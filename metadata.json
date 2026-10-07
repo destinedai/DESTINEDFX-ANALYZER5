@@ -1,0 +1,6 @@
+{
+  "name": "DestinedFX",
+  "description": "Institutional AI Trading Dashboard with SMC/ICT analysis and multi-model consensus.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

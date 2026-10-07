@@ -1,0 +1,89 @@
+package com.example.ui.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.domain.engine.QuantitativeEngine
+import com.example.domain.model.RiskProfile
+import com.example.domain.repository.RiskRepository
+import com.example.security.SecretsManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+
+data class RiskUiState(
+    val maxDrawdownLimit: Double  = 3.0, val currentDrawdown: Double  = 0.0,
+    val fixedRiskPerTrade: Double = 1.0, val isNfpShieldActive: Boolean = true,
+    val themeMode: String         = "System"
+)
+
+/**
+ * REPLACES the credential StateFlows that were exposed in DestinedFXViewModel:
+ *   telegramBotToken, telegramChatId, whatsappApiKey, whatsappPhoneNumber, mtBrokerPassword
+ *
+ * Credentials ONLY pass through SecretsManager (Android Keystore).
+ * RiskViewModel only exposes non-sensitive display values (account number, server name).
+ */
+class RiskViewModel(
+    private val risk: RiskRepository, private val secrets: SecretsManager
+) : ViewModel() {
+
+    private val _s = MutableStateFlow(RiskUiState())
+    val state: StateFlow<RiskUiState> = _s
+
+    val themeMode       = MutableStateFlow("System")
+    val brokerServer    = MutableStateFlow("")
+    val mtAccountNumber = MutableStateFlow("")
+    val terminalMode    = MutableStateFlow("MT5 Gateway")
+    val telegramEnabled = MutableStateFlow(false)
+    val whatsappEnabled = MutableStateFlow(false)
+    val nfpShieldActive = MutableStateFlow(true)
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            val p = risk.getRiskProfile()
+            _s.value = RiskUiState(
+                maxDrawdownLimit=p.maxDailyDrawdownPercentage,
+                currentDrawdown=p.currentDailyDrawdown,
+                fixedRiskPerTrade=p.fixedRiskPercentage
+            )
+            mtAccountNumber.value = secrets.getMT5AccountNumber()
+            brokerServer.value    = secrets.getMT5BrokerServer()
+            telegramEnabled.value = secrets.getTelegramToken().isNotBlank()
+            whatsappEnabled.value = secrets.getWhatsAppApiKey().isNotBlank()
+        }
+    }
+
+    fun updateRiskPercent(v: Double) { _s.value = _s.value.copy(fixedRiskPerTrade=v.coerceIn(0.1,1.0)); persist() }
+    fun updateMaxDrawdown(v: Double) { _s.value = _s.value.copy(maxDrawdownLimit=v.coerceIn(1.0,10.0)); persist() }
+    fun toggleNfpShield() { nfpShieldActive.value=!nfpShieldActive.value; _s.value=_s.value.copy(isNfpShieldActive=nfpShieldActive.value) }
+    fun setTheme(m: String) { themeMode.value=m; _s.value=_s.value.copy(themeMode=m) }
+    fun calculateLotSize(bal: Double, entry: Double, sl: Double, rPct: Double, symbol: String = "") =
+        QuantitativeEngine.calculateDynamicLotSize(bal, entry, sl, rPct, symbol = symbol)
+
+    fun saveBrokerCredentials(account: String, password: String, server: String, metaApiToken: String) {
+        secrets.saveMT5AccountNumber(account); secrets.saveMT5Password(password)
+        secrets.saveMT5BrokerServer(server);   secrets.saveMetaApiToken(metaApiToken)
+        mtAccountNumber.value=account; brokerServer.value=server
+    }
+
+    fun saveTelegramCredentials(token: String, chatId: String) {
+        secrets.saveTelegramToken(token); secrets.saveTelegramChatId(chatId)
+        telegramEnabled.value=token.isNotBlank()
+    }
+
+    fun saveWhatsAppCredentials(apiKey: String, phone: String) {
+        secrets.saveWhatsAppApiKey(apiKey); secrets.saveWhatsAppPhone(phone)
+        whatsappEnabled.value=apiKey.isNotBlank()
+    }
+
+    private fun persist() = viewModelScope.launch(Dispatchers.IO) {
+        risk.updateRiskProfile(RiskProfile(
+            accountBalance=0.0, fixedRiskPercentage=_s.value.fixedRiskPerTrade,
+            maxDailyDrawdownPercentage=_s.value.maxDrawdownLimit,
+            maxWeeklyDrawdownPercentage=_s.value.maxDrawdownLimit*2,
+            currentDailyDrawdown=_s.value.currentDrawdown, currentWeeklyDrawdown=0.0,
+            minimumRR=2.0, isTradingHalted=_s.value.currentDrawdown>=_s.value.maxDrawdownLimit
+        ))
+    }
+}

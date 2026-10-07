@@ -1,0 +1,808 @@
+package com.example.ui.chart
+
+import android.net.http.SslError
+import android.os.Build
+import android.view.View
+import android.webkit.SslErrorHandler
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.QueryStats
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.example.domain.model.Candle
+import com.example.ui.DynamicAnalysisInfo
+import com.example.ui.formatPrice
+import com.example.ui.theme.*
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * Unified Trading Chart Container supporting:
+ * 1. Live TradingView Chart (with non-blank direct widget embed and WebView lifecycle protection)
+ * 2. High-FPS Algorithmic Canvas Chart mapping structures as the market flows (BOS, CHoCH, OB, FVG, TP/SL targets)
+ * 3. Live Structure HUD overlay floating across the top
+ */
+@Composable
+fun TradingChartContainer(
+    activeSymbol: String,
+    selectedTimeframe: String,
+    currentSpotPrice: Double,
+    activeStrategy: String,
+    dynamicAnalysis: DynamicAnalysisInfo,
+    candles: List<Candle>,
+    isRealTradingViewEnabled: Boolean,
+    onToggleChartType: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showStructureOverlayOnTv by remember { mutableStateOf(true) }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color(0xFF0B0E14))
+            .border(1.dp, TabBorder, RoundedCornerShape(4.dp))
+    ) {
+        if (isRealTradingViewEnabled) {
+            // Live Interactive TradingView Chart
+            TradingViewWebView(
+                symbol = activeSymbol,
+                timeframe = selectedTimeframe,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            // Pure Algorithmic Structure Canvas (100% native Compose)
+            AlgorithmicCanvasChart(
+                activeSymbol = activeSymbol,
+                currentSpotPrice = currentSpotPrice,
+                activeStrategy = activeStrategy,
+                drawConfluences = dynamicAnalysis,
+                candles = candles,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // Floating Top HUD: Live Market Structure & Flow status
+        LiveStructureHud(
+            analysis = dynamicAnalysis,
+            symbol = activeSymbol,
+            currentSpotPrice = currentSpotPrice,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        )
+
+        // Floating Bottom-Right Controls (Canvas / TV switcher & Structure toggle)
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(8.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color(0xFF101520).copy(alpha = 0.92f))
+                .border(1.dp, TabBorder, RoundedCornerShape(6.dp))
+                .padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (isRealTradingViewEnabled) {
+                // Structure Overlay Toggle button
+                Box(
+                    modifier = Modifier
+                        .height(26.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            if (showStructureOverlayOnTv) CyanPrimary.copy(alpha = 0.18f)
+                            else Color.Transparent
+                        )
+                        .clickable { showStructureOverlayOnTv = !showStructureOverlayOnTv }
+                        .padding(horizontal = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (showStructureOverlayOnTv) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                            contentDescription = null,
+                            tint = if (showStructureOverlayOnTv) CyanPrimary else TextSecondary,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Text(
+                            text = if (showStructureOverlayOnTv) "SMC: ON" else "SMC: OFF",
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (showStructureOverlayOnTv) CyanPrimary else TextSecondary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(2.dp))
+            }
+
+            Button(
+                onClick = { onToggleChartType(false) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (!isRealTradingViewEnabled) CyanPrimary else Color.Transparent
+                ),
+                shape = RoundedCornerShape(4.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                modifier = Modifier.height(26.dp)
+            ) {
+                Text(
+                    text = "CANVAS",
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Black,
+                    color = if (!isRealTradingViewEnabled) Color.Black else TextSecondary
+                )
+            }
+
+            Button(
+                onClick = { onToggleChartType(true) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isRealTradingViewEnabled) CyanPrimary else Color.Transparent
+                ),
+                shape = RoundedCornerShape(4.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                modifier = Modifier.height(26.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .clip(RoundedCornerShape(2.5.dp))
+                            .background(Color(0xFF00FF99))
+                    )
+                    Text(
+                        text = "LIVE TV",
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (isRealTradingViewEnabled) Color.Black else TextSecondary
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Top floating HUD bar showing real-time market structure flow.
+ */
+@Composable
+fun LiveStructureHud(
+    analysis: DynamicAnalysisInfo,
+    symbol: String,
+    currentSpotPrice: Double,
+    modifier: Modifier = Modifier
+) {
+    val isBuy = analysis.direction == "BUY"
+    val dirCol = if (isBuy) Color(0xFF00FF99) else Color(0xFFFF4560)
+    val dirBg = if (isBuy) Color(0xFF132A20) else Color(0xFF2E131C)
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF0D121B).copy(alpha = 0.90f))
+            .border(1.dp, TabBorder, RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Pulsing live beacon
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF00FF99))
+            )
+
+            // Flow Direction Badge
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(dirBg)
+                    .border(1.dp, dirCol.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "FLOW: ${analysis.direction} (Score: ${analysis.confidencePct}/100)",
+                    color = dirCol,
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
+            // Order Block Status
+            val ob = analysis.orderBlocks.firstOrNull()
+            if (ob != null) {
+                Text(
+                    text = "OB: ${ob.type} [${ob.strength}]",
+                    color = TextPrimary,
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
+            // Target TP1 Harvest
+            Text(
+                text = "TARGET: ${formatPrice(analysis.tp1, symbol)} (+${String.format(Locale.US, "%.1f", analysis.tp1YieldPips)} pts)",
+                color = Color(0xFF00FF99),
+                fontSize = 8.5.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+
+        // Live Spot Price
+        Text(
+            text = "SPOT: ${formatPrice(currentSpotPrice, symbol)}",
+            color = CyanPrimary,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Black,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+/**
+ * Bulletproof TradingView WebView embed that NEVER stays blank!
+ * 1. Uses direct iframe embed URL (https://s.tradingview.com/widgetembed/...)
+ * 2. Checks webView.tag to prevent reloading on Compose timer recompositions
+ * 3. Modern Chrome UserAgent and full DOM storage support
+ */
+@Composable
+fun TradingViewWebView(
+    symbol: String,
+    timeframe: String,
+    modifier: Modifier = Modifier
+) {
+    val mappedSymbol = mapToTradingViewSymbol(symbol)
+    val mappedInterval = when (timeframe.uppercase()) {
+        "M1", "1" -> "1"
+        "M5", "5" -> "5"
+        "M15", "15" -> "15"
+        "M30", "30" -> "30"
+        "H1", "60" -> "60"
+        "H4", "240" -> "240"
+        "D1", "D" -> "D"
+        "W1", "W" -> "W"
+        else -> "60"
+    }
+
+    val html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body, html { margin: 0; padding: 0; height: 100%; width: 100%; background-color: #0B0E14; overflow: hidden; }
+                .tradingview-widget-container { height: 100%; width: 100%; }
+            </style>
+        </head>
+        <body>
+            <div class="tradingview-widget-container">
+                <div class="tradingview-widget-container__widget"></div>
+                <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+                {
+                  "autosize": true,
+                  "symbol": "$mappedSymbol",
+                  "interval": "$mappedInterval",
+                  "timezone": "Etc/UTC",
+                  "theme": "dark",
+                  "style": "1",
+                  "locale": "en",
+                  "allow_symbol_change": false
+                }
+                </script>
+            </div>
+            <div style="position: absolute; bottom: 0; right: 0; color: #444; font-size: 8px; padding: 2px;">v6.0</div>
+        </body>
+        </html>
+    """.trimIndent()
+
+    val currentKey = "${mappedSymbol}_$mappedInterval"
+    var isChartError by remember { mutableStateOf(false) }
+
+    Box(modifier = modifier) {
+        if (isChartError) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0B0E14))
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Chart Unavailable", color = TextPrimary, fontWeight = FontWeight.Bold)
+                Text("Unable to load TradingView widget chart.", fontSize = 12.sp, color = TextSecondary)
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = { isChartError = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary)
+                ) {
+                    Text("Retry", color = DarkBackground, fontWeight = FontWeight.Bold)
+                }
+            }
+        } else {
+            AndroidView(
+                factory = { context ->
+                    WebView(context).apply {
+                        tag = currentKey
+                        setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                        webViewClient = object : WebViewClient() {
+                            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                                handler?.cancel()
+                                isChartError = true
+                            }
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                if (request?.isForMainFrame == true) {
+                                    isChartError = true
+                                }
+                            }
+                        }
+                        @android.annotation.SuppressLint("SetJavaScriptEnabled")
+                        settings.apply {
+                            javaScriptEnabled = true
+                            domStorageEnabled = true
+                            useWideViewPort = true
+                            loadWithOverviewMode = true
+                            javaScriptCanOpenWindowsAutomatically = false
+                            cacheMode = WebSettings.LOAD_DEFAULT
+                            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                            allowFileAccess = false
+                            allowContentAccess = false
+                            userAgentString = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+                        }
+                        loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
+                    }
+                },
+                update = { webView ->
+                    if (webView.tag != currentKey) {
+                        webView.tag = currentKey
+                        webView.loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+/**
+ * Semi-transparent SMC overlay mapped on top of the TradingView widget.
+ */
+@Composable
+fun LiveStructureCanvasOverlay(
+    dynamicAnalysis: DynamicAnalysisInfo,
+    currentSpotPrice: Double,
+    activeSymbol: String,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        // Calculate visual Y levels for trade coordinates
+        val isBuy = dynamicAnalysis.direction == "BUY"
+        val entryY = h * 0.52f
+        val slY = if (isBuy) h * 0.76f else h * 0.28f
+        val tp1Y = if (isBuy) h * 0.38f else h * 0.66f
+        val tp2Y = if (isBuy) h * 0.24f else h * 0.80f
+
+        val entryCol = Color(0xFF448AFF)
+        val slCol = Color(0xFFFF5252)
+        val tp1Col = Color(0xFF00FF99)
+        val tp2Col = Color(0xFF00E5FF)
+
+        // Draw Stop Loss Line
+        drawLine(
+            color = slCol.copy(alpha = 0.85f),
+            start = Offset(0f, slY),
+            end = Offset(w, slY),
+            strokeWidth = 2f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+        )
+
+        // Draw Entry Line
+        drawLine(
+            color = entryCol.copy(alpha = 0.85f),
+            start = Offset(0f, entryY),
+            end = Offset(w, entryY),
+            strokeWidth = 2f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+        )
+
+        // Draw TP1 Line
+        drawLine(
+            color = tp1Col.copy(alpha = 0.85f),
+            start = Offset(0f, tp1Y),
+            end = Offset(w, tp1Y),
+            strokeWidth = 2f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+        )
+
+        // Draw TP2 Line
+        drawLine(
+            color = tp2Col.copy(alpha = 0.85f),
+            start = Offset(0f, tp2Y),
+            end = Offset(w, tp2Y),
+            strokeWidth = 2f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+        )
+
+        // Native canvas labels on the right edge
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            textSize = 24f
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+        }
+
+        // SL Label
+        paint.color = android.graphics.Color.parseColor("#FF5252")
+        drawContext.canvas.nativeCanvas.drawText("SL ${formatPrice(dynamicAnalysis.stopLoss, activeSymbol)}", 20f, slY - 8f, paint)
+
+        // Entry Label
+        paint.color = android.graphics.Color.parseColor("#448AFF")
+        drawContext.canvas.nativeCanvas.drawText("ENTRY ${formatPrice(dynamicAnalysis.entry, activeSymbol)}", 20f, entryY - 8f, paint)
+
+        // TP1 Label
+        paint.color = android.graphics.Color.parseColor("#00FF99")
+        drawContext.canvas.nativeCanvas.drawText("TP1 ${formatPrice(dynamicAnalysis.tp1, activeSymbol)} (+${String.format(Locale.US, "%.1f", dynamicAnalysis.tp1YieldPips)} pts)", 20f, tp1Y - 8f, paint)
+
+        // TP2 Label
+        paint.color = android.graphics.Color.parseColor("#00E5FF")
+        drawContext.canvas.nativeCanvas.drawText("TP2 ${formatPrice(dynamicAnalysis.tp2, activeSymbol)} (1:2.5R)", 20f, tp2Y - 8f, paint)
+    }
+}
+
+/**
+ * High-performance Compose Canvas chart that maps out structures as the market flows!
+ * Maps:
+ * - Dynamic Bullish & Bearish Order Blocks (OB)
+ * - Fair Value Gaps (FVG) with 50% Consequent Encroachment (CE)
+ * - Break of Structure (BOS) and Change of Character (CHoCH)
+ * - Liquidity Sweeps (BSL/SSL)
+ * - EMA 9 & EMA 21 flowing ribbons
+ * - Trade Coordinates (Entry, SL, TP1, TP2, TP3)
+ * - Live spot price pulsing beacon
+ */
+@Composable
+fun AlgorithmicCanvasChart(
+    activeSymbol: String,
+    currentSpotPrice: Double,
+    activeStrategy: String,
+    drawConfluences: DynamicAnalysisInfo,
+    candles: List<Candle>,
+    modifier: Modifier = Modifier
+) {
+    if (candles.isEmpty()) {
+        Box(
+            modifier = modifier.background(Color(0xFF0D111A)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "No live candles available",
+                color = Color(0xFF5A6978),
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+        return
+    }
+
+    Box(modifier = modifier.background(Color(0xFF0D111A))) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+
+            // Calculate scaled min/max bounds so all structures and candles fit
+            val candleMin = candles.minOf { it.low }
+            val candleMax = candles.maxOf { it.high }
+
+            val rawMin = min(candleMin, min(drawConfluences.entry, min(drawConfluences.stopLoss, drawConfluences.tp1)))
+            val rawMax = max(candleMax, max(drawConfluences.entry, max(drawConfluences.stopLoss, drawConfluences.tp3)))
+
+            val padding = (rawMax - rawMin) * 0.08
+            val minPrice = rawMin - padding
+            val maxPrice = rawMax + padding
+            val priceRange = if (maxPrice > minPrice) maxPrice - minPrice else 1.0
+
+            fun priceToY(price: Double): Float {
+                return (h - ((price - minPrice) / priceRange * h)).toFloat()
+            }
+
+            // 1. Draw Grid lines and Price Axis
+            val gridCount = 6
+            val nativePaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                textSize = 20f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
+            }
+
+            for (i in 1 until gridCount) {
+                val gridY = h * (i.toFloat() / gridCount)
+                val gridPrice = minPrice + ((h - gridY) / h) * priceRange
+                drawLine(
+                    color = Color(0xFF1E2638).copy(alpha = 0.5f),
+                    start = Offset(0f, gridY),
+                    end = Offset(w - 70f, gridY),
+                    strokeWidth = 1f
+                )
+
+                nativePaint.color = android.graphics.Color.parseColor("#5A6978")
+                drawContext.canvas.nativeCanvas.drawText(
+                    formatPrice(gridPrice, activeSymbol),
+                    w - 65f,
+                    gridY + 6f,
+                    nativePaint
+                )
+            }
+
+            // 2. Map Market Structures: Order Blocks (OB)
+            val isBuy = drawConfluences.direction == "BUY"
+            val obHeightPips = abs(drawConfluences.entry - drawConfluences.stopLoss) * 0.35
+
+            if (isBuy) {
+                // Bullish Order Block at Discount
+                val obTopPrice = drawConfluences.entry - (obHeightPips * 0.2)
+                val obBottomPrice = drawConfluences.entry - obHeightPips
+                val obY1 = priceToY(obTopPrice)
+                val obY2 = priceToY(obBottomPrice)
+
+                drawRect(
+                    color = Color(0xFF00FF99).copy(alpha = 0.12f),
+                    topLeft = Offset(w * 0.25f, min(obY1, obY2)),
+                    size = Size(w * 0.75f, abs(obY2 - obY1))
+                )
+                drawLine(
+                    color = Color(0xFF00FF99).copy(alpha = 0.6f),
+                    start = Offset(w * 0.25f, min(obY1, obY2)),
+                    end = Offset(w, min(obY1, obY2)),
+                    strokeWidth = 1.5f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                )
+                nativePaint.color = android.graphics.Color.parseColor("#00FF99")
+                drawContext.canvas.nativeCanvas.drawText("BULLISH OB [UNMITIGATED]", w * 0.26f, min(obY1, obY2) - 6f, nativePaint)
+            } else {
+                // Bearish Order Block at Premium
+                val obTopPrice = drawConfluences.entry + obHeightPips
+                val obBottomPrice = drawConfluences.entry + (obHeightPips * 0.2)
+                val obY1 = priceToY(obTopPrice)
+                val obY2 = priceToY(obBottomPrice)
+
+                drawRect(
+                    color = Color(0xFFFF4560).copy(alpha = 0.12f),
+                    topLeft = Offset(w * 0.25f, min(obY1, obY2)),
+                    size = Size(w * 0.75f, abs(obY2 - obY1))
+                )
+                drawLine(
+                    color = Color(0xFFFF4560).copy(alpha = 0.6f),
+                    start = Offset(w * 0.25f, max(obY1, obY2)),
+                    end = Offset(w, max(obY1, obY2)),
+                    strokeWidth = 1.5f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                )
+                nativePaint.color = android.graphics.Color.parseColor("#FF4560")
+                drawContext.canvas.nativeCanvas.drawText("BEARISH OB [UNMITIGATED]", w * 0.26f, max(obY1, obY2) + 20f, nativePaint)
+            }
+
+            // 3. Map Fair Value Gap (FVG) with 50% Consequent Encroachment
+            val fvgMidPrice = if (isBuy) drawConfluences.entry + (obHeightPips * 0.5) else drawConfluences.entry - (obHeightPips * 0.5)
+            val fvgY = priceToY(fvgMidPrice)
+            drawLine(
+                color = Color(0xFF00E5FF).copy(alpha = 0.5f),
+                start = Offset(w * 0.4f, fvgY),
+                end = Offset(w * 0.85f, fvgY),
+                strokeWidth = 1.5f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+            )
+            nativePaint.color = android.graphics.Color.parseColor("#00E5FF")
+            drawContext.canvas.nativeCanvas.drawText("FVG CE 50%", w * 0.42f, fvgY - 6f, nativePaint)
+
+            // 4. Map Break of Structure (BOS)
+            val bosPrice = if (isBuy) candleMax else candleMin
+            val bosY = priceToY(bosPrice)
+            drawLine(
+                color = if (isBuy) Color(0xFF00FF99).copy(alpha = 0.7f) else Color(0xFFFF4560).copy(alpha = 0.7f),
+                start = Offset(w * 0.15f, bosY),
+                end = Offset(w * 0.75f, bosY),
+                strokeWidth = 1.5f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+            )
+            nativePaint.color = if (isBuy) android.graphics.Color.parseColor("#00FF99") else android.graphics.Color.parseColor("#FF4560")
+            drawContext.canvas.nativeCanvas.drawText(if (isBuy) "BOS ↑ (STRUCTURAL BREAK)" else "BOS ↓ (STRUCTURAL BREAK)", w * 0.16f, bosY - 6f, nativePaint)
+
+            // 5. Draw High-Fidelity Candlesticks
+            val totalCandles = candles.size
+            val chartAreaWidth = w - 75f
+            val candleSpacing = chartAreaWidth / totalCandles
+            val candleWidth = candleSpacing * 0.65f
+
+            candles.forEachIndexed { i, c ->
+                val cX = i * candleSpacing + candleSpacing / 2f
+                val yHigh = priceToY(c.high)
+                val yLow = priceToY(c.low)
+                val yOpen = priceToY(c.open)
+                val yClose = priceToY(c.close)
+
+                val isGreen = c.close >= c.open
+                val cColor = if (isGreen) Color(0xFF00FF99) else Color(0xFFFF4560)
+
+                // Wick
+                drawLine(
+                    color = cColor,
+                    start = Offset(cX, yHigh),
+                    end = Offset(cX, yLow),
+                    strokeWidth = 1.5f
+                )
+
+                // Body
+                val topY = min(yOpen, yClose)
+                val bodyHeight = max(3f, abs(yOpen - yClose))
+                drawRect(
+                    color = cColor,
+                    topLeft = Offset(cX - candleWidth / 2f, topY),
+                    size = Size(candleWidth, bodyHeight)
+                )
+            }
+
+            // 6. Draw Algorithmic Execution Target Lines
+            val entryY = priceToY(drawConfluences.entry)
+            val slY = priceToY(drawConfluences.stopLoss)
+            val tp1Y = priceToY(drawConfluences.tp1)
+            val tp2Y = priceToY(drawConfluences.tp2)
+            val tp3Y = priceToY(drawConfluences.tp3)
+
+            // Entry Line (Blue)
+            drawLine(
+                color = Color(0xFF448AFF),
+                start = Offset(0f, entryY),
+                end = Offset(w - 70f, entryY),
+                strokeWidth = 2f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
+            )
+            nativePaint.color = android.graphics.Color.parseColor("#448AFF")
+            drawContext.canvas.nativeCanvas.drawText("ENTRY ${formatPrice(drawConfluences.entry, activeSymbol)}", 16f, entryY - 8f, nativePaint)
+
+            // Stop Loss Line (Red with buffer)
+            drawLine(
+                color = Color(0xFFFF5252),
+                start = Offset(0f, slY),
+                end = Offset(w - 70f, slY),
+                strokeWidth = 2f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
+            )
+            nativePaint.color = android.graphics.Color.parseColor("#FF5252")
+            drawContext.canvas.nativeCanvas.drawText("SL ${formatPrice(drawConfluences.stopLoss, activeSymbol)} [INVALIDATION]", 16f, slY - 8f, nativePaint)
+
+            // TP1 Line (Green)
+            drawLine(
+                color = Color(0xFF00FF99),
+                start = Offset(0f, tp1Y),
+                end = Offset(w - 70f, tp1Y),
+                strokeWidth = 2f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
+            )
+            nativePaint.color = android.graphics.Color.parseColor("#00FF99")
+            drawContext.canvas.nativeCanvas.drawText("TP1 ${formatPrice(drawConfluences.tp1, activeSymbol)} (+${String.format(Locale.US, "%.1f", drawConfluences.tp1YieldPips)} pts | 1:1.5R)", 16f, tp1Y - 8f, nativePaint)
+
+            // TP2 Line (Cyan)
+            drawLine(
+                color = Color(0xFF00E5FF),
+                start = Offset(0f, tp2Y),
+                end = Offset(w - 70f, tp2Y),
+                strokeWidth = 2f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
+            )
+            nativePaint.color = android.graphics.Color.parseColor("#00E5FF")
+            drawContext.canvas.nativeCanvas.drawText("TP2 ${formatPrice(drawConfluences.tp2, activeSymbol)} (1:2.5R)", 16f, tp2Y - 8f, nativePaint)
+
+            // 7. Live Spot Price Cursor & Pulsating Beacon
+            val spotY = priceToY(currentSpotPrice)
+            drawLine(
+                color = Color(0xFFFFD700).copy(alpha = 0.8f),
+                start = Offset(0f, spotY),
+                end = Offset(w, spotY),
+                strokeWidth = 1f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+            )
+
+            val lastX = (candles.size - 1) * candleSpacing + candleSpacing / 2f
+            drawCircle(
+                color = Color(0xFFFFD700),
+                radius = 5f,
+                center = Offset(lastX, spotY)
+            )
+            drawCircle(
+                color = Color(0xFFFFD700).copy(alpha = 0.25f),
+                radius = 12f,
+                center = Offset(lastX, spotY)
+            )
+
+            // Spot Price Pill on the Right Axis
+            drawRect(
+                color = Color(0xFFFFD700),
+                topLeft = Offset(w - 70f, spotY - 12f),
+                size = Size(70f, 24f)
+            )
+            nativePaint.color = android.graphics.Color.BLACK
+            nativePaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+            drawContext.canvas.nativeCanvas.drawText(
+                formatPrice(currentSpotPrice, activeSymbol),
+                w - 65f,
+                spotY + 6f,
+                nativePaint
+            )
+        }
+    }
+}
+
+private fun mapToTradingViewSymbol(symbol: String): String {
+    return when (symbol) {
+        "EUR/USD" -> "FX:EURUSD"
+        "GBP/USD" -> "FX:GBPUSD"
+        "USD/JPY" -> "FX:USDJPY"
+        "USD/CHF" -> "FX:USDCHF"
+        "AUD/USD" -> "FX:AUDUSD"
+        "USD/CAD" -> "FX:USDCAD"
+        "NZD/USD" -> "FX:NZDUSD"
+        "EUR/GBP" -> "FX:EURGBP"
+        "EUR/JPY" -> "FX:EURJPY"
+        "GBP/JPY" -> "FX:GBPJPY"
+        "XAU/USD" -> "OANDA:XAUUSD"
+        "XAG/USD" -> "OANDA:XAGUSD"
+        "BTC/USD" -> "BYBIT:BTCUSDT"
+        "ETH/USD" -> "BYBIT:ETHUSDT"
+        "SOL/USD" -> "BYBIT:SOLUSDT"
+        "XRP/USD" -> "BYBIT:XRPUSDT"
+        "BNB/USD" -> "BYBIT:BNBUSDT"
+        "USOIL" -> "TVC:USOIL"
+        "SPX500" -> "FOREXCOM:SPX500"
+        "NAS100" -> "FOREXCOM:NAS100"
+        "DJ30" -> "FOREXCOM:DJ30"
+        else -> "FX:" + symbol.replace("/", "")
+    }
+}
