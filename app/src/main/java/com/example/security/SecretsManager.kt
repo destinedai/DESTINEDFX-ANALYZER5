@@ -28,6 +28,7 @@ class SecretsManager(private val ctx: Context) {
         private const val SB_ACCESS_TOKEN = "supabase_access_token"
         private const val SB_REFRESH_TOKEN = "supabase_refresh_token"
         private const val SB_UID = "supabase_uid"
+        private const val SB_EMAIL_CONFIRMED_AT = "supabase_email_confirmed_at"
         private const val GEMINI_KEY = "gemini_api_key"
         private const val OANDA_KEY = "oanda_api_key"
         private const val OANDA_ACC = "oanda_account_id"
@@ -35,6 +36,8 @@ class SecretsManager(private val ctx: Context) {
         private const val CONFIGURED_EQUITY = "configured_equity"
         private const val SELECTED_STRATEGY = "selected_strategy_id"
         private const val BROKER_SYMBOL_OVERRIDES = "broker_symbol_overrides"
+        private const val DERIV_API_TOKEN = "deriv_api_token"
+        private const val DERIV_APP_ID = "deriv_app_id"
     }
 
     private val prefs: android.content.SharedPreferences = try {
@@ -80,12 +83,18 @@ class SecretsManager(private val ctx: Context) {
     fun saveSupabaseAccessToken(v: String) = prefs.edit().putString(SB_ACCESS_TOKEN, v).apply()
     fun saveSupabaseRefreshToken(v: String) = prefs.edit().putString(SB_REFRESH_TOKEN, v).apply()
     fun saveSupabaseUid(v: String)      = prefs.edit().putString(SB_UID, v).apply()
+    fun saveSupabaseEmailConfirmedAt(v: String) = prefs.edit().putString(SB_EMAIL_CONFIRMED_AT, v).apply()
     fun saveGeminiApiKey(v: String)     = prefs.edit().putString(GEMINI_KEY, v).apply()
     fun saveOandaApiKey(v: String)      = prefs.edit().putString(OANDA_KEY, v).apply()
     fun saveOandaAccountId(v: String)   = prefs.edit().putString(OANDA_ACC, v).apply()
     fun saveTwelveDataApiKey(v: String) = prefs.edit().putString(TD_KEY,    v).apply()
     fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
+    fun saveDerivApiToken(v: String)    = prefs.edit().putString(DERIV_API_TOKEN, v).apply()
+    fun saveDerivAppId(v: String)       = prefs.edit().putString(DERIV_APP_ID, v).apply()
+
+    fun getDerivApiToken(): String     = prefs.getString(DERIV_API_TOKEN, "") ?: ""
+    fun getDerivAppId(): String        = prefs.getString(DERIV_APP_ID, "1089") ?: "1089"
 
     fun getTelegramToken(): String     = prefs.getString(TG_TOK,  "") ?: ""
     fun getTelegramChatId(): String    = prefs.getString(TG_CHAT, "") ?: ""
@@ -121,6 +130,7 @@ class SecretsManager(private val ctx: Context) {
     fun getSupabaseAccessToken(): String = prefs.getString(SB_ACCESS_TOKEN, "") ?: ""
     fun getSupabaseRefreshToken(): String = prefs.getString(SB_REFRESH_TOKEN, "") ?: ""
     fun getSupabaseUid(): String       = prefs.getString(SB_UID, "") ?: ""
+    fun getSupabaseEmailConfirmedAt(): String? = prefs.getString(SB_EMAIL_CONFIRMED_AT, "")?.takeUnless { it.isBlank() || it == "null" }
     fun getGeminiApiKey(): String      = prefs.getString(GEMINI_KEY, "") ?: ""
     fun getOandaApiKey(): String       = prefs.getString(OANDA_KEY, "") ?: ""
     fun getOandaAccountId(): String    = prefs.getString(OANDA_ACC, "") ?: ""

@@ -12,9 +12,15 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+sealed class SignUpResponse {
+    data class SuccessVerified(val user: User) : SignUpResponse()
+    data class EmailVerificationRequired(val email: String, val username: String, val uid: String) : SignUpResponse()
+}
+
 /**
  * Native REST client for Supabase Auth and PostgREST profiles.
  * Never bundles service_role key; uses only client-safe anon key.
+ * Strictly enforces email verification checking on signup, login, and session restore.
  */
 class SupabaseAuthClient(
     private val secrets: SecretsManager,
@@ -36,9 +42,12 @@ class SupabaseAuthClient(
         return secrets.getSupabaseAnonKey().trim()
     }
 
-    suspend fun signUp(email: String, passwordText: String, username: String): Result<User> = withContext(Dispatchers.IO) {
+    suspend fun signUp(email: String, passwordText: String, username: String): Result<SignUpResponse> = withContext(Dispatchers.IO) {
         val url = getUrl()
         val key = getAnonKey()
+        if (url.isBlank() || key.isBlank() || url.contains("your-project")) {
+            return@withContext Result.failure(Exception("AUTHENTICATION_UNAVAILABLE: Supabase credentials not configured."))
+        }
 
         try {
             val json = JSONObject().apply {
@@ -66,35 +75,45 @@ class SupabaseAuthClient(
             val respJson = JSONObject(body)
             val userObj = respJson.optJSONObject("user") ?: respJson
             val uid = userObj.optString("id")
+            val emailConfirmedAt = userObj.optString("email_confirmed_at").takeUnless { it.isBlank() || it == "null" }
             val accessToken = respJson.optString("access_token")
             val refreshToken = respJson.optString("refresh_token")
 
-            if (accessToken.isNotBlank()) secrets.saveSupabaseAccessToken(accessToken)
-            if (refreshToken.isNotBlank()) secrets.saveSupabaseRefreshToken(refreshToken)
             if (uid.isNotBlank()) secrets.saveSupabaseUid(uid)
 
-            val user = User(
-                email = email.trim().lowercase(),
-                username = username.trim(),
-                passwordHash = "SUPABASE_AUTH",
-                uid = uid
-            )
+            val isVerified = !emailConfirmedAt.isNullOrBlank()
 
-            // Attempt to create profile row if session is established
-            if (accessToken.isNotBlank()) {
-                upsertProfile(user, accessToken)
+            if (!isVerified) {
+                // Email confirmation required by Supabase
+                Log.i(TAG, "Supabase signup successful. Email verification pending for: $email")
+                Result.success(SignUpResponse.EmailVerificationRequired(email.trim().lowercase(), username.trim(), uid))
+            } else {
+                if (accessToken.isNotBlank()) secrets.saveSupabaseAccessToken(accessToken)
+                if (refreshToken.isNotBlank()) secrets.saveSupabaseRefreshToken(refreshToken)
+
+                val user = User(
+                    email = email.trim().lowercase(),
+                    username = username.trim(),
+                    passwordHash = "SUPABASE_AUTH",
+                    uid = uid
+                )
+                if (accessToken.isNotBlank()) {
+                    upsertProfile(user, accessToken)
+                }
+                Result.success(SignUpResponse.SuccessVerified(user))
             }
-
-            Result.success(user)
         } catch (e: Exception) {
             Log.e(TAG, "Sign up exception: ${e.message}", e)
-            Result.failure(Exception("Network error during sign up: ${e.message}"))
+            Result.failure(Exception("AUTHENTICATION_UNAVAILABLE: Network error during sign up: ${e.message}"))
         }
     }
 
     suspend fun signIn(email: String, passwordText: String): Result<User> = withContext(Dispatchers.IO) {
         val url = getUrl()
         val key = getAnonKey()
+        if (url.isBlank() || key.isBlank() || url.contains("your-project")) {
+            return@withContext Result.failure(Exception("AUTHENTICATION_UNAVAILABLE: Supabase credentials not configured."))
+        }
 
         try {
             val json = JSONObject().apply {
@@ -115,6 +134,9 @@ class SupabaseAuthClient(
                 val msg = errObj?.optString("error_description")?.ifBlank { null }
                     ?: errObj?.optString("msg")?.ifBlank { null }
                     ?: errObj?.optString("message") ?: "Invalid email or password."
+                if (msg.contains("Email not confirmed", ignoreCase = true)) {
+                    return@withContext Result.failure(Exception("EMAIL_VERIFICATION_REQUIRED: Please verify your email address before logging in."))
+                }
                 return@withContext Result.failure(Exception(msg))
             }
 
@@ -123,12 +145,19 @@ class SupabaseAuthClient(
             val refreshToken = respJson.optString("refresh_token")
             val userObj = respJson.optJSONObject("user")
             val uid = userObj?.optString("id") ?: ""
+            val emailConfirmedAt = userObj?.optString("email_confirmed_at")?.takeUnless { it.isBlank() || it == "null" }
+
+            if (emailConfirmedAt == null) {
+                return@withContext Result.failure(Exception("EMAIL_VERIFICATION_REQUIRED: Email not verified yet. Please check your inbox."))
+            }
+
             val userMeta = userObj?.optJSONObject("user_metadata")
             val username = userMeta?.optString("username", "")?.ifBlank { email.substringBefore("@") } ?: email.substringBefore("@")
 
             if (accessToken.isNotBlank()) secrets.saveSupabaseAccessToken(accessToken)
             if (refreshToken.isNotBlank()) secrets.saveSupabaseRefreshToken(refreshToken)
             if (uid.isNotBlank()) secrets.saveSupabaseUid(uid)
+            secrets.saveSupabaseEmailConfirmedAt(emailConfirmedAt)
 
             val user = User(
                 email = email.trim().lowercase(),
@@ -139,7 +168,7 @@ class SupabaseAuthClient(
             Result.success(user)
         } catch (e: Exception) {
             Log.e(TAG, "Sign in exception: ${e.message}", e)
-            Result.failure(Exception("Network error during login: ${e.message}"))
+            Result.failure(Exception("AUTHENTICATION_UNAVAILABLE: Network error during login: ${e.message}"))
         }
     }
 
@@ -161,10 +190,17 @@ class SupabaseAuthClient(
             if (resp.isSuccessful) {
                 val body = resp.body?.string() ?: "{}"
                 val userObj = JSONObject(body)
+                val emailConfirmedAt = userObj.optString("email_confirmed_at").takeUnless { it.isBlank() || it == "null" }
+                if (emailConfirmedAt == null) {
+                    Log.w(TAG, "User email not verified in stored session. Locking out.")
+                    return@withContext null
+                }
+
                 val uid = userObj.optString("id")
                 val email = userObj.optString("email")
                 val userMeta = userObj.optJSONObject("user_metadata")
                 val username = userMeta?.optString("username", "")?.ifBlank { email.substringBefore("@") } ?: email.substringBefore("@")
+                secrets.saveSupabaseEmailConfirmedAt(emailConfirmedAt)
                 return@withContext User(email = email, username = username, passwordHash = "SUPABASE_AUTH", uid = uid)
             }
 
@@ -197,9 +233,15 @@ class SupabaseAuthClient(
             val resp = client.newCall(req).execute()
             if (resp.isSuccessful) {
                 val respJson = JSONObject(resp.body?.string() ?: "{}")
+                val userObj = respJson.optJSONObject("user")
+                val emailConfirmedAt = userObj?.optString("email_confirmed_at")?.takeUnless { it.isBlank() || it == "null" }
+                if (emailConfirmedAt == null) {
+                    Log.w(TAG, "Refreshed session user email is unconfirmed.")
+                    return@withContext null
+                }
+
                 val newAccessToken = respJson.optString("access_token")
                 val newRefreshToken = respJson.optString("refresh_token")
-                val userObj = respJson.optJSONObject("user")
                 val uid = userObj?.optString("id") ?: ""
                 val email = userObj?.optString("email") ?: ""
                 val userMeta = userObj?.optJSONObject("user_metadata")
@@ -208,6 +250,7 @@ class SupabaseAuthClient(
                 if (newAccessToken.isNotBlank()) secrets.saveSupabaseAccessToken(newAccessToken)
                 if (newRefreshToken.isNotBlank()) secrets.saveSupabaseRefreshToken(newRefreshToken)
                 if (uid.isNotBlank()) secrets.saveSupabaseUid(uid)
+                secrets.saveSupabaseEmailConfirmedAt(emailConfirmedAt)
 
                 return@withContext User(email = email, username = username, passwordHash = "SUPABASE_AUTH", uid = uid)
             }
@@ -216,6 +259,87 @@ class SupabaseAuthClient(
             Log.w(TAG, "Refresh session failed: ${e.message}")
             null
         }
+    }
+
+    suspend fun resendVerificationEmail(email: String): Result<String> = withContext(Dispatchers.IO) {
+        val url = getUrl()
+        val key = getAnonKey()
+        if (url.isBlank() || key.isBlank()) {
+            return@withContext Result.failure(Exception("AUTHENTICATION_UNAVAILABLE: Supabase not configured."))
+        }
+
+        try {
+            val json = JSONObject().apply {
+                put("type", "signup")
+                put("email", email.trim().lowercase())
+            }
+            val req = Request.Builder()
+                .url("$url/auth/v1/resend")
+                .header("apikey", key)
+                .header("Content-Type", "application/json")
+                .post(json.toString().toRequestBody(JSON_TYPE))
+                .build()
+
+            val resp = client.newCall(req).execute()
+            if (resp.isSuccessful) {
+                Result.success("Verification email resent successfully to $email")
+            } else {
+                val body = resp.body?.string() ?: ""
+                val errObj = try { JSONObject(body) } catch (_: Exception) { null }
+                val msg = errObj?.optString("message") ?: "Failed to resend verification email (HTTP ${resp.code})"
+                Result.failure(Exception(msg))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("Network error: ${e.message}"))
+        }
+    }
+
+    suspend fun checkEmailVerification(email: String, passwordText: String? = null): Result<User> = withContext(Dispatchers.IO) {
+        val url = getUrl()
+        val key = getAnonKey()
+        val token = secrets.getSupabaseAccessToken()
+
+        if (token.isNotBlank()) {
+            try {
+                val req = Request.Builder()
+                    .url("$url/auth/v1/user")
+                    .header("apikey", key)
+                    .header("Authorization", "Bearer $token")
+                    .get()
+                    .build()
+
+                val resp = client.newCall(req).execute()
+                if (resp.isSuccessful) {
+                    val userObj = JSONObject(resp.body?.string() ?: "{}")
+                    val confirmedAt = userObj.optString("email_confirmed_at").takeUnless { it.isBlank() || it == "null" }
+                    if (confirmedAt != null) {
+                        val uid = userObj.optString("id")
+                        val emailStr = userObj.optString("email", email)
+                        val userMeta = userObj.optJSONObject("user_metadata")
+                        val username = userMeta?.optString("username", "")?.ifBlank { emailStr.substringBefore("@") } ?: emailStr.substringBefore("@")
+                        val user = User(email = emailStr, username = username, passwordHash = "SUPABASE_AUTH", uid = uid)
+                        return@withContext Result.success(user)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        if (!passwordText.isNullOrBlank()) {
+            val loginRes = signIn(email, passwordText)
+            if (loginRes.isSuccess) {
+                return@withContext loginRes
+            }
+        }
+
+        val rToken = secrets.getSupabaseRefreshToken()
+        if (rToken.isNotBlank()) {
+            val refreshed = refreshSession(rToken)
+            if (refreshed != null) {
+                return@withContext Result.success(refreshed)
+            }
+        }
+
+        Result.failure(Exception("EMAIL_NOT_VERIFIED: Verification pending. Please verify your email before entering."))
     }
 
     suspend fun sendPasswordRecovery(email: String): Result<String> = withContext(Dispatchers.IO) {
@@ -265,6 +389,7 @@ class SupabaseAuthClient(
         secrets.saveSupabaseAccessToken("")
         secrets.saveSupabaseRefreshToken("")
         secrets.saveSupabaseUid("")
+        secrets.saveSupabaseEmailConfirmedAt("")
     }
 
     private suspend fun upsertProfile(user: User, accessToken: String) {

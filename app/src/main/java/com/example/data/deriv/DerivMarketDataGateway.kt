@@ -1,0 +1,274 @@
+package com.example.data.deriv
+
+import android.util.Log
+import com.destinedfx.core.marketdata.AssetClass
+import com.destinedfx.core.marketdata.Candle as CoreCandle
+import com.destinedfx.core.marketdata.MarketQuote
+import com.destinedfx.core.marketdata.VolumeType
+import com.example.domain.model.Candle
+import com.example.domain.model.Tick
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
+/**
+ * Real-time WebSocket Gateway for Deriv market data.
+ * Connects to Deriv public WebSocket endpoint: wss://ws.derivws.com/websockets/v3?app_id=...
+ * Streams real live ticks, subscribes/unsubscribes symbols, and fetches real historical candles.
+ */
+class DerivMarketDataGateway(
+    private val appId: String = "1089",
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
+        .build()
+) {
+    companion object {
+        private const val TAG = "DerivMDGateway"
+        private const val WS_URL_BASE = "wss://ws.derivws.com/websockets/v3?app_id="
+    }
+
+    private val _connectionState = MutableStateFlow(DerivConnectionState.DISCONNECTED)
+    val connectionState: StateFlow<DerivConnectionState> = _connectionState.asStateFlow()
+
+    private val _latestQuotes = MutableStateFlow<Map<String, MarketQuote>>(emptyMap())
+    val latestQuotes: StateFlow<Map<String, MarketQuote>> = _latestQuotes.asStateFlow()
+
+    private var webSocket: WebSocket? = null
+    private val reqIdCounter = AtomicInteger(1)
+    private val activeSubscriptions = ConcurrentHashMap<String, String>() // symbol -> subscriptionId
+    private val tickListeners = ConcurrentHashMap<String, (Tick) -> Unit>()
+    private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    fun connect() {
+        if (_connectionState.value == DerivConnectionState.CONNECTING || _connectionState.value == DerivConnectionState.CONNECTED) {
+            return
+        }
+
+        _connectionState.value = DerivConnectionState.CONNECTING
+        val request = Request.Builder()
+            .url("$WS_URL_BASE$appId")
+            .build()
+
+        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                Log.i(TAG, "Deriv WebSocket connected.")
+                _connectionState.value = DerivConnectionState.CONNECTED
+                startHeartbeat()
+                // Re-subscribe to any active symbols
+                tickListeners.keys.forEach { sym ->
+                    sendSubscribeTick(sym)
+                }
+            }
+
+            override fun onMessage(ws: WebSocket, text: String) {
+                handleIncomingMessage(text)
+            }
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                Log.e(TAG, "Deriv WebSocket failure: ${t.message}")
+                _connectionState.value = DerivConnectionState.ERROR
+                cleanup()
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "Deriv WebSocket closed: $code / $reason")
+                _connectionState.value = DerivConnectionState.DISCONNECTED
+                cleanup()
+            }
+        })
+    }
+
+    fun disconnect() {
+        webSocket?.close(1000, "Client disconnect")
+        cleanup()
+        _connectionState.value = DerivConnectionState.DISCONNECTED
+    }
+
+    private fun cleanup() {
+        webSocket = null
+        activeSubscriptions.clear()
+        pendingRequests.values.forEach {
+            it.cancel()
+        }
+        pendingRequests.clear()
+    }
+
+    private fun startHeartbeat() {
+        scope.launch {
+            while (isActive && _connectionState.value == DerivConnectionState.CONNECTED) {
+                delay(30_000)
+                try {
+                    val pingJson = JSONObject().apply {
+                        put("ping", 1)
+                        put("req_id", reqIdCounter.getAndIncrement())
+                    }
+                    webSocket?.send(pingJson.toString())
+                } catch (e: Exception) {
+                    Log.w(TAG, "Heartbeat error: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun subscribeTicks(symbol: String, onTick: (Tick) -> Unit) {
+        tickListeners[symbol] = onTick
+        if (_connectionState.value == DerivConnectionState.CONNECTED) {
+            sendSubscribeTick(symbol)
+        } else {
+            connect()
+        }
+    }
+
+    fun unsubscribeTicks(symbol: String) {
+        tickListeners.remove(symbol)
+        val subId = activeSubscriptions.remove(symbol)
+        if (subId != null && webSocket != null) {
+            val forgetJson = JSONObject().apply {
+                put("forget", subId)
+                put("req_id", reqIdCounter.getAndIncrement())
+            }
+            webSocket?.send(forgetJson.toString())
+        }
+    }
+
+    private fun sendSubscribeTick(symbol: String) {
+        val reqId = reqIdCounter.getAndIncrement()
+        val json = JSONObject().apply {
+            put("ticks", symbol)
+            put("subscribe", 1)
+            put("req_id", reqId)
+        }
+        webSocket?.send(json.toString())
+    }
+
+    suspend fun fetchCandles(symbol: String, granularitySeconds: Int, count: Int = 300): List<Candle> = withContext(Dispatchers.IO) {
+        val reqId = reqIdCounter.getAndIncrement()
+        val deferred = CompletableDeferred<JSONObject>()
+        pendingRequests[reqId] = deferred
+
+        if (_connectionState.value != DerivConnectionState.CONNECTED) {
+            connect()
+            // Wait up to 5 seconds for connection
+            withTimeoutOrNull(5000) {
+                while (_connectionState.value != DerivConnectionState.CONNECTED) {
+                    delay(100)
+                }
+            }
+        }
+
+        val json = JSONObject().apply {
+            put("ticks_history", symbol)
+            put("end", "latest")
+            put("count", count)
+            put("style", "candles")
+            put("granularity", granularitySeconds)
+            put("req_id", reqId)
+        }
+
+        val sent = webSocket?.send(json.toString()) ?: false
+        if (!sent) {
+            pendingRequests.remove(reqId)
+            return@withContext emptyList<Candle>()
+        }
+
+        try {
+            val response = withTimeout(10_000) { deferred.await() }
+            val candlesArr = response.optJSONArray("candles") ?: return@withContext emptyList<Candle>()
+            val result = mutableListOf<Candle>()
+            for (i in 0 until candlesArr.length()) {
+                val c = candlesArr.getJSONObject(i)
+                val epochSec = c.optLong("epoch", 0L)
+                val open = c.optDouble("open", 0.0)
+                val high = c.optDouble("high", 0.0)
+                val low = c.optDouble("low", 0.0)
+                val close = c.optDouble("close", 0.0)
+                val volume = c.optDouble("volume", 0.0)
+                if (epochSec > 0 && open > 0 && high > 0 && low > 0 && close > 0) {
+                    result.add(
+                        Candle(
+                            timestamp = epochSec * 1000L,
+                            open = open,
+                            high = high,
+                            low = low,
+                            close = close,
+                            volume = volume,
+                            complete = true
+                        )
+                    )
+                }
+            }
+            result.sortBy { it.timestamp }
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch Deriv candles for $symbol: ${e.message}")
+            emptyList()
+        } finally {
+            pendingRequests.remove(reqId)
+        }
+    }
+
+    private fun handleIncomingMessage(text: String) {
+        try {
+            val json = JSONObject(text)
+            val msgType = json.optString("msg_type")
+            val reqId = json.optInt("req_id", -1)
+
+            if (reqId != -1 && pendingRequests.containsKey(reqId)) {
+                pendingRequests[reqId]?.complete(json)
+            }
+
+            when (msgType) {
+                "tick" -> {
+                    val tickObj = json.optJSONObject("tick") ?: return
+                    val symbol = tickObj.optString("symbol")
+                    val quote = tickObj.optDouble("quote", 0.0)
+                    val bid = tickObj.optDouble("bid", quote)
+                    val ask = tickObj.optDouble("ask", quote)
+                    val epoch = tickObj.optLong("epoch", System.currentTimeMillis() / 1000)
+                    val subId = json.optJSONObject("subscription")?.optString("id")
+                    if (subId != null && symbol.isNotBlank()) {
+                        activeSubscriptions[symbol] = subId
+                    }
+
+                    val timeMs = epoch * 1000L
+                    val tick = Tick(timestamp = timeMs, price = quote, size = 1.0)
+                    val cls = com.destinedfx.core.instrument.AssetClassifier.of(symbol)
+                    val marketQuote = MarketQuote(
+                        symbol = symbol,
+                        assetClass = cls,
+                        bid = bid,
+                        ask = ask,
+                        last = quote,
+                        timestampMs = timeMs,
+                        receivedAtMs = System.currentTimeMillis(),
+                        source = "Deriv WebSocket"
+                    )
+
+                    val updatedMap = _latestQuotes.value.toMutableMap()
+                    updatedMap[symbol] = marketQuote
+                    _latestQuotes.value = updatedMap
+
+                    tickListeners[symbol]?.invoke(tick)
+                }
+                "error" -> {
+                    val errorObj = json.optJSONObject("error")
+                    val code = errorObj?.optString("code") ?: "UNKNOWN"
+                    val msg = errorObj?.optString("message") ?: "Unknown Deriv error"
+                    Log.e(TAG, "Deriv API Error: $code - $msg")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Deriv message parse error: ${e.message}", e)
+        }
+    }
+}

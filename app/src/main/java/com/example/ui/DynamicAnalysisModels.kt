@@ -35,9 +35,14 @@ data class DynamicAnalysisInfo(
     val mtf1M: String = "N/A",
     val mtf5M: String = "N/A",
     val mtf15M: String = "N/A",
+    val mtf30M: String = "N/A",
     val mtf1H: String = "N/A",
     val mtf4H: String = "N/A",
     val mtf1D: String = "N/A",
+    val mtf1W: String = "N/A",
+    val mtfSummary: String = "N/A",
+    val mtfStatus: String = "WAIT",
+    val mtfPerTimeframe: Map<String, String> = emptyMap(),
     val strategyScores: Map<String, Int> = emptyMap(),
     val tp1YieldPips: Double = 0.0,
     val tp2YieldPips: Double = 0.0,
@@ -53,7 +58,22 @@ data class DynamicAnalysisInfo(
     val strategyVersion: String = "",
     val signalState: String = "WAIT",
     val blockReasons: List<String> = emptyList()
-)
+) {
+    fun getTfBias(tf: String): String {
+        val norm = tf.trim().uppercase()
+        return mtfPerTimeframe[norm] ?: when (norm) {
+            "M1", "1" -> mtf1M
+            "M5", "5" -> mtf5M
+            "M15", "15" -> mtf15M
+            "M30", "30" -> mtf30M
+            "H1", "60" -> mtf1H
+            "H4", "240" -> mtf4H
+            "D1", "D" -> mtf1D
+            "W1", "W" -> mtf1W
+            else -> "N/A"
+        }
+    }
+}
 
 fun formatPrice(price: Double, symbol: String = ""): String {
     if (price == 0.0) return "0.00000"
@@ -122,12 +142,17 @@ fun mapTradeSignalToUiModel(signal: TradeSignal): DynamicAnalysisInfo {
         keyLevels = signal.keyLevels,
         riskNote = if (signal.executable) "Risk sized by RiskEngine (max 1% of equity)." else "Analysis only; trading blocked or quote unconfirmed.",
         sessionBias = signal.sessionLabel.ifBlank { "N/A" },
-        mtf1M = "N/A",
-        mtf5M = "N/A",
-        mtf15M = "N/A",
-        mtf1H = "N/A",
-        mtf4H = "N/A",
-        mtf1D = "N/A",
+        mtf1M = signal.mtfPerTimeframe["M1"] ?: "N/A",
+        mtf5M = signal.mtfPerTimeframe["M5"] ?: "N/A",
+        mtf15M = signal.mtfPerTimeframe["M15"] ?: "N/A",
+        mtf30M = signal.mtfPerTimeframe["M30"] ?: "N/A",
+        mtf1H = signal.mtfPerTimeframe["H1"] ?: "N/A",
+        mtf4H = signal.mtfPerTimeframe["H4"] ?: "N/A",
+        mtf1D = signal.mtfPerTimeframe["D1"] ?: "N/A",
+        mtf1W = signal.mtfPerTimeframe["W1"] ?: "N/A",
+        mtfSummary = signal.mtfSummary.ifBlank { "N/A" },
+        mtfStatus = signal.mtfState.ifBlank { "WAIT" },
+        mtfPerTimeframe = signal.mtfPerTimeframe,
         strategyScores = signal.strategyScores,
         tp1YieldPips = tp1Pips,
         tp2YieldPips = tp2Pips,

@@ -34,6 +34,13 @@ class MyApplication : Application() {
     lateinit var analysisRepository: com.example.data.AnalysisRepository
     lateinit var cloudSyncManager: com.example.data.cloud.RealtimeCloudSyncManager
 
+    lateinit var derivMarketDataGateway: com.example.data.deriv.DerivMarketDataGateway
+    lateinit var derivBrokerGateway: com.example.data.deriv.DerivBrokerGateway
+    lateinit var derivGatewayAdapter: com.example.data.broker.DerivBrokerGatewayAdapter
+    lateinit var mt5GatewayAdapter: com.example.data.broker.MT5BrokerGatewayAdapter
+    lateinit var brokerManager: com.example.data.broker.BrokerManager
+    lateinit var autonomousBotEngine: com.destinedfx.core.bot.AutonomousBotEngine
+
     lateinit var structureAnalyzer: CoreMarketStructureAnalyzer
     lateinit var mtfAlignmentEngine: MTFAlignmentEngine
 
@@ -99,7 +106,9 @@ class MyApplication : Application() {
             .build()
 
         try {
-            marketDataRepository = MarketDataRepositoryImpl(secretsManager)
+            derivMarketDataGateway = com.example.data.deriv.DerivMarketDataGateway()
+            derivMarketDataGateway.connect()
+            marketDataRepository = MarketDataRepositoryImpl(secretsManager, derivMarketDataGateway)
             mt5GatewayRepository = MT5GatewayRepository(secretsManager)
             newsRepository = ForexNewsRepository()
             tradeRepository = TradeRepository(db.tradeDao())
@@ -120,10 +129,15 @@ class MyApplication : Application() {
             authUseCase = AuthUseCaseImpl(db, secretsManager)
             marketDataUseCase = GetMarketDataUseCaseImpl(marketDataRepository)
             signalGenerationUseCase = SignalGenerationUseCaseImpl(marketDataRepository, newsRepository)
+
+            derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secretsManager)
+            derivGatewayAdapter = com.example.data.broker.DerivBrokerGatewayAdapter(derivBrokerGateway)
+            mt5GatewayAdapter = com.example.data.broker.MT5BrokerGatewayAdapter(mt5GatewayRepository)
+            brokerManager = com.example.data.broker.BrokerManager(derivGatewayAdapter, mt5GatewayAdapter)
             
             tradeUseCase = TradeUseCaseImpl(
                 market = marketDataRepository,
-                mt5 = mt5GatewayRepository,
+                brokerProvider = { brokerManager.activeBroker.value },
                 journal = tradeRepository,
                 news = newsRepository,
                 reports = signalGenerationUseCase,
@@ -144,12 +158,28 @@ class MyApplication : Application() {
             )
             
             backtestUseCase = BacktestUseCaseImpl(marketDataRepository, startingBalance = { try { mt5GatewayRepository.getAccountBalance().getOrNull() } catch(e: Exception) { null } })
+
+            autonomousBotEngine = com.destinedfx.core.bot.AutonomousBotEngine(
+                marketDataRepo = marketDataRepository,
+                newsRepo = newsRepository,
+                tradeUseCase = tradeUseCase,
+                tradeRepo = tradeRepository,
+                brokerManager = brokerManager,
+                secretsManager = secretsManager,
+                isEmailVerified = { secretsManager.getSupabaseEmailConfirmedAt() != null },
+                isAuthenticated = { secretsManager.getSupabaseAccessToken().isNotBlank() },
+                validateSession = { authUseCase.validateCurrentSession().isSuccess }
+            )
             
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("MyApplication", "Secondary initialization failed: ${e.javaClass.simpleName}")
             // Ensure all lateinit vars are initialized to avoid crashes
-            if (!::marketDataRepository.isInitialized) marketDataRepository = MarketDataRepositoryImpl(secretsManager)
+            if (!::derivMarketDataGateway.isInitialized) {
+                derivMarketDataGateway = com.example.data.deriv.DerivMarketDataGateway()
+                derivMarketDataGateway.connect()
+            }
+            if (!::marketDataRepository.isInitialized) marketDataRepository = MarketDataRepositoryImpl(secretsManager, derivMarketDataGateway)
             if (!::mt5GatewayRepository.isInitialized) mt5GatewayRepository = MT5GatewayRepository(secretsManager)
             if (!::newsRepository.isInitialized) newsRepository = ForexNewsRepository()
             if (!::tradeRepository.isInitialized) tradeRepository = TradeRepository(db.tradeDao())
@@ -173,10 +203,15 @@ class MyApplication : Application() {
             if (!::marketDataUseCase.isInitialized) marketDataUseCase = GetMarketDataUseCaseImpl(marketDataRepository)
             if (!::signalGenerationUseCase.isInitialized) signalGenerationUseCase = SignalGenerationUseCaseImpl(marketDataRepository, newsRepository)
             
+            if (!::derivBrokerGateway.isInitialized) derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secretsManager)
+            if (!::derivGatewayAdapter.isInitialized) derivGatewayAdapter = com.example.data.broker.DerivBrokerGatewayAdapter(derivBrokerGateway)
+            if (!::mt5GatewayAdapter.isInitialized) mt5GatewayAdapter = com.example.data.broker.MT5BrokerGatewayAdapter(mt5GatewayRepository)
+            if (!::brokerManager.isInitialized) brokerManager = com.example.data.broker.BrokerManager(derivGatewayAdapter, mt5GatewayAdapter)
+
             if (!::tradeUseCase.isInitialized) {
                 tradeUseCase = TradeUseCaseImpl(
                     market = marketDataRepository,
-                    mt5 = mt5GatewayRepository,
+                    brokerProvider = { brokerManager.activeBroker.value },
                     journal = tradeRepository,
                     news = newsRepository,
                     reports = signalGenerationUseCase,
@@ -190,6 +225,19 @@ class MyApplication : Application() {
                 )
             }
             if (!::backtestUseCase.isInitialized) backtestUseCase = BacktestUseCaseImpl(marketDataRepository, startingBalance = { null })
+            if (!::autonomousBotEngine.isInitialized) {
+                autonomousBotEngine = com.destinedfx.core.bot.AutonomousBotEngine(
+                    marketDataRepo = marketDataRepository,
+                    newsRepo = newsRepository,
+                    tradeUseCase = tradeUseCase,
+                    tradeRepo = tradeRepository,
+                    brokerManager = brokerManager,
+                    secretsManager = secretsManager,
+                    isEmailVerified = { secretsManager.getSupabaseEmailConfirmedAt() != null },
+                    isAuthenticated = { secretsManager.getSupabaseAccessToken().isNotBlank() },
+                    validateSession = { if (::authUseCase.isInitialized) authUseCase.validateCurrentSession().isSuccess else false }
+                )
+            }
         }
     }
 }

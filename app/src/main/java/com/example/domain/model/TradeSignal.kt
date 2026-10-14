@@ -41,6 +41,8 @@ data class TradeSignal(
     val dataSource: String = "",
     val dataHealth: String = "",
     val mtfSummary: String = "",
+    val mtfState: String = "",
+    val mtfPerTimeframe: Map<String, String> = emptyMap(),
     val spreadText: String = "",
     val sessionLabel: String = "",
     val newsStatus: String = "",

@@ -17,8 +17,11 @@ import com.destinedfx.core.trade.TradeDecision
 import com.destinedfx.core.trade.TradeValidationPipeline
 import com.destinedfx.core.trade.TradingConfig
 import com.destinedfx.core.trade.ValidationContext
+import com.example.data.broker.BrokerGateway
 import com.example.data.trade.TradeEntity
 import com.example.data.trade.TradeRepository
+import com.example.domain.model.CanonicalTarget
+import com.example.domain.model.CanonicalTradePlan
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.domain.repository.MT5Repository
@@ -33,17 +36,52 @@ class TradeBlockedException(val decision: TradeDecision) : Exception(decision.ex
 
 /**
  * Execution gate. Everything runs through [TradeValidationPipeline]; there is no second validation path. A rejected attempt is journaled with its reasons.
- * Broker is the source of truth for balance, equity, margin and open positions.
+ * BrokerGateway is the canonical source of truth for balance, equity, margin and open positions.
  */
 class TradeUseCaseImpl(
-    private val market: MarketDataRepository, private val mt5: MT5Repository, private val journal: TradeRepository,
-    private val news: NewsRepository, private val reports: SignalReportStore,
-    private val config: suspend () -> TradingConfig = { TradingConfig() }, private val guard: DuplicateGuard = DuplicateGuard(),
-    private val clock: () -> Long = System::currentTimeMillis, private val pollIntervalMs: Long = 45_000L
+    private val market: MarketDataRepository,
+    private val brokerProvider: () -> BrokerGateway,
+    private val journal: TradeRepository,
+    private val news: NewsRepository,
+    private val reports: SignalReportStore,
+    private val config: suspend () -> TradingConfig = { TradingConfig() },
+    private val guard: DuplicateGuard = DuplicateGuard(),
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val pollIntervalMs: Long = 45_000L
 ) : TradeUseCase {
+
+    // Backward-compatible secondary constructor for MT5-only invocations
+    constructor(
+        market: MarketDataRepository,
+        mt5: MT5Repository,
+        journal: TradeRepository,
+        news: NewsRepository,
+        reports: SignalReportStore,
+        config: suspend () -> TradingConfig = { TradingConfig() },
+        guard: DuplicateGuard = DuplicateGuard(),
+        clock: () -> Long = System::currentTimeMillis,
+        pollIntervalMs: Long = 45_000L
+    ) : this(
+        market = market,
+        brokerProvider = {
+            if (mt5 is com.example.data.mt5.MT5GatewayRepository) {
+                com.example.data.broker.MT5BrokerGatewayAdapter(mt5)
+            } else {
+                throw UnsupportedOperationException("Unsupported MT5 repository instance")
+            }
+        },
+        journal = journal,
+        news = news,
+        reports = reports,
+        config = config,
+        guard = guard,
+        clock = clock,
+        pollIntervalMs = pollIntervalMs
+    )
 
     override suspend fun executeTrade(signal: TradeSignal) {
         val now = clock(); val cfg = config(); val symbol = signal.symbol
+        val broker = brokerProvider()
         val ticker = market.tickerFlow.value[symbol]
         val quote = ticker?.let { if (it.bid != null && it.ask != null && it.hasRealSpread) MarketQuote.twoSided(symbol, AssetClassifier.of(symbol), it.bid, it.ask, it.lastUpdateMillis, it.lastUpdateMillis, it.source)
             else MarketQuote.lastOnly(symbol, AssetClassifier.of(symbol), it.price, it.lastUpdateMillis, it.lastUpdateMillis, it.source) }
@@ -57,25 +95,25 @@ class TradeUseCaseImpl(
         val plan: TradePlan? = if (!manual) null else RiskEngine.rewardToRisk(signal.entryPrice, signal.stopLoss, signal.takeProfit, isLong)?.let {
             val t = Target("TP1", signal.takeProfit, it, "manual"); TradePlan(isLong, signal.entryPrice, signal.stopLoss, 0.0, listOf(t), t, "user-specified") }
 
-        val metrics = mt5.getAccountMetrics().getOrNull()
+        val metrics = broker.accountMetrics.value
         val account = metrics?.let { AccountState(it.balance, it.equity, it.freeMargin, null, "ACC") }
-        val spec = SpecRegistry.get(symbol) ?: mt5.loadSymbolSpec(symbol).getOrNull()
+        val spec = SpecRegistry.get(symbol) ?: broker.loadSymbolSpec(symbol).getOrNull()
         val effPlan = plan ?: report.plan
         val prelim = if (effPlan != null && spec != null && account != null) RiskEngine.positionSize(account, cfg.riskPercent, effPlan.entry, effPlan.stopLoss, spec, cfg.commissionPerLot) as? SizingResult.Sized else null
-        val reqMargin = prelim?.let { mt5.calculateRequiredMargin(symbol, it.lots).getOrNull() }
-        val positions = mt5.getOpenPositions().getOrNull()
-        val open = positions?.map { p -> val sp = SpecRegistry.get(p.symbol)
+        val reqMargin = prelim?.let { broker.calculateRequiredMargin(symbol, it.lots).getOrNull() }
+        val positions = broker.openPositions.value
+        val open = positions.map { p -> val sp = SpecRegistry.get(p.symbol)
             val risk = if (sp != null && account != null && account.balance > 0) kotlin.math.abs(p.entryPrice - p.stopLoss) / sp.tickSize * sp.tickValue * p.lotSize / account.balance * 100 else cfg.riskPercent
-            OpenRisk(p.symbol, p.direction == SignalDirection.LONG, risk, sp?.baseCurrency ?: p.symbol.take(3), sp?.profitCurrency ?: p.symbol.takeLast(3)) } ?: emptyList()
+            OpenRisk(p.symbol, p.direction == SignalDirection.LONG, risk, sp?.baseCurrency ?: p.symbol.take(3), sp?.profitCurrency ?: p.symbol.takeLast(3)) }
         val closed = journal.allTrades.first().filter { it.closeTimestamp != null }.map { RealizedPnl(it.closeTimestamp ?: 0L, it.plAmount) }
         val atr = report.structure?.atr ?: market.getCandles(symbol, "H1", 60).filter { it.complete }
             .map { CoreCandle(it.timestamp, it.open, it.high, it.low, it.close) }.takeIf { it.size > 20 }?.let { Indicators.lastAtr(it) }
         val key = guard.key(signal.id, symbol, isLong)
-        val brokerQuote = mt5.getBrokerQuote(symbol).getOrNull()
+        val brokerQuote = broker.getBrokerQuote(symbol).getOrNull()
 
         val decision = TradeValidationPipeline.validate(ValidationContext(
             report, health, quote, NewsFilter.evaluate(news.calendar(), AssetClassifier.newsCurrencies(symbol), now), SessionEngine.state(now), spec, account,
-            mt5.isConnected() && positions != null, reqMargin, account?.balance ?: 0.0, closed, (metrics?.equity ?: 0.0) - (metrics?.balance ?: 0.0), open, now, cfg,
+            broker.isConnected(), reqMargin, account?.balance ?: 0.0, closed, (metrics?.equity ?: 0.0) - (metrics?.balance ?: 0.0), open, now, cfg,
             duplicateOrder = guard.isDuplicate(key), analysisGatesRequired = !manual, planOverride = plan, atr = atr, brokerQuote = brokerQuote))
 
         if (!decision.approved || effPlan == null) {
@@ -121,9 +159,40 @@ class TradeUseCaseImpl(
         }
 
         if (!guard.tryClaim(key)) { record(signal, 0.0, "BLOCKED", "Duplicate order", report, now); throw IllegalStateException("Duplicate order blocked") }
-        val requestId = "REQ-" + UUID.randomUUID()
-        val result = mt5.executeTrade(signal.copy(entryPrice = brokerPlan.entry, stopLoss = brokerPlan.stopLoss, takeProfit = brokerPlan.primary.price), finalSizing.lots, requestId)
-        record(signal, finalSizing.lots, if (result.isSuccess) "OPEN" else "FAILED", result.exceptionOrNull()?.message ?: "requestId=$requestId order=${result.getOrNull()}", report, now, result.getOrNull())
+
+        // Execute via unified BrokerGateway using CanonicalTradePlan
+        val canonicalPlan = CanonicalTradePlan(
+            symbol = signal.symbol,
+            broker = broker.displayName,
+            provider = quote?.source ?: "NATIVE",
+            timeframe = signal.timeframe,
+            strategy = report.strategyVersion,
+            direction = signal.direction,
+            status = report.state.name,
+            entry = brokerPlan.entry,
+            bid = bq?.bid ?: brokerPlan.entry,
+            ask = bq?.ask ?: brokerPlan.entry,
+            spread = quote?.spread ?: 0.0,
+            stopLoss = brokerPlan.stopLoss,
+            takeProfit = brokerPlan.primary.price,
+            rr = brokerPlan.primary.rr,
+            riskPercent = cfg.riskPercent,
+            riskAmount = finalSizing.moneyRiskActual,
+            positionSize = finalSizing.lots,
+            invalidation = brokerPlan.stopLoss,
+            timestamp = now,
+            marketDataTimestamp = quote?.timestampMs ?: now,
+            dataHealth = health.name,
+            reason = report.reasons.firstOrNull() ?: "Verified technical setup",
+            strategyVersion = report.strategyVersion,
+            confluenceScore = report.confluenceScore,
+            targets = brokerPlan.targets.map { CanonicalTarget(it.label, it.price, it.rr, it.source) },
+            newsStatus = "CLEAR"
+        )
+
+        val result = broker.executeTrade(canonicalPlan)
+        val orderRef = result.getOrNull()
+        record(signal, finalSizing.lots, if (result.isSuccess) "OPEN" else "FAILED", result.exceptionOrNull()?.message ?: "broker=${broker.displayName} orderRef=$orderRef", report, now, orderRef)
         if (result.isFailure) { guard.release(key); throw Exception(result.exceptionOrNull()?.message ?: "Execution failed") }
     }
 

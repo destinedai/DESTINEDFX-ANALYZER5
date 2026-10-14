@@ -18,7 +18,7 @@ enum class CheckStatus { PASS, FAIL }
 data class CheckResult(val name: String, val status: CheckStatus, val detail: String)
 
 data class TradingConfig(
-    val riskPercent: Double = 1.0, val maxSpreadPips: Double? = null, val maxSpreadAtrFraction: Double = 0.15, val minRR: Double = 1.5,
+    val riskPercent: Double = 1.0, val maxSpreadPips: Double? = null, val maxSpreadAtrFraction: Double = 0.15, val minRR: Double = 2.0,
     val allowedSessions: Set<com.destinedfx.core.session.Session>? = null, val requireKillzone: Boolean = false,
     val manualRiskMode: Boolean = false, val minConfluence: Int = 65, val commissionPerLot: Double = 0.0, val portfolio: PortfolioLimits = PortfolioLimits()
 )

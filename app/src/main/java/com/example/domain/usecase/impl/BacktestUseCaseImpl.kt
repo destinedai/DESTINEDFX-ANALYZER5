@@ -40,7 +40,7 @@ class BacktestUseCaseImpl(
             val sc = SignalConfig(structure = StructureConfig(swingLeft = p.getValue("swingLeft").toInt(), swingRight = p.getValue("swingLeft").toInt()),
                 mtf = MtfConfig(required = listOf(timeframe)), minRR = p.getValue("minRR"))
             val q = com.destinedfx.core.marketdata.MarketQuote.lastOnly(symbol, cls, hist.last().close, hist.last().timeMs, hist.last().timeMs, "backtest")
-            val rep = SignalEngine.analyse(AnalysisInput(symbol, timeframe, hist.takeLast(250), emptyMap(), q, spec, hist.last().timeMs), sc)
+            val rep = SignalEngine.analyse(AnalysisInput(symbol, timeframe, hist.takeLast(250), emptyMap(), q, spec, hist.last().timeMs, strategyId = strategy), sc)
             val pl = rep.plan
             if (pl != null && rep.state in setOf(SignalState.STRONG_BUY, SignalState.BUY, SignalState.STRONG_SELL, SignalState.SELL))
                 Order(if (pl.isLong) Dir.BULL else Dir.BEAR, pl.stopLoss, pl.primary.price) else null } }

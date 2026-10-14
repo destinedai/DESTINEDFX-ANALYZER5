@@ -27,7 +27,7 @@ object RiskEngine {
         commissionPerLotRoundTurn: Double = 0.0, estimatedSlippagePerLot: Double = 0.0
     ): SizingResult {
         if (!entry.isFinite() || !stopLoss.isFinite() || entry <= 0.0 || stopLoss <= 0.0) return SizingResult.Rejected("Invalid entry/SL price")
-        if (!(riskPercent > 0.0 && riskPercent <= 100.0)) return SizingResult.Rejected("Invalid risk percent")
+        if (!(riskPercent > 0.0 && riskPercent <= 1.0)) return SizingResult.Rejected("Invalid risk percent: strictly capped at maximum 1.0% risk per trade")
         val base = riskBase(account)
         if (!(base > 0.0 && base.isFinite())) return SizingResult.Rejected("Account balance/equity unavailable or non-positive")
         spec.validationErrors().takeIf { it.isNotEmpty() }?.let { return SizingResult.Rejected("Broker spec invalid: ${it.joinToString()}") }

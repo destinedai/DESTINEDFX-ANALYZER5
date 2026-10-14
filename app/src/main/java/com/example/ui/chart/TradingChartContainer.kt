@@ -82,6 +82,7 @@ fun TradingChartContainer(
             TradingViewWebView(
                 symbol = activeSymbol,
                 timeframe = selectedTimeframe,
+                onSwitchToCanvas = { onToggleChartType(false) },
                 modifier = Modifier.fillMaxSize()
             )
         } else {
@@ -295,29 +296,91 @@ fun LiveStructureHud(
 fun TradingViewWebView(
     symbol: String,
     timeframe: String,
+    onSwitchToCanvas: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val mappedSymbol = mapToTradingViewSymbol(symbol)
-    val mappedInterval = when (timeframe.uppercase()) {
-        "M1", "1" -> "1"
-        "M5", "5" -> "5"
-        "M15", "15" -> "15"
-        "M30", "30" -> "30"
-        "H1", "60" -> "60"
-        "H4", "240" -> "240"
-        "D1", "D" -> "D"
-        "W1", "W" -> "W"
-        else -> "60"
+    val mappedSymbol = TradingViewMapper.mapSymbol(symbol)
+    val mappedInterval = TradingViewMapper.mapInterval(timeframe)
+
+    if (mappedSymbol == null) {
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .background(Color(0xFF0B0E14))
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Symbol Not Supported by TradingView", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "TradingView does not supply charts for proprietary synthetic or unmapped asset '$symbol'.",
+                fontSize = 11.sp,
+                color = TextSecondary,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+            if (onSwitchToCanvas != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onSwitchToCanvas,
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text("Switch to CANVAS Chart", color = DarkBackground, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+            }
+        }
+        return
+    }
+
+    if (mappedInterval == null) {
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .background(Color(0xFF0B0E14))
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Unsupported Timeframe", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("Timeframe '$timeframe' is not supported by the TradingView chart widget.", fontSize = 11.sp, color = TextSecondary)
+        }
+        return
+    }
+
+    val currentKey = "${mappedSymbol}_$mappedInterval"
+    var isLoading by remember(currentKey) { mutableStateOf(true) }
+    var isChartError by remember(currentKey) { mutableStateOf(false) }
+    var errorMessage by remember(currentKey) { mutableStateOf("") }
+    var retryTrigger by remember { mutableIntStateOf(0) }
+
+    // Chart load timeout guard (15 seconds)
+    LaunchedEffect(currentKey, retryTrigger) {
+        isLoading = true
+        isChartError = false
+        errorMessage = ""
+        kotlinx.coroutines.delay(15_000L)
+        if (isLoading && !isChartError) {
+            isChartError = true
+            isLoading = false
+            errorMessage = "Chart load timed out. Check your network connection and retry."
+        }
     }
 
     val html = """
         <!DOCTYPE html>
         <html>
         <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 body, html { margin: 0; padding: 0; height: 100%; width: 100%; background-color: #0B0E14; overflow: hidden; }
                 .tradingview-widget-container { height: 100%; width: 100%; }
+                .tradingview-widget-container__widget { height: 100%; width: 100%; }
             </style>
         </head>
         <body>
@@ -332,17 +395,16 @@ fun TradingViewWebView(
                   "theme": "dark",
                   "style": "1",
                   "locale": "en",
-                  "allow_symbol_change": false
+                  "allow_symbol_change": false,
+                  "enable_publishing": false,
+                  "calendar": false,
+                  "support_host": "https://www.tradingview.com"
                 }
                 </script>
             </div>
-            <div style="position: absolute; bottom: 0; right: 0; color: #444; font-size: 8px; padding: 2px;">v6.0</div>
         </body>
         </html>
     """.trimIndent()
-
-    val currentKey = "${mappedSymbol}_$mappedInterval"
-    var isChartError by remember { mutableStateOf(false) }
 
     Box(modifier = modifier) {
         if (isChartError) {
@@ -356,12 +418,24 @@ fun TradingViewWebView(
             ) {
                 Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Chart Unavailable", color = TextPrimary, fontWeight = FontWeight.Bold)
-                Text("Unable to load TradingView widget chart.", fontSize = 12.sp, color = TextSecondary)
+                Text("Chart Unavailable", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(
+                    text = errorMessage.ifBlank { "Unable to load TradingView chart widget for $symbol." },
+                    fontSize = 11.sp,
+                    color = TextSecondary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 Button(
-                    onClick = { isChartError = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary)
+                    onClick = {
+                        isChartError = false
+                        isLoading = true
+                        errorMessage = ""
+                        retryTrigger++
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
+                    shape = RoundedCornerShape(4.dp)
                 ) {
                     Text("Retry", color = DarkBackground, fontWeight = FontWeight.Bold)
                 }
@@ -370,16 +444,29 @@ fun TradingViewWebView(
             AndroidView(
                 factory = { context ->
                     WebView(context).apply {
-                        tag = currentKey
+                        tag = "$currentKey-$retryTrigger"
                         setLayerType(View.LAYER_TYPE_HARDWARE, null)
                         webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                if (!isChartError) {
+                                    isLoading = false
+                                }
+                            }
                             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                handler?.cancel()
+                                handler?.cancel() // STRICT SSL: Never bypass SSL certificate errors
                                 isChartError = true
+                                isLoading = false
+                                errorMessage = "SSL verification failed. Connection not secure."
                             }
                             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                                 if (request?.isForMainFrame == true) {
+                                    val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                        error?.description?.toString() ?: "Network error"
+                                    } else "Network error"
                                     isChartError = true
+                                    isLoading = false
+                                    errorMessage = desc
                                 }
                             }
                         }
@@ -400,103 +487,45 @@ fun TradingViewWebView(
                     }
                 },
                 update = { webView ->
-                    if (webView.tag != currentKey) {
-                        webView.tag = currentKey
+                    val expectedTag = "$currentKey-$retryTrigger"
+                    if (webView.tag != expectedTag) {
+                        webView.tag = expectedTag
                         webView.loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
+
+            // Visible loading indicator while TradingView initializes
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF0B0E14).copy(alpha = 0.85f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = CyanPrimary,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Text(
+                            text = "Loading TradingView Chart ($symbol $timeframe)...",
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
-/**
- * Semi-transparent SMC overlay mapped on top of the TradingView widget.
- */
-@Composable
-fun LiveStructureCanvasOverlay(
-    dynamicAnalysis: DynamicAnalysisInfo,
-    currentSpotPrice: Double,
-    activeSymbol: String,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-
-        // Calculate visual Y levels for trade coordinates
-        val isBuy = dynamicAnalysis.direction == "BUY"
-        val entryY = h * 0.52f
-        val slY = if (isBuy) h * 0.76f else h * 0.28f
-        val tp1Y = if (isBuy) h * 0.38f else h * 0.66f
-        val tp2Y = if (isBuy) h * 0.24f else h * 0.80f
-
-        val entryCol = Color(0xFF448AFF)
-        val slCol = Color(0xFFFF5252)
-        val tp1Col = Color(0xFF00FF99)
-        val tp2Col = Color(0xFF00E5FF)
-
-        // Draw Stop Loss Line
-        drawLine(
-            color = slCol.copy(alpha = 0.85f),
-            start = Offset(0f, slY),
-            end = Offset(w, slY),
-            strokeWidth = 2f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
-        )
-
-        // Draw Entry Line
-        drawLine(
-            color = entryCol.copy(alpha = 0.85f),
-            start = Offset(0f, entryY),
-            end = Offset(w, entryY),
-            strokeWidth = 2f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
-        )
-
-        // Draw TP1 Line
-        drawLine(
-            color = tp1Col.copy(alpha = 0.85f),
-            start = Offset(0f, tp1Y),
-            end = Offset(w, tp1Y),
-            strokeWidth = 2f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
-        )
-
-        // Draw TP2 Line
-        drawLine(
-            color = tp2Col.copy(alpha = 0.85f),
-            start = Offset(0f, tp2Y),
-            end = Offset(w, tp2Y),
-            strokeWidth = 2f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
-        )
-
-        // Native canvas labels on the right edge
-        val paint = android.graphics.Paint().apply {
-            isAntiAlias = true
-            textSize = 24f
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
-        }
-
-        // SL Label
-        paint.color = android.graphics.Color.parseColor("#FF5252")
-        drawContext.canvas.nativeCanvas.drawText("SL ${formatPrice(dynamicAnalysis.stopLoss, activeSymbol)}", 20f, slY - 8f, paint)
-
-        // Entry Label
-        paint.color = android.graphics.Color.parseColor("#448AFF")
-        drawContext.canvas.nativeCanvas.drawText("ENTRY ${formatPrice(dynamicAnalysis.entry, activeSymbol)}", 20f, entryY - 8f, paint)
-
-        // TP1 Label
-        paint.color = android.graphics.Color.parseColor("#00FF99")
-        drawContext.canvas.nativeCanvas.drawText("TP1 ${formatPrice(dynamicAnalysis.tp1, activeSymbol)} (+${String.format(Locale.US, "%.1f", dynamicAnalysis.tp1YieldPips)} pts)", 20f, tp1Y - 8f, paint)
-
-        // TP2 Label
-        paint.color = android.graphics.Color.parseColor("#00E5FF")
-        drawContext.canvas.nativeCanvas.drawText("TP2 ${formatPrice(dynamicAnalysis.tp2, activeSymbol)} (1:2.5R)", 20f, tp2Y - 8f, paint)
-    }
-}
 
 /**
  * High-performance Compose Canvas chart that maps out structures as the market flows!
@@ -780,29 +809,67 @@ fun AlgorithmicCanvasChart(
     }
 }
 
-private fun mapToTradingViewSymbol(symbol: String): String {
-    return when (symbol) {
-        "EUR/USD" -> "FX:EURUSD"
-        "GBP/USD" -> "FX:GBPUSD"
-        "USD/JPY" -> "FX:USDJPY"
-        "USD/CHF" -> "FX:USDCHF"
-        "AUD/USD" -> "FX:AUDUSD"
-        "USD/CAD" -> "FX:USDCAD"
-        "NZD/USD" -> "FX:NZDUSD"
-        "EUR/GBP" -> "FX:EURGBP"
-        "EUR/JPY" -> "FX:EURJPY"
-        "GBP/JPY" -> "FX:GBPJPY"
-        "XAU/USD" -> "OANDA:XAUUSD"
-        "XAG/USD" -> "OANDA:XAGUSD"
-        "BTC/USD" -> "BYBIT:BTCUSDT"
-        "ETH/USD" -> "BYBIT:ETHUSDT"
-        "SOL/USD" -> "BYBIT:SOLUSDT"
-        "XRP/USD" -> "BYBIT:XRPUSDT"
-        "BNB/USD" -> "BYBIT:BNBUSDT"
-        "USOIL" -> "TVC:USOIL"
-        "SPX500" -> "FOREXCOM:SPX500"
-        "NAS100" -> "FOREXCOM:NAS100"
-        "DJ30" -> "FOREXCOM:DJ30"
-        else -> "FX:" + symbol.replace("/", "")
+internal object TradingViewMapper {
+    fun mapSymbol(symbol: String): String? {
+        val clean = symbol.trim().uppercase()
+        // Reject Deriv synthetic indices which TradingView does not support
+        if (clean.startsWith("R_") || clean.startsWith("1HZ") || clean.startsWith("CRASH") ||
+            clean.startsWith("BOOM") || clean.startsWith("JUMP") || clean.startsWith("STEP") ||
+            clean.startsWith("STP_") || clean.contains("VOLATILITY") || clean.contains("DEX")) {
+            return null
+        }
+        return when (clean) {
+            "EUR/USD", "EURUSD" -> "FX:EURUSD"
+            "GBP/USD", "GBPUSD" -> "FX:GBPUSD"
+            "USD/JPY", "USDJPY" -> "FX:USDJPY"
+            "USD/CHF", "USDCHF" -> "FX:USDCHF"
+            "AUD/USD", "AUDUSD" -> "FX:AUDUSD"
+            "USD/CAD", "USDCAD" -> "FX:USDCAD"
+            "NZD/USD", "NZDUSD" -> "FX:NZDUSD"
+            "EUR/GBP", "EURGBP" -> "FX:EURGBP"
+            "EUR/JPY", "EURJPY" -> "FX:EURJPY"
+            "GBP/JPY", "GBPJPY" -> "FX:GBPJPY"
+            "AUD/JPY", "AUDJPY" -> "FX:AUDJPY"
+            "EUR/AUD", "EURAUD" -> "FX:EURAUD"
+            "EUR/CAD", "EURCAD" -> "FX:EURCAD"
+            "GBP/AUD", "GBPAUD" -> "FX:GBPAUD"
+            "GBP/CAD", "GBPCAD" -> "FX:GBPCAD"
+            "XAU/USD", "XAUUSD", "GOLD" -> "OANDA:XAUUSD"
+            "XAG/USD", "XAGUSD", "SILVER" -> "OANDA:XAGUSD"
+            "BTC/USD", "BTCUSD", "BTCUSDT" -> "BYBIT:BTCUSDT"
+            "ETH/USD", "ETHUSD", "ETHUSDT" -> "BYBIT:ETHUSDT"
+            "SOL/USD", "SOLUSD", "SOLUSDT" -> "BYBIT:SOLUSDT"
+            "XRP/USD", "XRPUSD", "XRPUSDT" -> "BYBIT:XRPUSDT"
+            "BNB/USD", "BNBUSD", "BNBUSDT" -> "BYBIT:BNBUSDT"
+            "USOIL", "WTI" -> "TVC:USOIL"
+            "UKOIL", "BRENT" -> "TVC:UKOIL"
+            "SPX500", "US500", "SPX" -> "FOREXCOM:SPX500"
+            "NAS100", "US100", "NDX" -> "FOREXCOM:NAS100"
+            "DJ30", "US30", "DJI" -> "FOREXCOM:DJ30"
+            "GER30", "GER40", "DAX" -> "FOREXCOM:GER40"
+            else -> {
+                // If standard 6-character forex pair like "NZD/CAD"
+                val stripped = clean.replace("/", "")
+                if (stripped.length == 6 && stripped.all { it.isLetter() }) {
+                    "FX:$stripped"
+                } else {
+                    null // Fail-safe: unsupported symbol
+                }
+            }
+        }
+    }
+
+    fun mapInterval(timeframe: String): String? {
+        return when (timeframe.trim().uppercase()) {
+            "M1", "1" -> "1"
+            "M5", "5" -> "5"
+            "M15", "15" -> "15"
+            "M30", "30" -> "30"
+            "H1", "60", "1H" -> "60"
+            "H4", "240", "4H" -> "240"
+            "D1", "D", "1D" -> "D"
+            "W1", "W", "1W" -> "W"
+            else -> null
+        }
     }
 }

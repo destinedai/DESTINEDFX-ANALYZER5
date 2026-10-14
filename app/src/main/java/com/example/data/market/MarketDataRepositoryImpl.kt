@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 class MarketDataRepositoryImpl(
     private val secrets: SecretsManager,
+    private val derivMarketDataGateway: com.example.data.deriv.DerivMarketDataGateway? = null,
     private val clock: () -> Long = System::currentTimeMillis
 ) : MarketDataRepository {
 
@@ -63,7 +64,7 @@ class MarketDataRepositoryImpl(
     private val _tickers = MutableStateFlow<Map<String, MarketTicker>>(emptyMap())
     override val tickerFlow: StateFlow<Map<String, MarketTicker>> = _tickers.asStateFlow()
 
-    override val selectedApiSource = MutableStateFlow("TWELVE_DATA")
+    override val selectedApiSource = MutableStateFlow("DERIV")
 
     private val activeSource = ConcurrentHashMap<String, String>()
     private val lastSourceLog = ConcurrentHashMap<String, Long>()
@@ -121,49 +122,104 @@ class MarketDataRepositoryImpl(
         }
 
         val preferred = selectedApiSource.value
-        
-        return withTimeoutOrNull(5000) {
-            if (preferred == "TWELVE_DATA") {
-                twelveDataProvider.getLiveQuote(sym)?.copy(source = "TwelveData")
-                    ?: alphaVantageProvider.getLiveQuote(sym)
-            } else {
-                alphaVantageProvider.getLiveQuote(sym)
-                    ?: twelveDataProvider.getLiveQuote(sym)?.copy(source = "TwelveData")
+
+        // 2. Deriv priority: when DERIV is preferred, gateway is present, query Deriv quote
+        if ((preferred == "DERIV" || preferred.isBlank()) && derivMarketDataGateway != null) {
+            val derivSym = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(sym)
+            if (derivSym != null) {
+                val q = derivMarketDataGateway.latestQuotes.value[derivSym]
+                if (q != null && System.currentTimeMillis() - q.receivedAtMs <= 10_000L) {
+                    return MarketTicker(
+                        symbol = sym,
+                        price = q.mid ?: q.last ?: 0.0,
+                        changePercent = 0.0,
+                        high = 0.0,
+                        low = 0.0,
+                        spread = q.spread ?: 0.0,
+                        bias = "NEUTRAL",
+                        confidence = 0,
+                        lastUpdateMillis = q.receivedAtMs,
+                        isLive = true,
+                        source = "Deriv WebSocket",
+                        bid = q.bid,
+                        ask = q.ask,
+                        hasRealSpread = q.spread != null,
+                        kind = "STREAM"
+                    )
+                }
             }
-        } ?: withTimeoutOrNull(3000) {
-            oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA")
         }
+
+        // 3. OANDA if configured and preferred
+        if (preferred == "OANDA" || (secrets.getOandaApiKey().isNotBlank() && preferred != "TWELVE_DATA" && preferred != "ALPHA_VANTAGE")) {
+            val oanda = withTimeoutOrNull(3000) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
+            if (oanda != null) return oanda
+        }
+
+        // Only query TwelveData if user explicitly configured selectedApiSource to "TWELVE_DATA"
+        if (preferred == "TWELVE_DATA") {
+            return withTimeoutOrNull(5000) { twelveDataProvider.getLiveQuote(sym)?.copy(source = "TwelveData") }
+        }
+        if (preferred == "ALPHA_VANTAGE") {
+            return withTimeoutOrNull(5000) { alphaVantageProvider.getLiveQuote(sym) }
+        }
+
+        return null
     }
 
     private suspend fun fetchBackgroundQuoteForSymbol(sym: String): MarketTicker? {
         val aClass = com.destinedfx.core.instrument.AssetClassifier.of(sym)
-        // 1. Crypto priority
+        // 1. Crypto priority: Binance
         if (aClass == com.destinedfx.core.marketdata.AssetClass.CRYPTO) {
             val binance = withTimeoutOrNull(2000) { binanceProvider.getLiveQuote(sym) }
             if (binance != null) return binance.copy(source = "Binance Spot (USDT pairs)")
         }
 
         val preferred = selectedApiSource.value
-        val now = clock()
 
-        // Background polling is throttled more heavily for non-crypto to respect rate limits
-        if (preferred == "TWELVE_DATA") {
-            val lastCall = lastTwelveDataCall[sym] ?: 0L
-            if ((now - lastCall) > 30_000L) { // 30s for background TD
-                lastTwelveDataCall[sym] = now
-                val twelve = withTimeoutOrNull(3000) { twelveDataProvider.getLiveQuote(sym) }
-                if (twelve != null) return twelve.copy(source = "TwelveData")
+        // 2. Deriv background quote check
+        if ((preferred == "DERIV" || preferred.isBlank()) && derivMarketDataGateway != null) {
+            val derivSym = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(sym)
+            if (derivSym != null) {
+                val q = derivMarketDataGateway.latestQuotes.value[derivSym]
+                if (q != null && System.currentTimeMillis() - q.receivedAtMs <= 15_000L) {
+                    return MarketTicker(
+                        symbol = sym,
+                        price = q.mid ?: q.last ?: 0.0,
+                        changePercent = 0.0,
+                        high = 0.0,
+                        low = 0.0,
+                        spread = q.spread ?: 0.0,
+                        bias = "NEUTRAL",
+                        confidence = 0,
+                        lastUpdateMillis = q.receivedAtMs,
+                        isLive = true,
+                        source = "Deriv WebSocket",
+                        bid = q.bid,
+                        ask = q.ask,
+                        hasRealSpread = q.spread != null,
+                        kind = "STREAM"
+                    )
+                }
             }
-            return withTimeoutOrNull(2000) { alphaVantageProvider.getLiveQuote(sym) }
-        } else {
-            val lastCall = lastAlphaVantageCall[sym] ?: 0L
-            if ((now - lastCall) > 30_000L) { // 30s for background AV
-                lastAlphaVantageCall[sym] = now
-                val av = withTimeoutOrNull(3000) { alphaVantageProvider.getLiveQuote(sym) }
-                if (av != null) return av
-            }
-            return withTimeoutOrNull(2000) { twelveDataProvider.getLiveQuote(sym)?.copy(source = "TwelveData") }
         }
+
+        // 3. OANDA background quote if configured
+        if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
+            return withTimeoutOrNull(2000) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
+        }
+
+        // TwelveData only if explicitly configured
+        if (preferred == "TWELVE_DATA") {
+            val now = clock()
+            val lastCall = lastTwelveDataCall[sym] ?: 0L
+            if ((now - lastCall) > 30_000L) {
+                lastTwelveDataCall[sym] = now
+                return withTimeoutOrNull(3000) { twelveDataProvider.getLiveQuote(sym)?.copy(source = "TwelveData") }
+            }
+        }
+
+        return null
     }
 
     private fun toQuoteView(t: MarketTicker) = com.destinedfx.core.marketdata.QuoteView(
@@ -294,6 +350,36 @@ class MarketDataRepositoryImpl(
                 delay(backoff.nextDelayMs())
             }
         }
+
+        // 3. Deriv Market Data Gateway Live Stream
+        derivMarketDataGateway?.let { derivGw ->
+            scope.launch {
+                derivGw.latestQuotes.collect { quotes ->
+                    if (quotes.isNotEmpty()) {
+                        val updated = quotes.mapValues { (sym, q) ->
+                            MarketTicker(
+                                symbol = sym,
+                                price = q.mid ?: q.last ?: 0.0,
+                                changePercent = 0.0,
+                                high = 0.0,
+                                low = 0.0,
+                                spread = q.spread ?: 0.0,
+                                bias = "NEUTRAL",
+                                confidence = 0,
+                                lastUpdateMillis = q.receivedAtMs,
+                                isLive = true,
+                                source = q.source,
+                                bid = q.bid,
+                                ask = q.ask,
+                                hasRealSpread = q.spread != null,
+                                kind = "STREAM"
+                            )
+                        }
+                        _tickers.update { it + updated }
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun pollAllSymbolsParallel() {
@@ -365,38 +451,46 @@ class MarketDataRepositoryImpl(
         var sourceUsed = ""
         var isDelayed = false
 
-        // P3: Source prioritization
-        if (BinanceSymbols.toBinance(symbol) != null) {
+        val preferred = selectedApiSource.value
+
+        // 1. Deriv WebSocket priority: when DERIV is selected, default, or for Deriv symbols
+        val derivSymbol = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(symbol)
+        if ((preferred == "DERIV" || preferred.isBlank() || derivSymbol?.startsWith("R_") == true || derivSymbol?.startsWith("1HZ") == true || derivSymbol?.startsWith("BOOM") == true || derivSymbol?.startsWith("CRASH") == true) && derivMarketDataGateway != null && derivSymbol != null) {
+            val granSec = (tf?.minutes ?: 60) * 60
+            candles = withTimeoutOrNull(6000) { derivMarketDataGateway.fetchCandles(derivSymbol, granSec, count) } ?: emptyList()
+            if (candles.isNotEmpty()) {
+                sourceUsed = "Deriv WebSocket"
+                isDelayed = false
+            }
+        }
+
+        // 2. Crypto priority: Binance Spot
+        if (candles.isEmpty() && BinanceSymbols.toBinance(symbol) != null) {
             candles = withTimeoutOrNull(5000) { binanceProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
             if (candles.isNotEmpty()) sourceUsed = "Binance Spot (USDT pairs)"
-        } else if (aClass == com.destinedfx.core.marketdata.AssetClass.FOREX || 
+        } else if (candles.isEmpty() && (aClass == com.destinedfx.core.marketdata.AssetClass.FOREX || 
                    aClass == com.destinedfx.core.marketdata.AssetClass.METALS || 
-                   aClass == com.destinedfx.core.marketdata.AssetClass.INDICES) {
+                   aClass == com.destinedfx.core.marketdata.AssetClass.INDICES)) {
             
-            // Try OANDA first if credentials exist
-            if (secrets.getOandaApiKey().isNotBlank()) {
+            // 3. OANDA if configured and selected
+            if (preferred == "OANDA" || (secrets.getOandaApiKey().isNotBlank() && preferred != "TWELVE_DATA" && preferred != "ALPHA_VANTAGE")) {
                 candles = withTimeoutOrNull(4000) { oandaProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
                 if (candles.isNotEmpty()) sourceUsed = "OANDA"
             }
             
-            if (candles.isEmpty()) {
-                val preferred = selectedApiSource.value
-                if (preferred == "TWELVE_DATA") {
-                    candles = withTimeoutOrNull(5000) { twelveDataProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
-                    if (candles.isNotEmpty()) sourceUsed = "TwelveData"
-                    else {
-                        candles = withTimeoutOrNull(5000) { alphaVantageProvider.getCandles(symbol, timeframe) } ?: emptyList()
-                        if (candles.isNotEmpty()) sourceUsed = "AlphaVantage"
-                    }
-                } else {
-                    candles = withTimeoutOrNull(5000) { alphaVantageProvider.getCandles(symbol, timeframe) } ?: emptyList()
-                    if (candles.isNotEmpty()) sourceUsed = "AlphaVantage"
-                    else {
-                        candles = withTimeoutOrNull(5000) { twelveDataProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
-                        if (candles.isNotEmpty()) sourceUsed = "TwelveData"
-                    }
+            // Explicit TwelveData or AlphaVantage ONLY if requested explicitly (never silent fallback)
+            if (candles.isEmpty() && preferred == "TWELVE_DATA") {
+                candles = withTimeoutOrNull(5000) { twelveDataProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
+                if (candles.isNotEmpty()) {
+                    sourceUsed = "TwelveData"
+                    isDelayed = true
                 }
-                if (candles.isNotEmpty()) isDelayed = true
+            } else if (candles.isEmpty() && preferred == "ALPHA_VANTAGE") {
+                candles = withTimeoutOrNull(5000) { alphaVantageProvider.getCandles(symbol, timeframe) } ?: emptyList()
+                if (candles.isNotEmpty()) {
+                    sourceUsed = "AlphaVantage"
+                    isDelayed = true
+                }
             }
         }
 
@@ -452,6 +546,6 @@ class MarketDataRepositoryImpl(
     }
 
     fun getDataSource(symbol: String, timeframe: String): String {
-        return dataSourceMap["$symbol-$timeframe"] ?: "OANDA / Twelve Data"
+        return dataSourceMap["$symbol-$timeframe"] ?: "Deriv WebSocket"
     }
 }

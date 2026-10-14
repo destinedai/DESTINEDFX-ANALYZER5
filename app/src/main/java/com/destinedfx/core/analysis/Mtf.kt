@@ -28,12 +28,13 @@ object MtfEngine {
     /** FULL requires EVERY required timeframe to agree. A missing timeframe is DATA_INCOMPLETE - never inferred from the others. */
     fun analyse(data: Map<Timeframe, List<Candle>>, cfg: MtfConfig = MtfConfig(), structureCfg: StructureConfig = StructureConfig()): MtfResult {
         val missing = cfg.required.filter { (data[it]?.size ?: 0) < cfg.minCandles }
-        val available = cfg.required.filter { (data[it]?.size ?: 0) >= cfg.minCandles }
-        val trends = available.associateWith { 
+        val allAvailable = data.filter { it.value.size >= cfg.minCandles }.keys
+        val trends = allAvailable.associateWith { 
             StructureEngine.analyze(data.getValue(it), it, structureCfg).trend
         }
-        val bull = trends.values.count { it == Trend.BULLISH }
-        val bear = trends.values.count { it == Trend.BEARISH }
+        val requiredTrends = cfg.required.mapNotNull { trends[it] }
+        val bull = requiredTrends.count { it == Trend.BULLISH }
+        val bear = requiredTrends.count { it == Trend.BEARISH }
         val n = cfg.required.size
         if (missing.isNotEmpty()) {
             return MtfResult(MtfState.DATA_INCOMPLETE, trends, missing, maxOf(bull, bear), n)

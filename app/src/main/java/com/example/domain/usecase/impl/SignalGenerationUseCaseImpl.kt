@@ -79,7 +79,7 @@ class SignalGenerationUseCaseImpl(
             suspend fun load(t: Timeframe, n: Int): List<CoreCandle> {
                 val cacheKey = "$symbol-${t.label}"
                 val lastFailed = failedFetches[cacheKey] ?: 0L
-                if (now - lastFailed < 60_000L) {
+                if (now - lastFailed < 15_000L) {
                     return emptyList()
                 }
 
@@ -87,6 +87,8 @@ class SignalGenerationUseCaseImpl(
                 if (raw.isEmpty()) {
                     failedFetches[cacheKey] = clock()
                     return emptyList()
+                } else {
+                    failedFetches.remove(cacheKey)
                 }
                 
                 val kind = if (raw.sumOf { it.volume } <= 0.0) VolumeType.NONE else if (cls == AssetClass.CRYPTO) VolumeType.REAL else VolumeType.TICK
@@ -97,8 +99,19 @@ class SignalGenerationUseCaseImpl(
             val chk = CandleValidator.validate(main, tf, 60, tolerateWeekendGaps = cls != AssetClass.CRYPTO)
             if (!chk.ok) return unavailable(symbol, timeframe, "DATA ERROR: " + chk.problems.firstOrNull(), "GAP_DETECTED")
             
+            val htfTargets = when (tf) {
+                Timeframe.M1 -> listOf(Timeframe.M5, Timeframe.M15, Timeframe.H1)
+                Timeframe.M5 -> listOf(Timeframe.M15, Timeframe.H1, Timeframe.H4)
+                Timeframe.M15 -> listOf(Timeframe.H1, Timeframe.H4, Timeframe.D1)
+                Timeframe.M30 -> listOf(Timeframe.H1, Timeframe.H4, Timeframe.D1)
+                Timeframe.H1 -> listOf(Timeframe.H4, Timeframe.D1, Timeframe.W1)
+                Timeframe.H4 -> listOf(Timeframe.D1, Timeframe.W1)
+                Timeframe.D1 -> listOf(Timeframe.W1)
+                Timeframe.W1 -> listOf(Timeframe.D1, Timeframe.H4)
+            }
+            val displayTargets = listOf(Timeframe.M5, Timeframe.M15, Timeframe.M30, Timeframe.H1, Timeframe.H4, Timeframe.D1, Timeframe.W1)
+            val targets = (htfTargets + cfg.mtf.required + displayTargets).distinct().filter { it != tf }
             val htf = coroutineScope {
-                val targets = (cfg.mtf.required + Timeframe.D1 + Timeframe.W1).distinct().filter { it != tf }
                 targets.map { t ->
                     async {
                         try {
@@ -118,8 +131,9 @@ class SignalGenerationUseCaseImpl(
             val spec = SpecRegistry.get(symbol)
             val prevComputations = SignalEngine.structureComputations.get()
             val startCompute = clock()
+            val dynamicCfg = cfg.copy(mtf = MtfConfig(required = htfTargets))
             val report = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { 
-                SignalEngine.analyse(AnalysisInput(symbol, tf, chk.cleanClosed, htf, quote, spec, now, strategyId = strategyId), cfg)
+                SignalEngine.analyse(AnalysisInput(symbol, tf, chk.cleanClosed, htf, quote, spec, now, strategyId = strategyId), dynamicCfg)
             }
             val endCompute = clock()
             val computeMs = endCompute - startCompute
@@ -155,6 +169,7 @@ class SignalGenerationUseCaseImpl(
             val id = UUID.randomUUID().toString(); reports[id] = final
             if (reports.size > 200) reports.keys.take(100).forEach { reports.remove(it) }
             val plan = final.plan
+            val mtfPerTfMap = final.mtf?.perTf?.mapKeys { it.key.label }?.mapValues { it.value.name } ?: emptyMap()
             TradeSignal(
                 id = id, symbol = symbol, timeframe = timeframe,
                 direction = if (!tradeable && state != SignalState.WEAK_BUY && state != SignalState.WEAK_SELL) SignalDirection.WAIT else if (plan?.isLong == true) SignalDirection.LONG else SignalDirection.SHORT,
@@ -168,6 +183,8 @@ class SignalGenerationUseCaseImpl(
                 strategyScores = final.components.filter { it.isAvailable }.associate { it.name to (it.earned / it.available * 100).toInt() },
                 signalState = state.name, executable = tradeable && health == MarketDataHealth.LIVE && spread != null && blockers.isEmpty(),
                 blockReasons = blockers, reasons = final.reasons, dataSource = quote?.source ?: "", dataHealth = health.name, mtfSummary = final.mtf?.summary ?: "",
+                mtfState = final.mtf?.state?.name ?: "DATA_UNAVAILABLE",
+                mtfPerTimeframe = mtfPerTfMap,
                 spreadText = spread?.let { s -> spec?.priceToPips(s)?.let { "%.1f pips".format(it) } ?: "%.5f".format(s) } ?: "UNKNOWN",
                 sessionLabel = sess.label, newsStatus = newsVerdict.status.name, knowledge = final.knowledge, strategyVersion = final.strategyVersion,
                 analysisLoadMs = loadMs, analysisComputeMs = computeMs, analysisTotalMs = totalMs, cacheHit = cacheHit)

@@ -66,4 +66,50 @@ object Indicators {
 
     /** Real vs tick volume. Forex tick volume is broker-specific activity, NOT centralised exchange volume. */
     fun volumeKind(c: List<Candle>): VolumeType = c.lastOrNull()?.volumeType ?: VolumeType.NONE
+
+    data class BollingerBands(val upper: Double, val middle: Double, val lower: Double, val bandwidth: Double)
+
+    fun lastBollingerBands(closes: List<Double>, period: Int = 20, multiplier: Double = 2.0): BollingerBands? {
+        if (closes.size < period) return null
+        val sub = closes.takeLast(period)
+        val mean = sub.average()
+        val variance = sub.sumOf { (it - mean) * (it - mean) } / period
+        val stdDev = kotlin.math.sqrt(variance)
+        val upper = mean + multiplier * stdDev
+        val lower = mean - multiplier * stdDev
+        val bandwidth = if (mean > 0) (upper - lower) / mean else 0.0
+        return BollingerBands(upper, mean, lower, bandwidth)
+    }
+
+    data class DonchianChannel(val upper: Double, val middle: Double, val lower: Double)
+
+    fun lastDonchian(c: List<Candle>, period: Int = 20): DonchianChannel? {
+        if (c.size < period) return null
+        val sub = c.takeLast(period)
+        val high = sub.maxOf { it.high }
+        val low = sub.minOf { it.low }
+        return DonchianChannel(high, (high + low) / 2.0, low)
+    }
+
+    enum class KillzoneType { LONDON_OPEN, NY_AM, NY_PM, ASIAN, OFF_HOURS }
+
+    fun killzone(timeMs: Long): Pair<KillzoneType, String> {
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { timeInMillis = timeMs }
+        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        val minute = cal.get(java.util.Calendar.MINUTE)
+        val timeInMinutes = hour * 60 + minute
+
+        // UTC equivalents:
+        // London Open Killzone: 07:00 - 09:00 UTC (420 - 540 min)
+        // NY AM Killzone: 13:30 - 15:30 UTC (810 - 930 min)
+        // NY PM Killzone: 18:00 - 20:00 UTC (1080 - 1200 min)
+        // Asian Killzone: 00:00 - 04:00 UTC (0 - 240 min)
+        return when (timeInMinutes) {
+            in 420..540 -> KillzoneType.LONDON_OPEN to "London Open Killzone (07:00-09:00 UTC)"
+            in 810..930 -> KillzoneType.NY_AM to "NY AM Killzone (13:30-15:30 UTC)"
+            in 1080..1200 -> KillzoneType.NY_PM to "NY PM Killzone (18:00-20:00 UTC)"
+            in 0..240 -> KillzoneType.ASIAN to "Asian Session (00:00-04:00 UTC)"
+            else -> KillzoneType.OFF_HOURS to "Regular Market Hours"
+        }
+    }
 }

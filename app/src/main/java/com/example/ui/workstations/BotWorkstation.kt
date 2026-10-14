@@ -1,0 +1,385 @@
+package com.example.ui.workstations
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.destinedfx.core.bot.BotLifecycleState
+import com.example.data.broker.BrokerType
+import com.example.ui.DestinedFXViewModel
+import com.example.ui.theme.*
+import kotlinx.coroutines.launch
+
+@Composable
+fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
+    val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
+    val botActive by viewModel.botActive.collectAsStateWithLifecycle()
+    val activeBrokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
+    val activeBrokerGateway by viewModel.activeBrokerGateway.collectAsStateWithLifecycle()
+    val brokerConnStatus by activeBrokerGateway.connectionStatus.collectAsStateWithLifecycle()
+    val accountMetrics by activeBrokerGateway.accountMetrics.collectAsStateWithLifecycle()
+    val openPositions by activeBrokerGateway.openPositions.collectAsStateWithLifecycle()
+
+    val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
+    val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
+    val selectedTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
+    val riskPercent by viewModel.riskPercent.collectAsStateWithLifecycle()
+
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DarkBackground)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Workstation Title & Mode
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "AUTONOMOUS BOT CENTER",
+                        fontWeight = FontWeight.Black,
+                        fontSize = 15.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Automated Quantitative Execution Engine",
+                        fontSize = 10.sp,
+                        color = TextSecondary
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF00FF99).copy(alpha = 0.15f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "DEMO / PAPER",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFF00FF99),
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+
+        // Master Bot Control Card
+        item {
+            val isRunning = botSummary.isRunning || botActive
+            val statusColor = when (botSummary.state) {
+                BotLifecycleState.ACTIVE_SCANNING -> Color(0xFF00FF99)
+                BotLifecycleState.EXECUTING -> CyanPrimary
+                BotLifecycleState.CONNECTING_BROKER -> OrangeAccent
+                BotLifecycleState.ERROR -> Color(0xFFFF4560)
+                else -> if (isRunning) Color(0xFF00FF99) else Color(0xFF8892A4)
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, if (isRunning) statusColor.copy(alpha = 0.6f) else TabBorder),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().testTag("bot_master_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(CircleShape)
+                                    .background(statusColor)
+                            )
+                            Text(
+                                text = "BOT STATUS: ${botSummary.state.name}",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = statusColor
+                            )
+                        }
+
+                        Switch(
+                            checked = isRunning,
+                            onCheckedChange = { active ->
+                                viewModel.setBotStatus(active) { success, err ->
+                                    statusMessage = if (success) {
+                                        if (active) "Bot activated successfully" else "Bot stopped"
+                                    } else {
+                                        err ?: "Failed to change bot state"
+                                    }
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DarkBackground,
+                                checkedTrackColor = Color(0xFF00FF99),
+                                uncheckedThumbColor = TextSecondary,
+                                uncheckedTrackColor = DarkSurfaceVariant
+                            ),
+                            modifier = Modifier.testTag("bot_toggle_switch")
+                        )
+                    }
+
+                    HorizontalDivider(color = TabBorder)
+
+                    // Last Action & Logs
+                    Text(
+                        text = "LAST ACTION: ${botSummary.lastAction}",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextPrimary
+                    )
+
+                    if (botSummary.lastError != null) {
+                        Text(
+                            text = "ERROR: ${botSummary.lastError}",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color(0xFFFF4560)
+                        )
+                    }
+
+                    if (statusMessage != null) {
+                        Text(
+                            text = statusMessage!!,
+                            fontSize = 10.sp,
+                            color = CyanPrimary
+                        )
+                    }
+                }
+            }
+        }
+
+        // Active Broker Selector & Account Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, TabBorder),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "ACTIVE BROKER & EXECUTION ROUTING",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = CyanPrimary
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.selectBroker(BrokerType.DERIV) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (activeBrokerType == BrokerType.DERIV) CyanPrimary else DarkSurfaceVariant
+                            ),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.weight(1f).testTag("select_deriv_button")
+                        ) {
+                            Text(
+                                "Deriv WS",
+                                color = if (activeBrokerType == BrokerType.DERIV) DarkBackground else TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
+
+                        Button(
+                            onClick = { viewModel.selectBroker(BrokerType.MT5) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (activeBrokerType == BrokerType.MT5) CyanPrimary else DarkSurfaceVariant
+                            ),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.weight(1f).testTag("select_mt5_button")
+                        ) {
+                            Text(
+                                "MetaTrader 5",
+                                color = if (activeBrokerType == BrokerType.MT5) DarkBackground else TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text("Connection:", fontSize = 10.sp, color = TextSecondary)
+                            Text(
+                                text = brokerConnStatus.name,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                color = if (brokerConnStatus.name == "CONNECTED") Color(0xFF00FF99) else OrangeAccent
+                            )
+                        }
+
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("Balance:", fontSize = 10.sp, color = TextSecondary)
+                            Text(
+                                text = "$${String.format("%.2f", accountMetrics?.balance ?: 0.0)}",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                color = TextPrimary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Target Configuration Parameters Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, TabBorder),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "AUTONOMOUS PARAMETERS & SAFETY CONSTRAINTS",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = CyanPrimary
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Instrument:", fontSize = 11.sp, color = TextSecondary)
+                        Text(activeSymbol, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Strategy:", fontSize = 11.sp, color = TextSecondary)
+                        Text(selectedStrategyId, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Timeframe:", fontSize = 11.sp, color = TextSecondary)
+                        Text(selectedTimeframe, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Max Risk per Trade:", fontSize = 11.sp, color = TextSecondary)
+                        Text("${riskPercent}% (Capped strictly <= 1.0%)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00FF99))
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Minimum Executable RR:", fontSize = 11.sp, color = TextSecondary)
+                        Text("1:2.0 (Absolute minimum)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00FF99))
+                    }
+                }
+            }
+        }
+
+        // Open Positions Section
+        item {
+            Text(
+                text = "OPEN POSITIONS (${openPositions.size})",
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = TextPrimary
+            )
+        }
+
+        if (openPositions.isEmpty()) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No open positions currently active on ${activeBrokerGateway.displayName}.",
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(14.dp)
+                    )
+                }
+            }
+        } else {
+            items(openPositions) { pos ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    border = BorderStroke(1.dp, TabBorder),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "${pos.direction.name} ${pos.symbol}",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = if (pos.direction.name == "LONG") Color(0xFF00FF99) else Color(0xFFFF4560)
+                            )
+                            Text(
+                                text = "Entry: ${pos.entryPrice} | Lot/Stake: ${pos.lotSize}",
+                                fontSize = 10.sp,
+                                color = TextSecondary
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    activeBrokerGateway.closePosition(pos.id)
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4560)),
+                            shape = RoundedCornerShape(4.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("close_position_${pos.id}")
+                        ) {
+                            Text("Close", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

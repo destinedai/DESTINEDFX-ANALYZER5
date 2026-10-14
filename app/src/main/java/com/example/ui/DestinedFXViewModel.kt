@@ -230,6 +230,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     // Selected ticker and timeframe for the chart
     val selectedTicker = MutableStateFlow("EUR/USD")
     val selectedTimeframe = MutableStateFlow("M15")
+    val riskPercent = MutableStateFlow(1.0)
     val selectedTab = MutableStateFlow(0)
 
     fun selectTicker(sym: String) {
@@ -238,6 +239,10 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
 
     fun selectTimeframe(tf: String) {
         selectedTimeframe.value = tf
+    }
+
+    fun setRiskPercent(value: Double) {
+        riskPercent.value = value.coerceIn(0.1, 1.0)
     }
 
     // Dynamic high-fidelity candlestick history for each symbol
@@ -377,15 +382,10 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         return app.mt5GatewayRepository.resolveSymbol(symbol)
     }
 
-    // Consensus states
-    val smcBiasConfidence = MutableStateFlow(89)
-    val structureAlignment = MutableStateFlow("COMBINED BULLISH ALIGNMENT")
-    val modelSentimentScores = MutableStateFlow(mapOf(
-        "SMC Structural Flow" to Pair("BULLISH", 92),
-        "ICT Silver Bullet (Daily Liquidity)" to Pair("BULLISH", 85),
-        "Macro Sentiment Analyzer" to Pair("NEUTRAL", 60),
-        "Order Flow / Volume Cluster" to Pair("STRONG BULLISH", 95)
-    ))
+    // Consensus states - derived from deterministic multi-model evaluation
+    val smcBiasConfidence = MutableStateFlow(0)
+    val structureAlignment = MutableStateFlow("ANALYZING MARKET STRUCTURE")
+    val modelSentimentScores = MutableStateFlow<Map<String, Pair<String, Int>>>(emptyMap())
 
     // Algorithmic execution variables
     val aiAnalysisResult = MutableStateFlow<String?>(null)
@@ -484,6 +484,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     fun selectStrategy(id: String) {
         selectedStrategyId.value = id
         app.secretsManager.saveSelectedStrategy(id)
+        runSignalScan(selectedTicker.value, selectedTimeframe.value)
     }
 
     fun saveConfiguredEquity(v: Double) {
@@ -615,10 +616,17 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     fun registerNewUser(email: String, username: String, passwordText: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
             val result = app.authUseCase.register(email, username, passwordText)
-            result.onSuccess { user ->
-                currentUser.value = user
-                isShowingSplash.value = true
-                onResult(true, "Account created successfully via Supabase!")
+            result.onSuccess { res ->
+                when (res) {
+                    is com.example.data.supabase.SignUpResponse.SuccessVerified -> {
+                        currentUser.value = res.user
+                        isShowingSplash.value = true
+                        onResult(true, "Account created successfully!")
+                    }
+                    is com.example.data.supabase.SignUpResponse.EmailVerificationRequired -> {
+                        onResult(true, "Verification email sent to ${res.email}. Please verify before logging in.")
+                    }
+                }
             }.onFailure { e ->
                 onResult(false, e.message ?: "Registration failed")
             }
@@ -705,16 +713,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
             val priceTimeAgo = formatPriceTimeAgo(resolvedPrice.timestamp)
 
             val candles = candlestickHistory[symbol] ?: emptyList()
-            val domainCandles = candles.mapIndexed { index, c -> 
-                com.example.domain.model.Candle(
-                    timestamp = System.currentTimeMillis() - (candles.size - index) * 60000L,
-                    open = c.open.toDouble(),
-                    high = c.high.toDouble(),
-                    low = c.low.toDouble(),
-                    close = c.close.toDouble(),
-                    volume = 1000.0
-                )
-            }
+            val domainCandles = candles
             val smcData = if (domainCandles.size > 10) {
                 structureAnalyzer.analyzeStructure(domainCandles)
             } else null
@@ -746,7 +745,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     private suspend fun fetchGeminiOpinion(prompt: String): Pair<String, String> {
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                val apiKey = "" // API Key must be provided at runtime via SecretsManager
+                val apiKey = app.secretsManager.getGeminiApiKey()
                 if (apiKey.isEmpty()) return@withContext Pair("NEUTRAL", "API Key missing.")
                 
                 val jsonPayload = org.json.JSONObject()
@@ -1184,16 +1183,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
             val hasImage = !base64.isNullOrEmpty()
 
             val candles = candlestickHistory[symbol] ?: emptyList()
-            val domainCandles = candles.mapIndexed { index, c -> 
-                com.example.domain.model.Candle(
-                    timestamp = System.currentTimeMillis() - (candles.size - index) * 60000L,
-                    open = c.open.toDouble(),
-                    high = c.high.toDouble(),
-                    low = c.low.toDouble(),
-                    close = c.close.toDouble(),
-                    volume = 1000.0
-                )
-            }
+            val domainCandles = candles
             val smcData = if (domainCandles.size > 10) {
                 structureAnalyzer.analyzeStructure(domainCandles)
             } else null
@@ -1234,7 +1224,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     ): String {
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                val apiKey = "" // API Key must be provided at runtime via SecretsManager
+                val apiKey = app.secretsManager.getGeminiApiKey()
                 if (apiKey.isEmpty()) {
                     return@withContext "Error: Gemini API Key not configured."
                 }
@@ -1379,9 +1369,47 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    fun setBotStatus(active: Boolean) {
-        _botActive.value = active
+    val botStatusSummary = app.autonomousBotEngine.status
+
+    fun setBotStatus(active: Boolean, onResult: ((Boolean, String?) -> Unit)? = null) {
+        viewModelScope.launch {
+            if (active) {
+                val sym = selectedTicker.value
+                val strat = selectedStrategyId.value
+                val tf = selectedTimeframe.value
+                val risk = riskPercent.value
+                val res = app.autonomousBotEngine.startBot(sym, strat, tf, risk)
+                _botActive.value = res.isSuccess
+                onResult?.invoke(res.isSuccess, res.exceptionOrNull()?.message)
+            } else {
+                app.autonomousBotEngine.stopBot()
+                _botActive.value = false
+                onResult?.invoke(true, null)
+            }
+        }
     }
+
+    fun connectToDeriv(token: String, appId: String = "1089", onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            app.secretsManager.saveDerivApiToken(token.trim())
+            app.secretsManager.saveDerivAppId(appId.trim().ifBlank { "1089" })
+            app.brokerManager.selectBroker(com.example.data.broker.BrokerType.DERIV)
+            val res = app.derivBrokerGateway.connectAndAuthorize(token.trim())
+            if (res.isSuccess) {
+                val info = res.getOrThrow()
+                onResult(true, "Connected to Deriv (${info.loginId}, Balance: ${info.balance} ${info.currency})")
+            } else {
+                onResult(false, res.exceptionOrNull()?.message ?: "Deriv connection failed")
+            }
+        }
+    }
+
+    fun selectBroker(type: com.example.data.broker.BrokerType) {
+        app.brokerManager.selectBroker(type)
+    }
+
+    val activeBrokerType = app.brokerManager.selectedBrokerType
+    val activeBrokerGateway = app.brokerManager.activeBroker
 
     fun exportPdfDossier(info: DynamicAnalysisInfo) {
         exportChartData(getApplication(), info.symbol, "SMC Order Blocks")
