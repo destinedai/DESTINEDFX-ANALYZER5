@@ -50,6 +50,8 @@ import com.example.domain.model.Candle
 import com.example.domain.engine.QuantitativeEngine
 import com.destinedfx.core.risk.SizingResult
 import com.destinedfx.core.instrument.SpecRegistry
+import com.destinedfx.core.bot.BotStatusSummary
+import com.destinedfx.core.bot.BotLifecycleState
 import com.example.ui.DestinedFXScreen
 
 data class BacktestTrade(
@@ -89,14 +91,19 @@ data class ResolvedPrice(
     val timestamp: Long
 )
 
-class DestinedFXViewModel(application: Application) : AndroidViewModel(application) {
+open class DestinedFXViewModel(
+    application: Application,
+    val isPreview: Boolean = false
+) : AndroidViewModel(application) {
 
-    val app = application as com.example.MyApplication
-    val initStatus = app.initStatus
+    val app: com.example.MyApplication get() = (getApplication() as? com.example.MyApplication)
+        ?: error("MyApplication required for production operations")
+    val initStatus: StateFlow<com.example.MyApplication.InitState> =
+        if (isPreview) MutableStateFlow(com.example.MyApplication.InitState.Ready) else app.initStatus
     private val db by lazy { app.db }
     private val repository by lazy { TradeRepository(db.tradeDao()) }
     private val analysisRepository by lazy { com.example.data.AnalysisRepository(db.analysisDao()) }
-    private val client = OkHttpClient()
+    private val client by lazy { OkHttpClient() }
 
     suspend fun resolveRealPrice(symbol: String, timeframe: String): ResolvedPrice? {
         // 1. Try tickers.value[symbol]?.price
@@ -133,14 +140,14 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    val tradeHistory: StateFlow<List<TradeEntity>> = repository.allTrades
+    val tradeHistory: StateFlow<List<TradeEntity>> = if (isPreview) MutableStateFlow(emptyList()) else repository.allTrades
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
 
-    val analysisHistory: StateFlow<List<com.example.data.AnalysisEntity>> = analysisRepository.allHistory
+    val analysisHistory: StateFlow<List<com.example.data.AnalysisEntity>> = if (isPreview) MutableStateFlow(emptyList()) else analysisRepository.allHistory
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -256,26 +263,28 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     val candlestickHistory = androidx.compose.runtime.mutableStateMapOf<String, List<Candle>>()
 
     // Real-time market candle fetch errors exposed to UI
-    val candleFetchErrors: StateFlow<Map<String, String>> = app.marketDataRepository.candleFetchErrors
-    val selectedApiSource: MutableStateFlow<String> = app.marketDataRepository.selectedApiSource
+    val candleFetchErrors: StateFlow<Map<String, String>> =
+        if (isPreview) MutableStateFlow(emptyMap()) else app.marketDataRepository.candleFetchErrors
+    val selectedApiSource: MutableStateFlow<String> =
+        if (isPreview) MutableStateFlow("Deriv WebSocket") else app.marketDataRepository.selectedApiSource
 
     fun getCandleError(symbol: String, timeframe: String): String? =
-        app.marketDataRepository.getCandleError(symbol, timeframe)
+        if (isPreview) null else app.marketDataRepository.getCandleError(symbol, timeframe)
 
     fun getDataSourceForSymbol(symbol: String): String =
-        app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
+        if (isPreview) "Deriv WebSocket" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
 
     fun isDataFresh(symbol: String): Boolean =
-        app.marketDataRepository.isFresh(symbol)
+        if (isPreview) true else app.marketDataRepository.isFresh(symbol)
 
-    val brokerConnected = MutableStateFlow(app.mt5GatewayRepository.isConnected())
+    val brokerConnected = MutableStateFlow(if (isPreview) false else app.mt5GatewayRepository.isConnected())
     val brokerQuote = MutableStateFlow<com.destinedfx.core.marketdata.MarketQuote?>(null)
 
-    val crashLogManager = com.destinedfx.core.security.CrashLogManager(application.filesDir)
-    val lastCrashText = MutableStateFlow<String?>(crashLogManager.readLastCrash())
+    val crashLogManager by lazy { com.destinedfx.core.security.CrashLogManager(application.filesDir) }
+    val lastCrashText = MutableStateFlow<String?>(null)
 
     fun dismissLastCrash() {
-        crashLogManager.dismissCrash()
+        if (!isPreview) crashLogManager.dismissCrash()
         lastCrashText.value = null
     }
 
@@ -412,15 +421,15 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
 
     // Real-Time Alerts & Notification Gateway Properties
     val telegramNotificationEnabled = MutableStateFlow(true)
-    val telegramBotToken = MutableStateFlow(app.secretsManager.getTelegramToken())
-    val telegramChatId = MutableStateFlow(app.secretsManager.getTelegramChatId())
+    val telegramBotToken = MutableStateFlow(if (isPreview) "" else app.secretsManager.getTelegramToken())
+    val telegramChatId = MutableStateFlow(if (isPreview) "" else app.secretsManager.getTelegramChatId())
     val whatsappNotificationEnabled = MutableStateFlow(true)
-    val whatsappPhoneNumber = MutableStateFlow(app.secretsManager.getWhatsAppPhone())
-    val whatsappApiKey = MutableStateFlow(app.secretsManager.getWhatsAppApiKey())
+    val whatsappPhoneNumber = MutableStateFlow(if (isPreview) "" else app.secretsManager.getWhatsAppPhone())
+    val whatsappApiKey = MutableStateFlow(if (isPreview) "" else app.secretsManager.getWhatsAppApiKey())
 
     // --- TELEGRAM NOTIFICATIONS & ONBOARDING ---
-    val telegramStatus = MutableStateFlow(app.secretsManager.getTelegramConnectionStatus())
-    val telegramNotificationsEnabled = MutableStateFlow(app.secretsManager.getTelegramNotificationsEnabled())
+    val telegramStatus = MutableStateFlow(if (isPreview) "Not configured" else app.secretsManager.getTelegramConnectionStatus())
+    val telegramNotificationsEnabled = MutableStateFlow(if (isPreview) false else app.secretsManager.getTelegramNotificationsEnabled())
     val telegramTestMessageResult = MutableStateFlow<String?>(null)
     val isTelegramLoading = MutableStateFlow(false)
 
@@ -529,7 +538,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
 
     // MetaTrader Broker Connection Configurations & Themes (100% Free Lifetime Active)
     val themeMode = MutableStateFlow("System") // "System", "Light", "Dark"
-    val brokerServer = MutableStateFlow(app.secretsManager.getMT5BrokerServer())
+    val brokerServer = MutableStateFlow(if (isPreview) "" else app.secretsManager.getMT5BrokerServer())
     val mtAccountNumber = MutableStateFlow("1028471")
     val mtBrokerPassword = MutableStateFlow("••••••••••••")
     val terminalMode = MutableStateFlow("MT5 Gateway")
@@ -620,19 +629,23 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     // Strategy & Configured Equity Persistence
-    val selectedStrategyId = MutableStateFlow(app.secretsManager.getSelectedStrategy())
-    val configuredEquity = MutableStateFlow(app.secretsManager.getConfiguredEquity())
+    val selectedStrategyId = MutableStateFlow(if (isPreview) "smc-confluence-1.0.0" else app.secretsManager.getSelectedStrategy())
+    val configuredEquity = MutableStateFlow(if (isPreview) 10.0 else app.secretsManager.getConfiguredEquity())
 
     fun selectStrategy(id: String) {
         selectedStrategyId.value = id
-        app.secretsManager.saveSelectedStrategy(id)
-        runSignalScan(selectedTicker.value, selectedTimeframe.value)
+        if (!isPreview) {
+            app.secretsManager.saveSelectedStrategy(id)
+            runSignalScan(selectedTicker.value, selectedTimeframe.value)
+        }
     }
 
     fun saveConfiguredEquity(v: Double) {
         val clean = if (v > 0.0) v else 10.0
         configuredEquity.value = clean
-        app.secretsManager.saveConfiguredEquity(clean)
+        if (!isPreview) {
+            app.secretsManager.saveConfiguredEquity(clean)
+        }
     }
 
     // Live Real-Time Trade Signal State for Signals Tab
@@ -641,6 +654,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     val isSignalScanning = MutableStateFlow(false)
 
     fun runSignalScan(symbol: String, timeframe: String) {
+        if (isPreview) return
         viewModelScope.launch {
             isSignalScanning.value = true
             try {
@@ -969,8 +983,9 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     init {
-        initTTS()
-        restorePersistedSession()
+        if (!isPreview) {
+            initTTS()
+            restorePersistedSession()
 
         // Sync broker connection and quote for selectedTicker
         viewModelScope.launch {
@@ -1111,6 +1126,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
     }
+}
 
     private fun updateFloatingCapital() {
         if (_mt5Connected.value) {
@@ -1398,9 +1414,28 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    val botStatusSummary = app.autonomousBotEngine.status
+    val botStatusSummary: StateFlow<BotStatusSummary> =
+        if (isPreview) MutableStateFlow(
+            BotStatusSummary(
+                state = BotLifecycleState.STOPPED,
+                isRunning = false,
+                activeBrokerName = "Deriv Demo (Preview)",
+                selectedSymbol = "EUR/USD",
+                selectedStrategy = "smc-confluence-1.0.0",
+                timeframe = "M15",
+                riskPercent = 1.0,
+                marketState = "PAPER / OFFLINE",
+                currentSignal = "STRONG_BUY",
+                lastAction = "Automated bot ready for user authorization",
+                lastError = null
+            )
+        ) else app.autonomousBotEngine.status
 
     fun setBotStatus(active: Boolean, onResult: ((Boolean, String?) -> Unit)? = null) {
+        if (isPreview) {
+            onResult?.invoke(true, null)
+            return
+        }
         viewModelScope.launch {
             if (active) {
                 val sym = selectedTicker.value
@@ -1419,6 +1454,10 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun connectToDeriv(token: String, appId: String = "1089", onResult: (Boolean, String?) -> Unit) {
+        if (isPreview) {
+            onResult(true, "Preview Mode: Simulated connection")
+            return
+        }
         viewModelScope.launch {
             app.secretsManager.saveDerivApiToken(token.trim())
             app.secretsManager.saveDerivAppId(appId.trim().ifBlank { "1089" })
@@ -1434,11 +1473,21 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun selectBroker(type: com.example.data.broker.BrokerType) {
-        app.brokerManager.selectBroker(type)
+        if (!isPreview) app.brokerManager.selectBroker(type)
     }
 
-    val activeBrokerType = app.brokerManager.selectedBrokerType
-    val activeBrokerGateway = app.brokerManager.activeBroker
+    val activeBrokerType: StateFlow<com.example.data.broker.BrokerType> =
+        if (isPreview) MutableStateFlow(com.example.data.broker.BrokerType.DERIV) else app.brokerManager.selectedBrokerType
+
+    val activeBrokerGateway: StateFlow<com.example.data.broker.BrokerGateway> =
+        if (isPreview) MutableStateFlow(com.example.data.broker.PreviewBrokerGateway()) else app.brokerManager.activeBroker
+
+    fun getSupabaseUrl(): String = if (isPreview) "https://xyz.supabase.co" else app.secretsManager.getSupabaseUrl()
+    fun getSupabaseAnonKey(): String = if (isPreview) "ey...anon_key" else app.secretsManager.getSupabaseAnonKey()
+    fun getDerivApiToken(): String = if (isPreview) "sample_token" else app.secretsManager.getDerivApiToken()
+    fun getDerivAppId(): String = if (isPreview) "1089" else app.secretsManager.getDerivAppId()
+    fun getTelegramBotToken(): String = if (isPreview) "" else app.secretsManager.getTelegramToken()
+    fun getTelegramChatId(): String = if (isPreview) "" else app.secretsManager.getTelegramChatId()
 
     fun exportPdfDossier(info: DynamicAnalysisInfo) {
         exportChartData(getApplication(), info.symbol, "SMC Order Blocks")

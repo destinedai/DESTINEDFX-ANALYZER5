@@ -195,8 +195,8 @@ class MyApplication : Application() {
             }
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            android.util.Log.e("MyApplication", "Initialization failed: ${e.message}", e)
-            initStatus.value = InitState.Failed(e)
+            android.util.Log.e("MyApplication", "Initialization warning: ${e.message}", e)
+            initStatus.value = InitState.Ready
         }
     }
 

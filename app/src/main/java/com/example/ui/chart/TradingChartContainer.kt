@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -77,7 +79,15 @@ fun TradingChartContainer(
             .background(Color(0xFF0B0E14))
             .border(1.dp, TabBorder, RoundedCornerShape(4.dp))
     ) {
-        if (isRealTradingViewEnabled) {
+        val isInspection = LocalInspectionMode.current
+        if (isInspection) {
+            // Static Canvas Candlestick placeholder for Preview / Inspection Mode
+            TradingViewPreviewPlaceholder(
+                symbol = activeSymbol,
+                timeframe = selectedTimeframe,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else if (isRealTradingViewEnabled) {
             // Live Interactive TradingView Chart
             TradingViewWebView(
                 symbol = activeSymbol,
@@ -299,6 +309,11 @@ fun TradingViewWebView(
     onSwitchToCanvas: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    if (LocalInspectionMode.current) {
+        TradingViewPreviewPlaceholder(symbol = symbol, timeframe = timeframe, modifier = modifier)
+        return
+    }
+
     val mappedSymbol = TradingViewMapper.mapSymbol(symbol)
     val mappedInterval = TradingViewMapper.mapInterval(timeframe)
 
@@ -514,6 +529,123 @@ fun TradingViewWebView(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun TradingViewPreviewPlaceholder(
+    symbol: String,
+    timeframe: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color(0xFF0B0E14)),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val width = size.width
+            val height = size.height
+            if (width <= 0 || height <= 0) return@Canvas
+
+            // Draw grid lines
+            val numHorizontal = 5
+            for (i in 1..numHorizontal) {
+                val y = height * (i.toFloat() / (numHorizontal + 1))
+                drawLine(
+                    color = Color(0xFF161E2E),
+                    start = Offset(0f, y),
+                    end = Offset(width, y),
+                    strokeWidth = 1f
+                )
+            }
+            val numVertical = 8
+            for (i in 1..numVertical) {
+                val x = width * (i.toFloat() / (numVertical + 1))
+                drawLine(
+                    color = Color(0xFF161E2E),
+                    start = Offset(x, 0f),
+                    end = Offset(x, height),
+                    strokeWidth = 1f
+                )
+            }
+
+            // Draw sample stylized candlesticks across the width
+            val candleCount = 18
+            val candleSpacing = width / (candleCount + 1)
+            val candleWidth = candleSpacing * 0.55f
+
+            val samplePcts = listOf(
+                0.60f to 0.52f, 0.53f to 0.48f, 0.50f to 0.62f, 0.61f to 0.55f,
+                0.54f to 0.45f, 0.46f to 0.40f, 0.42f to 0.50f, 0.51f to 0.42f,
+                0.43f to 0.35f, 0.36f to 0.46f, 0.45f to 0.38f, 0.39f to 0.32f,
+                0.33f to 0.40f, 0.39f to 0.30f, 0.31f to 0.25f, 0.26f to 0.34f,
+                0.33f to 0.28f, 0.27f to 0.22f
+            )
+
+            for (idx in 0 until candleCount) {
+                val (openPct, closePct) = samplePcts[idx % samplePcts.size]
+                val openY = height * openPct
+                val closeY = height * closePct
+                val isGreen = closeY <= openY
+                val color = if (isGreen) Color(0xFF00FF99) else Color(0xFFFF4560)
+                val x = candleSpacing * (idx + 1)
+
+                val highY = min(openY, closeY) - height * 0.05f
+                val lowY = max(openY, closeY) + height * 0.05f
+
+                // Wick
+                drawLine(
+                    color = color,
+                    start = Offset(x, highY),
+                    end = Offset(x, lowY),
+                    strokeWidth = 2f
+                )
+
+                // Body
+                val topBody = min(openY, closeY)
+                val bodyH = max(4f, abs(openY - closeY))
+                drawRect(
+                    color = color,
+                    topLeft = Offset(x - candleWidth / 2, topBody),
+                    size = Size(candleWidth, bodyH)
+                )
+            }
+        }
+
+        // Institutional label overlay
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF101520).copy(alpha = 0.90f))
+                .border(1.dp, TabBorder, RoundedCornerShape(8.dp))
+                .padding(horizontal = 14.dp, vertical = 8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF00FF99))
+                )
+                Text(
+                    text = "TradingView chart (live on device)",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = CyanPrimary,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            Text(
+                text = "$symbol · $timeframe · Interactive Chart Widget",
+                fontSize = 9.5.sp,
+                color = TextSecondary,
+                fontFamily = FontFamily.Monospace
+            )
         }
     }
 }

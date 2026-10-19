@@ -24,6 +24,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -54,22 +58,29 @@ class MainActivity : FragmentActivity() {
         setContent {
             val app = (LocalContext.current.applicationContext as MyApplication)
             val initStatus by app.initStatus.collectAsStateWithLifecycle()
+            var timedOutToReady by remember { mutableStateOf(false) }
 
-            when (val state = initStatus) {
-                is MyApplication.InitState.Ready -> {
-                    val mainVm: DestinedFXViewModel = viewModel(factory = AppContainer.Factory)
-                    mainViewModel = mainVm
-                    val riskVm: RiskViewModel = viewModel(factory = AppContainer.Factory)
-                    val themeMode by riskVm.themeMode.collectAsStateWithLifecycle()
+            LaunchedEffect(Unit) {
+                delay(1200L)
+                timedOutToReady = true
+            }
 
-                    DestinedFXTheme(themeMode = themeMode) {
-                        Surface(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-                            DestinedFXApp(
-                                viewModel = mainVm
-                            )
-                        }
+            val isReady = initStatus is MyApplication.InitState.Ready || (timedOutToReady && initStatus !is MyApplication.InitState.Failed)
+
+            if (isReady) {
+                val mainVm: DestinedFXViewModel = viewModel(factory = AppContainer.Factory)
+                mainViewModel = mainVm
+                val riskVm: RiskViewModel = viewModel(factory = AppContainer.Factory)
+                val themeMode by riskVm.themeMode.collectAsStateWithLifecycle()
+
+                DestinedFXTheme(themeMode = themeMode) {
+                    Surface(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
+                        DestinedFXApp(
+                            viewModel = mainVm
+                        )
                     }
                 }
+            } else when (val state = initStatus) {
                 is MyApplication.InitState.Failed -> {
                     DestinedFXTheme {
                         Surface(

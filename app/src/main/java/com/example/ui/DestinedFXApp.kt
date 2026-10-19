@@ -676,10 +676,10 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
 @Composable
 fun SettingsTab(viewModel: DestinedFXViewModel) {
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
-    var supabaseUrlInput by remember { mutableStateOf(viewModel.app.secretsManager.getSupabaseUrl()) }
-    var supabaseKeyInput by remember { mutableStateOf(viewModel.app.secretsManager.getSupabaseAnonKey()) }
-    var derivTokenInput by remember { mutableStateOf(viewModel.app.secretsManager.getDerivApiToken()) }
-    var derivAppIdInput by remember { mutableStateOf(viewModel.app.secretsManager.getDerivAppId()) }
+    var supabaseUrlInput by remember { mutableStateOf(viewModel.getSupabaseUrl()) }
+    var supabaseKeyInput by remember { mutableStateOf(viewModel.getSupabaseAnonKey()) }
+    var derivTokenInput by remember { mutableStateOf(viewModel.getDerivApiToken()) }
+    var derivAppIdInput by remember { mutableStateOf(viewModel.getDerivAppId()) }
     var savedMessage by remember { mutableStateOf("") }
     var derivConnectStatus by remember { mutableStateOf<String?>(null) }
 
@@ -747,10 +747,12 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
-                        viewModel.app.secretsManager.saveSupabaseUrl(supabaseUrlInput.trim())
-                        viewModel.app.secretsManager.saveSupabaseAnonKey(supabaseKeyInput.trim())
-                        viewModel.app.secretsManager.saveDerivApiToken(derivTokenInput.trim())
-                        viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim())
+                        if (!viewModel.isPreview) {
+                            viewModel.app.secretsManager.saveSupabaseUrl(supabaseUrlInput.trim())
+                            viewModel.app.secretsManager.saveSupabaseAnonKey(supabaseKeyInput.trim())
+                            viewModel.app.secretsManager.saveDerivApiToken(derivTokenInput.trim())
+                            viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim())
+                        }
                         savedMessage = "All credentials saved securely in Keystore."
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
@@ -795,8 +797,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
             val telegramResult by viewModel.telegramTestMessageResult.collectAsStateWithLifecycle()
             val isTelegramLoading by viewModel.isTelegramLoading.collectAsStateWithLifecycle()
 
-            var botTokenInput by remember { mutableStateOf(viewModel.app.secretsManager.getTelegramToken()) }
-            var chatIdInput by remember { mutableStateOf(viewModel.app.secretsManager.getTelegramChatId()) }
+            var botTokenInput by remember { mutableStateOf(viewModel.getTelegramBotToken()) }
+            var chatIdInput by remember { mutableStateOf(viewModel.getTelegramChatId()) }
             var showBotFatherGuide by remember { mutableStateOf(false) }
 
             Card(

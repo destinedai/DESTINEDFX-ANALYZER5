@@ -32,20 +32,65 @@ import com.example.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import java.text.SimpleDateFormat
 import java.util.*
 
 @Composable
 fun CalendarTab(viewModel: DestinedFXViewModel) {
-    var events by remember { mutableStateOf<List<NewsEvent>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var newsStatus by remember { mutableStateOf(NewsStatus.UNKNOWN) }
-    var statusDetail by remember { mutableStateOf("Evaluating economic calendar news filter and event windows...") }
+    val isPreviewMode = LocalInspectionMode.current || viewModel.isPreview
+    val sampleEvents = remember {
+        listOf(
+            NewsEvent(
+                title = "Non-Farm Employment Change (USD)",
+                currency = "USD",
+                impact = "High",
+                dateTimeUtcMs = System.currentTimeMillis() + 3600000,
+                forecast = "180K",
+                previous = "175K"
+            ),
+            NewsEvent(
+                title = "ECB Main Refinancing Rate",
+                currency = "EUR",
+                impact = "High",
+                dateTimeUtcMs = System.currentTimeMillis() + 7200000,
+                forecast = "3.75%",
+                previous = "3.75%"
+            ),
+            NewsEvent(
+                title = "Core CPI m/m",
+                currency = "USD",
+                impact = "High",
+                dateTimeUtcMs = System.currentTimeMillis() + 10800000,
+                forecast = "0.3%",
+                previous = "0.2%"
+            ),
+            NewsEvent(
+                title = "German Prelim Flash Manufacturing PMI",
+                currency = "EUR",
+                impact = "Medium",
+                dateTimeUtcMs = System.currentTimeMillis() + 14400000,
+                forecast = "42.8",
+                previous = "42.4"
+            )
+        )
+    }
+
+    var events by remember { mutableStateOf<List<NewsEvent>>(if (isPreviewMode) sampleEvents else emptyList()) }
+    var isLoading by remember { mutableStateOf(!isPreviewMode) }
+    var newsStatus by remember { mutableStateOf(if (isPreviewMode) NewsStatus.CLEAR else NewsStatus.UNKNOWN) }
+    var statusDetail by remember {
+        mutableStateOf(
+            if (isPreviewMode) "No high-impact event window active. Automated trading permitted."
+            else "Evaluating economic calendar news filter and event windows..."
+        )
+    }
 
     val coroutineScope = rememberCoroutineScope()
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
 
     fun refreshCalendar() {
+        if (isPreviewMode) return
         coroutineScope.launch {
             isLoading = true
             val evts = withContext(Dispatchers.IO) {
@@ -63,7 +108,9 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
     }
 
     LaunchedEffect(activeSymbol) {
-        refreshCalendar()
+        if (!isPreviewMode) {
+            refreshCalendar()
+        }
     }
 
     LazyColumn(
