@@ -11,7 +11,7 @@ import com.example.data.trade.TradeDao
 import com.example.data.user.User
 import com.example.data.user.UserDao
 
-@Database(entities = [TradeEntity::class, User::class, AnalysisEntity::class], version = 4, exportSchema = true)
+@Database(entities = [TradeEntity::class, User::class, AnalysisEntity::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tradeDao(): TradeDao
     abstract fun userDao(): UserDao

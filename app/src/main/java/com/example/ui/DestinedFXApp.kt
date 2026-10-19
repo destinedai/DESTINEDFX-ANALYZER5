@@ -122,7 +122,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                         }
                         Column {
                             Text(
-                                text = "DESTINEDFX",
+                                text = "DESTINEDFX ANALYZER (v1.0.1-rev1)",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace,
@@ -222,288 +222,280 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
         viewModel.runSignalScan(activeSymbol, selectedTimeframe)
     }
 
-    LazyColumn(
+    Column(
         modifier = Modifier.fillMaxSize().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Symbol & Timeframe Selectors
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(symbols) { sym ->
-                        FilterChip(
-                            selected = activeSymbol == sym,
-                            onClick = { viewModel.selectTicker(sym) },
-                            label = { Text(sym, fontWeight = FontWeight.Bold, fontSize = 11.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = CyanPrimary,
-                                selectedLabelColor = DarkBackground,
-                                containerColor = DarkSurface,
-                                labelColor = TextPrimary
-                            ),
-                            modifier = Modifier.testTag("symbol_chip_$sym")
-                        )
-                    }
+        // Symbol & Timeframe Selectors
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(symbols) { sym ->
+                    FilterChip(
+                        selected = activeSymbol == sym,
+                        onClick = { viewModel.selectTicker(sym) },
+                        label = { Text(sym, fontWeight = FontWeight.Bold, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = CyanPrimary,
+                            selectedLabelColor = DarkBackground,
+                            containerColor = DarkSurface,
+                            labelColor = TextPrimary
+                        ),
+                        modifier = Modifier.testTag("symbol_chip_$sym")
+                    )
                 }
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(timeframes) { tf ->
-                        FilterChip(
-                            selected = selectedTimeframe == tf,
-                            onClick = { viewModel.selectTimeframe(tf) },
-                            label = { Text(tf, fontSize = 11.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = CyanPrimary,
-                                selectedLabelColor = DarkBackground,
-                                containerColor = DarkSurface,
-                                labelColor = TextSecondary
-                            ),
-                            modifier = Modifier.testTag("tf_chip_$tf")
-                        )
-                    }
+            }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(timeframes) { tf ->
+                    FilterChip(
+                        selected = selectedTimeframe == tf,
+                        onClick = { viewModel.selectTimeframe(tf) },
+                        label = { Text(tf, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = CyanPrimary,
+                            selectedLabelColor = DarkBackground,
+                            containerColor = DarkSurface,
+                            labelColor = TextSecondary
+                        ),
+                        modifier = Modifier.testTag("tf_chip_$tf")
+                    )
                 }
-                Button(
-                    onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe) },
-                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
-                    modifier = Modifier.fillMaxWidth().height(40.dp).testTag("analyze_button"),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("Analyze Market", color = DarkBackground, fontWeight = FontWeight.Bold)
-                }
+            }
+            Button(
+                onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe) },
+                colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
+                modifier = Modifier.fillMaxWidth().height(40.dp).testTag("analyze_button"),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Analyze Market", color = DarkBackground, fontWeight = FontWeight.Bold)
             }
         }
 
         // Data Source & Chart Banner
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "CHART: TradingView Widget ($selectedTimeframe)",
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    color = CyanPrimary
-                )
-                Text(
-                    text = "FEED: ${analysis?.dataSource?.ifBlank { "Deriv WebSocket" } ?: "Deriv WebSocket"}",
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    color = TextSecondary
-                )
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "CHART: TradingView Widget ($selectedTimeframe)",
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = CyanPrimary
+            )
+            Text(
+                text = "FEED: ${analysis?.dataSource?.ifBlank { "Deriv WebSocket" } ?: "Deriv WebSocket"}",
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = TextSecondary
+            )
         }
 
         // TradingView Chart WebView Container
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, TabBorder),
-                modifier = Modifier.fillMaxWidth().height(320.dp)
-            ) {
-                TradingChartContainer(
-                    activeSymbol = activeSymbol,
-                    selectedTimeframe = selectedTimeframe,
-                    currentSpotPrice = spotPrice,
-                    activeStrategy = selectedStrategyId,
-                    dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
-                    candles = viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
-                    isRealTradingViewEnabled = isRealTradingViewEnabled,
-                    onToggleChartType = { isRealTradingViewEnabled = it },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, TabBorder),
+            modifier = Modifier.fillMaxWidth().height(320.dp)
+        ) {
+            TradingChartContainer(
+                activeSymbol = activeSymbol,
+                selectedTimeframe = selectedTimeframe,
+                currentSpotPrice = spotPrice,
+                activeStrategy = selectedStrategyId,
+                dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
+                candles = viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
+                isRealTradingViewEnabled = isRealTradingViewEnabled,
+                onToggleChartType = { isRealTradingViewEnabled = it },
+                modifier = Modifier.fillMaxSize()
+            )
         }
 
         // Native Trade Plan Card
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, TabBorder),
-                modifier = Modifier.fillMaxWidth()
+        // Native Trade Plan Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, TabBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.Assessment, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(20.dp))
-                            Text("INSTITUTIONAL TRADE PLAN", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-                        }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Assessment, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(20.dp))
+                        Text("INSTITUTIONAL TRADE PLAN", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
+                    }
 
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(
-                                    when (analysis?.signalState) {
-                                        "STRONG_BUY", "BUY", "WEAK_BUY" -> Color(0xFF00FF99).copy(alpha = 0.2f)
-                                        "STRONG_SELL", "SELL", "WEAK_SELL" -> Color(0xFFFF4560).copy(alpha = 0.2f)
-                                        "INVALIDATED" -> Color(0xFFFF4560).copy(alpha = 0.3f)
-                                        else -> Color(0xFFFFB300).copy(alpha = 0.2f)
-                                    }
-                                )
-                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = analysis?.signalState ?: "WAIT",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = when (analysis?.signalState) {
-                                    "STRONG_BUY", "BUY", "WEAK_BUY" -> Color(0xFF00FF99)
-                                    "STRONG_SELL", "SELL", "WEAK_SELL" -> Color(0xFFFF4560)
-                                    "INVALIDATED" -> Color(0xFFFF4560)
-                                    else -> Color(0xFFFFB300)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(
+                                when (analysis?.signalState) {
+                                    "STRONG_BUY", "BUY", "WEAK_BUY" -> Color(0xFF00FF99).copy(alpha = 0.2f)
+                                    "STRONG_SELL", "SELL", "WEAK_SELL" -> Color(0xFFFF4560).copy(alpha = 0.2f)
+                                    "INVALIDATED" -> Color(0xFFFF4560).copy(alpha = 0.3f)
+                                    else -> Color(0xFFFFB300).copy(alpha = 0.2f)
                                 }
                             )
-                        }
-                    }
-
-                    if (isScanning) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = CyanPrimary)
-                    }
-
-                    val a = analysis
-                    val isTradeValid = a != null && a.entry != 0.0 && (a.signalState == "STRONG_BUY" || a.signalState == "BUY" || a.signalState == "WEAK_BUY" || a.signalState == "STRONG_SELL" || a.signalState == "SELL" || a.signalState == "WEAK_SELL")
-                    if (isTradeValid && a != null) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Column {
-                                Text("Direction:", fontSize = 10.sp, color = TextSecondary)
-                                Text(a.direction, fontWeight = FontWeight.Bold, color = if (a.direction == "BUY") Color(0xFF00FF99) else Color(0xFFFF4560))
-                            }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text("Reward-to-Risk:", fontSize = 10.sp, color = TextSecondary)
-                                Text(a.tp1RR, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = Color(0xFF00FF99))
-                            }
-                        }
-
-                        Divider(color = TabBorder)
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Column {
-                                Text("Entry Price:", fontSize = 10.sp, color = TextSecondary)
-                                Text(formatPrice(a.entry, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary)
-                            }
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("Stop Loss (SL):", fontSize = 10.sp, color = TextSecondary)
-                                Text(formatPrice(a.stopLoss, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = Color(0xFFFF5252))
-                            }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text("Take Profit (TP):", fontSize = 10.sp, color = TextSecondary)
-                                Text(formatPrice(a.tp1, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = Color(0xFF00FF99))
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text("SL Reason: ${a.slReason}", fontSize = 10.sp, color = TextSecondary)
-                        Text("TP Reason: ${a.tpReason}", fontSize = 10.sp, color = TextSecondary)
-                        Text("Strategy: ${a.strategyVersion}", fontSize = 10.sp, color = TextSecondary)
-                    } else {
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
                         Text(
-                            text = analysis?.blockReasons?.firstOrNull() ?: analysis?.smcAnalysis ?: "WAIT: Gathering confluence & structural validation...",
-                            fontSize = 11.sp,
-                            color = Color(0xFFFFB300)
+                            text = analysis?.signalState ?: "WAIT",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when (analysis?.signalState) {
+                                "STRONG_BUY", "BUY", "WEAK_BUY" -> Color(0xFF00FF99)
+                                "STRONG_SELL", "SELL", "WEAK_SELL" -> Color(0xFFFF4560)
+                                "INVALIDATED" -> Color(0xFFFF4560)
+                                else -> Color(0xFFFFB300)
+                            }
                         )
                     }
+                }
+
+                if (isScanning) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = CyanPrimary)
+                }
+
+                val a = analysis
+                val isTradeValid = a != null && a.entry != 0.0 && (a.signalState == "STRONG_BUY" || a.signalState == "BUY" || a.signalState == "WEAK_BUY" || a.signalState == "STRONG_SELL" || a.signalState == "SELL" || a.signalState == "WEAK_SELL")
+                if (isTradeValid && a != null) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column {
+                            Text("Direction:", fontSize = 10.sp, color = TextSecondary)
+                            Text(a.direction, fontWeight = FontWeight.Bold, color = if (a.direction == "BUY") Color(0xFF00FF99) else Color(0xFFFF4560))
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("Reward-to-Risk:", fontSize = 10.sp, color = TextSecondary)
+                            Text(a.tp1RR, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = Color(0xFF00FF99))
+                        }
+                    }
+
+                    HorizontalDivider(color = TabBorder)
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column {
+                            Text("Entry Price:", fontSize = 10.sp, color = TextSecondary)
+                            Text(formatPrice(a.entry, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Stop Loss (SL):", fontSize = 10.sp, color = TextSecondary)
+                            Text(formatPrice(a.stopLoss, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = Color(0xFFFF5252))
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("Take Profit (TP):", fontSize = 10.sp, color = TextSecondary)
+                            Text(formatPrice(a.tp1, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = Color(0xFF00FF99))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text("SL Reason: ${a.slReason}", fontSize = 10.sp, color = TextSecondary)
+                    Text("TP Reason: ${a.tpReason}", fontSize = 10.sp, color = TextSecondary)
+                    Text("Strategy: ${a.strategyVersion}", fontSize = 10.sp, color = TextSecondary)
+                } else {
+                    Text(
+                        text = analysis?.blockReasons?.firstOrNull() ?: analysis?.smcAnalysis ?: "WAIT: Gathering confluence & structural validation...",
+                        fontSize = 11.sp,
+                        color = Color(0xFFFFB300)
+                    )
                 }
             }
         }
 
         // Multi-Timeframe Alignment & Confluence Card
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, TabBorder),
-                modifier = Modifier.fillMaxWidth().testTag("mtf_alignment_card")
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, TabBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.Layers, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(18.dp))
-                            Text("MULTI-TIMEFRAME CONFLUENCE", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(
-                                    when {
-                                        analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> Color(0xFF00FF99).copy(alpha = 0.2f)
-                                        analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> Color(0xFFFF4560).copy(alpha = 0.2f)
-                                        analysis?.mtfStatus?.contains("PARTIAL") == true -> CyanPrimary.copy(alpha = 0.2f)
-                                        analysis?.mtfStatus?.contains("CONFLICT") == true -> Color(0xFFFF4560).copy(alpha = 0.2f)
-                                        else -> Color(0xFFFFB300).copy(alpha = 0.2f)
-                                    }
-                                )
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = analysis?.mtfSummary?.ifBlank { "EVALUATING" } ?: "EVALUATING",
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = when {
-                                    analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> Color(0xFF00FF99)
-                                    analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> Color(0xFFFF4560)
-                                    analysis?.mtfStatus?.contains("PARTIAL") == true -> CyanPrimary
-                                    analysis?.mtfStatus?.contains("CONFLICT") == true -> Color(0xFFFF4560)
-                                    else -> Color(0xFFFFB300)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Layers, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(18.dp))
+                        Text("MULTI-TIMEFRAME CONFLUENCE", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(
+                                when {
+                                    analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> Color(0xFF00FF99).copy(alpha = 0.2f)
+                                    analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> Color(0xFFFF4560).copy(alpha = 0.2f)
+                                    analysis?.mtfStatus?.contains("PARTIAL") == true -> CyanPrimary.copy(alpha = 0.2f)
+                                    analysis?.mtfStatus?.contains("CONFLICT") == true -> Color(0xFFFF4560).copy(alpha = 0.2f)
+                                    else -> Color(0xFFFFB300).copy(alpha = 0.2f)
                                 }
                             )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        val mtfDisplayTfs = listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")
-                        mtfDisplayTfs.forEach { tfKey ->
-                            val isSelected = selectedTimeframe == tfKey
-                            val bias = analysis?.getTfBias(tfKey) ?: "N/A"
-                            val (badgeColor, badgeBg) = when (bias) {
-                                "BULLISH" -> Color(0xFF00FF99) to Color(0xFF00FF99).copy(alpha = 0.15f)
-                                "BEARISH" -> Color(0xFFFF4560) to Color(0xFFFF4560).copy(alpha = 0.15f)
-                                "NEUTRAL" -> TextSecondary to Color(0xFF222834)
-                                "MISSING" -> Color(0xFFFFB300) to Color(0xFFFFB300).copy(alpha = 0.15f)
-                                else -> TextSecondary.copy(alpha = 0.5f) to Color.Transparent
+                        Text(
+                            text = analysis?.mtfSummary?.ifBlank { "EVALUATING" } ?: "EVALUATING",
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> Color(0xFF00FF99)
+                                analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> Color(0xFFFF4560)
+                                analysis?.mtfStatus?.contains("PARTIAL") == true -> CyanPrimary
+                                analysis?.mtfStatus?.contains("CONFLICT") == true -> Color(0xFFFF4560)
+                                else -> Color(0xFFFFB300)
                             }
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val mtfDisplayTfs = listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")
+                    mtfDisplayTfs.forEach { tfKey ->
+                        val isSelected = selectedTimeframe == tfKey
+                        val bias = analysis?.getTfBias(tfKey) ?: "N/A"
+                        val (badgeColor, badgeBg) = when (bias) {
+                            "BULLISH" -> Color(0xFF00FF99) to Color(0xFF00FF99).copy(alpha = 0.15f)
+                            "BEARISH" -> Color(0xFFFF4560) to Color(0xFFFF4560).copy(alpha = 0.15f)
+                            "NEUTRAL" -> TextSecondary to Color(0xFF222834)
+                            "MISSING" -> Color(0xFFFFB300) to Color(0xFFFFB300).copy(alpha = 0.15f)
+                            else -> TextSecondary.copy(alpha = 0.5f) to Color.Transparent
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = tfKey,
+                                fontSize = 9.sp,
+                                fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
+                                color = if (isSelected) CyanPrimary else TextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(badgeBg)
+                                    .border(if (isSelected) 1.dp else 0.dp, if (isSelected) CyanPrimary else Color.Transparent, RoundedCornerShape(3.dp))
+                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                            ) {
                                 Text(
-                                    text = tfKey,
-                                    fontSize = 9.sp,
-                                    fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
-                                    color = if (isSelected) CyanPrimary else TextSecondary
+                                    text = bias.take(4),
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = badgeColor
                                 )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(badgeBg)
-                                        .border(if (isSelected) 1.dp else 0.dp, if (isSelected) CyanPrimary else Color.Transparent, RoundedCornerShape(3.dp))
-                                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = bias.take(4),
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = badgeColor
-                                    )
-                                }
                             }
                         }
                     }
@@ -514,54 +506,52 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
         // Detailed Market Structure Elements
         val smc = analysis
         if (smc != null && (smc.orderBlocks.isNotEmpty() || smc.keyLevels.isNotEmpty())) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, TabBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("SMC STRUCTURAL INVENTORY", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CyanPrimary)
-                        
-                        if (smc.orderBlocks.isNotEmpty()) {
-                            Text("Active Order Blocks", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            smc.orderBlocks.take(4).forEach { ob ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Box(
-                                            modifier = Modifier.size(8.dp).clip(CircleShape)
-                                                .background(if (ob.type == "BULLISH") Color(0xFF00FF99) else Color(0xFFFF4560))
-                                        )
-                                        Text(ob.type, fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
-                                    }
-                                    Text(ob.zone, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = TextSecondary)
-                                    Text(ob.strength, fontSize = 9.sp, color = CyanPrimary, fontWeight = FontWeight.Black)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, TabBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("SMC STRUCTURAL INVENTORY", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CyanPrimary)
+                    
+                    if (smc.orderBlocks.isNotEmpty()) {
+                        Text("Active Order Blocks", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                        smc.orderBlocks.take(4).forEach { ob ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Box(
+                                        modifier = Modifier.size(8.dp).clip(CircleShape)
+                                            .background(if (ob.type == "BULLISH") Color(0xFF00FF99) else Color(0xFFFF4560))
+                                    )
+                                    Text(ob.type, fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
                                 }
+                                Text(ob.zone, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = TextSecondary)
+                                Text(ob.strength, fontSize = 9.sp, color = CyanPrimary, fontWeight = FontWeight.Black)
                             }
                         }
+                    }
 
-                        if (smc.keyLevels.isNotEmpty()) {
-                            HorizontalDivider(color = TabBorder.copy(alpha = 0.5f))
-                            Text("Verified Key Levels", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            FlowRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                smc.keyLevels.take(6).forEach { level ->
-                                    SuggestionChip(
-                                        onClick = { },
-                                        label = { Text(level, fontSize = 9.sp) },
-                                        colors = SuggestionChipDefaults.suggestionChipColors(
-                                            labelColor = TextSecondary,
-                                            containerColor = DarkSurfaceVariant
-                                        )
+                    if (smc.keyLevels.isNotEmpty()) {
+                        HorizontalDivider(color = TabBorder.copy(alpha = 0.5f))
+                        Text("Verified Key Levels", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            smc.keyLevels.take(6).forEach { level ->
+                                SuggestionChip(
+                                    onClick = { },
+                                    label = { Text(level, fontSize = 9.sp) },
+                                    colors = SuggestionChipDefaults.suggestionChipColors(
+                                        labelColor = TextSecondary,
+                                        containerColor = DarkSurfaceVariant
                                     )
-                                }
+                                )
                             }
                         }
                     }
