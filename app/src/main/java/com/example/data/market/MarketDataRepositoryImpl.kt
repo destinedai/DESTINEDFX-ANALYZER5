@@ -36,13 +36,9 @@ class MarketDataRepositoryImpl(
         private const val TAG = "MarketDataRepo"
     }
 
-    private val twelveDataProvider = TwelveDataProvider(
-        apiKeyProvider = { secrets.getTwelveDataApiKey() }
-    )
 
-    private val alphaVantageProvider = AlphaVantageProvider(
-        apiKeyProvider = { secrets.getAlphaVantageKey() }
-    )
+
+
 
     private val binanceProvider = BinanceProvider()
 
@@ -69,8 +65,8 @@ class MarketDataRepositoryImpl(
     private val activeSource = ConcurrentHashMap<String, String>()
     private val lastSourceLog = ConcurrentHashMap<String, Long>()
 
-    private val lastTwelveDataCall = ConcurrentHashMap<String, Long>()
-    private val lastAlphaVantageCall = ConcurrentHashMap<String, Long>()
+
+
 
     private val _candleFetchErrors = MutableStateFlow<Map<String, String>>(emptyMap())
     override val candleFetchErrors: StateFlow<Map<String, String>> = _candleFetchErrors.asStateFlow()
@@ -151,18 +147,13 @@ class MarketDataRepositoryImpl(
         }
 
         // 3. OANDA if configured and preferred
-        if (preferred == "OANDA" || (secrets.getOandaApiKey().isNotBlank() && preferred != "TWELVE_DATA" && preferred != "ALPHA_VANTAGE")) {
+        if (preferred == "OANDA" || secrets.getOandaApiKey().isNotBlank()) {
             val oanda = withTimeoutOrNull(3000) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
             if (oanda != null) return oanda
         }
 
-        // Only query TwelveData if user explicitly configured selectedApiSource to "TWELVE_DATA"
-        if (preferred == "TWELVE_DATA") {
-            return withTimeoutOrNull(5000) { twelveDataProvider.getLiveQuote(sym)?.copy(source = "TwelveData") }
-        }
-        if (preferred == "ALPHA_VANTAGE") {
-            return withTimeoutOrNull(5000) { alphaVantageProvider.getLiveQuote(sym) }
-        }
+
+
 
         return null
     }
@@ -209,15 +200,7 @@ class MarketDataRepositoryImpl(
             return withTimeoutOrNull(2000) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
         }
 
-        // TwelveData only if explicitly configured
-        if (preferred == "TWELVE_DATA") {
-            val now = clock()
-            val lastCall = lastTwelveDataCall[sym] ?: 0L
-            if ((now - lastCall) > 30_000L) {
-                lastTwelveDataCall[sym] = now
-                return withTimeoutOrNull(3000) { twelveDataProvider.getLiveQuote(sym)?.copy(source = "TwelveData") }
-            }
-        }
+
 
         return null
     }
@@ -473,25 +456,13 @@ class MarketDataRepositoryImpl(
                    aClass == com.destinedfx.core.marketdata.AssetClass.INDICES)) {
             
             // 3. OANDA if configured and selected
-            if (preferred == "OANDA" || (secrets.getOandaApiKey().isNotBlank() && preferred != "TWELVE_DATA" && preferred != "ALPHA_VANTAGE")) {
+            if (preferred == "OANDA" || secrets.getOandaApiKey().isNotBlank()) {
                 candles = withTimeoutOrNull(4000) { oandaProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
                 if (candles.isNotEmpty()) sourceUsed = "OANDA"
             }
             
-            // Explicit TwelveData or AlphaVantage ONLY if requested explicitly (never silent fallback)
-            if (candles.isEmpty() && preferred == "TWELVE_DATA") {
-                candles = withTimeoutOrNull(5000) { twelveDataProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
-                if (candles.isNotEmpty()) {
-                    sourceUsed = "TwelveData"
-                    isDelayed = true
-                }
-            } else if (candles.isEmpty() && preferred == "ALPHA_VANTAGE") {
-                candles = withTimeoutOrNull(5000) { alphaVantageProvider.getCandles(symbol, timeframe) } ?: emptyList()
-                if (candles.isNotEmpty()) {
-                    sourceUsed = "AlphaVantage"
-                    isDelayed = true
-                }
-            }
+
+
         }
 
         if (candles.isNotEmpty()) {

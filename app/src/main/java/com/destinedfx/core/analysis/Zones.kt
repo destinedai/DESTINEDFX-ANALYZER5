@@ -57,7 +57,7 @@ object ZoneEngine {
         for (ev in a.events) {
             val from = maxOf(0, ev.breakIndex - cfg.obLookbackBeforeBreak)
             if (ev.breakIndex - from < 2) continue
-            val origin = if (ev.dir == Dir.BULL) (from until ev.breakIndex).minByOrNull { c[it].low }!! else (from until ev.breakIndex).maxByOrNull { c[it].high }!!
+            val origin = (if (ev.dir == Dir.BULL) (from until ev.breakIndex).minByOrNull { c[it].low } else (from until ev.breakIndex).maxByOrNull { c[it].high }) ?: continue
             var obIdx = -1
             for (k in origin downTo maxOf(0, origin - 3)) if ((ev.dir == Dir.BULL && c[k].isBearish) || (ev.dir == Dir.BEAR && c[k].isBullish)) { obIdx = k; break }
             if (obIdx < 0) continue

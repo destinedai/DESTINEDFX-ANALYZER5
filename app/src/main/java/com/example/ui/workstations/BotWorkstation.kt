@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.bot.BotLifecycleState
 import com.example.data.broker.BrokerType
+import com.example.data.broker.BrokerConnectionStatus
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
@@ -74,17 +75,21 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     )
                 }
 
+                val isConnected = brokerConnStatus == BrokerConnectionStatus.CONNECTED
+                val modeText = if (isConnected) "LIVE TRADING (${activeBrokerType.name})" else "PAPER / OFFLINE"
+                val modeColor = if (isConnected) Color(0xFF00FF99) else OrangeAccent
+
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .background(Color(0xFF00FF99).copy(alpha = 0.15f))
+                        .background(modeColor.copy(alpha = 0.15f))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = "DEMO / PAPER",
+                        text = modeText,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Black,
-                        color = Color(0xFF00FF99),
+                        color = modeColor,
                         fontFamily = FontFamily.Monospace
                     )
                 }
@@ -173,9 +178,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         )
                     }
 
-                    if (statusMessage != null) {
+                    val msg = statusMessage
+                    if (msg != null) {
                         Text(
-                            text = statusMessage!!,
+                            text = msg,
                             fontSize = 10.sp,
                             color = CyanPrimary
                         )

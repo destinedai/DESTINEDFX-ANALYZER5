@@ -6,6 +6,7 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.MyApplication
+import com.example.ui.DestinedFXViewModel
 import com.example.ui.viewmodel.AnalysisViewModel
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.DashboardViewModel
@@ -13,6 +14,10 @@ import com.example.ui.viewmodel.RiskViewModel
 
 object AppContainer {
     val Factory: ViewModelProvider.Factory = viewModelFactory {
+        initializer {
+            val app = (this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as MyApplication)
+            DestinedFXViewModel(app)
+        }
         initializer {
             val app = (this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as MyApplication)
             AuthViewModel(

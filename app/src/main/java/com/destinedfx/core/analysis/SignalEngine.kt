@@ -433,8 +433,20 @@ object SignalEngine {
 
         var plan: TradePlan? = null
         if (state != SignalState.WAIT) {
-            val r = plan(i, i.quote!!, st, bundle.orderBlocks, bundle.levels, dir, atr, cfg)
-            if (r.second != null) { reasons += r.second!!; state = SignalState.WAIT } else plan = r.first
+            val q = i.quote
+            if (q != null) {
+                val r = plan(i, q, st, bundle.orderBlocks, bundle.levels, dir, atr, cfg)
+                val blockReason = r.second
+                if (blockReason != null) {
+                    reasons += blockReason
+                    state = SignalState.WAIT
+                } else {
+                    plan = r.first
+                }
+            } else {
+                state = SignalState.WAIT
+                reasons += "Market quote unavailable for trade plan"
+            }
         }
         comps.forEach { cc -> cc.notes.forEach { if (cc.earned > 0) reasons += "${cc.name}: $it" } }
         val keys = buildSet { if (st.events.isNotEmpty()) add(st.events.last().type.name); if (bundle.orderBlocks.isNotEmpty()) add("ORDER_BLOCK"); if (bundle.fvgs.isNotEmpty()) add("FVG")

@@ -6,7 +6,7 @@ import androidx.security.crypto.MasterKey
 
 /**
  * Institutional Keystore-backed secrets manager.
- * Stores Supabase, Gemini, Broker (MT5, OANDA), TwelveData, and Risk Configuration.
+ * Stores Supabase, Broker (MT5, OANDA), and Risk Configuration.
  * All values stored in Android Keystore via EncryptedSharedPreferences.
  */
 class SecretsManager(private val ctx: Context) {
@@ -21,7 +21,6 @@ class SecretsManager(private val ctx: Context) {
         private const val MT5_AC  = "mt5_account_number"
         private const val MT5_SV  = "mt5_broker_server"
         private const val META    = "metaapi_token"
-        private const val AV_KEY  = "alpha_vantage_key"
         private const val FMP_KEY = "fmp_api_key"
         private const val SB_URL  = "supabase_url"
         private const val SB_KEY  = "supabase_anon_key"
@@ -29,44 +28,39 @@ class SecretsManager(private val ctx: Context) {
         private const val SB_REFRESH_TOKEN = "supabase_refresh_token"
         private const val SB_UID = "supabase_uid"
         private const val SB_EMAIL_CONFIRMED_AT = "supabase_email_confirmed_at"
-        private const val GEMINI_KEY = "gemini_api_key"
         private const val OANDA_KEY = "oanda_api_key"
         private const val OANDA_ACC = "oanda_account_id"
-        private const val TD_KEY    = "twelve_data_api_key"
         private const val CONFIGURED_EQUITY = "configured_equity"
         private const val SELECTED_STRATEGY = "selected_strategy_id"
         private const val BROKER_SYMBOL_OVERRIDES = "broker_symbol_overrides"
         private const val DERIV_API_TOKEN = "deriv_api_token"
         private const val DERIV_APP_ID = "deriv_app_id"
+        private const val TG_STATUS = "telegram_connection_status"
+        private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
     }
 
-    private val prefs: android.content.SharedPreferences = try {
-        val masterKey = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-        EncryptedSharedPreferences.create(
-            ctx, PREFS, masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    } catch (e: Exception) {
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                ctx.deleteSharedPreferences(PREFS)
-            } else {
-                ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
-            }
-        } catch (ignored: Exception) {}
-        try {
+    val isSecureStorageAvailable: Boolean
+    private val prefs: android.content.SharedPreferences
+
+    init {
+        var tempSecure = false
+        prefs = try {
             val masterKey = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-            EncryptedSharedPreferences.create(
+            val p = EncryptedSharedPreferences.create(
                 ctx, PREFS, masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-        } catch (fallbackEx: Exception) {
-            android.util.Log.e("SecretsManager", "KEYSTORE UNAVAILABLE", fallbackEx)
+            tempSecure = true
+            p
+        } catch (e: Exception) {
+            android.util.Log.e("SecretsManager", "KEYSTORE UNAVAILABLE - falling back to memory-only storage to prevent plaintext disk exposure", e)
+            tempSecure = false
             InMemorySharedPreferences()
         }
+        isSecureStorageAvailable = tempSecure
     }
+
 
     fun saveTelegramToken(v: String)    = prefs.edit().putString(TG_TOK,  v).apply()
     fun saveTelegramChatId(v: String)   = prefs.edit().putString(TG_CHAT, v).apply()
@@ -76,7 +70,6 @@ class SecretsManager(private val ctx: Context) {
     fun saveMT5AccountNumber(v: String) = prefs.edit().putString(MT5_AC,  v).apply()
     fun saveMT5BrokerServer(v: String)  = prefs.edit().putString(MT5_SV,  v).apply()
     fun saveMetaApiToken(v: String)     = prefs.edit().putString(META,    v).apply()
-    fun saveAlphaVantageKey(v: String)  = prefs.edit().putString(AV_KEY,  v).apply()
     fun saveFmpKey(v: String)           = prefs.edit().putString(FMP_KEY, v).apply()
     fun saveSupabaseUrl(v: String)      = prefs.edit().putString(SB_URL,  v).apply()
     fun saveSupabaseAnonKey(v: String)  = prefs.edit().putString(SB_KEY,  v).apply()
@@ -84,17 +77,19 @@ class SecretsManager(private val ctx: Context) {
     fun saveSupabaseRefreshToken(v: String) = prefs.edit().putString(SB_REFRESH_TOKEN, v).apply()
     fun saveSupabaseUid(v: String)      = prefs.edit().putString(SB_UID, v).apply()
     fun saveSupabaseEmailConfirmedAt(v: String) = prefs.edit().putString(SB_EMAIL_CONFIRMED_AT, v).apply()
-    fun saveGeminiApiKey(v: String)     = prefs.edit().putString(GEMINI_KEY, v).apply()
     fun saveOandaApiKey(v: String)      = prefs.edit().putString(OANDA_KEY, v).apply()
     fun saveOandaAccountId(v: String)   = prefs.edit().putString(OANDA_ACC, v).apply()
-    fun saveTwelveDataApiKey(v: String) = prefs.edit().putString(TD_KEY,    v).apply()
     fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
     fun saveDerivApiToken(v: String)    = prefs.edit().putString(DERIV_API_TOKEN, v).apply()
     fun saveDerivAppId(v: String)       = prefs.edit().putString(DERIV_APP_ID, v).apply()
+    fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
+    fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
 
     fun getDerivApiToken(): String     = prefs.getString(DERIV_API_TOKEN, "") ?: ""
     fun getDerivAppId(): String        = prefs.getString(DERIV_APP_ID, "1089") ?: "1089"
+    fun getTelegramConnectionStatus(): String = prefs.getString(TG_STATUS, "Not configured") ?: "Not configured"
+    fun getTelegramNotificationsEnabled(): Boolean = prefs.getBoolean(TG_NOTIF_ENABLED, false)
 
     fun getTelegramToken(): String     = prefs.getString(TG_TOK,  "") ?: ""
     fun getTelegramChatId(): String    = prefs.getString(TG_CHAT, "") ?: ""
@@ -104,7 +99,6 @@ class SecretsManager(private val ctx: Context) {
     fun getMT5AccountNumber(): String  = prefs.getString(MT5_AC,  "") ?: ""
     fun getMT5BrokerServer(): String   = prefs.getString(MT5_SV,  "") ?: ""
     fun getMetaApiToken(): String      = prefs.getString(META,    "") ?: ""
-    fun getAlphaVantageKey(): String   = prefs.getString(AV_KEY, "") ?: ""
     fun getFmpKey(): String            = prefs.getString(FMP_KEY, "") ?: ""
     fun getSupabaseUrl(): String {
         val saved = prefs.getString(SB_URL, "") ?: ""
@@ -131,10 +125,8 @@ class SecretsManager(private val ctx: Context) {
     fun getSupabaseRefreshToken(): String = prefs.getString(SB_REFRESH_TOKEN, "") ?: ""
     fun getSupabaseUid(): String       = prefs.getString(SB_UID, "") ?: ""
     fun getSupabaseEmailConfirmedAt(): String? = prefs.getString(SB_EMAIL_CONFIRMED_AT, "")?.takeUnless { it.isBlank() || it == "null" }
-    fun getGeminiApiKey(): String      = prefs.getString(GEMINI_KEY, "") ?: ""
     fun getOandaApiKey(): String       = prefs.getString(OANDA_KEY, "") ?: ""
     fun getOandaAccountId(): String    = prefs.getString(OANDA_ACC, "") ?: ""
-    fun getTwelveDataApiKey(): String  = prefs.getString(TD_KEY, "") ?: ""
     fun getConfiguredEquity(): Double  = prefs.getString(CONFIGURED_EQUITY, "10.0")?.toDoubleOrNull() ?: 10.0
     fun getSelectedStrategy(): String  = prefs.getString(SELECTED_STRATEGY, "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0"
 

@@ -38,9 +38,9 @@ import java.util.*
 @Composable
 fun CalendarTab(viewModel: DestinedFXViewModel) {
     var events by remember { mutableStateOf<List<NewsEvent>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-    var newsStatus by remember { mutableStateOf(NewsStatus.CLEAR) }
-    var statusDetail by remember { mutableStateOf("No high-impact event window active. Automated trading permitted.") }
+    var isLoading by remember { mutableStateOf(true) }
+    var newsStatus by remember { mutableStateOf(NewsStatus.UNKNOWN) }
+    var statusDetail by remember { mutableStateOf("Evaluating economic calendar news filter and event windows...") }
 
     val coroutineScope = rememberCoroutineScope()
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()

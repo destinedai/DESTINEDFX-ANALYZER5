@@ -8,16 +8,18 @@ data class HealthConfig(val liveMaxAgeMs: Long = 5_000, val delayedMaxAgeMs: Lon
 /** Single authority for "may this data be used". Signals and trading require LIVE. */
 object MarketDataHealthEvaluator {
     fun evaluate(quote: MarketQuote?, nowMs: Long, connected: Boolean, sourceError: Boolean = false,
-                 sequenceGap: Boolean = false, cfg: HealthConfig = HealthConfig()): MarketDataHealth = when {
-        sourceError -> MarketDataHealth.SOURCE_ERROR
-        !connected || quote == null -> MarketDataHealth.DISCONNECTED
-        !quote.isStructurallyValid -> MarketDataHealth.INVALID
-        quote.spread != null && quote.mid != null && quote.spread!! / quote.mid!! > cfg.maxSpreadToMid -> MarketDataHealth.INVALID
-        quote.receivedAtMs > nowMs + 2_000 -> MarketDataHealth.INVALID
-        sequenceGap -> MarketDataHealth.GAP_DETECTED
-        quote.ageMs(nowMs) <= cfg.liveMaxAgeMs -> MarketDataHealth.LIVE
-        quote.ageMs(nowMs) <= cfg.delayedMaxAgeMs -> MarketDataHealth.DELAYED
-        else -> MarketDataHealth.STALE
+                 sequenceGap: Boolean = false, cfg: HealthConfig = HealthConfig()): MarketDataHealth {
+        if (sourceError) return MarketDataHealth.SOURCE_ERROR
+        if (!connected || quote == null) return MarketDataHealth.DISCONNECTED
+        if (!quote.isStructurallyValid) return MarketDataHealth.INVALID
+        val spread = quote.spread
+        val mid = quote.mid
+        if (spread != null && mid != null && mid > 0.0 && spread / mid > cfg.maxSpreadToMid) return MarketDataHealth.INVALID
+        if (quote.receivedAtMs > nowMs + 2_000) return MarketDataHealth.INVALID
+        if (sequenceGap) return MarketDataHealth.GAP_DETECTED
+        if (quote.ageMs(nowMs) <= cfg.liveMaxAgeMs) return MarketDataHealth.LIVE
+        if (quote.ageMs(nowMs) <= cfg.delayedMaxAgeMs) return MarketDataHealth.DELAYED
+        return MarketDataHealth.STALE
     }
     fun isUsable(h: MarketDataHealth) = h == MarketDataHealth.LIVE
     fun displayText(h: MarketDataHealth, hasData: Boolean) = if (!hasData && h == MarketDataHealth.DISCONNECTED) "WAITING FOR LIVE DATA" else h.name

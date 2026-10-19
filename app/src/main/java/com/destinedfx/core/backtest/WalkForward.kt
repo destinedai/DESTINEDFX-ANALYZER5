@@ -22,7 +22,8 @@ object WalkForward {
         fun score(r: BacktestResult) = r.stats.expectancyR ?: Double.NEGATIVE_INFINITY
         val trained = grid.map { it to Backtester.run(train, factory(it), cfg, dataSource, nowMs) }.filter { it.second.stats.trades >= 10 }.sortedByDescending { score(it.second) }.take(3)
         if (trained.isEmpty()) return WalkForwardResult(null, null, null, null, Verdict.INSUFFICIENT_SAMPLE, "No parameter set produced >= 10 training trades")
-        val validated = trained.map { (p, _) -> p to Backtester.run(valid, factory(p), cfg, dataSource, nowMs) }.maxByOrNull { score(it.second) }!!
+        val validated = trained.map { (p, _) -> p to Backtester.run(valid, factory(p), cfg, dataSource, nowMs) }.maxByOrNull { score(it.second) }
+            ?: return WalkForwardResult(null, null, null, null, Verdict.INSUFFICIENT_SAMPLE, "Validation phase produced no results")
         val best = validated.first
         val trRes = trained.first { it.first == best }.second
         val oosRes = Backtester.run(oos, factory(best), cfg, dataSource, nowMs)

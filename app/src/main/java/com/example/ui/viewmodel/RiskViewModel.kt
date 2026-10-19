@@ -41,16 +41,22 @@ class RiskViewModel(
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            val p = risk.getRiskProfile()
-            _s.value = RiskUiState(
-                maxDrawdownLimit=p.maxDailyDrawdownPercentage,
-                currentDrawdown=p.currentDailyDrawdown,
-                fixedRiskPerTrade=p.fixedRiskPercentage
-            )
-            mtAccountNumber.value = secrets.getMT5AccountNumber()
-            brokerServer.value    = secrets.getMT5BrokerServer()
-            telegramEnabled.value = secrets.getTelegramToken().isNotBlank()
-            whatsappEnabled.value = secrets.getWhatsAppApiKey().isNotBlank()
+            try {
+                val p = risk.getRiskProfile()
+                _s.value = RiskUiState(
+                    maxDrawdownLimit=p.maxDailyDrawdownPercentage,
+                    currentDrawdown=p.currentDailyDrawdown,
+                    fixedRiskPerTrade=p.fixedRiskPercentage
+                )
+                mtAccountNumber.value = secrets.getMT5AccountNumber()
+                brokerServer.value    = secrets.getMT5BrokerServer()
+                telegramEnabled.value = secrets.getTelegramToken().isNotBlank()
+                whatsappEnabled.value = secrets.getWhatsAppApiKey().isNotBlank()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                android.util.Log.e("RiskViewModel", "Failed to load risk profile: ${e.message}")
+            }
         }
     }
 

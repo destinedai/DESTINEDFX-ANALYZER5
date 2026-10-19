@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
+import com.example.data.NotificationService
 import com.example.data.trade.TradeEntity
 import com.example.data.trade.TradeRepository
 import com.example.data.user.User
@@ -49,6 +50,7 @@ import com.example.domain.model.Candle
 import com.example.domain.engine.QuantitativeEngine
 import com.destinedfx.core.risk.SizingResult
 import com.destinedfx.core.instrument.SpecRegistry
+import com.example.ui.DestinedFXScreen
 
 data class BacktestTrade(
     val dateString: String,
@@ -90,9 +92,10 @@ data class ResolvedPrice(
 class DestinedFXViewModel(application: Application) : AndroidViewModel(application) {
 
     val app = application as com.example.MyApplication
-    private val db = AppDatabase.getDatabase(application)
-    private val repository = TradeRepository(db.tradeDao())
-    private val analysisRepository = com.example.data.AnalysisRepository(db.analysisDao())
+    val initStatus = app.initStatus
+    private val db by lazy { app.db }
+    private val repository by lazy { TradeRepository(db.tradeDao()) }
+    private val analysisRepository by lazy { com.example.data.AnalysisRepository(db.analysisDao()) }
     private val client = OkHttpClient()
 
     suspend fun resolveRealPrice(symbol: String, timeframe: String): ResolvedPrice? {
@@ -104,16 +107,16 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         // 2. Else try marketDataRepository.getLatestTick(symbol).price if > 0
-        val tick = app.marketDataRepository.getLatestTick(symbol)
+        val tick = app.marketDataRepository?.getLatestTick(symbol) ?: return null
         if (tick.price > 0.0) {
             return ResolvedPrice(tick.price, "Market Tick", tick.timestamp)
         }
 
         // 3. Else use the close of the latest candle from getCandles(symbol, timeframe, 1)
-        val candles = app.marketDataRepository.getCandles(symbol, timeframe, 1)
+        val candles = app.marketDataRepository?.getCandles(symbol, timeframe, 1) ?: emptyList()
         val latestCandle = candles.lastOrNull()
         if (latestCandle != null && latestCandle.close > 0.0) {
-            val src = app.marketDataRepository.getDataSource(symbol, timeframe)
+            val src = app.marketDataRepository?.getDataSource(symbol, timeframe) ?: "Unknown"
             return ResolvedPrice(latestCandle.close, src, latestCandle.timestamp)
         }
 
@@ -231,7 +234,11 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     val selectedTicker = MutableStateFlow("EUR/USD")
     val selectedTimeframe = MutableStateFlow("M15")
     val riskPercent = MutableStateFlow(1.0)
-    val selectedTab = MutableStateFlow(0)
+    val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
+
+    fun selectScreen(screen: DestinedFXScreen) {
+        selectedScreen.value = screen
+    }
 
     fun selectTicker(sym: String) {
         selectedTicker.value = sym
@@ -292,7 +299,13 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         correspondenceJob?.cancel()
         correspondenceJob = viewModelScope.launch(Dispatchers.IO) {
             while (true) {
-                refreshDataCorrespondence()
+                try {
+                    refreshDataCorrespondence()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e("DestinedFXViewModel", "refreshDataCorrespondence error: ${e.message}")
+                }
                 delay(5000L)
             }
         }
@@ -404,6 +417,110 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     val whatsappNotificationEnabled = MutableStateFlow(true)
     val whatsappPhoneNumber = MutableStateFlow(app.secretsManager.getWhatsAppPhone())
     val whatsappApiKey = MutableStateFlow(app.secretsManager.getWhatsAppApiKey())
+
+    // --- TELEGRAM NOTIFICATIONS & ONBOARDING ---
+    val telegramStatus = MutableStateFlow(app.secretsManager.getTelegramConnectionStatus())
+    val telegramNotificationsEnabled = MutableStateFlow(app.secretsManager.getTelegramNotificationsEnabled())
+    val telegramTestMessageResult = MutableStateFlow<String?>(null)
+    val isTelegramLoading = MutableStateFlow(false)
+
+    fun connectTelegram(botToken: String, chatId: String) {
+        viewModelScope.launch {
+            isTelegramLoading.value = true
+            telegramTestMessageResult.value = null
+            try {
+                if (botToken.isBlank() || chatId.isBlank()) {
+                    telegramStatus.value = "Connection failed"
+                    telegramTestMessageResult.value = "Bot token and Chat ID are required."
+                    isTelegramLoading.value = false
+                    return@launch
+                }
+                val notificationService = NotificationService(OkHttpClient())
+                val success = notificationService.sendTelegramMessage(
+                    botToken,
+                    chatId,
+                    "DestinedFX Analyzer: Telegram connection verified successfully."
+                )
+                if (success) {
+                    app.secretsManager.saveTelegramToken(botToken)
+                    app.secretsManager.saveTelegramChatId(chatId)
+                    app.secretsManager.saveTelegramConnectionStatus("Connected")
+                    telegramStatus.value = "Connected"
+                    telegramTestMessageResult.value = "Connected and test message delivered!"
+                    app.secretsManager.saveTelegramNotificationsEnabled(true)
+                    telegramNotificationsEnabled.value = true
+                } else {
+                    telegramStatus.value = "Connection failed"
+                    telegramTestMessageResult.value = "Failed to deliver verification message to Telegram API."
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                telegramStatus.value = "Connection failed"
+                telegramTestMessageResult.value = "Error: ${e.message}"
+            } finally {
+                isTelegramLoading.value = false
+            }
+        }
+    }
+
+    fun sendTelegramTestNotification() {
+        viewModelScope.launch {
+            isTelegramLoading.value = true
+            telegramTestMessageResult.value = null
+            try {
+                val token = app.secretsManager.getTelegramToken()
+                val chatId = app.secretsManager.getTelegramChatId()
+                if (token.isBlank() || chatId.isBlank()) {
+                    telegramTestMessageResult.value = "Not configured. Please connect Telegram first."
+                    isTelegramLoading.value = false
+                    return@launch
+                }
+                val notificationService = NotificationService(OkHttpClient())
+                val success = notificationService.sendTelegramMessage(
+                    token,
+                    chatId,
+                    "DestinedFX Analyzer: Test alert at ${java.util.Date()}"
+                )
+                if (success) {
+                    telegramTestMessageResult.value = "Test message delivered successfully!"
+                } else {
+                    telegramTestMessageResult.value = "Delivery failed. Check Bot Token / Chat ID."
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                telegramTestMessageResult.value = "Test failed: ${e.message}"
+            } finally {
+                isTelegramLoading.value = false
+            }
+        }
+    }
+
+    fun unlinkTelegram() {
+        app.secretsManager.saveTelegramToken("")
+        app.secretsManager.saveTelegramChatId("")
+        app.secretsManager.saveTelegramConnectionStatus("Not configured")
+        app.secretsManager.saveTelegramNotificationsEnabled(false)
+        telegramStatus.value = "Not configured"
+        telegramNotificationsEnabled.value = false
+        telegramTestMessageResult.value = "Telegram unlinked successfully."
+    }
+
+    fun refreshTelegramStatus() {
+        val token = app.secretsManager.getTelegramToken()
+        val chatId = app.secretsManager.getTelegramChatId()
+        val status = if (token.isBlank() || chatId.isBlank()) "Not configured" else app.secretsManager.getTelegramConnectionStatus()
+        telegramStatus.value = status
+        telegramNotificationsEnabled.value = app.secretsManager.getTelegramNotificationsEnabled() && status == "Connected"
+    }
+
+    fun setTelegramNotificationsEnabled(enabled: Boolean) {
+        if (telegramStatus.value != "Connected" && enabled) {
+            telegramTestMessageResult.value = "Cannot enable notifications until Telegram connection is verified."
+            return
+        }
+        telegramNotificationsEnabled.value = enabled
+        app.secretsManager.saveTelegramNotificationsEnabled(enabled)
+    }
     
     // Safety Risk Filters & News Safeguards (Non-Farm Payroll / NFP CPI Protection)
     val nfpProtectionArmed = MutableStateFlow(true)
@@ -434,9 +551,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     val canUseBiometrics = MutableStateFlow(false)
 
     fun lockApp() {
-        if (currentUser.value != null) {
-            isAppLocked.value = true
-        }
+        // Disabled by default to ensure terminal remains accessible
     }
 
     fun unlockApp() {
@@ -444,38 +559,65 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun checkBiometricAvailability(context: Context) {
-        val biometricManager = BiometricManager.from(context)
-        val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        
-        when (biometricManager.canAuthenticate(authenticators)) {
-            BiometricManager.BIOMETRIC_SUCCESS -> {
-                canUseBiometrics.value = true
-                biometricStatus.value = "Secure biometric vault active."
+        try {
+            val biometricManager = BiometricManager.from(context)
+            val authenticators = if (android.os.Build.VERSION.SDK_INT >= 30) {
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            } else {
+                BiometricManager.Authenticators.BIOMETRIC_WEAK
             }
-            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> {
-                canUseBiometrics.value = false
-                biometricStatus.value = "Hardware encryption unavailable."
+            
+            when (biometricManager.canAuthenticate(authenticators)) {
+                BiometricManager.BIOMETRIC_SUCCESS -> {
+                    canUseBiometrics.value = true
+                    biometricStatus.value = "Secure biometric vault active."
+                }
+                BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> {
+                    canUseBiometrics.value = false
+                    biometricStatus.value = "Hardware encryption unavailable."
+                }
+                BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> {
+                    canUseBiometrics.value = false
+                    biometricStatus.value = "Biometric node busy."
+                }
+                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> {
+                    canUseBiometrics.value = false
+                    biometricStatus.value = "No device credentials established."
+                }
+                else -> {
+                    canUseBiometrics.value = false
+                    biometricStatus.value = "Encryption bridge error."
+                }
             }
-            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> {
-                canUseBiometrics.value = false
-                biometricStatus.value = "Biometric node busy."
-            }
-            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> {
-                canUseBiometrics.value = false
-                biometricStatus.value = "No device credentials established."
-            }
-            else -> {
-                canUseBiometrics.value = false
-                biometricStatus.value = "Encryption bridge error."
-            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.e("DestinedFXViewModel", "Biometric check error: ${e.message}")
+            canUseBiometrics.value = false
+            biometricStatus.value = "Biometric security unavailable."
         }
     }
 
     // --- USER REGISTRATION & AUTHENTICATION (SUPABASE AUTH CLIENT) ---
     private val supabaseClient by lazy { com.example.data.supabase.SupabaseAuthClient(app.secretsManager) }
     val currentUser = MutableStateFlow<com.example.data.user.User?>(null)
+    val showAuthScreen = MutableStateFlow(false)
     val showRegisterScreen = MutableStateFlow(false)
     val isShowingSplash = MutableStateFlow(false)
+
+    fun openLoginScreen() {
+        showRegisterScreen.value = false
+        showAuthScreen.value = true
+    }
+
+    fun openRegisterScreen() {
+        showRegisterScreen.value = true
+        showAuthScreen.value = true
+    }
+
+    fun closeAuthScreen() {
+        showAuthScreen.value = false
+        showRegisterScreen.value = false
+    }
 
     // Strategy & Configured Equity Persistence
     val selectedStrategyId = MutableStateFlow(app.secretsManager.getSelectedStrategy())
@@ -561,7 +703,8 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         val spread = quote.spread
-        if (spread == null || (spec != null && spec.pipSize != null && spread > spec.pipSize!! * 3.5)) {
+        val pipSize = spec?.pipSize
+        if (spread == null || (pipSize != null && spread > pipSize * 3.5)) {
             return@withContext PreExecutionCheck(false, 0.0, 0.0, "Spread too wide. Execution blocked.")
         }
 
@@ -603,12 +746,17 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun restorePersistedSession() {
         viewModelScope.launch {
-            val user = supabaseClient.restoreSession()
-            if (user != null) {
-                currentUser.value = user
-                isShowingSplash.value = true
-                isAppLocked.value = true
-                app.cloudSyncManager.syncUserSession(user, accountCapital.value)
+            try {
+                val user = supabaseClient.restoreSession()
+                if (user != null) {
+                    currentUser.value = user
+                    // Silent background sync without locking or forcing splash
+                    app.cloudSyncManager.syncUserSession(user, accountCapital.value)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e("DestinedFXViewModel", "restorePersistedSession background check: ${e.message}")
             }
         }
     }
@@ -620,11 +768,11 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
                 when (res) {
                     is com.example.data.supabase.SignUpResponse.SuccessVerified -> {
                         currentUser.value = res.user
-                        isShowingSplash.value = true
+                        closeAuthScreen()
                         onResult(true, "Account created successfully!")
                     }
                     is com.example.data.supabase.SignUpResponse.EmailVerificationRequired -> {
-                        onResult(true, "Verification email sent to ${res.email}. Please verify before logging in.")
+                        onResult(true, "Verification email sent to ${res.email}. You can continue in Guest mode.")
                     }
                 }
             }.onFailure { e ->
@@ -638,7 +786,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
             val result = app.authUseCase.login(email, passwordText)
             result.onSuccess { user ->
                 currentUser.value = user
-                isShowingSplash.value = true
+                closeAuthScreen()
                 onResult(true, "Login successful")
             }.onFailure { e ->
                 onResult(false, e.message ?: "Login failed")
@@ -648,10 +796,16 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
 
     fun logoutUser() {
         viewModelScope.launch {
-            supabaseClient.signOut()
+            try {
+                supabaseClient.signOut()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.w("DestinedFXViewModel", "signOut failed: ${e.message}")
+            }
             currentUser.value = null
-            showRegisterScreen.value = false
-            speakText("Algorithmic session expired. Session closed.")
+            closeAuthScreen()
+            speakText("Session closed. Reverted to Guest mode.")
         }
     }
 
@@ -699,7 +853,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             val resolvedPrice = resolveRealPrice(symbol, timeframe)
             if (resolvedPrice == null) {
-                val err = "Live price unavailable for $symbol. Check OANDA/Twelve Data keys or connection."
+                val err = "Live price unavailable for $symbol. Check OANDA keys or connection."
                 actionAlertMessage.value = err
                 return@launch
             }
@@ -717,6 +871,21 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
             val smcData = if (domainCandles.size > 10) {
                 structureAnalyzer.analyzeStructure(domainCandles)
             } else null
+            
+            if (smcData == null) {
+                val entity = com.example.data.AnalysisEntity(
+                    symbol = symbol,
+                    timeframe = timeframe,
+                    strategy = strategy,
+                    dateMs = System.currentTimeMillis(),
+                    winRateConfidence = 0.0,
+                    signal = "DATA_UNAVAILABLE",
+                    report = "Insufficient data for structural analysis."
+                )
+                analysisRepository.insertAnalysis(entity)
+                actionAlertMessage.value = "Data Unavailable"
+                return@launch
+            }
 
             val candlesContextStr = domainCandles.takeLast(20).joinToString("\n") { 
                 "O: ${it.open}, H: ${it.high}, L: ${it.low}, C: ${it.close}" 
@@ -725,9 +894,9 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
             val reportDetails = generateAlgorithmicReport(
                 symbol, timeframe, currentPrice, priceSource, priceTimeAgo, strategy, smcData, candlesContextStr
             )
-            
-            val baseConfidence = smcData?.confluenceScore?.toDouble() ?: 75.0
-            val selectedSignal = if (baseConfidence > 85.0) "STRONG BUY" else if (baseConfidence > 70.0) "BUY" else if (baseConfidence > 55.0) "NEUTRAL" else "SELL"
+
+            val baseConfidence = smcData.confluenceScore.toDouble()
+            val selectedSignal = if (smcData.bias == "BULLISH") "BUY" else if (smcData.bias == "BEARISH") "SELL" else "WAIT"
             
             val entity = com.example.data.AnalysisEntity(
                 symbol = symbol,
@@ -742,122 +911,52 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private suspend fun fetchGeminiOpinion(prompt: String): Pair<String, String> {
-        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                val apiKey = app.secretsManager.getGeminiApiKey()
-                if (apiKey.isEmpty()) return@withContext Pair("NEUTRAL", "API Key missing.")
-                
-                val jsonPayload = org.json.JSONObject()
-                val contentsArray = org.json.JSONArray()
-                val contentObj = org.json.JSONObject()
-                val partsArray = org.json.JSONArray()
-                val partObj = org.json.JSONObject()
-                partObj.put("text", prompt + "\nProvide rigorous risk management. Warn against over-leveraging and state strictly that large lot sizes like 5.0 will blow up accounts instantly.")
-                partsArray.put(partObj)
-                contentObj.put("parts", partsArray)
-                contentsArray.put(contentObj)
-                jsonPayload.put("contents", contentsArray)
 
-                val mediaType = "application/json".toMediaType()
-                val requestBody = jsonPayload.toString().toRequestBody(mediaType)
 
-                val request = okhttp3.Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}")
-                    .post(requestBody)
-                    .build()
-
-                val geminiClient = client.newBuilder().build()
-                val response = geminiClient.newCall(request).execute()
-                val responseBody = response.body?.string()
-
-                if (response.isSuccessful && responseBody != null) {
-                    val responseJson = org.json.JSONObject(responseBody)
-                    val candidates = responseJson.optJSONArray("candidates")
-                    if (candidates != null && candidates.length() > 0) {
-                        val text = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")?.getJSONObject(0)?.optString("text") ?: ""
-                        // Extract JSON from markdown
-                        val jsonStr = text.substringAfter("{").substringBeforeLast("}")
-                        val parsed = org.json.JSONObject("{${jsonStr}}")
-                        return@withContext Pair(parsed.optString("signal", "NEUTRAL"), parsed.optString("rationale", "No rationale."))
-                    }
-                }
-                Pair("NEUTRAL", "API error.")
-            } catch (e: Exception) {
-                Pair("NEUTRAL", "Error: ${e.message}")
-            }
-        }
-    }
-
-    fun triggerMultiAIConsensusScan(symbol: String) {
+    fun triggerAlgorithmicAnalysisScan(symbol: String) {
         viewModelScope.launch {
             isMultiAIScanning.value = true
-            multiAIConsensusStatus.value = "Fetching multi-model AI consensus..."
-            speakText("Initiating domain level signal generation.")
-
-            val resolvedPrice = resolveRealPrice(symbol, "H1")
-            if (resolvedPrice == null) {
-                val err = "Live price unavailable for $symbol. Check OANDA/Twelve Data keys or connection."
-                multiAIConsensusStatus.value = err
-                actionAlertMessage.value = err
-                isMultiAIScanning.value = false
-                return@launch
-            }
-            if (resolvedPrice.source == "Frankfurter (daily reference)") {
-                val msg = "Only daily reference price available - not suitable for intraday SMC levels."
-                multiAIConsensusStatus.value = msg
-                actionAlertMessage.value = msg
-                isMultiAIScanning.value = false
-                return@launch
-            }
-            val currentPrice = resolvedPrice.price
-            val priceSource = resolvedPrice.source
-            val priceTimeAgo = formatPriceTimeAgo(resolvedPrice.timestamp)
+            multiAIConsensusStatus.value = "Executing multi-timeframe algorithmic analysis..."
 
             val app = getApplication<com.example.MyApplication>()
-            val signal = app.signalGenerationUseCase.generateSignal(symbol, "H1")
-            val report = (app.signalGenerationUseCase as? com.example.domain.usecase.impl.SignalReportStore)?.reportFor(signal.id)
-            
-            val geminiPrompt = if (report != null) {
-                com.destinedfx.core.ai.AiPrompt.build(report) + "\nRespond with a simple JSON object: {\"signal\": \"${signal.direction.name}\", \"rationale\": \"1-2 sentence explanation of the technical factors.\"}"
-            } else {
-                val candles = candlestickHistory[symbol]?.takeLast(20)?.joinToString("\n") { "O:${it.open} C:${it.close} H:${it.high} L:${it.low}" } ?: ""
-                """
-                    You are an analyst assistant. Explain the following verified technical context for $symbol:
-                    $candles
-                    Spot price: $currentPrice (source: $priceSource, $priceTimeAgo).
-                    Respond with a simple JSON object:
-                    {"signal": "NEUTRAL", "rationale": "Short explanation"}
-                """.trimIndent()
-            }
-            
-            val geminiOpinion = fetchGeminiOpinion(geminiPrompt)
+            val signalH1 = app.signalGenerationUseCase.generateSignal(symbol, "H1")
+            val signalM15 = app.signalGenerationUseCase.generateSignal(symbol, "M15")
+            val signalH4 = app.signalGenerationUseCase.generateSignal(symbol, "H4")
 
             val newOpinions = mapOf(
-                "NativeEngine" to AIBotOpinion(
-                    botName = "Native Core Engine",
-                    signal = signal.direction.name,
-                    entry = signal.entryPrice,
-                    sl = signal.stopLoss,
-                    tp = signal.takeProfit,
-                    confidence = signal.confidenceScore,
-                    coreRationale = signal.rationale
+                "SMC_H1" to AIBotOpinion(
+                    botName = "SMC Core (H1)",
+                    signal = signalH1.direction.name,
+                    entry = signalH1.entryPrice,
+                    sl = signalH1.stopLoss,
+                    tp = signalH1.takeProfit,
+                    confidence = signalH1.confidenceScore,
+                    coreRationale = signalH1.rationale
                 ),
-                "GeminiPro" to AIBotOpinion(
-                    botName = "Gemini Analyst",
-                    signal = signal.direction.name, // AI text never changes the verified signal
-                    entry = signal.entryPrice,       // AI text never changes entry
-                    sl = signal.stopLoss,           // AI text never changes stop loss
-                    tp = signal.takeProfit,         // AI text never changes take profit
-                    confidence = signal.confidenceScore,
-                    coreRationale = com.destinedfx.core.ai.AiPrompt.sanitize(geminiOpinion.second)
-                )
+                "SMC_M15" to AIBotOpinion(
+                    botName = "SMC Core (M15)",
+                    signal = signalM15.direction.name,
+                    entry = signalM15.entryPrice,
+                    sl = signalM15.stopLoss,
+                    tp = signalM15.takeProfit,
+                    confidence = signalM15.confidenceScore,
+                    coreRationale = signalM15.rationale
+                ),
+                "SMC_H4" to AIBotOpinion(
+                    botName = "SMC Core (H4)",
+                    signal = signalH4.direction.name,
+                    entry = signalH4.entryPrice,
+                    sl = signalH4.stopLoss,
+                    tp = signalH4.takeProfit,
+                    confidence = signalH4.confidenceScore,
+                    coreRationale = signalH4.rationale
+                ),
+
             )
 
             aiBotOpinions.value = newOpinions
             multiAIConsensusStatus.value = "ANALYSIS COMPLETE"
             isMultiAIScanning.value = false
-            speakText("Consensus loaded.")
         }
     }
 
@@ -1160,7 +1259,7 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
 
             val resolvedPrice = resolveRealPrice(symbol, timeframe)
             if (resolvedPrice == null) {
-                val err = "Live price unavailable for $symbol. Check OANDA/Twelve Data keys or connection."
+                val err = "Live price unavailable for $symbol. Check OANDA keys or connection."
                 aiAnalysisResult.value = err
                 actionAlertMessage.value = err
                 isAnalyzing.value = false
@@ -1222,107 +1321,37 @@ class DestinedFXViewModel(application: Application) : AndroidViewModel(applicati
         smcData: com.example.domain.model.MarketAnalysisResult?,
         candlesContext: String
     ): String {
-        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                val apiKey = app.secretsManager.getGeminiApiKey()
-                if (apiKey.isEmpty()) {
-                    return@withContext "Error: Gemini API Key not configured."
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val app = getApplication<com.example.MyApplication>()
+            val signal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategy)
+            
+            buildString {
+                appendLine("## Algorithmic Market Structure Analysis Matrix")
+                appendLine("- **Symbol:** $symbol")
+                appendLine("- **Timeframe:** $timeframe")
+                appendLine("- **Spot Price:** $currentPrice ($priceSource, $priceTimeAgo)")
+                appendLine("- **Active Strategy:** $strategy")
+                appendLine()
+                appendLine("### Executive Summary")
+                appendLine("- **Direction Bias:** ${signal.direction}")
+                appendLine("- **Confluence Score:** ${signal.confidenceScore}/100")
+                appendLine("- **Signal State:** ${signal.signalState}")
+                appendLine("- **Executable:** ${signal.executable}")
+                appendLine()
+                appendLine("### Trade Coordinates & Risk")
+                appendLine("- **Entry Price:** ${signal.entryPrice}")
+                appendLine("- **Stop Loss (SL):** ${signal.stopLoss}")
+                appendLine("- **Take Profit (TP):** ${signal.takeProfit}")
+                appendLine("- **Nearest High-Yield Zone:** ${signal.nearestHighYieldZone}")
+                appendLine("- **Spread:** ${signal.spreadText}")
+                appendLine()
+                appendLine("### Rationale & Rules")
+                appendLine(signal.rationale)
+                if (signal.blockReasons.isNotEmpty()) {
+                    appendLine()
+                    appendLine("### Blockers / Invalidation Reasons")
+                    signal.blockReasons.forEach { appendLine("- $it") }
                 }
-                
-                val smcContext = if (smcData != null) {
-                    """
-                    NATIVE SMC ENGINE DATA:
-                    - Confluence Score: ${smcData.confluenceScore}% 
-                    - Algorithm Bias Direction: ${smcData.bias}
-                    - Unmitigated FVGs found: ${smcData.fvgs.filter { !it.mitigated }.size}
-                    - Recent Unmitigated Order Blocks: ${smcData.orderBlocks.filter { !it.mitigated }.size}
-                    - Liquidity Sweeps Tracked: ${smcData.liquiditySweeps.size}
-                    """
-                } else "No SMC data available."
-
-                val prompt = """
-                    You are an elite, quantitative AI trading algorithm operating at a high frequency hedge fund. 
-                    Perform a deep algorithmic analysis on $symbol for the $timeframe timeframe.
-                    
-                    CRITICAL: YOU MUST ANCHOR ALL CALCULATIONS TO THIS REAL-TIME PRICE:
-                    - Spot price: $currentPrice (source: $priceSource, $priceTimeAgo)
-                    
-                    Rule: Use ONLY the spot price and candles provided. Never invent or recall prices from memory. Entry must be at or near the spot price. SL and TP must be calculated from the spot price using the provided candles and swing levels.
-                    
-                    Strategy Protocol: $strategy
-                    
-                    $smcContext
-                    
-                    Recent Price Action (OHLC format):
-                    $candlesContext
-                    
-                    Provide a highly professional, broker-grade market structure analysis matrix.
-                    Use the provided data to formulate the ultimate confluence result.
-                    
-                    STRICT RULES:
-                    1. Confirm the entry price EXACTLY AT or NEAR the provided Spot Price ($currentPrice). DO NOT GUESS historical or future prices.
-                    2. Calculate Stop Loss and Take Profit levels based on actual price distance from $currentPrice.
-                    3. Format in clean markdown with sections for: Executive Summary, Structural Matrix, Trade Coordinates (Entry, SL, TP1, TP2), and Risk Mitigation.
-                    
-                    WARNING: Emphasize rigorous risk management. explicitly advise against extreme lot sizes (e.g. 5.05 lots on a 3000 balance is mathematically disastrous). Dictate standard 1-2% risk sizes (e.g. 0.01 - 0.05 max for 3000 USD).
-                    Do not use disclaimers. Give direct output.
-                """.trimIndent()
-
-                val jsonPayload = org.json.JSONObject()
-                val contentsArray = org.json.JSONArray()
-                val contentObj = org.json.JSONObject()
-                val partsArray = org.json.JSONArray()
-                val partObj = org.json.JSONObject()
-                
-                partObj.put("text", prompt)
-                partsArray.put(partObj)
-                contentObj.put("parts", partsArray)
-                contentsArray.put(contentObj)
-                jsonPayload.put("contents", contentsArray)
-
-                val systemInst = org.json.JSONObject()
-                val sysPartsArray = org.json.JSONArray()
-                val sysPartObj = org.json.JSONObject()
-                sysPartObj.put("text", "You are an elite trading bot. Give factual, direct quantitative analysis in markdown with strict risk metrics.")
-                sysPartsArray.put(sysPartObj)
-                systemInst.put("parts", sysPartsArray)
-                jsonPayload.put("systemInstruction", systemInst)
-
-                val mediaType = "application/json".toMediaType()
-                val requestBody = jsonPayload.toString().toRequestBody(mediaType)
-
-                val request = okhttp3.Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}")
-                    .post(requestBody)
-                    .build()
-
-                // Increase timeout for the Gemini request
-                val geminiClient = client.newBuilder()
-                    .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .build()
-
-                val response = geminiClient.newCall(request).execute()
-                val responseBody = response.body?.string()
-
-                if (response.isSuccessful && responseBody != null) {
-                    val responseJson = org.json.JSONObject(responseBody)
-                    val candidates = responseJson.optJSONArray("candidates")
-                    if (candidates != null && candidates.length() > 0) {
-                        val firstCandidate = candidates.getJSONObject(0)
-                        val content = firstCandidate.optJSONObject("content")
-                        val parts = content?.optJSONArray("parts")
-                        if (parts != null && parts.length() > 0) {
-                            return@withContext parts.getJSONObject(0).optString("text")
-                        }
-                    }
-                    "Error parsing AI response."
-                } else {
-                    "API Error: ${response.code} ${response.message}\nBody: $responseBody"
-                }
-            } catch (e: Exception) {
-                "Error generating AI analysis: ${e.localizedMessage}"
             }
         }
     }

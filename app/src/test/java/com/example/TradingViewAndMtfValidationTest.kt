@@ -70,30 +70,6 @@ class TradingViewAndMtfValidationTest {
         assertNull(TradingViewMapper.mapInterval("INVALID"))
     }
 
-    // --- 2. DATA SOURCE & TWELVEDATA EXCLUSION TESTS ---
-
-    @Test
-    fun testMarketDataRepository_DefaultSourceIsNotTwelveData() {
-        val repo = MarketDataRepositoryImpl(secrets = getSecretsManager(), derivMarketDataGateway = null)
-
-        // Acceptance criterion: TwelveData must not be the default selected API source
-        assertNotEquals("TWELVE_DATA", repo.selectedApiSource.value)
-        assertEquals("DERIV", repo.selectedApiSource.value)
-        assertEquals("Deriv WebSocket", repo.getDataSource("EUR/USD", "H1"))
-    }
-
-    @Test
-    fun testMarketDataRepository_DoesNotSilentlyFallbackToTwelveDataWhenDerivFails() = runBlocking {
-        val repo = MarketDataRepositoryImpl(secrets = getSecretsManager(), derivMarketDataGateway = null)
-        val candles = repo.getCandles("EUR/USD", "H1", 50)
-
-        // When primary provider is unavailable, candles must be empty (fail closed)
-        assertTrue("When primary provider is unavailable, candles must be empty (fail closed)", candles.isEmpty())
-        val error = repo.getCandleError("EUR/USD", "H1")
-        assertNotNull("Fetch error must be recorded honestly", error)
-        assertTrue(error!!.contains("unavailable"))
-    }
-
     // --- 3. MULTI-TIMEFRAME ANALYSIS TESTS ---
 
     private fun generateCandleSeries(

@@ -59,33 +59,38 @@ class DerivMarketDataGateway(
             .url("$WS_URL_BASE$appId")
             .build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
-                Log.i(TAG, "Deriv WebSocket connected.")
-                _connectionState.value = DerivConnectionState.CONNECTED
-                startHeartbeat()
-                // Re-subscribe to any active symbols
-                tickListeners.keys.forEach { sym ->
-                    sendSubscribeTick(sym)
+        try {
+            webSocket = client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.i(TAG, "Deriv WebSocket connected.")
+                    _connectionState.value = DerivConnectionState.CONNECTED
+                    startHeartbeat()
+                    // Re-subscribe to any active symbols
+                    tickListeners.keys.forEach { sym ->
+                        sendSubscribeTick(sym)
+                    }
                 }
-            }
 
-            override fun onMessage(ws: WebSocket, text: String) {
-                handleIncomingMessage(text)
-            }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    handleIncomingMessage(text)
+                }
 
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Deriv WebSocket failure: ${t.message}")
-                _connectionState.value = DerivConnectionState.ERROR
-                cleanup()
-            }
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.e(TAG, "Deriv WebSocket failure: ${t.message}")
+                    _connectionState.value = DerivConnectionState.ERROR
+                    cleanup()
+                }
 
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "Deriv WebSocket closed: $code / $reason")
-                _connectionState.value = DerivConnectionState.DISCONNECTED
-                cleanup()
-            }
-        })
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    Log.i(TAG, "Deriv WebSocket closed: $code / $reason")
+                    _connectionState.value = DerivConnectionState.DISCONNECTED
+                    cleanup()
+                }
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to connect Deriv WebSocket: ${e.message}")
+            _connectionState.value = DerivConnectionState.ERROR
+        }
     }
 
     fun disconnect() {

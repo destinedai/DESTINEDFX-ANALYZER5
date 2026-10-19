@@ -50,6 +50,12 @@ private val DestinedFxLightColorScheme =
     outlineVariant = Color(0xFFCBD5E1)
   )
 
+private tailrec fun android.content.Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 @Composable
 fun DestinedFXTheme(
   themeMode: String = "System",
@@ -66,11 +72,16 @@ fun DestinedFXTheme(
   val view = LocalView.current
   if (!view.isInEditMode) {
     SideEffect {
-      val window = (view.context as Activity).window
-      window.statusBarColor = Color.Transparent.toArgb()
-      window.navigationBarColor = Color.Transparent.toArgb()
-      WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !isDark
-      WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !isDark
+      try {
+        val activity = view.context.findActivity()
+        val window = activity?.window
+        if (window != null) {
+          window.statusBarColor = Color.Transparent.toArgb()
+          window.navigationBarColor = Color.Transparent.toArgb()
+          WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !isDark
+          WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !isDark
+        }
+      } catch (ignored: Exception) {}
     }
   }
 

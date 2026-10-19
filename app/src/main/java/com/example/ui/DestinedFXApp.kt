@@ -41,42 +41,56 @@ import com.example.ui.chart.TradingChartContainer
 import com.example.ui.export.AnalysisExportSelectionDialog
 import com.example.ui.workstations.CalendarTab
 import com.example.ui.workstations.BotWorkstationTab
+import com.example.ui.DestinedFXScreen
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import java.util.Locale
+import androidx.compose.ui.res.painterResource
+import com.example.R
+import com.example.MyApplication
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
-    val isShowingSplash by viewModel.isShowingSplash.collectAsStateWithLifecycle()
-    val isAppLocked by viewModel.isAppLocked.collectAsStateWithLifecycle()
-    val showRegisterScreen by viewModel.showRegisterScreen.collectAsStateWithLifecycle()
-    val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
-    val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
-    val selectedTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
+    val initStatus by viewModel.initStatus.collectAsStateWithLifecycle()
 
-    if (currentUser == null) {
-        if (showRegisterScreen) {
-            RegisterScreen(viewModel)
-        } else {
-            LoginScreen(viewModel)
+    if (initStatus !is MyApplication.InitState.Ready) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
         }
         return
     }
 
-    if (isShowingSplash) {
-        SplashScreen(
-            onFinished = { viewModel.isShowingSplash.value = false },
-            username = currentUser?.username ?: "Trader"
-        )
+    val isAppLocked by viewModel.isAppLocked.collectAsStateWithLifecycle()
+    val showAuthScreen by viewModel.showAuthScreen.collectAsStateWithLifecycle()
+    val showRegisterScreen by viewModel.showRegisterScreen.collectAsStateWithLifecycle()
+    val selectedScreen by viewModel.selectedScreen.collectAsStateWithLifecycle()
+    val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
+    val selectedTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
+
+    // 1. Never block the terminal on startup.
+    // Display login/register ONLY if the user explicitly opens it from Settings:
+    if (showAuthScreen) {
+        if (showRegisterScreen) {
+            RegisterScreen(
+                viewModel = viewModel,
+                onDismiss = { viewModel.closeAuthScreen() }
+            )
+        } else {
+            LoginScreen(
+                viewModel = viewModel,
+                onDismiss = { viewModel.closeAuthScreen() }
+            )
+        }
         return
     }
 
+    // 2. Only show BiometricLockScreen if the user explicitly engaged the lock manually
     if (isAppLocked) {
         BiometricLockScreen(
             viewModel = viewModel,
-            onUnlocked = { viewModel.isAppLocked.value = false }
+            onUnlocked = { viewModel.unlockApp() }
         )
         return
     }
@@ -95,16 +109,15 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(28.dp)
+                                .size(32.dp)
                                 .clip(CircleShape)
-                                .background(CyanPrimary),
+                                .border(1.dp, CyanPrimary, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.TrendingUp,
-                                contentDescription = null,
-                                tint = DarkBackground,
-                                modifier = Modifier.size(16.dp)
+                            Image(
+                                painter = painterResource(id = R.drawable.destinedfx_icon_1791382332866),
+                                contentDescription = "DestinedFX Emblem",
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
                         Column {
@@ -127,8 +140,8 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     IconButton(onClick = { showExportDialog = true }, modifier = Modifier.testTag("export_button")) {
                         Icon(Icons.Default.Share, contentDescription = "Export Analysis", tint = CyanPrimary)
                     }
-                    IconButton(onClick = { viewModel.isAppLocked.value = true }, modifier = Modifier.testTag("lock_button")) {
-                        Icon(Icons.Default.Lock, contentDescription = "Lock App", tint = OrangeAccent)
+                    IconButton(onClick = { /* App lock disabled by default to keep terminal open */ }, modifier = Modifier.testTag("lock_button")) {
+                        Icon(Icons.Default.Lock, contentDescription = "Lock App", tint = OrangeAccent.copy(alpha = 0.5f))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkSurface)
@@ -139,11 +152,12 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                 containerColor = DarkSurface,
                 tonalElevation = 8.dp
             ) {
+            DestinedFXScreen.allScreens.forEach { screen ->
                 NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { viewModel.selectedTab.value = 0 },
-                    icon = { Icon(Icons.Default.Architecture, contentDescription = null) },
-                    label = { Text("Strategies", fontSize = 9.sp) },
+                    selected = selectedScreen == screen,
+                    onClick = { viewModel.selectScreen(screen) },
+                    icon = { Icon(screen.icon, contentDescription = null) },
+                    label = { Text(screen.title, fontSize = 9.sp) },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = CyanPrimary,
                         selectedTextColor = CyanPrimary,
@@ -151,117 +165,34 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                         unselectedTextColor = TextSecondary,
                         indicatorColor = CyanPrimary.copy(alpha = 0.15f)
                     ),
-                    modifier = Modifier.testTag("nav_tab_strategies")
+                    modifier = Modifier.testTag(screen.tag)
                 )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { viewModel.selectedTab.value = 1 },
-                    icon = { Icon(Icons.Default.ShowChart, contentDescription = null) },
-                    label = { Text("Analyzer", fontSize = 9.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = CyanPrimary,
-                        selectedTextColor = CyanPrimary,
-                        unselectedIconColor = TextSecondary,
-                        unselectedTextColor = TextSecondary,
-                        indicatorColor = CyanPrimary.copy(alpha = 0.15f)
-                    ),
-                    modifier = Modifier.testTag("nav_tab_chart")
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { viewModel.selectedTab.value = 2 },
-                    icon = { Icon(Icons.Default.CalendarMonth, contentDescription = null) },
-                    label = { Text("Calendar", fontSize = 9.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = CyanPrimary,
-                        selectedTextColor = CyanPrimary,
-                        unselectedIconColor = TextSecondary,
-                        unselectedTextColor = TextSecondary,
-                        indicatorColor = CyanPrimary.copy(alpha = 0.15f)
-                    ),
-                    modifier = Modifier.testTag("nav_tab_calendar")
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 3,
-                    onClick = { viewModel.selectedTab.value = 3 },
-                    icon = { Icon(Icons.Default.SmartToy, contentDescription = null) },
-                    label = { Text("Bot", fontSize = 9.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = CyanPrimary,
-                        selectedTextColor = CyanPrimary,
-                        unselectedIconColor = TextSecondary,
-                        unselectedTextColor = TextSecondary,
-                        indicatorColor = CyanPrimary.copy(alpha = 0.15f)
-                    ),
-                    modifier = Modifier.testTag("nav_tab_bot")
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 4,
-                    onClick = { viewModel.selectedTab.value = 4 },
-                    icon = { Icon(Icons.Default.Psychology, contentDescription = null) },
-                    label = { Text("AI Review", fontSize = 9.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = CyanPrimary,
-                        selectedTextColor = CyanPrimary,
-                        unselectedIconColor = TextSecondary,
-                        unselectedTextColor = TextSecondary,
-                        indicatorColor = CyanPrimary.copy(alpha = 0.15f)
-                    ),
-                    modifier = Modifier.testTag("nav_tab_ai")
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 5,
-                    onClick = { viewModel.selectedTab.value = 5 },
-                    icon = { Icon(Icons.Default.Calculate, contentDescription = null) },
-                    label = { Text("Risk", fontSize = 9.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = CyanPrimary,
-                        selectedTextColor = CyanPrimary,
-                        unselectedIconColor = TextSecondary,
-                        unselectedTextColor = TextSecondary,
-                        indicatorColor = CyanPrimary.copy(alpha = 0.15f)
-                    ),
-                    modifier = Modifier.testTag("nav_tab_risk")
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 6,
-                    onClick = { viewModel.selectedTab.value = 6 },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text("Settings", fontSize = 9.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = CyanPrimary,
-                        selectedTextColor = CyanPrimary,
-                        unselectedIconColor = TextSecondary,
-                        unselectedTextColor = TextSecondary,
-                        indicatorColor = CyanPrimary.copy(alpha = 0.15f)
-                    ),
-                    modifier = Modifier.testTag("nav_tab_settings")
-                )
+            }
             }
         }
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-            when (selectedTab) {
-                0 -> StrategiesTab(viewModel)
-                1 -> SignalsAndChartTab(viewModel)
-                2 -> CalendarTab(viewModel)
-                3 -> BotWorkstationTab(viewModel)
-                4 -> AIConsensusTab(viewModel)
-                5 -> RiskManagementTab(viewModel)
-                6 -> SettingsTab(viewModel)
+            when (selectedScreen) {
+                DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
+                DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel)
+                DestinedFXScreen.Calendar -> CalendarTab(viewModel)
+                DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
+                DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
+                DestinedFXScreen.Settings -> SettingsTab(viewModel)
             }
         }
 
-        if (showExportDialog && dynamicAnalysis != null) {
+        val currentAnalysis = dynamicAnalysis
+        if (showExportDialog && currentAnalysis != null) {
             AnalysisExportSelectionDialog(
-                analysis = dynamicAnalysis!!,
+                analysis = currentAnalysis,
                 onDismiss = { showExportDialog = false },
                 onExportPdf = {
-                    viewModel.exportPdfDossier(dynamicAnalysis!!)
+                    viewModel.exportPdfDossier(currentAnalysis)
                     showExportDialog = false
                 },
                 onExportImage = {
-                    viewModel.exportImageSnapshot(dynamicAnalysis!!)
+                    viewModel.exportImageSnapshot(currentAnalysis)
                     showExportDialog = false
                 },
                 isExporting = false
@@ -329,6 +260,14 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                             modifier = Modifier.testTag("tf_chip_$tf")
                         )
                     }
+                }
+                Button(
+                    onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe) },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
+                    modifier = Modifier.fillMaxWidth().height(40.dp).testTag("analyze_button"),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Analyze Market", color = DarkBackground, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -400,12 +339,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                             Icon(Icons.Default.Assessment, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(20.dp))
                             Text("INSTITUTIONAL TRADE PLAN", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
                         }
-                        IconButton(
-                            onClick = { viewModel.triggerMultiAIConsensusScan(activeSymbol); viewModel.selectedTab.value = 2 },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(Icons.Default.Psychology, contentDescription = "AI Consensus", tint = CyanPrimary, modifier = Modifier.size(20.dp))
-                        }
+
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
@@ -437,9 +371,9 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = CyanPrimary)
                     }
 
-                    val isTradeValid = analysis != null && analysis?.entry != 0.0 && (analysis?.signalState == "STRONG_BUY" || analysis?.signalState == "BUY" || analysis?.signalState == "WEAK_BUY" || analysis?.signalState == "STRONG_SELL" || analysis?.signalState == "SELL" || analysis?.signalState == "WEAK_SELL")
-                    if (isTradeValid && analysis != null) {
-                        val a = analysis!!
+                    val a = analysis
+                    val isTradeValid = a != null && a.entry != 0.0 && (a.signalState == "STRONG_BUY" || a.signalState == "BUY" || a.signalState == "WEAK_BUY" || a.signalState == "STRONG_SELL" || a.signalState == "SELL" || a.signalState == "WEAK_SELL")
+                    if (isTradeValid && a != null) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Column {
                                 Text("Direction:", fontSize = 10.sp, color = TextSecondary)
@@ -578,7 +512,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
         }
 
         // Detailed Market Structure Elements
-        if (analysis != null && (analysis!!.orderBlocks.isNotEmpty() || analysis!!.keyLevels.isNotEmpty())) {
+        val smc = analysis
+        if (smc != null && (smc.orderBlocks.isNotEmpty() || smc.keyLevels.isNotEmpty())) {
             item {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -589,9 +524,9 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("SMC STRUCTURAL INVENTORY", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CyanPrimary)
                         
-                        if (analysis!!.orderBlocks.isNotEmpty()) {
+                        if (smc.orderBlocks.isNotEmpty()) {
                             Text("Active Order Blocks", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            analysis!!.orderBlocks.take(4).forEach { ob ->
+                            smc.orderBlocks.take(4).forEach { ob ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -610,14 +545,14 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                             }
                         }
 
-                        if (analysis!!.keyLevels.isNotEmpty()) {
-                            Divider(color = TabBorder.copy(alpha = 0.5f))
+                        if (smc.keyLevels.isNotEmpty()) {
+                            HorizontalDivider(color = TabBorder.copy(alpha = 0.5f))
                             Text("Verified Key Levels", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
                             FlowRow(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                analysis!!.keyLevels.take(6).forEach { level ->
+                                smc.keyLevels.take(6).forEach { level ->
                                     SuggestionChip(
                                         onClick = { },
                                         label = { Text(level, fontSize = 9.sp) },
@@ -670,7 +605,7 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
                 border = BorderStroke(1.dp, if (isSelected) CyanPrimary else TabBorder),
                 modifier = Modifier.fillMaxWidth().clickable(enabled = strat.isImplemented) {
                     viewModel.selectStrategy(strat.id)
-                    viewModel.selectedTab.value = 1
+                    viewModel.selectScreen(DestinedFXScreen.Analyzer)
                 }
             ) {
                 Column(
@@ -720,6 +655,10 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
                 }
             }
         }
+        item {
+            Spacer(modifier = Modifier.height(16.dp))
+            BacktestSection(viewModel)
+        }
     }
 }
 
@@ -749,7 +688,6 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     var supabaseUrlInput by remember { mutableStateOf(viewModel.app.secretsManager.getSupabaseUrl()) }
     var supabaseKeyInput by remember { mutableStateOf(viewModel.app.secretsManager.getSupabaseAnonKey()) }
-    var geminiKeyInput by remember { mutableStateOf(viewModel.app.secretsManager.getGeminiApiKey()) }
     var derivTokenInput by remember { mutableStateOf(viewModel.app.secretsManager.getDerivApiToken()) }
     var derivAppIdInput by remember { mutableStateOf(viewModel.app.secretsManager.getDerivAppId()) }
     var savedMessage by remember { mutableStateOf("") }
@@ -785,23 +723,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
             )
         }
 
-        item {
-            Divider(color = TabBorder)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text("GEMINI COGNITIVE ANALYST KEY", fontWeight = FontWeight.Black, fontSize = 14.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-            Text("Enter your Google Gemini API Key to enable model-based market structure analysis and explanations.", fontSize = 11.sp, color = TextSecondary)
-        }
 
-        item {
-            OutlinedTextField(
-                value = geminiKeyInput,
-                onValueChange = { geminiKeyInput = it },
-                label = { Text("Gemini API Key") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation()
-            )
-        }
 
         item {
             Divider(color = TabBorder)
@@ -837,7 +759,6 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                     onClick = {
                         viewModel.app.secretsManager.saveSupabaseUrl(supabaseUrlInput.trim())
                         viewModel.app.secretsManager.saveSupabaseAnonKey(supabaseKeyInput.trim())
-                        viewModel.app.secretsManager.saveGeminiApiKey(geminiKeyInput.trim())
                         viewModel.app.secretsManager.saveDerivApiToken(derivTokenInput.trim())
                         viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim())
                         savedMessage = "All credentials saved securely in Keystore."
@@ -864,9 +785,158 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(savedMessage, fontSize = 11.sp, color = Color(0xFF00FF99))
             }
-            if (derivConnectStatus != null) {
+            val status = derivConnectStatus
+            if (status != null) {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(derivConnectStatus!!, fontSize = 11.sp, color = CyanPrimary)
+                Text(status, fontSize = 11.sp, color = CyanPrimary)
+            }
+        }
+
+        item {
+            Divider(color = TabBorder)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("TELEGRAM NOTIFICATIONS & ONBOARDING", fontWeight = FontWeight.Black, fontSize = 14.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
+            Text("Configure real-time Telegram trade alerts and bot connectivity.", fontSize = 11.sp, color = TextSecondary)
+        }
+
+        item {
+            val telegramStatus by viewModel.telegramStatus.collectAsStateWithLifecycle()
+            val telegramNotifEnabled by viewModel.telegramNotificationsEnabled.collectAsStateWithLifecycle()
+            val telegramResult by viewModel.telegramTestMessageResult.collectAsStateWithLifecycle()
+            val isTelegramLoading by viewModel.isTelegramLoading.collectAsStateWithLifecycle()
+
+            var botTokenInput by remember { mutableStateOf(viewModel.app.secretsManager.getTelegramToken()) }
+            var chatIdInput by remember { mutableStateOf(viewModel.app.secretsManager.getTelegramChatId()) }
+            var showBotFatherGuide by remember { mutableStateOf(false) }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, TabBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Connection Status", fontSize = 11.sp, color = TextSecondary)
+                            Text(
+                                text = telegramStatus,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = when (telegramStatus) {
+                                    "Connected" -> Color(0xFF00FF99)
+                                    "Connection failed" -> Color(0xFFFF4560)
+                                    else -> OrangeAccent
+                                }
+                            )
+                        }
+                        TextButton(onClick = { showBotFatherGuide = !showBotFatherGuide }) {
+                            Text(if (showBotFatherGuide) "Hide BotFather Guide" else "How to Setup BotFather?", fontSize = 11.sp, color = CyanPrimary)
+                        }
+                    }
+
+                    if (showBotFatherGuide) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = DarkBackground),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("BotFather Setup Guide:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CyanPrimary)
+                                Text("1. Open Telegram and search for official @BotFather.", fontSize = 10.sp, color = TextPrimary)
+                                Text("2. Send /newbot and follow instructions to name your bot.", fontSize = 10.sp, color = TextPrimary)
+                                Text("3. Copy the HTTP API Token provided by BotFather.", fontSize = 10.sp, color = TextPrimary)
+                                Text("4. Send a message to your bot in Telegram, then enter your Chat ID.", fontSize = 10.sp, color = TextPrimary)
+                                Text("5. Enter Bot Token and Chat ID below and tap Connect Telegram.", fontSize = 10.sp, color = TextPrimary)
+                                Text("6. Handshake verifies delivery and activates secure alerts.", fontSize = 10.sp, color = TextPrimary)
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = botTokenInput,
+                        onValueChange = { botTokenInput = it },
+                        label = { Text("Telegram Bot Token") },
+                        modifier = Modifier.fillMaxWidth().testTag("telegram_token_input"),
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+
+                    OutlinedTextField(
+                        value = chatIdInput,
+                        onValueChange = { chatIdInput = it },
+                        label = { Text("Telegram Chat ID") },
+                        modifier = Modifier.fillMaxWidth().testTag("telegram_chat_id_input"),
+                        singleLine = true
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { viewModel.connectTelegram(botTokenInput, chatIdInput) },
+                            enabled = !isTelegramLoading,
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
+                            modifier = Modifier.weight(1f).testTag("connect_telegram_button")
+                        ) {
+                            Text(if (isTelegramLoading) "Connecting..." else "Connect Telegram", color = DarkBackground, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = { viewModel.sendTelegramTestNotification() },
+                            enabled = !isTelegramLoading && telegramStatus == "Connected",
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FF99)),
+                            modifier = Modifier.weight(1f).testTag("test_telegram_button")
+                        ) {
+                            Text("Test Message", color = DarkBackground, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { viewModel.refreshTelegramStatus() },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Refresh Status", color = TextPrimary, fontSize = 11.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = { viewModel.unlinkTelegram() },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF4560)),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Unlink", fontSize = 11.sp)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Enable Automated Alerts", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                            Text("Requires verified connection status", fontSize = 10.sp, color = TextSecondary)
+                        }
+                        Switch(
+                            checked = telegramNotifEnabled,
+                            onCheckedChange = { viewModel.setTelegramNotificationsEnabled(it) },
+                            enabled = telegramStatus == "Connected",
+                            modifier = Modifier.testTag("telegram_switch")
+                        )
+                    }
+
+                    val res = telegramResult
+                    if (res != null) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(res, fontSize = 11.sp, color = if (telegramStatus == "Connected") Color(0xFF00FF99) else Color(0xFFFF4560))
+                    }
+                }
             }
         }
 
@@ -875,14 +945,27 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
-                    Text("Logged in as:", fontSize = 11.sp, color = TextSecondary)
-                    Text(currentUser?.email ?: "Unknown", fontWeight = FontWeight.Bold, color = TextPrimary)
+                    Text("Session Status:", fontSize = 11.sp, color = TextSecondary)
+                    Text(
+                        if (currentUser != null) currentUser?.email ?: "Cloud Trader" else "Guest Trader (Local Terminal)",
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
                 }
-                Button(
-                    onClick = { viewModel.logoutUser() },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4560).copy(alpha = 0.2f))
-                ) {
-                    Text("Sign Out", color = Color(0xFFFF4560), fontWeight = FontWeight.Bold)
+                if (currentUser != null) {
+                    Button(
+                        onClick = { viewModel.logoutUser() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4560).copy(alpha = 0.2f))
+                    ) {
+                        Text("Sign Out", color = Color(0xFFFF4560), fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Button(
+                        onClick = { viewModel.openLoginScreen() },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary)
+                    ) {
+                        Text("Cloud Sign In", color = DarkBackground, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -890,7 +973,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
 }
 
 @Composable
-fun LoginScreen(viewModel: DestinedFXViewModel) {
+fun LoginScreen(viewModel: DestinedFXViewModel, onDismiss: () -> Unit = {}) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
@@ -907,8 +990,19 @@ fun LoginScreen(viewModel: DestinedFXViewModel) {
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("DESTINEDFX LOGIN", fontWeight = FontWeight.Black, fontSize = 18.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-                Text("Institutional Trading Suite", fontSize = 11.sp, color = TextSecondary)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("DESTINEDFX LOGIN", fontWeight = FontWeight.Black, fontSize = 18.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
+                        Text("Optional Cloud Sync Account", fontSize = 11.sp, color = TextSecondary)
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
+                    }
+                }
 
                 OutlinedTextField(
                     value = email,
@@ -946,13 +1040,17 @@ fun LoginScreen(viewModel: DestinedFXViewModel) {
                 TextButton(onClick = { viewModel.showRegisterScreen.value = true }) {
                     Text("Don't have an account? Register", color = CyanPrimary, fontSize = 11.sp)
                 }
+
+                TextButton(onClick = onDismiss) {
+                    Text("Continue as Guest (Open Terminal)", color = TextSecondary, fontSize = 12.sp)
+                }
             }
         }
     }
 }
 
 @Composable
-fun RegisterScreen(viewModel: DestinedFXViewModel) {
+fun RegisterScreen(viewModel: DestinedFXViewModel, onDismiss: () -> Unit = {}) {
     var email by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -970,8 +1068,19 @@ fun RegisterScreen(viewModel: DestinedFXViewModel) {
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("DESTINEDFX REGISTER", fontWeight = FontWeight.Black, fontSize = 18.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-                Text("Create Supabase Account", fontSize = 11.sp, color = TextSecondary)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("DESTINEDFX REGISTER", fontWeight = FontWeight.Black, fontSize = 18.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
+                        Text("Create Cloud Account", fontSize = 11.sp, color = TextSecondary)
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
+                    }
+                }
 
                 OutlinedTextField(
                     value = email,
@@ -1017,145 +1126,15 @@ fun RegisterScreen(viewModel: DestinedFXViewModel) {
                 TextButton(onClick = { viewModel.showRegisterScreen.value = false }) {
                     Text("Already registered? Sign In", color = CyanPrimary, fontSize = 11.sp)
                 }
+
+                TextButton(onClick = onDismiss) {
+                    Text("Continue as Guest (Open Terminal)", color = TextSecondary, fontSize = 12.sp)
+                }
             }
         }
     }
 }
 
-@Composable
-fun AIConsensusTab(viewModel: DestinedFXViewModel) {
-    val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
-    val isScanning by viewModel.isMultiAIScanning.collectAsStateWithLifecycle()
-    val status by viewModel.multiAIConsensusStatus.collectAsStateWithLifecycle()
-    val opinions by viewModel.aiBotOpinions.collectAsStateWithLifecycle()
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        item {
-            Text(
-                text = "MULTI-MODEL AI CONSENSUS",
-                fontWeight = FontWeight.Black,
-                fontSize = 14.sp,
-                fontFamily = FontFamily.Monospace,
-                color = CyanPrimary
-            )
-            Text(
-                text = "Aggregating Native SMC Engine and Gemini 1.5 Pro Neural Insights for $activeSymbol.",
-                fontSize = 11.sp,
-                color = TextSecondary
-            )
-        }
-
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, TabBorder),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Consensus Status", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                        if (isScanning) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = CyanPrimary, strokeWidth = 2.dp)
-                        }
-                    }
-                    Text(
-                        text = status,
-                        fontSize = 13.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = if (status == "ANALYSIS COMPLETE") Color(0xFF00FF99) else TextSecondary
-                    )
-                    Button(
-                        onClick = { viewModel.triggerMultiAIConsensusScan(activeSymbol) },
-                        enabled = !isScanning,
-                        colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Initiate New Consensus Scan", color = DarkBackground, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-                }
-            }
-        }
-
-        if (opinions.isNotEmpty()) {
-            items(opinions.values.toList()) { opinion ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, if (opinion.botName.contains("Gemini")) Color(0xFF8E75FF) else CyanPrimary),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Icon(
-                                    imageVector = if (opinion.botName.contains("Gemini")) Icons.Default.AutoAwesome else Icons.Default.Memory,
-                                    contentDescription = null,
-                                    tint = if (opinion.botName.contains("Gemini")) Color(0xFF8E75FF) else CyanPrimary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Text(opinion.botName, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimary)
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(
-                                        when (opinion.signal) {
-                                            "LONG", "BULLISH", "STRONG BUY", "BUY" -> Color(0xFF00FF99).copy(alpha = 0.15f)
-                                            "SHORT", "BEARISH", "STRONG SELL", "SELL" -> Color(0xFFFF4560).copy(alpha = 0.15f)
-                                            else -> Color(0xFFFFB300).copy(alpha = 0.15f)
-                                        }
-                                    )
-                                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                            ) {
-                                Text(
-                                    text = opinion.signal,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = when (opinion.signal) {
-                                        "LONG", "BULLISH", "STRONG BUY", "BUY" -> Color(0xFF00FF99)
-                                        "SHORT", "BEARISH", "STRONG SELL", "SELL" -> Color(0xFFFF4560)
-                                        else -> Color(0xFFFFB300)
-                                    }
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = opinion.coreRationale,
-                            fontSize = 11.sp,
-                            color = TextSecondary,
-                            lineHeight = 16.sp
-                        )
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Confidence: ${opinion.confidence}%", fontSize = 10.sp, color = CyanPrimary, fontWeight = FontWeight.Bold)
-                            Text("Entry Target: ${formatPrice(opinion.entry, activeSymbol)}", fontSize = 10.sp, color = TextSecondary)
-                        }
-                    }
-                }
-            }
-        }
-        
-        item {
-            BacktestSection(viewModel)
-        }
-    }
-}
 
 @Composable
 fun BacktestSection(viewModel: DestinedFXViewModel) {
@@ -1187,26 +1166,27 @@ fun BacktestSection(viewModel: DestinedFXViewModel) {
                 }
             }
 
-            if (report != null && backtestState == "SUCCESS") {
-                Divider(color = TabBorder)
+            val currentReport = report
+            if (currentReport != null && backtestState == "SUCCESS") {
+                HorizontalDivider(color = TabBorder)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column {
                         Text("Win Rate", fontSize = 10.sp, color = TextSecondary)
-                        Text("${String.format("%.1f", report!!.winRate)}%", fontWeight = FontWeight.Bold, color = Color(0xFF00FF99))
+                        Text("${String.format(java.util.Locale.US, "%.1f", currentReport.winRate)}%", fontWeight = FontWeight.Bold, color = Color(0xFF00FF99))
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Profit Factor", fontSize = 10.sp, color = TextSecondary)
-                        Text(String.format("%.2f", report!!.profitFactor), fontWeight = FontWeight.Bold, color = TextPrimary)
+                        Text(String.format(java.util.Locale.US, "%.2f", currentReport.profitFactor), fontWeight = FontWeight.Bold, color = TextPrimary)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("Max Drawdown", fontSize = 10.sp, color = TextSecondary)
-                        Text("${String.format("%.1f", report!!.maxDrawdown)}%", fontWeight = FontWeight.Bold, color = Color(0xFFFF4560))
+                        Text("${String.format(java.util.Locale.US, "%.1f", currentReport.maxDrawdown)}%", fontWeight = FontWeight.Bold, color = Color(0xFFFF4560))
                     }
                 }
                 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Net Profit:", fontSize = 11.sp, color = TextSecondary)
-                    Text("${String.format("%.2f", report!!.netProfitPercent)}%", fontWeight = FontWeight.Black, color = Color(0xFF00FF99), fontFamily = FontFamily.Monospace)
+                    Text("${String.format(java.util.Locale.US, "%.2f", currentReport.netProfitPercent)}%", fontWeight = FontWeight.Black, color = Color(0xFF00FF99), fontFamily = FontFamily.Monospace)
                 }
             }
         }

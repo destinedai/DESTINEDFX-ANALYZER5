@@ -379,29 +379,11 @@ fun TradingViewWebView(
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 body, html { margin: 0; padding: 0; height: 100%; width: 100%; background-color: #0B0E14; overflow: hidden; }
-                .tradingview-widget-container { height: 100%; width: 100%; }
-                .tradingview-widget-container__widget { height: 100%; width: 100%; }
+                iframe { width: 100%; height: 100%; border: none; background-color: #0B0E14; }
             </style>
         </head>
         <body>
-            <div class="tradingview-widget-container">
-                <div class="tradingview-widget-container__widget"></div>
-                <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-                {
-                  "autosize": true,
-                  "symbol": "$mappedSymbol",
-                  "interval": "$mappedInterval",
-                  "timezone": "Etc/UTC",
-                  "theme": "dark",
-                  "style": "1",
-                  "locale": "en",
-                  "allow_symbol_change": false,
-                  "enable_publishing": false,
-                  "calendar": false,
-                  "support_host": "https://www.tradingview.com"
-                }
-                </script>
-            </div>
+            <iframe src="https://s.tradingview.com/widgetembed/?symbol=$mappedSymbol&interval=$mappedInterval&theme=dark&style=1&timezone=Etc/UTC&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=0&save_image=0&details=0&calendar=0&hotlist=0&news=0" allowtransparency="true" scrolling="no" allowfullscreen="true"></iframe>
         </body>
         </html>
     """.trimIndent()
@@ -443,54 +425,64 @@ fun TradingViewWebView(
         } else {
             AndroidView(
                 factory = { context ->
-                    WebView(context).apply {
-                        tag = "$currentKey-$retryTrigger"
-                        setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                super.onPageFinished(view, url)
-                                if (!isChartError) {
-                                    isLoading = false
+                    try {
+                        WebView(context).apply {
+                            tag = "$currentKey-$retryTrigger"
+                            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    super.onPageFinished(view, url)
+                                    if (!isChartError) {
+                                        view?.postDelayed({
+                                            if (!isChartError) {
+                                                isLoading = false
+                                            }
+                                        }, 800L)
+                                    }
                                 }
-                            }
-                            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                handler?.cancel() // STRICT SSL: Never bypass SSL certificate errors
-                                isChartError = true
-                                isLoading = false
-                                errorMessage = "SSL verification failed. Connection not secure."
-                            }
-                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                if (request?.isForMainFrame == true) {
-                                    val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                        error?.description?.toString() ?: "Network error"
-                                    } else "Network error"
+                                override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                                    handler?.cancel() // STRICT SSL: Never bypass SSL certificate errors
                                     isChartError = true
                                     isLoading = false
-                                    errorMessage = desc
+                                    errorMessage = "SSL verification failed. Connection not secure."
+                                }
+                                override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                    if (request?.isForMainFrame == true) {
+                                        val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                            error?.description?.toString() ?: "Network error"
+                                        } else "Network error"
+                                        isChartError = true
+                                        isLoading = false
+                                        errorMessage = desc
+                                    }
                                 }
                             }
+                            @android.annotation.SuppressLint("SetJavaScriptEnabled")
+                            settings.apply {
+                                javaScriptEnabled = true
+                                domStorageEnabled = true
+                                useWideViewPort = true
+                                loadWithOverviewMode = true
+                                javaScriptCanOpenWindowsAutomatically = false
+                                cacheMode = WebSettings.LOAD_DEFAULT
+                                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                allowFileAccess = false
+                                allowContentAccess = false
+                                userAgentString = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+                            }
+                            loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
                         }
-                        @android.annotation.SuppressLint("SetJavaScriptEnabled")
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            useWideViewPort = true
-                            loadWithOverviewMode = true
-                            javaScriptCanOpenWindowsAutomatically = false
-                            cacheMode = WebSettings.LOAD_DEFAULT
-                            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                            allowFileAccess = false
-                            allowContentAccess = false
-                            userAgentString = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
-                        }
-                        loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
+                    } catch (e: Throwable) {
+                        isChartError = true
+                        errorMessage = "WebView unavailable: ${e.message}"
+                        android.view.View(context)
                     }
                 },
-                update = { webView ->
+                update = { view ->
                     val expectedTag = "$currentKey-$retryTrigger"
-                    if (webView.tag != expectedTag) {
-                        webView.tag = expectedTag
-                        webView.loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
+                    if (view.tag != expectedTag) {
+                        view.tag = expectedTag
+                        (view as? WebView)?.loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
                     }
                 },
                 modifier = Modifier.fillMaxSize()

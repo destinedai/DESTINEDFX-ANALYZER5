@@ -25,6 +25,6 @@ object JournalStats {
     fun winRate(entries: List<JournalEntry>, market: String, tf: String, version: String, minSample: Int = 30): VerifiedStat? {
         val done = entries.filter { it.symbol == market && it.timeframe == tf && it.strategyVersion == version && it.resultR != null }
         if (done.size < minSample) return null            // too few closed trades: show nothing rather than a misleading number
-        return VerifiedStat(done.count { it.resultR!! > 0 } * 100.0 / done.size, done.size, market, tf, version, done.minOf { it.timestampMs }, done.maxOf { it.timestampMs })
+        return VerifiedStat(done.count { (it.resultR ?: 0.0) > 0.0 } * 100.0 / done.size, done.size, market, tf, version, done.minOf { it.timestampMs }, done.maxOf { it.timestampMs })
     }
 }

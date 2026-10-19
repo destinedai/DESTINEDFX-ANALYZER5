@@ -49,11 +49,14 @@ class RealtimeCloudSyncManager(
         if (supabaseUrl.isNotBlank() && supabaseKey.isNotBlank() && !supabaseUrl.contains("your-project")) {
             try {
                 val endpoint = "$supabaseUrl/rest/v1/profiles"
+                val isoDate = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }.format(java.util.Date())
                 val payload = JSONObject().apply {
                     put("id", user.uid)
                     put("email", user.email)
                     put("username", user.username)
-                    put("updated_at", java.time.Instant.now().toString())
+                    put("updated_at", isoDate)
                 }
 
                 val reqBuilder = Request.Builder()

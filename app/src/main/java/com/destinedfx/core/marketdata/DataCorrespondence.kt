@@ -79,8 +79,10 @@ object DataCorrespondence {
             )
 
             val brokerAge = brokerQuote?.let { (nowMs - it.receivedAtMs).coerceAtLeast(0L) }
-            val diffRaw = if (brokerQuote?.mid != null && analysisQuote.mid != null) {
-                abs(analysisQuote.mid!! - brokerQuote.mid!!)
+            val bMid = brokerQuote?.mid
+            val aMid = analysisQuote.mid
+            val diffRaw = if (bMid != null && aMid != null) {
+                abs(aMid - bMid)
             } else null
 
             val diffPips = if (diffRaw != null && spec != null) {

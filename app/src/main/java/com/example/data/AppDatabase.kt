@@ -30,17 +30,17 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("""
-                    CREATE TABLE IF NOT EXISTS analysis_history (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        symbol TEXT NOT NULL,
-                        timeframe TEXT NOT NULL,
-                        strategy TEXT NOT NULL,
-                        dateMs INTEGER NOT NULL,
-                        winRateConfidence REAL NOT NULL,
-                        signal TEXT NOT NULL,
-                        report TEXT NOT NULL
-                    )
-                """.trimIndent())
+                        CREATE TABLE IF NOT EXISTS analysis_history (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            symbol TEXT NOT NULL,
+                            timeframe TEXT NOT NULL,
+                            strategy TEXT NOT NULL,
+                            dateMs INTEGER NOT NULL,
+                            winRateConfidence REAL NOT NULL,
+                            signal TEXT NOT NULL,
+                            report TEXT NOT NULL
+                        )
+                    """.trimIndent())
             }
         }
 
@@ -58,6 +58,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "destinedfx_database"
                 )
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .fallbackToDestructiveMigrationOnDowngrade(false)
                 .build()
                 INSTANCE = instance
                 instance
