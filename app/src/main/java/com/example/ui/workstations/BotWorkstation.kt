@@ -25,6 +25,8 @@ import com.destinedfx.core.bot.BotLifecycleState
 import com.example.data.broker.BrokerType
 import com.example.data.broker.BrokerConnectionStatus
 import com.example.ui.DestinedFXViewModel
+import com.example.ui.InsightCard
+import com.example.ui.InsightLine
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -186,6 +188,32 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             color = CyanPrimary
                         )
                     }
+                }
+            }
+        }
+
+        // Engine Safeguards & Quantitative Controls
+        item {
+            val capital by viewModel.accountCapital.collectAsStateWithLifecycle()
+            val strat by viewModel.activeStrategy.collectAsStateWithLifecycle()
+            val nfpArmed by viewModel.nfpProtectionArmed.collectAsStateWithLifecycle()
+            val isHalted by viewModel.showHaltNotification.collectAsStateWithLifecycle()
+            val isMultiScanning by viewModel.isMultiAIScanning.collectAsStateWithLifecycle()
+            val consensusStatus by viewModel.multiAIConsensusStatus.collectAsStateWithLifecycle()
+
+            InsightCard("ENGINE SAFEGUARDS & QUANT CONTROLS") {
+                InsightLine("Active Strategy", strat)
+                InsightLine("Account Capital", "$${"%.2f".format(capital)}")
+                InsightLine("NFP Safeguard", if (nfpArmed) "ARMED (High-Impact Guard Active)" else "DISARMED")
+                InsightLine("Execution Status", if (isHalted) "HALTED (News Filter Lock)" else "NORMAL")
+                InsightLine("Multi-AI Scan State", if (isMultiScanning) "SCANNING (H1 / M15 / H4)" else consensusStatus)
+                if (isHalted) {
+                    Text(
+                        text = "Trading halted due to high-impact economic event window.",
+                        color = Color(0xFFFF4560),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }

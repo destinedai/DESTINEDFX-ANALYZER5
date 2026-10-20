@@ -112,6 +112,99 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
         )
     )
 
+    // Engine outputs for EngineInsightsPanel & Safeguards
+    vm.smcBiasConfidence.value = 88
+    vm.structureAlignment.value = "FULL BULLISH ALIGNMENT (H4/H1/M15)"
+    vm.multiAIConsensusStatus.value = "ANALYSIS COMPLETE (3 Models In Agreement)"
+    vm.accountCapital.value = 10.0
+    vm.activeStrategy.value = "SMC Order Blocks"
+    vm.nfpProtectionArmed.value = true
+    vm.showHaltNotification.value = false
+    vm.brokerConnected.value = false
+    vm.isAnalyzing.value = false
+    vm.isMultiAIScanning.value = false
+
+    vm.currentTradeSignal.value = com.example.domain.model.TradeSignal(
+        id = "preview-sig-01",
+        symbol = "EUR/USD",
+        timeframe = "M15",
+        direction = com.example.domain.model.SignalDirection.LONG,
+        entryPrice = 1.08750,
+        stopLoss = 1.08500,
+        takeProfit = 1.09250,
+        confidenceScore = 92,
+        rationale = "Discount Bullish Order Block invalidation at 1.08500 with unmitigated FVG CE",
+        timestamp = now,
+        signalState = "STRONG_BUY",
+        executable = true,
+        strategyScores = mapOf("SMC Order Block" to 92, "Liquidity Sweep" to 88, "MTF Alignment" to 95)
+    )
+
+    vm.modelSentimentScores.value = mapOf(
+        "SMC Core" to Pair("BULLISH", 92),
+        "MTF Flow" to Pair("BULLISH", 85),
+        "Liquidity" to Pair("BULLISH", 88)
+    )
+
+    vm.aiBotOpinions.value = mapOf(
+        "SMC_H1" to AIBotOpinion(
+            botName = "SMC Core (H1)",
+            signal = "LONG",
+            entry = 1.08750,
+            sl = 1.08500,
+            tp = 1.09250,
+            confidence = 90,
+            coreRationale = "H1 Bullish Order Block respected at discount"
+        ),
+        "SMC_M15" to AIBotOpinion(
+            botName = "SMC Core (M15)",
+            signal = "LONG",
+            entry = 1.08750,
+            sl = 1.08500,
+            tp = 1.09250,
+            confidence = 88,
+            coreRationale = "M15 Fair Value Gap confluence"
+        ),
+        "SMC_H4" to AIBotOpinion(
+            botName = "SMC Core (H4)",
+            signal = "LONG",
+            entry = 1.08700,
+            sl = 1.08450,
+            tp = 1.09600,
+            confidence = 94,
+            coreRationale = "Higher timeframe liquidity sweep confirmed"
+        )
+    )
+
+    vm.correspondenceRows.value = listOf(
+        com.destinedfx.core.marketdata.DataCorrespondenceRow(
+            symbol = "EUR/USD",
+            analysisSource = "Deriv WebSocket",
+            kind = "STREAM",
+            analysisAgeMs = 120L,
+            candleSource = "Deriv WebSocket",
+            resolvedBrokerSymbol = "frxEURUSD",
+            brokerBid = 1.08748,
+            brokerAsk = 1.08752,
+            brokerAgeMs = 150L,
+            diffPips = 0.12,
+            status = "OK"
+        ),
+        com.destinedfx.core.marketdata.DataCorrespondenceRow(
+            symbol = "XAU/USD",
+            analysisSource = "Deriv WebSocket",
+            kind = "STREAM",
+            analysisAgeMs = 80L,
+            candleSource = "Deriv WebSocket",
+            resolvedBrokerSymbol = "frxXAUUSD",
+            brokerBid = 2345.10,
+            brokerAsk = 2345.50,
+            brokerAgeMs = 110L,
+            diffPips = 0.45,
+            status = "OK"
+        )
+    )
+
     // Pre-populate broker spec for EUR/USD to enable position sizing
     SpecRegistry.put(
         InstrumentSpec(
@@ -150,6 +243,17 @@ fun rememberPreviewViewModel(): DestinedFXViewModel {
 @Preview(name = "1. Analyzer Tab", showBackground = true, widthDp = 380, heightDp = 800)
 @Composable
 fun PreviewAnalyzerTab() {
+    DestinedFXTheme {
+        Surface(modifier = Modifier.fillMaxSize(), color = DarkBackground) {
+            val vm = rememberPreviewViewModel()
+            SignalsAndChartTab(viewModel = vm)
+        }
+    }
+}
+
+@Preview(name = "1b. Analyzer Tab with Engine Insights", showBackground = true, widthDp = 380, heightDp = 1200)
+@Composable
+fun PreviewAnalyzerTabWithEngineInsights() {
     DestinedFXTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = DarkBackground) {
             val vm = rememberPreviewViewModel()

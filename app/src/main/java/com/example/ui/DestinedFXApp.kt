@@ -289,7 +289,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Symbol & Timeframe Selectors
@@ -624,6 +624,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                 }
             }
         }
+
+        EngineInsightsPanel(viewModel)
     }
 }
 
@@ -999,7 +1001,32 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
         }
 
         item {
-            Divider(color = TabBorder)
+            val lastCrash by viewModel.lastCrashText.collectAsStateWithLifecycle()
+            InsightCard("SYSTEM DIAGNOSTICS & INCIDENT LOG") {
+                if (!lastCrash.isNullOrBlank()) {
+                    Text("Previous Incident Trace Recorded:", fontSize = 10.sp, color = Color(0xFFFF4560), fontWeight = FontWeight.Bold)
+                    Text(
+                        text = lastCrash ?: "",
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextSecondary
+                    )
+                    Button(
+                        onClick = { viewModel.dismissLastCrash() },
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                        modifier = Modifier.padding(top = 4.dp).testTag("dismiss_crash_button")
+                    ) {
+                        Text("Clear Incident Log", fontSize = 10.sp, color = TextPrimary)
+                    }
+                } else {
+                    InsightLine("Diagnostic Status", "Operational (Zero crashes recorded)")
+                    InsightLine("Process State", "Encrypted Sandbox Active")
+                }
+            }
+        }
+
+        item {
+            HorizontalDivider(color = TabBorder)
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {

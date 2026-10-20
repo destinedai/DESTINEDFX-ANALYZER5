@@ -634,6 +634,7 @@ open class DestinedFXViewModel(
 
     fun selectStrategy(id: String) {
         selectedStrategyId.value = id
+        activeStrategy.value = com.destinedfx.core.strategy.StrategyRegistry.allStrategies.find { it.id == id }?.name ?: id
         if (!isPreview) {
             app.secretsManager.saveSelectedStrategy(id)
             runSignalScan(selectedTicker.value, selectedTimeframe.value)
@@ -643,6 +644,7 @@ open class DestinedFXViewModel(
     fun saveConfiguredEquity(v: Double) {
         val clean = if (v > 0.0) v else 10.0
         configuredEquity.value = clean
+        accountCapital.value = clean
         if (!isPreview) {
             app.secretsManager.saveConfiguredEquity(clean)
         }
@@ -657,15 +659,23 @@ open class DestinedFXViewModel(
         if (isPreview) return
         viewModelScope.launch {
             isSignalScanning.value = true
+            isAnalyzing.value = true
             try {
                 val sig = app.signalGenerationUseCase.generateSignal(symbol, timeframe, selectedStrategyId.value)
                 currentTradeSignal.value = sig
                 val mapped = mapTradeSignalToUiModel(sig)
                 currentDynamicAnalysis.value = mapped
+                smcBiasConfidence.value = sig.confidenceScore
+                structureAlignment.value = if (sig.mtfSummary.isNotBlank()) sig.mtfSummary else "${sig.direction} [${sig.signalState}]"
+                modelSentimentScores.value = sig.strategyScores.mapValues { (_, score) ->
+                    Pair(if (score >= 50) "BULLISH" else "BEARISH", score)
+                }
+                triggerAlgorithmicAnalysisScan(symbol)
             } catch (e: Exception) {
                 Log.e("DestinedFXViewModel", "Signal scan failed: ${e.message}")
             } finally {
                 isSignalScanning.value = false
+                isAnalyzing.value = false
             }
         }
     }
@@ -970,6 +980,11 @@ open class DestinedFXViewModel(
             )
 
             aiBotOpinions.value = newOpinions
+            modelSentimentScores.value = mapOf(
+                "SMC H1" to Pair(signalH1.direction.name, signalH1.confidenceScore),
+                "SMC M15" to Pair(signalM15.direction.name, signalM15.confidenceScore),
+                "SMC H4" to Pair(signalH4.direction.name, signalH4.confidenceScore)
+            )
             multiAIConsensusStatus.value = "ANALYSIS COMPLETE"
             isMultiAIScanning.value = false
         }
@@ -987,19 +1002,29 @@ open class DestinedFXViewModel(
         if (!isPreview) {
             initTTS()
             restorePersistedSession()
+            startDataCorrespondenceUpdates()
+            try {
+                lastCrashText.value = crashLogManager.readLastCrash()
+            } catch (e: Throwable) {
+                Log.w("DestinedFXViewModel", "readLastCrash failed: ${e.message}")
+            }
 
-        // Sync broker connection and quote for selectedTicker
+        // Sync broker connection, quote, and account capital for selectedTicker
         viewModelScope.launch {
             while (true) {
                 try {
-                    val conn = app.mt5GatewayRepository.isConnected()
-                    brokerConnected.value = conn
-                    if (conn) {
+                    val activeBroker = app.brokerManager.activeBroker.value
+                    val isConn = (activeBroker.connectionStatus.value == com.example.data.broker.BrokerConnectionStatus.CONNECTED) || app.mt5GatewayRepository.isConnected()
+                    brokerConnected.value = isConn
+                    if (isConn) {
                         val sym = selectedTicker.value
-                        val bq = app.mt5GatewayRepository.getBrokerQuote(sym).getOrNull()
+                        val bq = activeBroker.getBrokerQuote(sym).getOrNull() ?: app.mt5GatewayRepository.getBrokerQuote(sym).getOrNull()
                         brokerQuote.value = bq
+                        val bal = activeBroker.accountMetrics.value?.balance ?: 0.0
+                        accountCapital.value = if (bal > 0.0) bal else configuredEquity.value
                     } else {
                         brokerQuote.value = null
+                        accountCapital.value = configuredEquity.value
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
