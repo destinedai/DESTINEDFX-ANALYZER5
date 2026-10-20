@@ -31,9 +31,9 @@ import androidx.compose.ui.Alignment
 
 /**
  * Surfaces engine outputs the ViewModel computes:
- * SMC bias, structure alignment, trade signal, multi-AI consensus, model sentiment,
- * data correspondence, broker quote, fetch errors, analysis state, multi-AI scan state,
- * action alerts, and Gemini analysis text.
+ * SMC bias, structure alignment, trade signal, deterministic multi-timeframe analysis,
+ * strategy sentiment, data correspondence, broker quote, fetch errors, analysis state,
+ * action alerts, and the algorithmic analysis report.
  */
 @Composable
 fun EngineInsightsPanel(viewModel: DestinedFXViewModel) {
@@ -110,10 +110,10 @@ fun EngineInsightsPanel(viewModel: DestinedFXViewModel) {
         }
     }
 
-    InsightCard("MULTI-AI CONSENSUS") {
+    InsightCard("DETERMINISTIC MTF ANALYSIS") {
         InsightLine("Status", consensus)
-        InsightLine("Multi-AI scanner", if (isMultiScanning) "SCANNING ACTIVE (H1/M15/H4)..." else "IDLE")
-        if (opinions.isEmpty()) Text("No model opinions yet.", fontSize = 10.sp, color = TextSecondary)
+        InsightLine("Timeframe scanner", if (isMultiScanning) "SCANNING ACTIVE (H1/M15/H4)..." else "IDLE")
+        if (opinions.isEmpty()) Text("No timeframe results yet.", fontSize = 10.sp, color = TextSecondary)
         opinions.values.forEach { o ->
             InsightLine(o.botName, "${o.signal} ${o.confidence}%  E ${o.entry} SL ${o.sl} TP ${o.tp}")
             if (o.coreRationale.isNotBlank()) Text(o.coreRationale, fontSize = 9.sp, color = TextSecondary)
