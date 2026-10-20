@@ -56,6 +56,18 @@ class TradingViewAndMtfValidationTest {
     }
 
     @Test
+    fun testTradingViewAdvancedChartHtml_ContainsOfficialResponsiveWidget() {
+        val html = TradingViewMapper.buildWidgetHtml("EUR/USD", "M15")
+        assertNotNull(html)
+        assertTrue(html!!.contains("https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"))
+        assertTrue(html.contains("\"symbol\":\"FX:EURUSD\""))
+        assertTrue(html.contains("\"interval\":\"15\""))
+        assertTrue(html.contains("height:100%"))
+        assertNull(TradingViewMapper.buildWidgetHtml("R_100", "M15"))
+        assertNull(TradingViewMapper.buildWidgetHtml("EUR/USD", "M2"))
+    }
+
+    @Test
     fun testTradingViewEmbedUrl_UsesSupportedSymbolAndInterval() {
         val url = TradingViewMapper.buildWidgetUrl("EUR/USD", "M15")
         assertNotNull(url)

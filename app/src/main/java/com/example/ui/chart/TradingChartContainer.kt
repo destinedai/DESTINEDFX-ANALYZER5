@@ -221,8 +221,9 @@ fun TradingViewWebView(
     val mappedSymbol = TradingViewMapper.mapSymbol(symbol)
     val mappedInterval = TradingViewMapper.mapInterval(timeframe)
     val widgetUrl = TradingViewMapper.buildWidgetUrl(symbol, timeframe)
+    val widgetHtml = TradingViewMapper.buildWidgetHtml(symbol, timeframe)
 
-    if (mappedSymbol == null || mappedInterval == null || widgetUrl == null) {
+    if (mappedSymbol == null || mappedInterval == null || widgetUrl == null || widgetHtml == null) {
         Column(modifier = modifier.fillMaxSize().background(Color(0xFF0B0E14)).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
@@ -248,11 +249,11 @@ fun TradingViewWebView(
         isLoading = true
         isChartError = false
         errorMessage = ""
-        kotlinx.coroutines.delay(25_000L)
+        kotlinx.coroutines.delay(45_000L)
         if (isLoading && !isChartError) {
             isChartError = true
             isLoading = false
-            errorMessage = "TradingView did not finish loading within 25 seconds. Check the device network and retry."
+            errorMessage = "TradingView's chart script or market iframe did not initialize within 45 seconds. Update Android System WebView/Chrome, check your connection, then retry."
         }
     }
 
@@ -308,26 +309,34 @@ fun TradingViewWebView(
                                 }
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
-                                    // A finished HTML page is not proof the chart has rendered.
+                                    // A loaded wrapper page is not proof that TradingView rendered the selected market.
                                     if (view == null || url?.contains("tradingview.com") != true) return
                                     fun verifyChart(attempt: Int) {
                                         if (isChartError || !isLoading) return
                                         view.evaluateJavascript(
-                                            "(function(){return document.querySelectorAll('canvas').length>0 || Array.from(document.querySelectorAll('iframe')).some(function(f){return !!f.src;});})()"
+                                            "(function(){var e=document.documentElement.getAttribute('data-tv-widget-error');if(e)return 'ERROR:'+e;var c=document.querySelector('.tradingview-widget-container__widget');var f=c?c.querySelector('iframe'):null;if(f&&f.src&&/tradingview/i.test(f.src)){var r=f.getBoundingClientRect();if(r.width>100&&r.height>100)return 'READY';}return 'WAIT';})()"
                                         ) { result ->
-                                            if (result == "true") {
-                                                isLoading = false
-                                                isChartError = false
-                                            } else if (attempt < 10) {
-                                                view.postDelayed({ verifyChart(attempt + 1) }, 1000L)
-                                            } else {
-                                                isLoading = false
-                                                isChartError = true
-                                                errorMessage = "TradingView opened, but the chart did not initialize. Retry or open the chart externally."
+                                            val state = result?.removeSurrounding("\"") ?: "WAIT"
+                                            when {
+                                                state == "READY" -> {
+                                                    isLoading = false
+                                                    isChartError = false
+                                                }
+                                                state.startsWith("ERROR:") -> {
+                                                    isLoading = false
+                                                    isChartError = true
+                                                    errorMessage = state.removePrefix("ERROR:")
+                                                }
+                                                attempt < 30 -> view.postDelayed({ verifyChart(attempt + 1) }, 1000L)
+                                                else -> {
+                                                    isLoading = false
+                                                    isChartError = true
+                                                    errorMessage = "TradingView loaded its page, but no visible market chart appeared. Update Android System WebView/Chrome or open the chart externally."
+                                                }
                                             }
                                         }
                                     }
-                                    view.postDelayed({ verifyChart(0) }, 1000L)
+                                    view.postDelayed({ verifyChart(0) }, 1200L)
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                                     handler?.cancel()
@@ -374,7 +383,7 @@ fun TradingViewWebView(
                             // outdated Chrome version. TradingView can then serve a compatible UI.
                             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                            loadUrl(widgetUrl)
+                            loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
                         }
                     } catch (error: Throwable) {
                         isChartError = true
@@ -389,7 +398,7 @@ fun TradingViewWebView(
                         isLoading = true
                         isChartError = false
                         errorMessage = ""
-                        view.loadUrl(widgetUrl)
+                        view.loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -778,7 +787,7 @@ internal object TradingViewMapper {
         }
     }
 
-    /** Build the supported TradingView embed URL in one testable place. */
+    /** Build the supported TradingView embed URL used by the browser fallback. */
     fun buildWidgetUrl(symbol: String, timeframe: String): String? {
         val mappedSymbol = mapSymbol(symbol) ?: return null
         val mappedInterval = mapInterval(timeframe) ?: return null
@@ -787,5 +796,76 @@ internal object TradingViewMapper {
             "&interval=$mappedInterval&hidesidetoolbar=0&symboledit=0&saveimage=0" +
             "&toolbarbg=0B0E14&theme=dark&style=1&timezone=Etc%2FUTC" +
             "&withdateranges=1&locale=en&hideideas=1&calendar=0&hotlist=0&news=0"
+    }
+
+    /**
+     * Full-size Advanced Chart widget document. Loading the documented widget script inside a
+     * responsive HTML container is more reliable in Android WebView than opening the low-level URL.
+     */
+    fun buildWidgetHtml(symbol: String, timeframe: String): String? {
+        val mappedSymbol = mapSymbol(symbol) ?: return null
+        val mappedInterval = mapInterval(timeframe) ?: return null
+        val config = org.json.JSONObject().apply {
+            put("autosize", true)
+            put("symbol", mappedSymbol)
+            put("interval", mappedInterval)
+            put("timezone", "Etc/UTC")
+            put("theme", "dark")
+            put("style", "1")
+            put("locale", "en")
+            put("enable_publishing", false)
+            put("backgroundColor", "#0B0E14")
+            put("gridColor", "rgba(42,46,57,0.06)")
+            put("allow_symbol_change", false)
+            put("hide_side_toolbar", false)
+            put("hide_top_toolbar", false)
+            put("hide_legend", false)
+            put("save_image", false)
+            put("withdateranges", true)
+            put("details", false)
+            put("hotlist", false)
+            put("calendar", false)
+            put("news", false)
+            put("support_host", "https://www.tradingview.com")
+        }.toString()
+
+        return """
+            <!doctype html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+              <meta name="referrer" content="strict-origin-when-cross-origin">
+              <style>
+                html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0B0E14; }
+                .tradingview-widget-container { position:relative; width:100%; height:100%; background:#0B0E14; }
+                .tradingview-widget-container__widget { width:100%; height:calc(100% - 18px); }
+                .tradingview-widget-copyright { height:18px; line-height:18px; text-align:right; padding-right:7px; font:9px Arial,sans-serif; background:#0B0E14; }
+                .tradingview-widget-copyright a { color:#8B98A9; text-decoration:none; }
+              </style>
+              <script>
+                window.addEventListener('error', function(event) {
+                  var target = event.target;
+                  if (target && target.tagName === 'SCRIPT' &&
+                      String(target.src || '').indexOf('embed-widget-advanced-chart.js') >= 0) {
+                    document.documentElement.setAttribute('data-tv-widget-error',
+                      'TradingView advanced chart script could not load.');
+                  }
+                }, true);
+              </script>
+            </head>
+            <body>
+              <div class="tradingview-widget-container">
+                <div class="tradingview-widget-container__widget"></div>
+                <div class="tradingview-widget-copyright">
+                  <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">Charts by TradingView</a>
+                </div>
+                <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+                ${config}
+                </script>
+              </div>
+            </body>
+            </html>
+        """.trimIndent()
     }
 }
