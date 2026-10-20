@@ -724,129 +724,133 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            TerminalPageHeader(
-                eyebrow = "CONFIGURATION",
-                title = "Settings & Integrations",
-                subtitle = "TradingView chart display does not require market-data API keys."
-            )
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF10232A)),
-                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
-                Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text("TERMINAL BUILD IDENTITY", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("DestinedFX Analyzer", fontSize = 16.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                            Text("Version ${BuildConfig.VERSION_NAME} • ${BuildConfig.BUILD_TYPE.uppercase(Locale.US)}",
-                                fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF111A28)),
+                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                        Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp))
+                            .background(ElectricCyan.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Settings, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(24.dp))
                         }
-                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(27.dp))
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("TERMINAL CONTROL", fontSize = 9.sp, color = ElectricCyan,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.1.sp)
+                            Text("Settings", fontSize = 25.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                            Text("Accounts, execution and notifications", fontSize = 10.sp, color = TextSecondary)
+                        }
                     }
                     HorizontalDivider(color = CardBorder)
-                    Text("TradingView is used for chart display. No market-data API key is required to open the chart.",
-                        fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
-                }
-            }
-        }
-
-        item {
-            Text("ACCOUNT & OPTIONAL SIGN-IN", fontWeight = FontWeight.Black, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = ElectricCyan)
-            Text("Supabase credentials are used only for cloud account features. Never store service_role keys in the app.", fontSize = 11.sp, color = TextSecondary)
-        }
-
-        item {
-            OutlinedTextField(
-                value = supabaseUrlInput,
-                onValueChange = { supabaseUrlInput = it },
-                label = { Text("Supabase URL (https://xyz.supabase.co)") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-        }
-
-        item {
-            OutlinedTextField(
-                value = supabaseKeyInput,
-                onValueChange = { supabaseKeyInput = it },
-                label = { Text("Supabase Anon / Public Key") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation()
-            )
-        }
-
-
-
-        item {
-            Divider(color = TabBorder)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text("OPTIONAL DERIV EXECUTION", fontWeight = FontWeight.Black, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = ElectricCyan)
-            Text("Only needed for Deriv broker execution. It is not needed to display TradingView or inspect strategy rules.", fontSize = 11.sp, color = TextSecondary)
-        }
-
-        item {
-            OutlinedTextField(
-                value = derivTokenInput,
-                onValueChange = { derivTokenInput = it },
-                label = { Text("Deriv API Token") },
-                modifier = Modifier.fillMaxWidth().testTag("deriv_token_input"),
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation()
-            )
-        }
-
-        item {
-            OutlinedTextField(
-                value = derivAppIdInput,
-                onValueChange = { derivAppIdInput = it },
-                label = { Text("Deriv App ID (Default: 1089)") },
-                modifier = Modifier.fillMaxWidth().testTag("deriv_app_id_input"),
-                singleLine = true
-            )
-        }
-
-        item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {
-                        if (!viewModel.isPreview) {
-                            viewModel.app.secretsManager.saveSupabaseUrl(supabaseUrlInput.trim())
-                            viewModel.app.secretsManager.saveSupabaseAnonKey(supabaseKeyInput.trim())
-                            viewModel.app.secretsManager.saveDerivApiToken(derivTokenInput.trim())
-                            viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim())
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(DarkSurfaceVariant).padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("CHART ACCESS", fontSize = 8.sp, color = TextSecondary,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                            Text("TradingView", fontSize = 12.sp, color = ProfitGreen, fontWeight = FontWeight.Black)
+                            Text("No market-data key needed", fontSize = 9.sp, color = TextSecondary)
                         }
-                        savedMessage = "All credentials saved securely in Keystore."
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
-                    modifier = Modifier.weight(1f).testTag("save_credentials_button")
-                ) {
-                    Text("Save All", color = DarkBackground, fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = {
-                        viewModel.connectToDeriv(derivTokenInput, derivAppIdInput) { success, msg ->
-                            derivConnectStatus = msg
+                        Column(modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(DarkSurfaceVariant).padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("BROKER EXECUTION", fontSize = 8.sp, color = TextSecondary,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                            Text("Optional", fontSize = 12.sp, color = WarningAmber, fontWeight = FontWeight.Black)
+                            Text("Connect only to trade", fontSize = 9.sp, color = TextSecondary)
                         }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FF99)),
-                    modifier = Modifier.weight(1f).testTag("connect_deriv_button")
-                ) {
-                    Text("Connect Deriv", color = DarkBackground, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
-            if (savedMessage.isNotBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(savedMessage, fontSize = 11.sp, color = Color(0xFF00FF99))
-            }
-            val status = derivConnectStatus
-            if (status != null) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(status, fontSize = 11.sp, color = CyanPrimary)
+        }
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(15.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, CardBorder)
+            ) {
+                Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Cloud, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("CLOUD ACCOUNT", fontSize = 11.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace, letterSpacing = 0.8.sp)
+                            Text("Optional Supabase sign-in and cloud account features.", fontSize = 10.sp, color = TextSecondary)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = supabaseUrlInput,
+                        onValueChange = { supabaseUrlInput = it },
+                        label = { Text("Supabase project URL") },
+                        placeholder = { Text("https://your-project.supabase.co") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = supabaseKeyInput,
+                        onValueChange = { supabaseKeyInput = it },
+                        label = { Text("Supabase anon / publishable key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                    Text("Never put a Supabase service_role key in this application.", fontSize = 9.sp, color = TextMuted)
+                    HorizontalDivider(color = CardBorder)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Link, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("DERIV EXECUTION", fontSize = 11.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace, letterSpacing = 0.8.sp)
+                            Text("Broker credentials are for execution; they do not enable chart display.", fontSize = 10.sp, color = TextSecondary)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = derivTokenInput,
+                        onValueChange = { derivTokenInput = it },
+                        label = { Text("Deriv API token") },
+                        modifier = Modifier.fillMaxWidth().testTag("deriv_token_input"),
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                    OutlinedTextField(
+                        value = derivAppIdInput,
+                        onValueChange = { derivAppIdInput = it },
+                        label = { Text("Deriv App ID (default 1089)") },
+                        modifier = Modifier.fillMaxWidth().testTag("deriv_app_id_input"),
+                        singleLine = true
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                if (!viewModel.isPreview) {
+                                    viewModel.app.secretsManager.saveSupabaseUrl(supabaseUrlInput.trim())
+                                    viewModel.app.secretsManager.saveSupabaseAnonKey(supabaseKeyInput.trim())
+                                    viewModel.app.secretsManager.saveDerivApiToken(derivTokenInput.trim())
+                                    viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim())
+                                }
+                                savedMessage = "Credentials saved."
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground),
+                            modifier = Modifier.weight(1f).testTag("save_credentials_button")
+                        ) {
+                            Text("SAVE SETTINGS", fontWeight = FontWeight.Black, fontSize = 10.sp)
+                        }
+                        Button(
+                            onClick = {
+                                viewModel.connectToDeriv(derivTokenInput, derivAppIdInput) { _, msg ->
+                                    derivConnectStatus = msg
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen, contentColor = DarkBackground),
+                            modifier = Modifier.weight(1f).testTag("connect_deriv_button")
+                        ) {
+                            Text("CONNECT DERIV", fontWeight = FontWeight.Black, fontSize = 10.sp)
+                        }
+                    }
+                    if (savedMessage.isNotBlank()) Text(savedMessage, fontSize = 10.sp, color = ProfitGreen)
+                    derivConnectStatus?.let { Text(it, fontSize = 10.sp, color = ElectricCyan) }
+                }
             }
         }
 
