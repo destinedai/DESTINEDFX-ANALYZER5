@@ -213,60 +213,31 @@ fun TradingViewWebView(
         TradingViewPreviewPlaceholder(symbol = symbol, timeframe = timeframe, modifier = modifier)
         return
     }
-
     val mappedSymbol = TradingViewMapper.mapSymbol(symbol)
     val mappedInterval = TradingViewMapper.mapInterval(timeframe)
-
-    if (mappedSymbol == null) {
-        Column(
-            modifier = modifier
-                .fillMaxSize()
-                .background(Color(0xFF0B0E14))
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Symbol Not Supported by TradingView", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "TradingView does not supply charts for proprietary synthetic or unmapped asset '$symbol'.",
-                fontSize = 11.sp,
-                color = TextSecondary,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-        }
-        return
-    }
-
-    if (mappedInterval == null) {
-        Column(
-            modifier = modifier
-                .fillMaxSize()
-                .background(Color(0xFF0B0E14))
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Unsupported Timeframe", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text("Timeframe '$timeframe' is not supported by the TradingView chart widget.", fontSize = 11.sp, color = TextSecondary)
-        }
-        return
-    }
-
     val widgetUrl = TradingViewMapper.buildWidgetUrl(symbol, timeframe)
-        ?: return
-    val currentKey = "${mappedSymbol}_$mappedInterval"
+
+    if (mappedSymbol == null || mappedInterval == null || widgetUrl == null) {
+        Column(modifier = modifier.fillMaxSize().background(Color(0xFF0B0E14)).padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(if (mappedSymbol == null) "Symbol Not Supported by TradingView" else "Unsupported Timeframe",
+                color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(if (mappedSymbol == null) "TradingView has no configured symbol mapping for '$symbol'."
+                else "Timeframe '$timeframe' cannot be mapped to the TradingView widget.",
+                fontSize = 11.sp, color = TextSecondary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
+        return
+    }
+
+    val currentKey = "${mappedSymbol}_${mappedInterval}"
     var isLoading by remember(currentKey) { mutableStateOf(true) }
     var isChartError by remember(currentKey) { mutableStateOf(false) }
     var errorMessage by remember(currentKey) { mutableStateOf("") }
-    var retryTrigger by remember { mutableIntStateOf(0) }
+    var retryTrigger by remember(currentKey) { mutableIntStateOf(0) }
 
-    // Chart load timeout guard (15 seconds)
     LaunchedEffect(currentKey, retryTrigger) {
         isLoading = true
         isChartError = false
@@ -275,58 +246,30 @@ fun TradingViewWebView(
         if (isLoading && !isChartError) {
             isChartError = true
             isLoading = false
-            errorMessage = "Chart load timed out. Check your network connection and retry."
+            errorMessage = "TradingView did not finish loading within 25 seconds. Check the device network and retry."
         }
     }
 
-    val html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <style>
-                body, html { margin: 0; padding: 0; height: 100%; width: 100%; background-color: #0B0E14; overflow: hidden; }
-                iframe { width: 100%; height: 100%; border: none; background-color: #0B0E14; }
-            </style>
-        </head>
-        <body>
-            <iframe id="destinedfx-tv" src="$widgetUrl" onload="if(window.DestinedFXChartBridge){window.DestinedFXChartBridge.onWidgetLoaded();}" allowtransparency="true" scrolling="no" allowfullscreen="true"></iframe>
-        </body>
-        </html>
-    """.trimIndent()
-
-    Box(modifier = modifier) {
+    val expectedTag = "${currentKey}_retry_${retryTrigger}"
+    Box(modifier = modifier.background(Color(0xFF0B0E14))) {
         if (isChartError) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xFF0B0E14))
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Chart Unavailable", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                Text(
-                    text = errorMessage.ifBlank { "Unable to load TradingView chart widget for $symbol." },
-                    fontSize = 11.sp,
-                    color = TextSecondary,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = {
-                        isChartError = false
-                        isLoading = true
-                        errorMessage = ""
-                        retryTrigger++
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text("Retry", color = DarkBackground, fontWeight = FontWeight.Bold)
+            Column(modifier = Modifier.fillMaxSize().padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(34.dp))
+                Spacer(Modifier.height(10.dp))
+                Text("TradingView unavailable", color = TextPrimary, fontWeight = FontWeight.Black, fontSize = 14.sp)
+                Spacer(Modifier.height(6.dp))
+                Text(errorMessage.ifBlank { "The chart could not be displayed for $symbol." },
+                    fontSize = 11.sp, color = TextSecondary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = {
+                    isChartError = false
+                    isLoading = true
+                    errorMessage = ""
+                    retryTrigger++
+                }, colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                    shape = RoundedCornerShape(9.dp), modifier = Modifier.testTag("tradingview_retry")) {
+                    Text("RETRY TRADINGVIEW", color = DarkBackground, fontWeight = FontWeight.Black)
                 }
             }
         } else {
@@ -334,37 +277,44 @@ fun TradingViewWebView(
                 factory = { context ->
                     try {
                         WebView(context).apply {
-                            tag = "$currentKey-$retryTrigger"
+                            tag = expectedTag
                             setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                            val chartView = this
-                            addJavascriptInterface(object {
-                                @android.webkit.JavascriptInterface
-                                fun onWidgetLoaded() {
-                                    chartView.post {
-                                        if (!isChartError) isLoading = false
-                                    }
-                                }
-                            }, "DestinedFXChartBridge")
+                            overScrollMode = View.OVER_SCROLL_NEVER
+                            isVerticalScrollBarEnabled = false
+                            isHorizontalScrollBarEnabled = false
                             webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                    super.onPageStarted(view, url, favicon)
+                                    isLoading = true
+                                    isChartError = false
+                                }
                                 override fun onPageFinished(view: WebView?, url: String?) {
-                                    super.onPageFinished(view, url)
-                                    // The wrapper HTML finishing does not mean the nested TradingView chart loaded.
-                                    // The iframe's onload callback below controls the loading indicator.
+                                    super.onPageFinished(view, url, favicon = null)
+                                    if (url?.startsWith("https://") == true) isLoading = false
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                    handler?.cancel() // STRICT SSL: Never bypass SSL certificate errors
+                                    handler?.cancel()
                                     isChartError = true
                                     isLoading = false
-                                    errorMessage = "SSL verification failed. Connection not secure."
+                                    errorMessage = "SSL verification failed. The TradingView connection was cancelled."
                                 }
                                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                                     if (request?.isForMainFrame == true) {
-                                        val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                            error?.description?.toString() ?: "Network error"
-                                        } else "Network error"
+                                        val description = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error?.description?.toString() else null
                                         isChartError = true
                                         isLoading = false
-                                        errorMessage = desc
+                                        errorMessage = description?.takeIf { it.isNotBlank() } ?: "The TradingView page could not be reached."
+                                    }
+                                }
+                                override fun onReceivedHttpError(
+                                    view: WebView?,
+                                    request: WebResourceRequest?,
+                                    errorResponse: android.webkit.WebResourceResponse?
+                                ) {
+                                    if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 200) >= 400) {
+                                        isChartError = true
+                                        isLoading = false
+                                        errorMessage = "TradingView returned HTTP ${errorResponse?.statusCode ?: "error"}."
                                     }
                                 }
                             }
@@ -372,56 +322,44 @@ fun TradingViewWebView(
                             settings.apply {
                                 javaScriptEnabled = true
                                 domStorageEnabled = true
+                                databaseEnabled = true
+                                loadsImagesAutomatically = true
                                 useWideViewPort = true
                                 loadWithOverviewMode = true
                                 javaScriptCanOpenWindowsAutomatically = false
+                                setSupportMultipleWindows(false)
                                 cacheMode = WebSettings.LOAD_DEFAULT
                                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                                 allowFileAccess = false
                                 allowContentAccess = false
-                                userAgentString = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+                                userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
                             }
-                            loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
+                            loadUrl(widgetUrl)
                         }
-                    } catch (e: Throwable) {
+                    } catch (error: Throwable) {
                         isChartError = true
-                        errorMessage = "WebView unavailable: ${e.message}"
-                        android.view.View(context)
+                        isLoading = false
+                        errorMessage = "Android WebView could not start: ${error.message ?: error.javaClass.simpleName}"
+                        View(context)
                     }
                 },
                 update = { view ->
-                    val expectedTag = "$currentKey-$retryTrigger"
-                    if (view.tag != expectedTag) {
+                    if (view is WebView && view.tag != expectedTag) {
                         view.tag = expectedTag
-                        (view as? WebView)?.loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
+                        isLoading = true
+                        isChartError = false
+                        errorMessage = ""
+                        view.loadUrl(widgetUrl)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
-
-            // Visible loading indicator while TradingView initializes
             if (isLoading) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xFF0B0E14).copy(alpha = 0.85f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            color = CyanPrimary,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Text(
-                            text = "Loading TradingView Chart ($symbol $timeframe)...",
-                            fontSize = 11.sp,
-                            color = TextSecondary,
-                            fontFamily = FontFamily.Monospace
-                        )
+                Box(modifier = Modifier.fillMaxSize().background(Color(0xD90B0E14)), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        CircularProgressIndicator(color = ElectricCyan, strokeWidth = 2.dp, modifier = Modifier.size(30.dp))
+                        Text("OPENING TRADINGVIEW • $symbol • $timeframe", fontSize = 10.sp, color = TextSecondary,
+                            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                     }
                 }
             }
@@ -430,121 +368,31 @@ fun TradingViewWebView(
 }
 
 @Composable
+
+
+@Composable
 fun TradingViewPreviewPlaceholder(
     symbol: String,
     timeframe: String,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color(0xFF0B0E14)),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val width = size.width
-            val height = size.height
-            if (width <= 0 || height <= 0) return@Canvas
-
-            // Draw grid lines
-            val numHorizontal = 5
-            for (i in 1..numHorizontal) {
-                val y = height * (i.toFloat() / (numHorizontal + 1))
-                drawLine(
-                    color = Color(0xFF161E2E),
-                    start = Offset(0f, y),
-                    end = Offset(width, y),
-                    strokeWidth = 1f
-                )
-            }
-            val numVertical = 8
-            for (i in 1..numVertical) {
-                val x = width * (i.toFloat() / (numVertical + 1))
-                drawLine(
-                    color = Color(0xFF161E2E),
-                    start = Offset(x, 0f),
-                    end = Offset(x, height),
-                    strokeWidth = 1f
-                )
-            }
-
-            // Draw sample stylized candlesticks across the width
-            val candleCount = 18
-            val candleSpacing = width / (candleCount + 1)
-            val candleWidth = candleSpacing * 0.55f
-
-            val samplePcts = listOf(
-                0.60f to 0.52f, 0.53f to 0.48f, 0.50f to 0.62f, 0.61f to 0.55f,
-                0.54f to 0.45f, 0.46f to 0.40f, 0.42f to 0.50f, 0.51f to 0.42f,
-                0.43f to 0.35f, 0.36f to 0.46f, 0.45f to 0.38f, 0.39f to 0.32f,
-                0.33f to 0.40f, 0.39f to 0.30f, 0.31f to 0.25f, 0.26f to 0.34f,
-                0.33f to 0.28f, 0.27f to 0.22f
-            )
-
-            for (idx in 0 until candleCount) {
-                val (openPct, closePct) = samplePcts[idx % samplePcts.size]
-                val openY = height * openPct
-                val closeY = height * closePct
-                val isGreen = closeY <= openY
-                val color = if (isGreen) Color(0xFF00FF99) else Color(0xFFFF4560)
-                val x = candleSpacing * (idx + 1)
-
-                val highY = min(openY, closeY) - height * 0.05f
-                val lowY = max(openY, closeY) + height * 0.05f
-
-                // Wick
-                drawLine(
-                    color = color,
-                    start = Offset(x, highY),
-                    end = Offset(x, lowY),
-                    strokeWidth = 2f
-                )
-
-                // Body
-                val topBody = min(openY, closeY)
-                val bodyH = max(4f, abs(openY - closeY))
-                drawRect(
-                    color = color,
-                    topLeft = Offset(x - candleWidth / 2, topBody),
-                    size = Size(candleWidth, bodyH)
-                )
-            }
-        }
-
-        // Institutional label overlay
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF101520).copy(alpha = 0.90f))
-                .border(1.dp, TabBorder, RoundedCornerShape(8.dp))
-                .padding(horizontal = 14.dp, vertical = 8.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF00FF99))
-                )
-                Text(
-                    text = "TradingView appears in the running Android app",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = CyanPrimary,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-            Text(
-                text = "$symbol · $timeframe · Interactive Chart Widget",
-                fontSize = 9.5.sp,
-                color = TextSecondary,
-                fontFamily = FontFamily.Monospace
-            )
+    Box(modifier = modifier.fillMaxSize().background(Color(0xFF0B0E14)), contentAlignment = Alignment.Center) {
+        Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Icon(Icons.Default.QueryStats, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(34.dp))
+            Text("TRADINGVIEW RUNTIME CHART", fontSize = 11.sp, color = ElectricCyan,
+                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+            Text("$symbol • $timeframe", fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace)
+            Text("DESIGN PREVIEW ONLY — Compose previews cannot display the embedded TradingView WebView.",
+                fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Text("Run the Android app to verify chart loading.", fontSize = 9.sp, color = WarningAmber,
+                fontFamily = FontFamily.Monospace)
         }
     }
 }
+
 
 
 /**

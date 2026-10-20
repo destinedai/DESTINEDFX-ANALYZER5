@@ -122,22 +122,51 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            TerminalPageHeader(
-                eyebrow = "EVENT RISK / UTC",
-                title = "Economic Calendar",
-                subtitle = if (isPreviewMode) "DESIGN PREVIEW • SAMPLE EVENTS — NOT LIVE"
-                    else "Verified event schedule for $activeSymbol",
-                trailing = {
-                    IconButton(
-                        onClick = { refreshCalendar() },
-                        modifier = Modifier.testTag("refresh_calendar_button")
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh Calendar", tint = ElectricCyan)
+            val statusColor = when (newsStatus) {
+                NewsStatus.CLEAR -> ProfitGreen
+                NewsStatus.HIGH_IMPACT_WINDOW -> LossRed
+                NewsStatus.UNKNOWN -> WarningAmber
+            }
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF111A28)), border = BorderStroke(1.dp, CardBorder)) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(ElectricCyan.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(23.dp))
+                        }
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("EVENT RISK DESK", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                            Text("Economic calendar", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                            Text(if (isPreviewMode) "DESIGN PREVIEW · SAMPLE DATA ONLY" else "Currency relevance: $activeSymbol",
+                                fontSize = 10.sp, color = TextSecondary)
+                        }
+                        IconButton(onClick = { refreshCalendar() }, modifier = Modifier.testTag("refresh_calendar_button")) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh verified calendar", tint = ElectricCyan)
+                        }
+                    }
+                    HorizontalDivider(color = CardBorder)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(SimpleDateFormat("EEE, dd MMM yyyy", Locale.US).format(Date()),
+                                fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                            Text("Times shown in UTC", fontSize = 9.sp, color = TextSecondary)
+                        }
+                        Box(Modifier.clip(RoundedCornerShape(7.dp)).background(statusColor.copy(alpha = 0.13f))
+                            .padding(horizontal = 9.dp, vertical = 6.dp)) {
+                            Text(when (newsStatus) {
+                                NewsStatus.CLEAR -> "CLEAR"
+                                NewsStatus.HIGH_IMPACT_WINDOW -> "HIGH IMPACT"
+                                NewsStatus.UNKNOWN -> if (isLoading) "CHECKING" else "UNKNOWN"
+                            }, fontSize = 9.sp, color = statusColor, fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace)
+                        }
                     }
                 }
-            )
+            }
         }
-
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),

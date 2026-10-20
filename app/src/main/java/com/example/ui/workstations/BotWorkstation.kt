@@ -57,34 +57,61 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Clear production command header
         item {
             val isConnected = brokerConnStatus == BrokerConnectionStatus.CONNECTED
-            val modeColor = if (isConnected) ProfitGreen else WarningAmber
-            TerminalPageHeader(
-                eyebrow = "AUTOMATION / EXECUTION",
-                title = "Bot Workstation",
-                subtitle = if (isConnected) "Execution gateway connected • ${activeBrokerType.name}"
-                    else "Execution offline • chart and analysis remain separate",
-                trailing = {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(modeColor.copy(alpha = 0.15f))
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = if (isConnected) "CONNECTED" else "OFFLINE",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            color = modeColor,
-                            fontFamily = FontFamily.Monospace
-                        )
+            val statusColor = when (botSummary.state) {
+                BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
+                BotLifecycleState.EXECUTING -> ElectricCyan
+                BotLifecycleState.CONNECTING_BROKER -> OrangeAccent
+                BotLifecycleState.ERROR -> LossRed
+                else -> if (isConnected) ProfitGreen else WarningAmber
+            }
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF111A28)),
+                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.42f))) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(statusColor.copy(alpha = 0.13f)),
+                            contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Memory, contentDescription = null, tint = statusColor, modifier = Modifier.size(23.dp))
+                        }
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("AUTOMATION / EXECUTION", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                            Text("Bot command desk", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                            Text("$activeSymbol · $selectedTimeframe · $selectedStrategyId",
+                                fontSize = 9.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                        }
+                        Box(Modifier.clip(RoundedCornerShape(7.dp)).background(statusColor.copy(alpha = 0.14f))
+                            .padding(horizontal = 8.dp, vertical = 6.dp)) {
+                            Text(if (isConnected) "CONNECTED" else "OFFLINE", fontSize = 8.sp, color = statusColor,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        }
                     }
+                    HorizontalDivider(color = CardBorder)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("BOT STATE", fontSize = 9.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
+                            Text(botSummary.state.name.replace('_', ' '), fontSize = 12.sp, color = statusColor,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("BROKER", fontSize = 9.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
+                            Text(activeBrokerType.name, fontSize = 12.sp, color = TextPrimary,
+                                fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("RISK LIMIT", fontSize = 9.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
+                            Text("${riskPercent.coerceAtMost(1.0)}%", fontSize = 12.sp, color = WarningAmber,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                    Text(if (isConnected) "Execution gateway connected; verify all orders before use."
+                        else "Execution is disconnected. Analysis and chart display are separate from broker execution.",
+                        fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
                 }
-            )
+            }
         }
-
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),

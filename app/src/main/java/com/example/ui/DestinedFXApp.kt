@@ -301,14 +301,10 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
     val selectedTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
-    val ticker = tickers[activeSymbol]
-    val spotPrice = ticker?.price ?: 0.0
-
     val analysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val isScanning by viewModel.isSignalScanning.collectAsStateWithLifecycle()
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
-    var isRealTradingViewEnabled by remember { mutableStateOf(true) }
-
+    val ticker = tickers[activeSymbol]
     val symbols = listOf("XAU/USD", "EUR/USD", "GBP/USD", "USD/JPY", "BTC/USD")
     val timeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
 
@@ -316,321 +312,238 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
         viewModel.runSignalScan(activeSymbol, selectedTimeframe)
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(12.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(DarkBackground),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        TerminalPageHeader(
-            eyebrow = "DESTINEDFX / ANALYSIS",
-            title = "$activeSymbol  •  $selectedTimeframe",
-            subtitle = "TradingView chart with deterministic strategy analysis",
-            trailing = { SignalBadge(state = analysis?.signalState ?: "WAIT") }
-        )
-
-        // Symbol & Timeframe Selectors
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(symbols) { sym ->
-                    FilterChip(
-                        selected = activeSymbol == sym,
-                        onClick = { viewModel.selectTicker(sym) },
-                        label = { Text(sym, fontWeight = FontWeight.Bold, fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = ElectricCyan,
-                            selectedLabelColor = DarkBackground,
-                            containerColor = DarkSurface,
-                            labelColor = TextPrimary
-                        ),
-                        border = FilterChipDefaults.filterChipBorder(
-                            borderColor = if (activeSymbol == sym) ElectricCyan else CardBorder,
-                            selectedBorderColor = ElectricCyan,
-                            enabled = true,
-                            selected = activeSymbol == sym
-                        ),
-                        modifier = Modifier.testTag("symbol_chip_$sym")
-                    )
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("MARKET WORKSPACE / DETERMINISTIC", fontSize = 9.sp, color = ElectricCyan,
+                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                    Text(activeSymbol, fontSize = 25.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                    Text("Chart display: TradingView • Analysis: algorithmic rules", fontSize = 10.sp, color = TextSecondary)
                 }
-            }
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(timeframes) { tf ->
-                    FilterChip(
-                        selected = selectedTimeframe == tf,
-                        onClick = { viewModel.selectTimeframe(tf) },
-                        label = { Text(tf, fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = ElectricCyan,
-                            selectedLabelColor = DarkBackground,
-                            containerColor = DarkSurface,
-                            labelColor = TextSecondary
-                        ),
-                        border = FilterChipDefaults.filterChipBorder(
-                            borderColor = if (selectedTimeframe == tf) ElectricCyan else CardBorder,
-                            selectedBorderColor = ElectricCyan,
-                            enabled = true,
-                            selected = selectedTimeframe == tf
-                        ),
-                        modifier = Modifier.testTag("tf_chip_$tf")
-                    )
-                }
-            }
-            Button(
-                onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe) },
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
-                modifier = Modifier.fillMaxWidth().height(40.dp).testTag("analyze_button"),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Analyze Market", color = DarkBackground, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-            }
-        }
-
-        // TradingView Chart Container with GlassCard
-        GlassCard(
-            title = "TRADINGVIEW CHART  •  $activeSymbol  •  $selectedTimeframe",
-            action = {
-                Text(
-                    text = "EMBEDDED CHART",
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    color = TextSecondary
-                )
-            }
-        ) {
-            Box(modifier = Modifier.fillMaxWidth().height(420.dp)) {
-                TradingChartContainer(
-                    activeSymbol = activeSymbol,
-                    selectedTimeframe = selectedTimeframe,
-                    currentSpotPrice = spotPrice,
-                    activeStrategy = selectedStrategyId,
-                    dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
-                    candles = viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
-                    isRealTradingViewEnabled = isRealTradingViewEnabled,
-                    onToggleChartType = { isRealTradingViewEnabled = it },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-        }
-
-        // Live Market Stat Chips
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val highVal = ticker?.high?.takeIf { it > 0.0 }?.let { formatPrice(it, activeSymbol) } ?: "—"
-            val lowVal = ticker?.low?.takeIf { it > 0.0 }?.let { formatPrice(it, activeSymbol) } ?: "—"
-            val biasVal = ticker?.bias ?: analysis?.direction ?: "NEUTRAL"
-            val confVal = analysis?.confidencePct?.takeIf { it > 0 }?.let { "${it}%" } ?: "—"
-
-            StatChip(label = "24h High", value = highVal, modifier = Modifier.weight(1f), color = ProfitGreen)
-            StatChip(label = "24h Low", value = lowVal, modifier = Modifier.weight(1f), color = LossRed)
-            StatChip(
-                label = "SMC Bias",
-                value = biasVal,
-                modifier = Modifier.weight(1f),
-                color = if (biasVal.contains("BULL")) ProfitGreen else if (biasVal.contains("BEAR")) LossRed else WarningAmber
-            )
-            StatChip(label = "Confidence", value = confVal, modifier = Modifier.weight(1f), color = ElectricCyan)
-        }
-
-        // Native Trade Plan Card
-        GlassCard(
-            title = "INSTITUTIONAL TRADE PLAN",
-            action = {
                 SignalBadge(state = analysis?.signalState ?: "WAIT")
             }
-        ) {
-            if (isScanning) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = ElectricCyan)
-            }
-
-            val a = analysis
-            val isTradeValid = a != null && a.entry != 0.0 && (a.signalState == "STRONG_BUY" || a.signalState == "BUY" || a.signalState == "WEAK_BUY" || a.signalState == "STRONG_SELL" || a.signalState == "SELL" || a.signalState == "WEAK_SELL")
-            if (isTradeValid && a != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        StatChip(
-                            label = "Direction",
-                            value = a.direction,
-                            color = if (a.direction == "BUY") ProfitGreen else LossRed
-                        )
-                        StatChip(
-                            label = "Reward / Risk",
-                            value = a.tp1RR,
-                            color = ProfitGreen
-                        )
-                    }
-                    StatChip(
-                        label = "Yield (Pips)",
-                        value = "${a.tp1YieldPips} pips",
-                        color = ElectricCyan
-                    )
-                }
-
-                HorizontalDivider(color = CardBorder.copy(alpha = 0.5f))
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column {
-                        Text("Entry Price", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
-                        Text(formatPrice(a.entry, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary, fontSize = 13.sp)
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Stop Loss (SL)", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
-                        Text(formatPrice(a.stopLoss, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = LossRed, fontSize = 13.sp)
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("Take Profit (TP)", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
-                        Text(formatPrice(a.tp1, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = ProfitGreen, fontSize = 13.sp)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(2.dp))
-                Text("SL Reason: ${a.slReason}", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
-                Text("TP Reason: ${a.tpReason}", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
-                Text("Strategy: ${a.strategyVersion}", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
-            } else {
-                Text(
-                    text = analysis?.blockReasons?.firstOrNull() ?: analysis?.smcAnalysis ?: "WAIT: Gathering confluence & structural validation...",
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = WarningAmber
-                )
-            }
         }
-
-        // Multi-Timeframe Alignment & Confluence Card
-        GlassCard(
-            title = "MULTI-TIMEFRAME CONFLUENCE",
-            action = {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(
-                            when {
-                                analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> ProfitGreen.copy(alpha = 0.2f)
-                                analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> LossRed.copy(alpha = 0.2f)
-                                analysis?.mtfStatus?.contains("PARTIAL") == true -> ElectricCyan.copy(alpha = 0.2f)
-                                analysis?.mtfStatus?.contains("CONFLICT") == true -> LossRed.copy(alpha = 0.2f)
-                                else -> WarningAmber.copy(alpha = 0.2f)
-                            }
-                        )
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = analysis?.mtfSummary?.ifBlank { "EVALUATING" } ?: "EVALUATING",
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        color = when {
-                            analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> ProfitGreen
-                            analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> LossRed
-                            analysis?.mtfStatus?.contains("PARTIAL") == true -> ElectricCyan
-                            analysis?.mtfStatus?.contains("CONFLICT") == true -> LossRed
-                            else -> WarningAmber
-                        }
-                    )
-                }
-            }
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                val mtfDisplayTfs = listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")
-                mtfDisplayTfs.forEach { tfKey ->
-                    val isSelected = selectedTimeframe == tfKey
-                    val bias = analysis?.getTfBias(tfKey) ?: "N/A"
-                    val (badgeColor, badgeBg) = when (bias) {
-                        "BULLISH" -> ProfitGreen to ProfitGreen.copy(alpha = 0.15f)
-                        "BEARISH" -> LossRed to LossRed.copy(alpha = 0.15f)
-                        "NEUTRAL" -> TextSecondary to DarkSurfaceVariant
-                        "MISSING" -> WarningAmber to WarningAmber.copy(alpha = 0.15f)
-                        else -> TextSecondary.copy(alpha = 0.5f) to Color.Transparent
+        item {
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, CardBorder)) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("INSTRUMENT", fontSize = 9.sp, fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace, color = TextSecondary)
+                        Spacer(Modifier.weight(1f))
+                        Text("Selected: $selectedTimeframe", fontSize = 10.sp, color = ElectricCyan,
+                            fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                     }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = tfKey,
-                            fontSize = 9.sp,
-                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
-                            fontFamily = FontFamily.Monospace,
-                            color = if (isSelected) ElectricCyan else TextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(badgeBg)
-                                .border(if (isSelected) 1.dp else 0.dp, if (isSelected) ElectricCyan else Color.Transparent, RoundedCornerShape(3.dp))
-                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = bias.take(4),
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                color = badgeColor
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Detailed Market Structure Elements
-        val smc = analysis
-        if (smc != null && (smc.orderBlocks.isNotEmpty() || smc.keyLevels.isNotEmpty())) {
-            GlassCard(title = "SMC STRUCTURAL INVENTORY") {
-                if (smc.orderBlocks.isNotEmpty()) {
-                    Text("Active Order Blocks", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary)
-                    smc.orderBlocks.take(4).forEach { ob ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Box(
-                                    modifier = Modifier.size(8.dp).clip(CircleShape)
-                                        .background(if (ob.type == "BULLISH") ProfitGreen else LossRed)
-                                )
-                                Text(ob.type, fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                            }
-                            Text(ob.zone, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = TextSecondary)
-                            Text(ob.strength, fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                }
-
-                if (smc.keyLevels.isNotEmpty()) {
-                    HorizontalDivider(color = CardBorder.copy(alpha = 0.5f))
-                    Text("Verified Key Levels", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary)
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        smc.keyLevels.take(6).forEach { level ->
-                            SuggestionChip(
-                                onClick = { },
-                                label = { Text(level, fontSize = 9.sp, fontFamily = FontFamily.Monospace) },
-                                colors = SuggestionChipDefaults.suggestionChipColors(
-                                    labelColor = TextSecondary,
-                                    containerColor = DarkSurfaceVariant
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(symbols) { sym ->
+                            FilterChip(
+                                selected = activeSymbol == sym,
+                                onClick = { viewModel.selectTicker(sym) },
+                                label = { Text(sym, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground,
+                                    containerColor = DarkSurfaceVariant, labelColor = TextPrimary
                                 ),
-                                border = SuggestionChipDefaults.suggestionChipBorder(
-                                    borderColor = CardBorder,
-                                    enabled = true
-                                )
+                                modifier = Modifier.testTag("symbol_chip_$sym")
                             )
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("TIMEFRAME", fontSize = 9.sp, fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace, color = TextSecondary)
+                        Spacer(Modifier.weight(1f))
+                        Text("M1 → W1", fontSize = 9.sp, color = TextMuted)
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        items(timeframes) { tf ->
+                            FilterChip(
+                                selected = selectedTimeframe == tf,
+                                onClick = { viewModel.selectTimeframe(tf) },
+                                label = { Text(tf, fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                                    fontWeight = if (selectedTimeframe == tf) FontWeight.Black else FontWeight.Medium) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground,
+                                    containerColor = DarkSurfaceVariant, labelColor = TextSecondary
+                                ),
+                                modifier = Modifier.testTag("tf_chip_$tf")
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe) },
+                        enabled = !isScanning,
+                        modifier = Modifier.fillMaxWidth().height(46.dp).testTag("analyze_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground,
+                            disabledContainerColor = ElectricCyan.copy(alpha = 0.45f))
+                    ) {
+                        if (isScanning) {
+                            CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp, color = DarkBackground)
+                            Spacer(Modifier.width(9.dp))
+                            Text("ANALYZING $activeSymbol", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        } else {
+                            Icon(Icons.Default.QueryStats, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("ANALYZE MARKET", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                         }
                     }
                 }
             }
         }
+        item {
+            Card(modifier = Modifier.fillMaxWidth().height(470.dp).testTag("tradingview_chart_panel"),
+                shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0B0E14)),
+                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(modifier = Modifier.fillMaxWidth().background(DarkSurface).padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("TRADINGVIEW", fontSize = 11.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                            Text("$activeSymbol • $selectedTimeframe", fontSize = 10.sp, color = TextPrimary, fontFamily = FontFamily.Monospace)
+                        }
+                        Text("CHART", fontSize = 9.sp, color = TextMuted, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                    TradingChartContainer(
+                        activeSymbol = activeSymbol,
+                        selectedTimeframe = selectedTimeframe,
+                        currentSpotPrice = ticker?.price ?: 0.0,
+                        activeStrategy = selectedStrategyId,
+                        dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
+                        candles = viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
+                        isRealTradingViewEnabled = true,
+                        onToggleChartType = {},
+                        modifier = Modifier.fillMaxWidth().weight(1f)
+                    )
+                }
+            }
+        }
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatChip(label = "QUOTE",
+                    value = ticker?.price?.takeIf { it > 0.0 }?.let { formatPrice(it, activeSymbol) } ?: "—",
+                    modifier = Modifier.weight(1f), color = TextPrimary)
+                StatChip(label = "STRUCTURE", value = ticker?.bias ?: analysis?.direction ?: "UNKNOWN",
+                    modifier = Modifier.weight(1f),
+                    color = when {
+                        (ticker?.bias ?: analysis?.direction.orEmpty()).contains("BULL", true) || analysis?.direction == "BUY" -> ProfitGreen
+                        (ticker?.bias ?: analysis?.direction.orEmpty()).contains("BEAR", true) || analysis?.direction == "SELL" -> LossRed
+                        else -> WarningAmber
+                    })
+                StatChip(label = "CONFIDENCE",
+                    value = analysis?.confidencePct?.takeIf { it > 0 }?.let { "$it%" } ?: "—",
+                    modifier = Modifier.weight(1f), color = ElectricCyan)
+            }
+        }
+        item {
+            val result = analysis
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface), border = BorderStroke(1.dp, CardBorder)) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("TRADE PLAN", fontSize = 10.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                            Text("Validated levels only", fontSize = 10.sp, color = TextSecondary)
+                        }
+                        SignalBadge(state = result?.signalState ?: "WAIT")
+                    }
+                    if (isScanning) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = ElectricCyan)
+                    val canDisplayTrade = result != null && result.entry != 0.0 &&
+                        listOf("STRONG_BUY", "BUY", "WEAK_BUY", "STRONG_SELL", "SELL", "WEAK_SELL").contains(result.signalState)
+                    if (canDisplayTrade && result != null) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PlanLevel("ENTRY", formatPrice(result.entry, activeSymbol), TextPrimary, Modifier.weight(1f))
+                            PlanLevel("STOP LOSS", formatPrice(result.stopLoss, activeSymbol), LossRed, Modifier.weight(1f))
+                            PlanLevel("TP1", formatPrice(result.tp1, activeSymbol), ProfitGreen, Modifier.weight(1f))
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            StatChip(label = "REWARD / RISK", value = result.tp1RR, modifier = Modifier.weight(1f), color = ProfitGreen)
+                            StatChip(label = "STRATEGY", value = result.strategyVersion.ifBlank { selectedStrategyId },
+                                modifier = Modifier.weight(1f), color = ElectricCyan)
+                        }
+                        HorizontalDivider(color = CardBorder)
+                        Text("Stop rationale: ${result.slReason.ifBlank { "Not supplied" }}", fontSize = 10.sp, color = TextSecondary)
+                        Text("Target rationale: ${result.tpReason.ifBlank { "Not supplied" }}", fontSize = 10.sp, color = TextSecondary)
+                    } else {
+                        Text(result?.blockReasons?.firstOrNull() ?: result?.smcAnalysis?.takeIf { it.isNotBlank() }
+                            ?: "WAIT — no validated setup is currently available for this symbol and timeframe.",
+                            fontSize = 11.sp, color = WarningAmber, lineHeight = 17.sp)
+                    }
+                }
+            }
+        }
+        item {
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface), border = BorderStroke(1.dp, CardBorder)) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("MULTI-TIMEFRAME MAP", fontSize = 10.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        items(listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")) { tf ->
+                            val bias = analysis?.getTfBias(tf) ?: "N/A"
+                            val tone = when (bias) {
+                                "BULLISH" -> ProfitGreen
+                                "BEARISH" -> LossRed
+                                "NEUTRAL" -> TextSecondary
+                                else -> WarningAmber
+                            }
+                            Column(modifier = Modifier.width(66.dp).clip(RoundedCornerShape(9.dp)).background(DarkSurfaceVariant)
+                                .padding(vertical = 10.dp, horizontal = 6.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(tf, fontSize = 10.sp, color = TextSecondary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                Box(Modifier.size(7.dp).clip(CircleShape).background(tone))
+                                Text(bias, fontSize = 8.sp, color = tone, fontWeight = FontWeight.Black)
+                            }
+                        }
+                    }
+                    Text(analysis?.mtfSummary?.takeIf { it.isNotBlank() } ?: "No multi-timeframe verdict available yet.",
+                        fontSize = 11.sp, color = TextPrimary, lineHeight = 16.sp)
+                }
+            }
+        }
+        item {
+            val result = analysis
+            if (result != null && (result.orderBlocks.isNotEmpty() || result.keyLevels.isNotEmpty())) {
+                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface), border = BorderStroke(1.dp, CardBorder)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("MARKET STRUCTURE", fontSize = 10.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                        result.orderBlocks.take(4).forEach { block ->
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text(block.type, color = if (block.type == "BULLISH") ProfitGreen else LossRed,
+                                    fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(block.zone, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                                Text(block.strength, color = TextSecondary, fontSize = 9.sp)
+                            }
+                        }
+                        result.keyLevels.take(5).forEach { level ->
+                            Text("• $level", color = TextSecondary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                }
+            }
+        }
+        item { EngineInsightsPanel(viewModel) }
+    }
+}
 
-        EngineInsightsPanel(viewModel)
+@Composable
+private fun PlanLevel(label: String, value: String, valueColor: Color, modifier: Modifier = Modifier) {
+    Column(modifier = modifier.clip(RoundedCornerShape(9.dp)).background(DarkSurfaceVariant).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, fontSize = 9.sp, color = TextSecondary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+        Text(value, fontSize = 12.sp, color = valueColor, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
     }
 }
 
@@ -640,167 +553,159 @@ private val selectedIdVersion = "smc-confluence-1.0.0"
 fun StrategiesTab(viewModel: DestinedFXViewModel) {
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     val strategies = StrategyRegistry.allStrategies
-    val selectedStrategy = strategies.firstOrNull { it.id == selectedStrategyId }
+    val selected = strategies.firstOrNull { it.id == selectedStrategyId }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            TerminalPageHeader(
-                eyebrow = "DETERMINISTIC RULESETS",
-                title = "Strategy Library",
-                subtitle = "Choose the ruleset used by the next analysis. Status reflects the registry."
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("SYSTEMATIC PLAYBOOKS / RULE-BASED", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                Text("Strategy desk", fontSize = 27.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                Text("Select a registered ruleset. Only implemented strategies can be activated.",
+                    fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
+            }
+        }
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatChip(label = "REGISTERED", value = strategies.size.toString(), modifier = Modifier.weight(1f))
-                StatChip(
-                    label = "IMPLEMENTED",
-                    value = strategies.count { it.isImplemented }.toString(),
-                    modifier = Modifier.weight(1f),
-                    color = ProfitGreen
-                )
+                StatChip(label = "IMPLEMENTED", value = strategies.count { it.isImplemented }.toString(),
+                    modifier = Modifier.weight(1f), color = ProfitGreen)
+                StatChip(label = "SELECTED", value = if (selected != null) "1" else "0",
+                    modifier = Modifier.weight(1f), color = ElectricCyan)
             }
         }
-
         item {
-            val selected = selectedStrategy
-            if (selected != null) {
-                GlassCard(
-                    title = "ACTIVE RULESET",
-                    action = {
-                        Text(
-                            text = if (selected.isImplemented) "READY" else "UNAVAILABLE",
-                            color = if (selected.isImplemented) ProfitGreen else WarningAmber,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                ) {
-                    Text(selected.name, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                    Text(selected.description, fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
-                    Text(
-                        text = selected.rulesSummary,
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ElectricCyan
-                    )
-                    Button(
-                        onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
-                    ) {
-                        Text("Analyze with this strategy", color = DarkBackground, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        items(strategies) { strat ->
-            val isSelected = strat.id == selectedStrategyId
-            Card(
-                colors = CardDefaults.cardColors(containerColor = if (isSelected) DarkSurfaceVariant else DarkSurface),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, if (isSelected) CyanPrimary else TabBorder),
-                modifier = Modifier.fillMaxWidth().clickable(enabled = strat.isImplemented) {
-                    viewModel.selectStrategy(strat.id)
-                    viewModel.selectScreen(DestinedFXScreen.Analyzer)
-                }
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = strat.name,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = TextPrimary
-                        )
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(if (strat.isImplemented) Color(0xFF00FF99).copy(alpha = 0.15f) else Color(0xFFFF4560).copy(alpha = 0.15f))
-                                .padding(horizontal = 6.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = if (strat.isImplemented) "IMPLEMENTED (${strat.version})" else "NOT IMPLEMENTED",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (strat.isImplemented) Color(0xFF00FF99) else Color(0xFFFF4560)
-                            )
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF10232A)),
+                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
+                Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("ACTIVE RULESET", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                    Text(selected?.name ?: "No registered strategy selected", fontSize = 18.sp,
+                        color = TextPrimary, fontWeight = FontWeight.Black)
+                    Text(selected?.description ?: "Choose an implemented ruleset below.", fontSize = 11.sp,
+                        color = TextSecondary, lineHeight = 17.sp)
+                    if (selected != null) {
+                        Text(selected.rulesSummary, fontSize = 10.sp, color = ElectricCyan,
+                            fontFamily = FontFamily.Monospace, lineHeight = 15.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            Box(Modifier.size(7.dp).clip(CircleShape).background(if (selected.isImplemented) ProfitGreen else WarningAmber))
+                            Text(if (selected.isImplemented) "IMPLEMENTED · ${selected.version}" else "REGISTERED BUT UNAVAILABLE",
+                                fontSize = 9.sp, color = if (selected.isImplemented) ProfitGreen else WarningAmber,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                         }
                     }
-
-                    Text(
-                        text = strat.description,
-                        fontSize = 11.sp,
-                        color = TextSecondary
-                    )
-
-                    Divider(color = TabBorder)
-
-                    Text(
-                        text = "Ruleset: ${strat.rulesSummary}",
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = if (strat.isImplemented) CyanPrimary else TextSecondary
-                    )
+                    Button(onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
+                        modifier = Modifier.fillMaxWidth().height(42.dp), enabled = selected?.isImplemented == true,
+                        shape = RoundedCornerShape(9.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)) {
+                        Text("OPEN ANALYZER WITH SELECTED RULESET", fontSize = 10.sp,
+                            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                    }
                 }
             }
         }
         item {
-            Spacer(modifier = Modifier.height(16.dp))
-            BacktestSection(viewModel)
+            Text("AVAILABLE RULESETS", fontSize = 10.sp, color = TextSecondary,
+                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
         }
+        items(strategies) { strat ->
+            val active = strat.id == selectedStrategyId
+            Card(modifier = Modifier.fillMaxWidth().testTag("strategy_card_${strat.id}")
+                .clickable(enabled = strat.isImplemented) { viewModel.selectStrategy(strat.id) },
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = if (active) DarkSurfaceVariant else DarkSurface),
+                border = BorderStroke(if (active) 1.5.dp else 1.dp, if (active) ElectricCyan else CardBorder)) {
+                Row(modifier = Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top) {
+                    Box(modifier = Modifier.width(4.dp).height(68.dp).clip(RoundedCornerShape(4.dp))
+                        .background(if (active) ElectricCyan else if (strat.isImplemented) ProfitGreen.copy(alpha = 0.75f) else WarningAmber))
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(strat.name, modifier = Modifier.weight(1f), fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                            if (active) Text("ACTIVE", fontSize = 8.sp, color = ElectricCyan,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        }
+                        Text(strat.description, fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+                        Text(strat.rulesSummary, fontSize = 9.sp, color = if (strat.isImplemented) ElectricCyan else TextMuted,
+                            fontFamily = FontFamily.Monospace, lineHeight = 14.sp)
+                        Text(if (strat.isImplemented) "AVAILABLE · ${strat.version}" else "NOT IMPLEMENTED",
+                            fontSize = 8.sp, color = if (strat.isImplemented) ProfitGreen else WarningAmber,
+                            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        }
+        item { BacktestSection(viewModel) }
     }
 }
 
 @Composable
 fun RiskManagementTab(viewModel: DestinedFXViewModel) {
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(DarkBackground)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        TerminalPageHeader(
-            eyebrow = "CAPITAL PROTECTION",
-            title = "Risk Management",
-            subtitle = "Position sizing is calculated by the deterministic RiskEngine."
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            StatChip(label = "MAX RISK / TRADE", value = "1.0%", modifier = Modifier.weight(1f), color = WarningAmber)
-            StatChip(label = "MINIMUM PLAN RR", value = "2.0R", modifier = Modifier.weight(1f), color = ProfitGreen)
+    val riskPercent by viewModel.riskPercent.collectAsStateWithLifecycle()
+
+    LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("ACCOUNT DEFENCE / POSITION CONTROL", fontSize = 9.sp, color = ElectricCyan,
+                    fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                Text("Risk control", fontSize = 27.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                Text("RiskEngine remains the authority for sizing and trade-plan validation.",
+                    fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
+            }
         }
-        GlassCard(title = "NON-NEGOTIABLE GUARDRAILS") {
-            Text(
-                text = "Risk is capped at 1% of configured equity. Plans below 2.0R must not be promoted to executable trades, and stops must never be narrowed to force a pass.",
-                fontSize = 11.sp,
-                color = TextSecondary,
-                lineHeight = 16.sp
-            )
+        item {
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface), border = BorderStroke(1.dp, CardBorder)) {
+                Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("CURRENT CONFIGURATION", fontSize = 9.sp, color = TextSecondary,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                            Text("${riskPercent.coerceAtMost(1.0)}% risk configured", fontSize = 18.sp,
+                                color = if (riskPercent <= 1.0) ProfitGreen else LossRed, fontWeight = FontWeight.Black)
+                        }
+                        Box(Modifier.clip(RoundedCornerShape(8.dp))
+                            .background(if (riskPercent <= 1.0) ProfitGreen.copy(alpha = 0.12f) else LossRed.copy(alpha = 0.15f))
+                            .padding(horizontal = 10.dp, vertical = 7.dp)) {
+                            Text(if (riskPercent <= 1.0) "WITHIN CAP" else "BREACH", fontSize = 9.sp,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace,
+                                color = if (riskPercent <= 1.0) ProfitGreen else LossRed)
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(5.dp)).background(DarkSurfaceVariant)) {
+                        Box(Modifier.fillMaxHeight().fillMaxWidth(riskPercent.coerceIn(0.0, 1.0).toFloat())
+                            .clip(RoundedCornerShape(5.dp)).background(if (riskPercent <= 1.0) ElectricCyan else LossRed))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        StatChip(label = "MAX PER TRADE", value = "1.0%", modifier = Modifier.weight(1f), color = WarningAmber)
+                        StatChip(label = "MIN PLAN RR", value = "2.0R", modifier = Modifier.weight(1f), color = ProfitGreen)
+                    }
+                    HorizontalDivider(color = CardBorder)
+                    Text("Hard limits", fontSize = 12.sp, fontWeight = FontWeight.Black, color = TextPrimary)
+                    Text("• Position sizing is calculated against configured equity.\n• Stops are not narrowed to force a valid trade.\n• Plans below 2.0R must remain WAIT / non-executable.\n• An invalidated setup cannot remain actionable.",
+                        fontSize = 11.sp, color = TextSecondary, lineHeight = 18.sp)
+                }
+            }
         }
-        RiskRewardCalculatorComponent(
-            viewModel = viewModel,
-            symbol = activeSymbol,
-            modifier = Modifier.fillMaxWidth()
-        )
+        item {
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.25f))) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("POSITION SIZING CALCULATOR", fontSize = 10.sp, color = ElectricCyan,
+                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                    Text("Instrument: $activeSymbol", fontSize = 11.sp, color = TextSecondary)
+                    RiskRewardCalculatorComponent(viewModel = viewModel, symbol = activeSymbol, modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
     }
 }
 
@@ -825,6 +730,29 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                 subtitle = "TradingView chart display does not require market-data API keys."
             )
         }
+        item {
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF10232A)),
+                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
+                Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text("TERMINAL BUILD IDENTITY", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("DestinedFX Analyzer", fontSize = 16.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                            Text("Version ${BuildConfig.VERSION_NAME} • ${BuildConfig.BUILD_TYPE.uppercase(Locale.US)}",
+                                fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                        }
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(27.dp))
+                    }
+                    HorizontalDivider(color = CardBorder)
+                    Text("TradingView is used for chart display. No market-data API key is required to open the chart.",
+                        fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+                }
+            }
+        }
+
         item {
             Text("ACCOUNT & OPTIONAL SIGN-IN", fontWeight = FontWeight.Black, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = ElectricCyan)
             Text("Supabase credentials are used only for cloud account features. Never store service_role keys in the app.", fontSize = 11.sp, color = TextSecondary)
