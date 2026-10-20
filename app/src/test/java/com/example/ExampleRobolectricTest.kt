@@ -112,13 +112,34 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `verify bot execution remains guarded against unauthenticated execution in guest mode`() = runBlocking {
+  fun `verify guest bot activation does not require Supabase but does require broker credentials`() = runBlocking {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
     val botEngine = context.autonomousBotEngine
 
-    // Attempting to start bot in guest mode without authenticated Supabase session must fail
+    // Fresh guest mode is permitted. With no Deriv/MT5 credentials, activation must instead
+    // fail at the broker connection boundary (not because a Supabase session is missing).
+    context.secretsManager.saveDerivApiToken("")
     val result = botEngine.startBot("EURUSD", "smc-confluence-1.0.0", "H1", 1.0)
     assertTrue(result.isFailure)
-    assertTrue(result.exceptionOrNull()?.message?.contains("AUTH_REQUIRED") == true)
+    val reason = result.exceptionOrNull()?.message.orEmpty()
+    assertTrue("Expected missing broker credentials to block activation, got: " + reason,
+      reason.contains("BROKER_DISCONNECTED"))
+    assertFalse(reason.contains("AUTH_REQUIRED"))
+    assertFalse(reason.contains("EMAIL_VERIFICATION_REQUIRED"))
+  }
+
+  @Test
+  fun `verify chart and MTF selections are native reactive view model state`() {
+    val context = ApplicationProvider.getApplicationContext<MyApplication>()
+    val vm = DestinedFXViewModel(context)
+    assertEquals("EUR/USD", vm.selectedTicker.value)
+    assertEquals("M15", vm.selectedTimeframe.value)
+    assertTrue("H4" in vm.selectedMtfTimeframes.value)
+    vm.selectTicker("GBP/USD")
+    vm.selectTimeframe("H1")
+    vm.toggleMtfTimeframe("M5")
+    assertEquals("GBP/USD", vm.selectedTicker.value)
+    assertEquals("H1", vm.selectedTimeframe.value)
+    assertFalse("M5" in vm.selectedMtfTimeframes.value)
   }
 }
