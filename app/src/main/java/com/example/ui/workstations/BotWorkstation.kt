@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -18,6 +19,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,6 +51,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val riskPercent by viewModel.riskPercent.collectAsStateWithLifecycle()
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var derivTokenInput by remember { mutableStateOf(viewModel.getDerivApiToken()) }
+    var derivAppIdInput by remember { mutableStateOf(viewModel.getDerivAppId()) }
+    var metaApiTokenInput by remember { mutableStateOf(viewModel.getMetaApiToken()) }
+    var metaApiAccountIdInput by remember { mutableStateOf(viewModel.getMetaApiAccountId()) }
+    var isConnectingBroker by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
     LazyColumn(
@@ -305,6 +313,86 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             )
                         }
                     }
+
+                    if (activeBrokerType == BrokerType.DERIV) {
+                        Text("DERIV ACCOUNT LOGIN", fontSize = 9.sp, color = ElectricCyan,
+                            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        OutlinedTextField(
+                            value = derivTokenInput, onValueChange = { derivTokenInput = it },
+                            label = { Text("Deriv API token") },
+                            placeholder = { Text("Token with required account permissions") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_deriv_token")
+                        )
+                        OutlinedTextField(
+                            value = derivAppIdInput, onValueChange = { derivAppIdInput = it },
+                            label = { Text("Deriv App ID") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_deriv_app_id")
+                        )
+                        Button(
+                            onClick = {
+                                isConnectingBroker = true
+                                statusMessage = null
+                                viewModel.connectToDeriv(derivTokenInput, derivAppIdInput) { success, message ->
+                                    isConnectingBroker = false
+                                    statusMessage = message ?: if (success) "Deriv account connected." else "Deriv login failed."
+                                }
+                            },
+                            enabled = !isConnectingBroker && derivTokenInput.isNotBlank() && derivAppIdInput.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth().testTag("bot_connect_deriv"),
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
+                        ) {
+                            if (isConnectingBroker) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (isConnectingBroker) "CONNECTING..." else "LOGIN TO DERIV", fontWeight = FontWeight.Black)
+                        }
+                    } else {
+                        Text("MT5 ACCOUNT LOGIN VIA METAAPI", fontSize = 9.sp, color = ElectricCyan,
+                            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        Text("This integrated adapter requires a MetaAPI access token and account ID, not a raw terminal password.",
+                            fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+                        OutlinedTextField(
+                            value = metaApiTokenInput, onValueChange = { metaApiTokenInput = it },
+                            label = { Text("MetaAPI access token") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_metaapi_token")
+                        )
+                        OutlinedTextField(
+                            value = metaApiAccountIdInput, onValueChange = { metaApiAccountIdInput = it },
+                            label = { Text("MetaAPI account ID") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_metaapi_account_id")
+                        )
+                        Button(
+                            onClick = {
+                                isConnectingBroker = true
+                                statusMessage = null
+                                viewModel.connectToMetaApiAccount(metaApiTokenInput, metaApiAccountIdInput) { success, message ->
+                                    isConnectingBroker = false
+                                    statusMessage = message ?: if (success) "MT5/MetaAPI account connected." else "MT5 login failed."
+                                }
+                            },
+                            enabled = !isConnectingBroker && metaApiTokenInput.isNotBlank() && metaApiAccountIdInput.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth().testTag("bot_connect_mt5"),
+                            colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen, contentColor = DarkBackground)
+                        ) {
+                            if (isConnectingBroker) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (isConnectingBroker) "CONNECTING..." else "LOGIN TO MT5", fontWeight = FontWeight.Black)
+                        }
+                    }
+                    statusMessage?.let { message ->
+                        Text(
+                            text = message, fontSize = 10.sp,
+                            color = if (message.contains("failed", true) || message.contains("error", true)) LossRed else ElectricCyan,
+                            lineHeight = 15.sp, modifier = Modifier.testTag("bot_connection_status")
+                        )
+                    }
+                    HorizontalDivider(color = CardBorder)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),

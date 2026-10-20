@@ -123,110 +123,69 @@ class MarketDataRepositoryImpl(
         }
     }
 
-    private suspend fun fetchLiveQuoteForSymbol(sym: String): MarketTicker? {
-        val aClass = com.destinedfx.core.instrument.AssetClassifier.of(sym)
-        // 1. Priority for Crypto: Binance
-        if (aClass == com.destinedfx.core.marketdata.AssetClass.CRYPTO) {
-            val binance = withTimeoutOrNull(3000) { binanceProvider.getLiveQuote(sym) }
-            if (binance != null) return binance.copy(source = "Binance Spot (USDT pairs)")
-        }
-
-        val preferred = selectedApiSource.value
-
-        // 2. Deriv priority: when DERIV is preferred, gateway is present, query Deriv quote or fallback to candles
-        if ((preferred == "DERIV" || preferred.isBlank()) && derivMarketDataGateway != null) {
-            val derivSym = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(sym)
-            if (derivSym != null) {
-                val q = derivMarketDataGateway.latestQuotes.value[derivSym]
-                val price = if (q != null && System.currentTimeMillis() - q.receivedAtMs <= 15_000L) {
-                    q.mid ?: q.last ?: 0.0
-                } else {
-                    val candles = derivMarketDataGateway.fetchCandles(derivSym, 60, 1)
-                    candles.lastOrNull()?.close ?: 0.0
-                }
-                if (price > 0.0) {
-                    val spread = q?.spread ?: 0.00010
-                    return MarketTicker(
-                        symbol = sym,
-                        price = price,
-                        changePercent = 0.0,
-                        high = 0.0,
-                        low = 0.0,
-                        spread = spread,
-                        bias = "NEUTRAL",
-                        confidence = 0,
-                        lastUpdateMillis = q?.receivedAtMs ?: System.currentTimeMillis(),
-                        isLive = true,
-                        source = if (q != null) "Deriv WebSocket" else "Deriv REST/WS",
-                        bid = q?.bid ?: (price - 0.00005),
-                        ask = q?.ask ?: (price + 0.00005),
-                        hasRealSpread = q?.spread != null,
-                        kind = if (q != null) "STREAM" else "POLLED_LAST"
-                    )
-                }
+    private suspend fun derivTickerForSymbol(sym: String, maxQuoteAgeMs: Long): MarketTicker? {
+        val gateway = derivMarketDataGateway ?: return null
+        val derivSymbol = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(sym) ?: return null
+        val now = clock()
+        val quote = gateway.latestQuotes.value[derivSymbol]
+        if (quote != null) {
+            val ageMs = now - quote.receivedAtMs
+            val price = quote.mid ?: quote.last ?: 0.0
+            if (ageMs >= 0L && ageMs <= maxQuoteAgeMs && price.isFinite() && price > 0.0) {
+                return MarketTicker(
+                    symbol = sym, price = price, changePercent = 0.0, high = 0.0, low = 0.0,
+                    spread = quote.spread ?: 0.0, bias = "NEUTRAL", confidence = 0,
+                    lastUpdateMillis = quote.receivedAtMs, isLive = true,
+                    source = "Deriv WebSocket",
+                    bid = quote.bid, ask = quote.ask, hasRealSpread = quote.spread != null, kind = "STREAM"
+                )
             }
         }
+        // Historical candles are one-sided historical data, not a live quote. Keep original
+        // timestamp and do not invent bid, ask, spread, or live status.
+        val candle = withTimeoutOrNull(6_000L) { gateway.fetchCandles(derivSymbol, 60, 2).lastOrNull() }
+            ?: return null
+        if (!candle.close.isFinite() || candle.close <= 0.0 || candle.timestamp <= 0L) return null
+        return MarketTicker(
+            symbol = sym, price = candle.close, changePercent = 0.0, high = candle.high, low = candle.low,
+            spread = 0.0, bias = "NEUTRAL", confidence = 0,
+            lastUpdateMillis = candle.timestamp, isLive = false,
+            source = "Deriv historical candle (analysis only)",
+            bid = null, ask = null, hasRealSpread = false, kind = "POLLED_LAST"
+        )
+    }
 
-        // 3. OANDA if configured and preferred
-        if (preferred == "OANDA" || secrets.getOandaApiKey().isNotBlank()) {
-            val oanda = withTimeoutOrNull(3000) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
-            if (oanda != null) return oanda
+    private suspend fun fetchLiveQuoteForSymbol(sym: String): MarketTicker? {
+        val assetClass = com.destinedfx.core.instrument.AssetClassifier.of(sym)
+        if (assetClass == com.destinedfx.core.marketdata.AssetClass.CRYPTO) {
+            withTimeoutOrNull(3_000L) { binanceProvider.getLiveQuote(sym) }?.let {
+                return it.copy(source = "Binance Spot (USDT pairs)")
+            }
         }
-
+        val preferred = selectedApiSource.value
+        if (preferred == "DERIV" || preferred.isBlank()) {
+            derivTickerForSymbol(sym, 15_000L)?.let { return it }
+        }
+        if (preferred == "OANDA" || secrets.getOandaApiKey().isNotBlank()) {
+            withTimeoutOrNull(3_000L) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }?.let { return it }
+        }
         return null
     }
 
     private suspend fun fetchBackgroundQuoteForSymbol(sym: String): MarketTicker? {
-        val aClass = com.destinedfx.core.instrument.AssetClassifier.of(sym)
-        // 1. Crypto priority: Binance
-        if (aClass == com.destinedfx.core.marketdata.AssetClass.CRYPTO) {
-            val binance = withTimeoutOrNull(2000) { binanceProvider.getLiveQuote(sym) }
-            if (binance != null) return binance.copy(source = "Binance Spot (USDT pairs)")
-        }
-
-        val preferred = selectedApiSource.value
-
-        // 2. Deriv background quote check
-        if ((preferred == "DERIV" || preferred.isBlank()) && derivMarketDataGateway != null) {
-            val derivSym = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(sym)
-            if (derivSym != null) {
-                val q = derivMarketDataGateway.latestQuotes.value[derivSym]
-                val price = if (q != null && System.currentTimeMillis() - q.receivedAtMs <= 20_000L) {
-                    q.mid ?: q.last ?: 0.0
-                } else {
-                    val candles = derivMarketDataGateway.fetchCandles(derivSym, 60, 1)
-                    candles.lastOrNull()?.close ?: 0.0
-                }
-                if (price > 0.0) {
-                    val spread = q?.spread ?: 0.00010
-                    return MarketTicker(
-                        symbol = sym,
-                        price = price,
-                        changePercent = 0.0,
-                        high = 0.0,
-                        low = 0.0,
-                        spread = spread,
-                        bias = "NEUTRAL",
-                        confidence = 0,
-                        lastUpdateMillis = q?.receivedAtMs ?: System.currentTimeMillis(),
-                        isLive = true,
-                        source = if (q != null) "Deriv WebSocket" else "Deriv REST/WS",
-                        bid = q?.bid ?: (price - 0.00005),
-                        ask = q?.ask ?: (price + 0.00005),
-                        hasRealSpread = q?.spread != null,
-                        kind = if (q != null) "STREAM" else "POLLED_LAST"
-                    )
-                }
+        val assetClass = com.destinedfx.core.instrument.AssetClassifier.of(sym)
+        if (assetClass == com.destinedfx.core.marketdata.AssetClass.CRYPTO) {
+            withTimeoutOrNull(2_000L) { binanceProvider.getLiveQuote(sym) }?.let {
+                return it.copy(source = "Binance Spot (USDT pairs)")
             }
         }
-
-        // 3. OANDA background quote if configured
-        if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
-            return withTimeoutOrNull(2000) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
+        val preferred = selectedApiSource.value
+        if (preferred == "DERIV" || preferred.isBlank()) {
+            derivTickerForSymbol(sym, 20_000L)?.let { return it }
         }
-
-
-
+        if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
+            return withTimeoutOrNull(2_000L) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
+        }
         return null
     }
 

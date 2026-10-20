@@ -53,6 +53,7 @@ import com.destinedfx.core.instrument.SpecRegistry
 import com.destinedfx.core.bot.BotStatusSummary
 import com.destinedfx.core.bot.BotLifecycleState
 import com.example.ui.DestinedFXScreen
+import com.example.ui.export.RealAnalysisExporter
 
 data class BacktestTrade(
     val dateString: String,
@@ -630,7 +631,7 @@ open class DestinedFXViewModel(
 
     // Strategy & Configured Equity Persistence
     val selectedStrategyId = MutableStateFlow(if (isPreview) "smc-confluence-1.0.0" else app.secretsManager.getSelectedStrategy())
-    val configuredEquity = MutableStateFlow(if (isPreview) 10.0 else app.secretsManager.getConfiguredEquity())
+    val configuredEquity = MutableStateFlow(if (isPreview) 0.0 else app.secretsManager.getConfiguredEquity())
 
     fun selectStrategy(id: String) {
         selectedStrategyId.value = id
@@ -642,12 +643,10 @@ open class DestinedFXViewModel(
     }
 
     fun saveConfiguredEquity(v: Double) {
-        val clean = if (v > 0.0) v else 10.0
+        val clean = if (v.isFinite() && v > 0.0) v else 0.0
         configuredEquity.value = clean
         accountCapital.value = clean
-        if (!isPreview) {
-            app.secretsManager.saveConfiguredEquity(clean)
-        }
+        if (!isPreview) app.secretsManager.saveConfiguredEquity(clean)
     }
 
     // Live Real-Time Trade Signal State for Signals Tab
@@ -1451,15 +1450,15 @@ open class DestinedFXViewModel(
                 timeframe = "M15",
                 riskPercent = 1.0,
                 marketState = "PAPER / OFFLINE",
-                currentSignal = "STRONG_BUY",
-                lastAction = "Automated bot ready for user authorization",
+                currentSignal = "WAIT",
+                lastAction = "Preview only — no live broker connection",
                 lastError = null
             )
         ) else app.autonomousBotEngine.status
 
     fun setBotStatus(active: Boolean, onResult: ((Boolean, String?) -> Unit)? = null) {
         if (isPreview) {
-            onResult?.invoke(true, null)
+            onResult?.invoke(false, "Bot execution is unavailable in preview mode.")
             return
         }
         viewModelScope.launch {
@@ -1481,19 +1480,61 @@ open class DestinedFXViewModel(
 
     fun connectToDeriv(token: String, appId: String = "1089", onResult: (Boolean, String?) -> Unit) {
         if (isPreview) {
-            onResult(true, "Preview Mode: Simulated connection")
+            onResult(false, "Broker login is disabled in preview mode.")
+            return
+        }
+        val cleanToken = token.trim()
+        val cleanAppId = appId.trim().ifBlank { "1089" }
+        if (cleanToken.isBlank()) {
+            onResult(false, "Enter your Deriv API token before connecting.")
             return
         }
         viewModelScope.launch {
-            app.secretsManager.saveDerivApiToken(token.trim())
-            app.secretsManager.saveDerivAppId(appId.trim().ifBlank { "1089" })
-            app.brokerManager.selectBroker(com.example.data.broker.BrokerType.DERIV)
-            val res = app.derivBrokerGateway.connectAndAuthorize(token.trim())
-            if (res.isSuccess) {
-                val info = res.getOrThrow()
-                onResult(true, "Connected to Deriv (${info.loginId}, Balance: ${info.balance} ${info.currency})")
-            } else {
-                onResult(false, res.exceptionOrNull()?.message ?: "Deriv connection failed")
+            try {
+                app.secretsManager.saveDerivApiToken(cleanToken)
+                app.secretsManager.saveDerivAppId(cleanAppId)
+                app.derivBrokerGateway.disconnect()
+                val result = app.derivBrokerGateway.connectAndAuthorize(cleanToken)
+                if (result.isSuccess) {
+                    val info = result.getOrThrow()
+                    app.brokerManager.selectBroker(com.example.data.broker.BrokerType.DERIV)
+                    onResult(true, "Deriv connected: ${info.loginId} • ${info.balance} ${info.currency}")
+                } else onResult(false, result.exceptionOrNull()?.message ?: "Deriv authentication failed.")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onResult(false, "Deriv connection failed: ${e.message ?: e.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /** The integrated MT5 gateway authenticates through MetaAPI token + account ID. */
+    fun connectToMetaApiAccount(token: String, accountId: String, onResult: (Boolean, String?) -> Unit) {
+        if (isPreview) {
+            onResult(false, "Broker login is disabled in preview mode.")
+            return
+        }
+        val cleanToken = token.trim()
+        val cleanAccountId = accountId.trim()
+        if (cleanToken.isBlank() || cleanAccountId.isBlank()) {
+            onResult(false, "Enter both the MetaAPI access token and account ID.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                app.secretsManager.saveMetaApiToken(cleanToken)
+                app.secretsManager.saveMT5AccountNumber(cleanAccountId)
+                app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
+                val result = app.mt5GatewayAdapter.connect()
+                if (result.isSuccess) {
+                    val metrics = app.mt5GatewayAdapter.accountMetrics.value
+                    onResult(true, "MT5/MetaAPI connected • Balance ${metrics?.balance ?: 0.0} ${metrics?.currency ?: ""}")
+                    prefetchWatchlistSpecs()
+                } else onResult(false, result.exceptionOrNull()?.message ?: "MT5/MetaAPI authentication failed.")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onResult(false, "MT5/MetaAPI connection failed: ${e.message ?: e.javaClass.simpleName}")
             }
         }
     }
@@ -1508,10 +1549,12 @@ open class DestinedFXViewModel(
     val activeBrokerGateway: StateFlow<com.example.data.broker.BrokerGateway> =
         if (isPreview) MutableStateFlow(com.example.data.broker.PreviewBrokerGateway()) else app.brokerManager.activeBroker
 
-    fun getSupabaseUrl(): String = if (isPreview) "https://xyz.supabase.co" else app.secretsManager.getSupabaseUrl()
-    fun getSupabaseAnonKey(): String = if (isPreview) "ey...anon_key" else app.secretsManager.getSupabaseAnonKey()
-    fun getDerivApiToken(): String = if (isPreview) "sample_token" else app.secretsManager.getDerivApiToken()
+    fun getSupabaseUrl(): String = if (isPreview) "" else app.secretsManager.getSupabaseUrl()
+    fun getSupabaseAnonKey(): String = if (isPreview) "" else app.secretsManager.getSupabaseAnonKey()
+    fun getDerivApiToken(): String = if (isPreview) "" else app.secretsManager.getDerivApiToken()
     fun getDerivAppId(): String = if (isPreview) "1089" else app.secretsManager.getDerivAppId()
+    fun getMetaApiToken(): String = if (isPreview) "" else app.secretsManager.getMetaApiToken()
+    fun getMetaApiAccountId(): String = if (isPreview) "" else app.secretsManager.getMT5AccountNumber()
     fun getTelegramBotToken(): String = if (isPreview) "" else app.secretsManager.getTelegramToken()
     fun getTelegramChatId(): String = if (isPreview) "" else app.secretsManager.getTelegramChatId()
     fun hasLiveBrokerKeys(): Boolean = if (isPreview) false else {
@@ -1525,174 +1568,14 @@ open class DestinedFXViewModel(
     }
 
     fun exportPdfDossier(info: DynamicAnalysisInfo) {
-        exportChartData(getApplication(), info.symbol, "SMC Order Blocks")
+        viewModelScope.launch(Dispatchers.IO) {
+            RealAnalysisExporter.exportPdf(getApplication(), info, selectedTimeframe.value, selectedStrategyId.value)
+        }
     }
 
     fun exportImageSnapshot(info: DynamicAnalysisInfo) {
-        exportChartData(getApplication(), info.symbol, "SMC Order Blocks")
-    }
-
-    fun exportChartData(context: Context, chartName: String, strategy: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val bitmap = Bitmap.createBitmap(1200, 800, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(bitmap)
-                canvas.drawColor(Color.parseColor("#121212")) // Dark background
-                
-                val width = bitmap.width.toFloat()
-                val height = bitmap.height.toFloat()
-                
-                val paint = Paint().apply {
-                    color = Color.parseColor("#00E5FF") // Cyan primary
-                    textSize = 40f
-                    isAntiAlias = true
-                    textAlign = Paint.Align.CENTER
-                }
-                
-                canvas.drawText("DESTINED FX V5.0", width / 2f, 60f, paint)
-                
-                paint.apply {
-                    color = Color.WHITE
-                    textSize = 24f
-                }
-                canvas.drawText("Algorithmic Snapshot: $chartName", width / 2f, 100f, paint)
-                canvas.drawText("Strategy: $strategy", width / 2f, 140f, paint)
-                
-                val candles = emptyList<Candle>()
-                if (candles.isNotEmpty()) {
-                    val drawCandleCount = minOf(100, candles.size)
-                    val visibleCandles = candles.takeLast(drawCandleCount)
-
-                    val rawMin = visibleCandles.minOf { it.low.toFloat() }
-                    val rawMax = visibleCandles.maxOf { it.high.toFloat() }
-                    val paddingFactor = (rawMax - rawMin) * 0.12f
-                    val minPrice = rawMin - paddingFactor
-                    val maxPrice = rawMax + paddingFactor
-                    val priceRange = if (maxPrice > minPrice) maxPrice - minPrice else 1f
-
-                    val chartTop = 200f
-                    val chartBottom = height - 50f
-                    val chartHeight = chartBottom - chartTop
-                    val spacing = width / drawCandleCount
-
-                    // Strategy specific markings
-                    if (strategy.contains("SMC") || strategy.contains("Order Block")) {
-                        var fvgTop = 0f
-                        var fvgBottom = 0f
-                        var hasFvg = false
-
-                        if (visibleCandles.size >= 3) {
-                            for (i in visibleCandles.size - 3 downTo 0) {
-                                val c1 = visibleCandles[i]
-                                val c3 = visibleCandles[i+2]
-                                if (c1.high < c3.low) {
-                                    hasFvg = true; fvgTop = c3.low.toFloat(); fvgBottom = c1.high.toFloat()
-                                    break
-                                } else if (c1.low > c3.high) {
-                                    hasFvg = true; fvgTop = c1.low.toFloat(); fvgBottom = c3.high.toFloat()
-                                    break
-                                }
-                            }
-                        }
-
-                        if (hasFvg) {
-                            val yTop = chartTop + chartHeight - ((fvgTop - minPrice) / priceRange) * chartHeight
-                            val yBottom = chartTop + chartHeight - ((fvgBottom - minPrice) / priceRange) * chartHeight
-                            val yMin = minOf(yTop, yBottom)
-                            val yMax = maxOf(yTop, yBottom)
-                            
-                            val fvgPaint = Paint().apply { color = Color.parseColor("#1F00E5FF"); style = Paint.Style.FILL }
-                            canvas.drawRect(0f, yMin, width, yMax, fvgPaint)
-                        }
-                    }
-
-                    if (strategy.contains("Liquidity")) {
-                        val localHigh = visibleCandles.dropLast(5).maxOfOrNull { it.high.toFloat() } ?: rawMax
-                        val localLow = visibleCandles.dropLast(5).minOfOrNull { it.low.toFloat() } ?: rawMin
-                        
-                        val yHigh = chartTop + chartHeight - ((localHigh - minPrice) / priceRange) * chartHeight
-                        val yLow = chartTop + chartHeight - ((localLow - minPrice) / priceRange) * chartHeight
-                        
-                        val liqPaint = Paint().apply { color = Color.parseColor("#03DAC6"); strokeWidth = 2f; style = Paint.Style.STROKE }
-                        canvas.drawLine(0f, yHigh, width, yHigh, liqPaint)
-                        canvas.drawLine(0f, yLow, width, yLow, liqPaint)
-                    }
-
-                    val candlePaint = Paint().apply { strokeWidth = 2f; style = Paint.Style.FILL_AND_STROKE }
-
-                    visibleCandles.forEachIndexed { index, candle ->
-                        val x = index * spacing + spacing / 2
-
-                        val yOpen = chartTop + chartHeight - ((candle.open.toFloat() - minPrice) / priceRange) * chartHeight
-                        val yClose = chartTop + chartHeight - ((candle.close.toFloat() - minPrice) / priceRange) * chartHeight
-                        val yHigh = chartTop + chartHeight - ((candle.high.toFloat() - minPrice) / priceRange) * chartHeight
-                        val yLow = chartTop + chartHeight - ((candle.low.toFloat() - minPrice) / priceRange) * chartHeight
-
-                        candlePaint.color = if (candle.close >= candle.open) Color.parseColor("#00E676") else Color.parseColor("#FF1744")
-
-                        canvas.drawLine(x, yHigh, x, yLow, candlePaint)
-
-                        val top = minOf(yOpen, yClose)
-                        val bottom = maxOf(yOpen, yClose)
-                        val bodyHeight = maxOf(2f, bottom - top)
-                        val bodyWidth = spacing * 0.65f
-
-                        canvas.drawRect(x - bodyWidth / 2, top, x + bodyWidth / 2, top + bodyHeight, candlePaint)
-                    }
-                }
-                
-                val filenameBase = "DestinedFX_${System.currentTimeMillis()}"
-                
-                // Save PNG
-                val pngFilename = "$filenameBase.png"
-                var fosPng: java.io.OutputStream? = null
-                val resolver = context.contentResolver
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val contentValues = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, pngFilename)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/DestinedFX")
-                    }
-                    val imageUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-                    fosPng = imageUri?.let { resolver.openOutputStream(it) }
-                } else {
-                    val imagesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).toString()
-                    val image = java.io.File(imagesDir, pngFilename)
-                    fosPng = java.io.FileOutputStream(image)
-                }
-                fosPng?.use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-
-                // Save PDF
-                val pdfFilename = "$filenameBase.pdf"
-                val pdfDocument = android.graphics.pdf.PdfDocument()
-                val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(1200, 800, 1).create()
-                val page = pdfDocument.startPage(pageInfo)
-                page.canvas.drawBitmap(bitmap, 0f, 0f, null)
-                pdfDocument.finishPage(page)
-                
-                var fosPdf: java.io.OutputStream? = null
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val pdfValues = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, pdfFilename)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/DestinedFX")
-                    }
-                    val pdfUri = resolver.insert(MediaStore.Files.getContentUri("external"), pdfValues)
-                    fosPdf = pdfUri?.let { resolver.openOutputStream(it) }
-                } else {
-                    val docsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS).toString()
-                    val pdfFile = java.io.File(docsDir, pdfFilename)
-                    fosPdf = java.io.FileOutputStream(pdfFile)
-                }
-                fosPdf?.use { pdfDocument.writeTo(it) }
-                pdfDocument.close()
-
-                withContext(Dispatchers.Main) {
-                    speakText("Exported both JPG and PDF files successfully.")
-                }
-            } catch (e: Exception) {
-                Log.e("DestinedFXViewModel", "Error exporting chart", e)
-            }
+            RealAnalysisExporter.exportPng(getApplication(), info, selectedTimeframe.value, selectedStrategyId.value)
         }
     }
 }

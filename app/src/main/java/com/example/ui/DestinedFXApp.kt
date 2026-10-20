@@ -267,7 +267,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedScreen) {
                     DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
-                    DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel)
+                    DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel, onExportAnalysis = { showExportDialog = true })
                     DestinedFXScreen.Calendar -> CalendarTab(viewModel)
                     DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
                     DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
@@ -277,9 +277,13 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
         }
 
         val currentAnalysis = dynamicAnalysis
-        if (showExportDialog && currentAnalysis != null) {
+        if (showExportDialog) {
+            val exportAnalysis = currentAnalysis ?: DynamicAnalysisInfo(
+                symbol = activeSymbol, direction = "WAIT", signalState = "DATA_UNAVAILABLE",
+                blockReasons = listOf("No completed analysis is available yet. No prices are invented for this report.")
+            )
             AnalysisExportSelectionDialog(
-                analysis = currentAnalysis,
+                analysis = exportAnalysis,
                 onDismiss = { showExportDialog = false },
                 onExportPdf = {
                     viewModel.exportPdfDossier(currentAnalysis)
@@ -297,7 +301,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
+fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {}) {
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
     val selectedTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
@@ -393,6 +397,17 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                             Spacer(Modifier.width(8.dp))
                             Text("ANALYZE MARKET", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                         }
+                    }
+                    OutlinedButton(
+                        onClick = onExportAnalysis,
+                        modifier = Modifier.fillMaxWidth().height(42.dp).testTag("export_analysis_button"),
+                        border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.65f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("EXPORT ANALYSIS", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
                     }
                 }
             }
@@ -716,6 +731,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     var supabaseKeyInput by remember { mutableStateOf(viewModel.getSupabaseAnonKey()) }
     var derivTokenInput by remember { mutableStateOf(viewModel.getDerivApiToken()) }
     var derivAppIdInput by remember { mutableStateOf(viewModel.getDerivAppId()) }
+    var metaApiTokenInput by remember { mutableStateOf(viewModel.getMetaApiToken()) }
+    var metaApiAccountIdInput by remember { mutableStateOf(viewModel.getMetaApiAccountId()) }
     var savedMessage by remember { mutableStateOf("") }
     var derivConnectStatus by remember { mutableStateOf<String?>(null) }
 
@@ -820,6 +837,23 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         modifier = Modifier.fillMaxWidth().testTag("deriv_app_id_input"),
                         singleLine = true
                     )
+                    HorizontalDivider(color = CardBorder)
+                    Text("MT5 EXECUTION VIA METAAPI", fontSize = 10.sp, color = ElectricCyan,
+                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                    OutlinedTextField(
+                        value = metaApiTokenInput, onValueChange = { metaApiTokenInput = it },
+                        label = { Text("MetaAPI access token") },
+                        modifier = Modifier.fillMaxWidth().testTag("settings_metaapi_token"),
+                        singleLine = true, visualTransformation = PasswordVisualTransformation()
+                    )
+                    OutlinedTextField(
+                        value = metaApiAccountIdInput, onValueChange = { metaApiAccountIdInput = it },
+                        label = { Text("MetaAPI account ID") },
+                        modifier = Modifier.fillMaxWidth().testTag("settings_metaapi_account_id"),
+                        singleLine = true
+                    )
+                    Text("The integrated adapter uses a MetaAPI token and account ID, not a raw terminal password.",
+                        fontSize = 9.sp, color = TextMuted)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
@@ -827,7 +861,9 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                                     viewModel.app.secretsManager.saveSupabaseUrl(supabaseUrlInput.trim())
                                     viewModel.app.secretsManager.saveSupabaseAnonKey(supabaseKeyInput.trim())
                                     viewModel.app.secretsManager.saveDerivApiToken(derivTokenInput.trim())
-                                    viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim())
+                                    viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim().ifBlank { "1089" })
+                                    viewModel.app.secretsManager.saveMetaApiToken(metaApiTokenInput.trim())
+                                    viewModel.app.secretsManager.saveMT5AccountNumber(metaApiAccountIdInput.trim())
                                 }
                                 savedMessage = "Credentials saved."
                             },
