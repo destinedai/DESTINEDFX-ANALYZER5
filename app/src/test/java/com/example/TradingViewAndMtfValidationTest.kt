@@ -54,6 +54,19 @@ class TradingViewAndMtfValidationTest {
     }
 
     @Test
+    fun testTradingViewEmbedUrl_UsesSupportedSymbolAndInterval() {
+        val url = TradingViewMapper.buildWidgetUrl("EUR/USD", "M15")
+        assertNotNull(url)
+        assertTrue(url!!.startsWith("https://s.tradingview.com/widgetembed/?"))
+        assertTrue(url.contains("symbol=FX%3AEURUSD"))
+        assertTrue(url.contains("interval=15"))
+        assertTrue(url.contains("hidesidetoolbar=0"))
+        assertTrue(url.contains("theme=dark"))
+        assertNull("Unsupported synthetic instruments must not get a TradingView URL", TradingViewMapper.buildWidgetUrl("R_100", "M15"))
+        assertNull("Unsupported timeframes must not get a TradingView URL", TradingViewMapper.buildWidgetUrl("EUR/USD", "M2"))
+    }
+
+    @Test
     fun testTradingViewIntervalMapping_AllSupportedIntervals() {
         assertEquals("1", TradingViewMapper.mapInterval("M1"))
         assertEquals("5", TradingViewMapper.mapInterval("M5"))
