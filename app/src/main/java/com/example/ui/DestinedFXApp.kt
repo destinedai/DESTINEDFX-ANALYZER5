@@ -102,8 +102,6 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     val currentTicker = tickers[activeSymbol]
     val currentPrice = currentTicker?.price ?: 0.0
     val priceChange = currentTicker?.changePercent
-    val brokerConnected by viewModel.brokerConnected.collectAsStateWithLifecycle()
-    val isFeedLive = brokerConnected || currentPrice > 0.0
 
     Scaffold(
         containerColor = DarkBackground,
@@ -167,28 +165,13 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // Live status indicator pill
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(DarkSurfaceVariant)
-                                    .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    PulsingDot(connected = isFeedLive)
-                                    Text(
-                                        text = if (isFeedLive) "LIVE" else "OFFLINE",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = if (isFeedLive) ProfitGreen else WarningAmber
-                                    )
-                                }
-                            }
+                            Text(
+                                text = "TRADINGVIEW",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                color = ElectricCyan
+                            )
 
                             IconButton(
                                 onClick = { showExportDialog = true },
@@ -280,71 +263,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
             }
         }
     ) { innerPadding ->
-        var isApiKeyBannerDismissed by remember { mutableStateOf(false) }
-        val hasBrokerKeys = remember(viewModel) { viewModel.hasLiveBrokerKeys() }
-
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-            if (!hasBrokerKeys && !isApiKeyBannerDismissed && selectedScreen != DestinedFXScreen.Settings) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF131B2A)),
-                    shape = RoundedCornerShape(0.dp),
-                    border = BorderStroke(1.dp, CyanPrimary.copy(alpha = 0.35f)),
-                    modifier = Modifier.fillMaxWidth().testTag("inline_api_key_banner")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "Key Status",
-                                tint = CyanPrimary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = "Analysis & simulation mode active.",
-                                fontSize = 11.sp,
-                                color = TextSecondary,
-                                maxLines = 1
-                            )
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(
-                                onClick = { viewModel.selectScreen(DestinedFXScreen.Settings) },
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                modifier = Modifier.testTag("add_key_in_settings_button")
-                            ) {
-                                Text(
-                                    text = "Add key in Settings",
-                                    fontSize = 11.sp,
-                                    color = CyanPrimary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            IconButton(
-                                onClick = { isApiKeyBannerDismissed = true },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Dismiss notice",
-                                    tint = TextSecondary,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedScreen) {
                     DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
@@ -398,9 +317,16 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+        modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        TerminalPageHeader(
+            eyebrow = "DESTINEDFX / ANALYSIS",
+            title = "$activeSymbol  •  $selectedTimeframe",
+            subtitle = "TradingView chart with deterministic strategy analysis",
+            trailing = { SignalBadge(state = analysis?.signalState ?: "WAIT") }
+        )
+
         // Symbol & Timeframe Selectors
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -457,33 +383,12 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
             }
         }
 
-        // Live Market Stat Chips
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val highVal = ticker?.high?.let { formatPrice(it, activeSymbol) } ?: "--"
-            val lowVal = ticker?.low?.let { formatPrice(it, activeSymbol) } ?: "--"
-            val biasVal = ticker?.bias ?: analysis?.direction ?: "NEUTRAL"
-            val confVal = "${analysis?.confidencePct ?: (ticker?.confidence ?: 85)}%"
-
-            StatChip(label = "24h High", value = highVal, modifier = Modifier.weight(1f), color = ProfitGreen)
-            StatChip(label = "24h Low", value = lowVal, modifier = Modifier.weight(1f), color = LossRed)
-            StatChip(
-                label = "SMC Bias",
-                value = biasVal,
-                modifier = Modifier.weight(1f),
-                color = if (biasVal.contains("BULL")) ProfitGreen else if (biasVal.contains("BEAR")) LossRed else WarningAmber
-            )
-            StatChip(label = "Confidence", value = confVal, modifier = Modifier.weight(1f), color = ElectricCyan)
-        }
-
         // TradingView Chart Container with GlassCard
         GlassCard(
-            title = "CHART: TradingView Widget ($selectedTimeframe)",
+            title = "TRADINGVIEW CHART  •  $activeSymbol  •  $selectedTimeframe",
             action = {
                 Text(
-                    text = "FEED: ${analysis?.dataSource?.ifBlank { "Deriv WebSocket" } ?: "Deriv WebSocket"}",
+                    text = "EMBEDDED CHART",
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -491,7 +396,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                 )
             }
         ) {
-            Box(modifier = Modifier.fillMaxWidth().height(320.dp)) {
+            Box(modifier = Modifier.fillMaxWidth().height(420.dp)) {
                 TradingChartContainer(
                     activeSymbol = activeSymbol,
                     selectedTimeframe = selectedTimeframe,
@@ -504,6 +409,27 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                     modifier = Modifier.fillMaxSize()
                 )
             }
+        }
+
+        // Live Market Stat Chips
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val highVal = ticker?.high?.takeIf { it > 0.0 }?.let { formatPrice(it, activeSymbol) } ?: "—"
+            val lowVal = ticker?.low?.takeIf { it > 0.0 }?.let { formatPrice(it, activeSymbol) } ?: "—"
+            val biasVal = ticker?.bias ?: analysis?.direction ?: "NEUTRAL"
+            val confVal = analysis?.confidencePct?.takeIf { it > 0 }?.let { "${it}%" } ?: "—"
+
+            StatChip(label = "24h High", value = highVal, modifier = Modifier.weight(1f), color = ProfitGreen)
+            StatChip(label = "24h Low", value = lowVal, modifier = Modifier.weight(1f), color = LossRed)
+            StatChip(
+                label = "SMC Bias",
+                value = biasVal,
+                modifier = Modifier.weight(1f),
+                color = if (biasVal.contains("BULL")) ProfitGreen else if (biasVal.contains("BEAR")) LossRed else WarningAmber
+            )
+            StatChip(label = "Confidence", value = confVal, modifier = Modifier.weight(1f), color = ElectricCyan)
         }
 
         // Native Trade Plan Card
@@ -720,18 +646,23 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Text(
-                text = "STRATEGY LIBRARY & ENGINE RULES",
-                fontWeight = FontWeight.Black,
-                fontSize = 14.sp,
-                fontFamily = FontFamily.Monospace,
-                color = CyanPrimary
+            TerminalPageHeader(
+                eyebrow = "DETERMINISTIC RULESETS",
+                title = "Strategy Library",
+                subtitle = "Choose the ruleset used by the next analysis. Status reflects the registry."
             )
-            Text(
-                text = "Select active analytical ruleset. All 7 institutional strategies fully implemented.",
-                fontSize = 11.sp,
-                color = TextSecondary
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                StatChip(label = "REGISTERED", value = strategies.size.toString(), modifier = Modifier.weight(1f))
+                StatChip(
+                    label = "IMPLEMENTED",
+                    value = strategies.count { it.isImplemented }.toString(),
+                    modifier = Modifier.weight(1f),
+                    color = ProfitGreen
+                )
+            }
         }
 
         items(strategies) { strat ->
@@ -803,19 +734,37 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
 fun RiskManagementTab(viewModel: DestinedFXViewModel) {
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DarkBackground)
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "RISK ENGINE & POSITION SIZING",
-            fontWeight = FontWeight.Black,
-            fontSize = 14.sp,
-            fontFamily = FontFamily.Monospace,
-            color = CyanPrimary
+        TerminalPageHeader(
+            eyebrow = "CAPITAL PROTECTION",
+            title = "Risk Management",
+            subtitle = "Position sizing is calculated by the deterministic RiskEngine."
         )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            StatChip(label = "MAX RISK / TRADE", value = "1.0%", modifier = Modifier.weight(1f), color = WarningAmber)
+            StatChip(label = "MINIMUM PLAN RR", value = "2.0R", modifier = Modifier.weight(1f), color = ProfitGreen)
+        }
+        GlassCard(title = "NON-NEGOTIABLE GUARDRAILS") {
+            Text(
+                text = "Risk is capped at 1% of configured equity. Plans below 2.0R must not be promoted to executable trades, and stops must never be narrowed to force a pass.",
+                fontSize = 11.sp,
+                color = TextSecondary,
+                lineHeight = 16.sp
+            )
+        }
         RiskRewardCalculatorComponent(
             viewModel = viewModel,
-            symbol = activeSymbol
+            symbol = activeSymbol,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
@@ -831,12 +780,19 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     var derivConnectStatus by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier.fillMaxSize().background(DarkBackground).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            Text("SUPABASE CLOUD & API CREDENTIALS", fontWeight = FontWeight.Black, fontSize = 14.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-            Text("Enter your Supabase project URL and Anon Key. Never store service_role keys here.", fontSize = 11.sp, color = TextSecondary)
+            TerminalPageHeader(
+                eyebrow = "CONFIGURATION",
+                title = "Settings & Integrations",
+                subtitle = "TradingView chart display does not require market-data API keys."
+            )
+        }
+        item {
+            Text("ACCOUNT & OPTIONAL SIGN-IN", fontWeight = FontWeight.Black, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = ElectricCyan)
+            Text("Supabase credentials are used only for cloud account features. Never store service_role keys in the app.", fontSize = 11.sp, color = TextSecondary)
         }
 
         item {
@@ -865,8 +821,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
         item {
             Divider(color = TabBorder)
             Spacer(modifier = Modifier.height(4.dp))
-            Text("DERIV BROKER WEBSOCKET API", fontWeight = FontWeight.Black, fontSize = 14.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-            Text("Enter your Deriv API token and App ID to enable live execution and portfolio synchronization.", fontSize = 11.sp, color = TextSecondary)
+            Text("OPTIONAL DERIV EXECUTION", fontWeight = FontWeight.Black, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = ElectricCyan)
+            Text("Only needed for Deriv broker execution. It is not needed to display TradingView or inspect strategy rules.", fontSize = 11.sp, color = TextSecondary)
         }
 
         item {
