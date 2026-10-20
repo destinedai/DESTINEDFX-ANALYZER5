@@ -26,6 +26,20 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * Public Deriv quote subscriptions must be translated back to the app's canonical symbols.
+ * Crypto tickers are supplied by the public Binance stream instead.
+ */
+internal fun buildDerivCanonicalSymbolMap(
+    symbols: List<String> = SymbolRegistry.getBackgroundSymbols()
+): Map<String, String> =
+    symbols.asSequence()
+        .filter { com.destinedfx.core.instrument.AssetClassifier.of(it) != com.destinedfx.core.marketdata.AssetClass.CRYPTO }
+        .mapNotNull { canonical ->
+            com.destinedfx.core.broker.DerivInstrumentResolver.resolve(canonical)?.let { it to canonical }
+        }
+        .toMap()
+
 class MarketDataRepositoryImpl(
     private val secrets: SecretsManager,
     private val derivMarketDataGateway: com.example.data.deriv.DerivMarketDataGateway? = null,
@@ -334,31 +348,51 @@ class MarketDataRepositoryImpl(
             }
         }
 
-        // 3. Deriv Market Data Gateway Live Stream
+        // 3. Public Deriv stream. Subscribe explicitly and translate broker symbols back to
+        // canonical app symbols (e.g. frxEURUSD -> EUR/USD), because the signal engine looks up
+        // tickers by the canonical UI symbol. A WebSocket connection without subscriptions emits
+        // no quote stream and leaves the Analyzer permanently in WAIT / DATA_UNAVAILABLE.
         derivMarketDataGateway?.let { derivGw ->
+            val canonicalByDerivSymbol = buildDerivCanonicalSymbolMap()
+
+            canonicalByDerivSymbol.keys.forEach { derivSymbol ->
+                // The latestQuotes flow below publishes the full, two-sided MarketQuote. This
+                // callback is deliberately side-effect free; registering it creates the
+                // subscription and lets the gateway restore it after reconnects.
+                derivGw.subscribeTicks(derivSymbol) { _ -> }
+            }
+
             scope.launch {
                 derivGw.latestQuotes.collect { quotes ->
-                    if (quotes.isNotEmpty()) {
-                        val updated = quotes.mapValues { (sym, q) ->
-                            MarketTicker(
-                                symbol = sym,
-                                price = q.mid ?: q.last ?: 0.0,
-                                changePercent = 0.0,
-                                high = 0.0,
-                                low = 0.0,
-                                spread = q.spread ?: 0.0,
-                                bias = "NEUTRAL",
-                                confidence = 0,
-                                lastUpdateMillis = q.receivedAtMs,
-                                isLive = true,
-                                source = q.source,
-                                bid = q.bid,
-                                ask = q.ask,
-                                hasRealSpread = q.spread != null,
-                                kind = "STREAM"
-                            )
+                    val updated = quotes.mapNotNull { (derivSymbol, q) ->
+                        val canonicalSymbol = canonicalByDerivSymbol[derivSymbol]
+                            ?: return@mapNotNull null
+                        val price = (q.mid ?: q.last ?: 0.0)
+                        if (price <= 0.0) return@mapNotNull null
+
+                        canonicalSymbol to MarketTicker(
+                            symbol = canonicalSymbol,
+                            price = price,
+                            changePercent = 0.0,
+                            high = 0.0,
+                            low = 0.0,
+                            spread = q.spread ?: 0.0,
+                            bias = "NEUTRAL",
+                            confidence = 0,
+                            lastUpdateMillis = q.receivedAtMs,
+                            isLive = true,
+                            source = "Deriv WebSocket",
+                            bid = q.bid,
+                            ask = q.ask,
+                            hasRealSpread = q.spread != null,
+                            kind = "STREAM"
+                        )
+                    }.toMap()
+
+                    updated.forEach { (canonicalSymbol, ticker) ->
+                        if (shouldUpdateTicker(canonicalSymbol, ticker)) {
+                            _tickers.update { current -> current + (canonicalSymbol to ticker) }
                         }
-                        _tickers.update { it + updated }
                     }
                 }
             }

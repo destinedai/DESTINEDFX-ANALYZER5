@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.destinedfx.core.analysis.*
 import com.destinedfx.core.marketdata.*
 import com.example.data.market.MarketDataRepositoryImpl
+import com.example.data.market.buildDerivCanonicalSymbolMap
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.security.SecretsManager
@@ -81,6 +82,19 @@ class TradingViewAndMtfValidationTest {
         assertNull(TradingViewMapper.mapInterval("M2"))
         assertNull(TradingViewMapper.mapInterval("H2"))
         assertNull(TradingViewMapper.mapInterval("INVALID"))
+    }
+
+    @Test
+    fun testPublicDerivFeedMapUsesCanonicalForexAndMetalSymbols() {
+        val mapping = buildDerivCanonicalSymbolMap()
+
+        assertEquals("EUR/USD", mapping["frxEURUSD"])
+        assertEquals("GBP/USD", mapping["frxGBPUSD"])
+        assertEquals("XAU/USD", mapping["frxXAUUSD"])
+        assertEquals("XAG/USD", mapping["frxXAGUSD"])
+        // Crypto is already served by the public Binance stream, so Deriv aliases must not
+        // override the canonical crypto tickers.
+        assertFalse(mapping.keys.any { it.startsWith("cry") })
     }
 
     // --- 3. MULTI-TIMEFRAME ANALYSIS TESTS ---

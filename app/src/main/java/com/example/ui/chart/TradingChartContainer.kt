@@ -291,7 +291,14 @@ fun TradingViewWebView(
                                 }
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
-                                    if (url?.startsWith("https://") == true) isLoading = false
+                                    // The embed document finishes before its async chart bundle has
+                                    // completed initialization. Give the widget a short settle
+                                    // window before removing the loading overlay.
+                                    if (url?.startsWith("https://") == true) {
+                                        view?.postDelayed({
+                                            if (!isChartError) isLoading = false
+                                        }, 2500L)
+                                    }
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                                     handler?.cancel()
@@ -333,8 +340,11 @@ fun TradingViewWebView(
                                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                                 allowFileAccess = false
                                 allowContentAccess = false
-                                userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
                             }
+                            // Use the device WebView's real user agent instead of spoofing an
+                            // outdated Chrome version. TradingView can then serve a compatible UI.
+                            android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                             loadUrl(widgetUrl)
                         }
                     } catch (error: Throwable) {

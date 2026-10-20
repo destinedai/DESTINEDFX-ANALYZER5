@@ -152,7 +152,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                     letterSpacing = 1.sp
                                 )
                                 Text(
-                                    text = "INSTITUTIONAL TERMINAL",
+                                    text = "INSTITUTIONAL TERMINAL • v${BuildConfig.VERSION_NAME}",
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     fontFamily = FontFamily.Monospace,
