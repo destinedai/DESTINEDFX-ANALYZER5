@@ -301,7 +301,7 @@ open class DestinedFXViewModel(
             marketDataStatus.value = "REFRESHING • " + symbol + " • " + timeframe
             try {
                 withTimeoutOrNull(4_000L) { app.marketDataRepository.refreshSymbol(symbol) }
-                val candles = withTimeoutOrNull(20_000L) {
+                val candles = withTimeoutOrNull(32_000L) {
                     app.marketDataRepository.getCandles(symbol, timeframe, 150)
                 } ?: emptyList()
                 if (candles.isNotEmpty()) {

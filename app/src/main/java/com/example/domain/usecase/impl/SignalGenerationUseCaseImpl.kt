@@ -148,7 +148,7 @@ class SignalGenerationUseCaseImpl(
                 targets.map { t ->
                     async {
                         try {
-                            withTimeout(19_000) {
+                            withTimeout(30_000) {
                                 t to load(t, if (t == Timeframe.W1) 80 else 150)
                             }
                         } catch (e: TimeoutCancellationException) {

@@ -153,7 +153,7 @@ class MarketDataRepositoryImpl(
         }
         // Historical candles are one-sided historical data, not a live quote. Keep original
         // timestamp and do not invent bid, ask, spread, or live status.
-        val candle = withTimeoutOrNull(18_000L) { gateway.fetchCandles(derivSymbol, 60, 2).lastOrNull() }
+        val candle = withTimeoutOrNull(30_000L) { gateway.fetchCandles(derivSymbol, 60, 2).lastOrNull() }
             ?: return null
         if (!candle.close.isFinite() || candle.close <= 0.0 || candle.timestamp <= 0L) return null
         return MarketTicker(
@@ -495,7 +495,7 @@ class MarketDataRepositoryImpl(
             val weekly = tf == com.destinedfx.core.marketdata.Timeframe.W1
             val granSec = if (weekly) 86_400 else (tf?.minutes ?: 60) * 60
             val requestCount = if (weekly) (count * 7 + 14).coerceAtMost(1_800) else count
-            val fetched = withTimeoutOrNull(18_000L) {
+            val fetched = withTimeoutOrNull(30_000L) {
                 derivMarketDataGateway.fetchCandles(derivSymbol, granSec, requestCount)
             } ?: emptyList()
             candles = if (weekly) aggregateDailyCandlesToWeekly(fetched).takeLast(count) else fetched

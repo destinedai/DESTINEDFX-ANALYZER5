@@ -48,15 +48,17 @@ class DerivMarketDataGateway(
     private val tickListeners = ConcurrentHashMap<String, (Tick) -> Unit>()
     private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
     private val lastCandleErrors = ConcurrentHashMap<String, String>()
+    @Volatile private var lastConnectionError: String? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    fun getLastCandleError(symbol: String): String? = lastCandleErrors[symbol]
+    fun getLastCandleError(symbol: String): String? = lastCandleErrors[symbol] ?: lastConnectionError
 
     fun connect() {
         if (_connectionState.value == DerivConnectionState.CONNECTING || _connectionState.value == DerivConnectionState.CONNECTED) {
             return
         }
 
+        lastConnectionError = null
         _connectionState.value = DerivConnectionState.CONNECTING
         val request = Request.Builder()
             .url("$WS_URL_BASE$appId")
@@ -79,13 +81,16 @@ class DerivMarketDataGateway(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "Deriv WebSocket failure: ${t.message}")
+                    lastConnectionError = t.message?.takeIf { it.isNotBlank() }
+                        ?: "Network connection to Deriv WebSocket failed"
+                    Log.e(TAG, "Deriv WebSocket failure: " + (lastConnectionError ?: "unknown"))
                     _connectionState.value = DerivConnectionState.ERROR
                     cleanup()
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     Log.i(TAG, "Deriv WebSocket closed: $code / $reason")
+                    if (code != 1000 && reason.isNotBlank()) lastConnectionError = "WebSocket closed: " + code + " / " + reason
                     _connectionState.value = DerivConnectionState.DISCONNECTED
                     cleanup()
                 }
@@ -168,14 +173,15 @@ class DerivMarketDataGateway(
         if (_connectionState.value != DerivConnectionState.CONNECTED) {
             connect()
             // Wait for the actual websocket handshake before sending a history request.
-            val connected = withTimeoutOrNull(7_000L) {
-                while (_connectionState.value != DerivConnectionState.CONNECTED) {
+            val connected = withTimeoutOrNull(16_000L) {
+                while (_connectionState.value == DerivConnectionState.CONNECTING) {
                     delay(100)
                 }
-                true
+                _connectionState.value == DerivConnectionState.CONNECTED
             } ?: false
-            if (!connected || _connectionState.value != DerivConnectionState.CONNECTED) {
-                lastCandleErrors[symbol] = "Deriv WebSocket did not connect within 7 seconds"
+            if (!connected) {
+                lastCandleErrors[symbol] = lastConnectionError
+                    ?: "Deriv WebSocket connection failed (state=" + _connectionState.value.name + ")"
                 pendingRequests.remove(reqId)
                 Log.w(TAG, "Candle request skipped: Deriv WebSocket did not connect for " + symbol)
                 return@withContext emptyList<Candle>()
