@@ -6,6 +6,7 @@ import com.destinedfx.core.analysis.*
 import com.destinedfx.core.marketdata.*
 import com.example.data.market.MarketDataRepositoryImpl
 import com.example.data.market.buildDerivCanonicalSymbolMap
+import com.example.data.market.shouldReuseCandleCache
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.security.SecretsManager
@@ -224,6 +225,16 @@ class TradingViewAndMtfValidationTest {
         assertEquals("N/A", uiModel.getTfBias("M1"))
         assertEquals("2/3 aligned", uiModel.mtfSummary)
         assertEquals("PARTIAL_BULLISH", uiModel.mtfStatus)
+    }
+
+    @Test
+    fun testCandleCache_DoesNotLetTwoBarReferencePriceHideFullHistoryRequest() {
+        assertTrue(shouldReuseCandleCache(cachedCount = 2, requestedCount = 2))
+        assertFalse(shouldReuseCandleCache(cachedCount = 2, requestedCount = 250))
+        assertFalse(shouldReuseCandleCache(cachedCount = 59, requestedCount = 250))
+        assertTrue(shouldReuseCandleCache(cachedCount = 60, requestedCount = 250))
+        assertTrue(shouldReuseCandleCache(cachedCount = 150, requestedCount = 250))
+        assertFalse(shouldReuseCandleCache(cachedCount = 0, requestedCount = 1))
     }
 
     @Test

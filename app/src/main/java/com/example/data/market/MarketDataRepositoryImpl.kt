@@ -40,6 +40,16 @@ internal fun buildDerivCanonicalSymbolMap(
         }
         .toMap()
 
+/**
+ * A tiny quote lookup (for example, 2 bars to display a reference price) must never satisfy
+ * a later multi-hundred-bar analysis request through the symbol/timeframe cache.
+ * 60 closed bars is the minimum useful cache size for the deterministic analysis pipeline.
+ */
+internal fun shouldReuseCandleCache(cachedCount: Int, requestedCount: Int, minimumUsefulCandles: Int = 60): Boolean {
+    if (cachedCount <= 0 || requestedCount <= 0 || minimumUsefulCandles <= 0) return false
+    return cachedCount >= minOf(requestedCount, minimumUsefulCandles)
+}
+
 class MarketDataRepositoryImpl(
     private val secrets: SecretsManager,
     private val derivMarketDataGateway: com.example.data.deriv.DerivMarketDataGateway? = null,
@@ -463,7 +473,8 @@ class MarketDataRepositoryImpl(
             (now - cached.timestamp) >= ttl || currentCandleOpen > lastCandleTime
         } else true
 
-        if (cached != null && !isExpired && cached.candles.isNotEmpty()) {
+        if (cached != null && !isExpired &&
+            shouldReuseCandleCache(cached.candles.size, count)) {
             return@withContext cached.candles.takeLast(count)
         }
 

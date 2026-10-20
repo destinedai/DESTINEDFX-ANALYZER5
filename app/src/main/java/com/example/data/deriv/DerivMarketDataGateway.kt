@@ -242,11 +242,18 @@ class DerivMarketDataGateway(
             }
             result
         } catch (e: CancellationException) {
-            if (e is TimeoutCancellationException && currentCoroutineContext().isActive) {
-                // This is the inner candle-response timeout, not cancellation of the caller.
-                lastCandleErrors[symbol] = "Timed out waiting for Deriv historical candles"
+            if (currentCoroutineContext().isActive) {
+                // A child response can be cancelled because the socket failed while the app's
+                // scan itself is still active. Surface that as a feed failure, not as cancellation
+                // of the whole analysis coroutine.
+                lastCandleErrors[symbol] = if (e is TimeoutCancellationException) {
+                    "Timed out waiting for Deriv historical candles"
+                } else {
+                    "Deriv WebSocket interrupted the historical candle request"
+                }
                 return@withContext emptyList<Candle>()
             }
+            // Respect real lifecycle/parent cancellation.
             throw e
         } catch (e: Exception) {
             lastCandleErrors[symbol] = e.message ?: e.javaClass.simpleName
