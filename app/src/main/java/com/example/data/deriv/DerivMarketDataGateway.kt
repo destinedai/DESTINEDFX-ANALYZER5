@@ -255,7 +255,8 @@ class DerivMarketDataGateway(
                 lastCandleErrors[symbol] = if (e is TimeoutCancellationException) {
                     "Timed out waiting for Deriv historical candles"
                 } else {
-                    "Deriv WebSocket interrupted the historical candle request"
+                    lastConnectionError?.let { "Deriv WebSocket network error: " + it }
+                        ?: "Deriv WebSocket interrupted the historical candle request"
                 }
                 return@withContext emptyList<Candle>()
             }
