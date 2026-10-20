@@ -6,6 +6,10 @@ import android.view.View
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.JavascriptInterface
+import android.os.Handler
+import android.os.Looper
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -369,21 +373,25 @@ fun TradingViewWebView(
     }
 
     val currentKey = "${mappedSymbol}_$mappedInterval"
-    var isLoading by remember(currentKey) { mutableStateOf(true) }
-    var isChartError by remember(currentKey) { mutableStateOf(false) }
-    var errorMessage by remember(currentKey) { mutableStateOf("") }
+    // NOTE: these states are deliberately NOT keyed by currentKey. The WebView callbacks are
+    // created once in `factory` and must keep writing to the same state objects after the symbol
+    // or timeframe changes; keyed state made callbacks write to stale objects, which produced a
+    // false "Chart load timed out" error 15s after every symbol/timeframe change.
+    var isLoading by remember { mutableStateOf(true) }
+    var isChartError by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
     var retryTrigger by remember { mutableIntStateOf(0) }
 
-    // Chart load timeout guard (15 seconds)
+    // Real timeout: only fires if the TradingView iframe never reported that it loaded.
     LaunchedEffect(currentKey, retryTrigger) {
         isLoading = true
         isChartError = false
         errorMessage = ""
-        kotlinx.coroutines.delay(15_000L)
+        kotlinx.coroutines.delay(20_000L)
         if (isLoading && !isChartError) {
             isChartError = true
             isLoading = false
-            errorMessage = "Chart load timed out. Check your network connection and retry."
+            errorMessage = "TradingView did not finish loading. Check your connection and retry."
         }
     }
 
@@ -398,7 +406,9 @@ fun TradingViewWebView(
             </style>
         </head>
         <body>
-            <iframe src="https://s.tradingview.com/widgetembed/?symbol=$mappedSymbol&interval=$mappedInterval&theme=dark&style=1&timezone=Etc/UTC&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=0&save_image=0&details=0&calendar=0&hotlist=0&news=0" allowtransparency="true" scrolling="no" allowfullscreen="true"></iframe>
+            <iframe id="tv" onload="if (window.ChartBridge) ChartBridge.chartLoaded();"
+                src="https://s.tradingview.com/widgetembed/?symbol=$mappedSymbol&interval=$mappedInterval&theme=dark&style=1&timezone=Etc/UTC&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=0&save_image=0&details=0&calendar=0&hotlist=0&news=0&locale=en"
+                allowtransparency="true" scrolling="no" allowfullscreen="true"></iframe>
         </body>
         </html>
     """.trimIndent()
@@ -443,32 +453,35 @@ fun TradingViewWebView(
                     try {
                         WebView(context).apply {
                             tag = "$currentKey-$retryTrigger"
+                            setBackgroundColor(android.graphics.Color.parseColor("#0B0E14"))
                             setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                            // The chart only counts as loaded when the TradingView iframe itself fires onload.
+                            addJavascriptInterface(
+                                ChartBridge { isLoading = false },
+                                "ChartBridge"
+                            )
                             webViewClient = object : WebViewClient() {
-                                override fun onPageFinished(view: WebView?, url: String?) {
-                                    super.onPageFinished(view, url)
-                                    if (!isChartError) {
-                                        view?.postDelayed({
-                                            if (!isChartError) {
-                                                isLoading = false
-                                            }
-                                        }, 800L)
-                                    }
-                                }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                    handler?.cancel() // STRICT SSL: Never bypass SSL certificate errors
+                                    handler?.cancel() // STRICT SSL: never bypass certificate errors
                                     isChartError = true
                                     isLoading = false
                                     errorMessage = "SSL verification failed. Connection not secure."
                                 }
                                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                    if (request?.isForMainFrame == true) {
-                                        val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                            error?.description?.toString() ?: "Network error"
-                                        } else "Network error"
+                                    val url = request?.url?.toString().orEmpty()
+                                    // Main page OR the TradingView widget document itself failed.
+                                    if (request?.isForMainFrame == true || url.contains("/widgetembed/")) {
                                         isChartError = true
                                         isLoading = false
-                                        errorMessage = desc
+                                        errorMessage = error?.description?.toString() ?: "Network error"
+                                    }
+                                }
+                                override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: WebResourceResponse?) {
+                                    val url = request?.url?.toString().orEmpty()
+                                    if (url.contains("/widgetembed/") && (errorResponse?.statusCode ?: 0) >= 400) {
+                                        isChartError = true
+                                        isLoading = false
+                                        errorMessage = "TradingView returned HTTP ${errorResponse?.statusCode}."
                                     }
                                 }
                             }
@@ -490,7 +503,7 @@ fun TradingViewWebView(
                     } catch (e: Throwable) {
                         isChartError = true
                         errorMessage = "WebView unavailable: ${e.message}"
-                        android.view.View(context)
+                        View(context)
                     }
                 },
                 update = { view ->
@@ -500,10 +513,10 @@ fun TradingViewWebView(
                         (view as? WebView)?.loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
                     }
                 },
+                onRelease = { view -> (view as? WebView)?.apply { stopLoading(); destroy() } },
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Visible loading indicator while TradingView initializes
             if (isLoading) {
                 Box(
                     modifier = Modifier
@@ -515,13 +528,9 @@ fun TradingViewWebView(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        CircularProgressIndicator(
-                            color = CyanPrimary,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(28.dp)
-                        )
+                        CircularProgressIndicator(color = CyanPrimary, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
                         Text(
-                            text = "Loading TradingView Chart ($symbol $timeframe)...",
+                            text = "Loading TradingView ($symbol $timeframe)...",
                             fontSize = 11.sp,
                             color = TextSecondary,
                             fontFamily = FontFamily.Monospace
@@ -530,6 +539,14 @@ fun TradingViewWebView(
                 }
             }
         }
+    }
+}
+
+/** JS bridge: the only thing the page may call is "the TradingView iframe finished loading". */
+private class ChartBridge(private val onLoaded: () -> Unit) {
+    @JavascriptInterface
+    fun chartLoaded() {
+        Handler(Looper.getMainLooper()).post { onLoaded() }
     }
 }
 

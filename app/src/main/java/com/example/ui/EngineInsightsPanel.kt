@@ -33,7 +33,7 @@ import androidx.compose.ui.Alignment
  * Surfaces engine outputs the ViewModel computes:
  * SMC bias, structure alignment, trade signal, multi-AI consensus, model sentiment,
  * data correspondence, broker quote, fetch errors, analysis state, multi-AI scan state,
- * action alerts, and Gemini analysis text.
+ * action alerts, and AI analysis text.
  */
 @Composable
 fun EngineInsightsPanel(viewModel: DestinedFXViewModel) {
