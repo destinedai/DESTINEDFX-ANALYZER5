@@ -133,28 +133,35 @@ class MarketDataRepositoryImpl(
 
         val preferred = selectedApiSource.value
 
-        // 2. Deriv priority: when DERIV is preferred, gateway is present, query Deriv quote
+        // 2. Deriv priority: when DERIV is preferred, gateway is present, query Deriv quote or fallback to candles
         if ((preferred == "DERIV" || preferred.isBlank()) && derivMarketDataGateway != null) {
             val derivSym = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(sym)
             if (derivSym != null) {
                 val q = derivMarketDataGateway.latestQuotes.value[derivSym]
-                if (q != null && System.currentTimeMillis() - q.receivedAtMs <= 10_000L) {
+                val price = if (q != null && System.currentTimeMillis() - q.receivedAtMs <= 15_000L) {
+                    q.mid ?: q.last ?: 0.0
+                } else {
+                    val candles = derivMarketDataGateway.fetchCandles(derivSym, 60, 1)
+                    candles.lastOrNull()?.close ?: 0.0
+                }
+                if (price > 0.0) {
+                    val spread = q?.spread ?: 0.00010
                     return MarketTicker(
                         symbol = sym,
-                        price = q.mid ?: q.last ?: 0.0,
+                        price = price,
                         changePercent = 0.0,
                         high = 0.0,
                         low = 0.0,
-                        spread = q.spread ?: 0.0,
+                        spread = spread,
                         bias = "NEUTRAL",
                         confidence = 0,
-                        lastUpdateMillis = q.receivedAtMs,
+                        lastUpdateMillis = q?.receivedAtMs ?: System.currentTimeMillis(),
                         isLive = true,
-                        source = "Deriv WebSocket",
-                        bid = q.bid,
-                        ask = q.ask,
-                        hasRealSpread = q.spread != null,
-                        kind = "STREAM"
+                        source = if (q != null) "Deriv WebSocket" else "Deriv REST/WS",
+                        bid = q?.bid ?: (price - 0.00005),
+                        ask = q?.ask ?: (price + 0.00005),
+                        hasRealSpread = q?.spread != null,
+                        kind = if (q != null) "STREAM" else "POLLED_LAST"
                     )
                 }
             }
@@ -165,9 +172,6 @@ class MarketDataRepositoryImpl(
             val oanda = withTimeoutOrNull(3000) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
             if (oanda != null) return oanda
         }
-
-
-
 
         return null
     }
@@ -187,23 +191,30 @@ class MarketDataRepositoryImpl(
             val derivSym = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(sym)
             if (derivSym != null) {
                 val q = derivMarketDataGateway.latestQuotes.value[derivSym]
-                if (q != null && System.currentTimeMillis() - q.receivedAtMs <= 15_000L) {
+                val price = if (q != null && System.currentTimeMillis() - q.receivedAtMs <= 20_000L) {
+                    q.mid ?: q.last ?: 0.0
+                } else {
+                    val candles = derivMarketDataGateway.fetchCandles(derivSym, 60, 1)
+                    candles.lastOrNull()?.close ?: 0.0
+                }
+                if (price > 0.0) {
+                    val spread = q?.spread ?: 0.00010
                     return MarketTicker(
                         symbol = sym,
-                        price = q.mid ?: q.last ?: 0.0,
+                        price = price,
                         changePercent = 0.0,
                         high = 0.0,
                         low = 0.0,
-                        spread = q.spread ?: 0.0,
+                        spread = spread,
                         bias = "NEUTRAL",
                         confidence = 0,
-                        lastUpdateMillis = q.receivedAtMs,
+                        lastUpdateMillis = q?.receivedAtMs ?: System.currentTimeMillis(),
                         isLive = true,
-                        source = "Deriv WebSocket",
-                        bid = q.bid,
-                        ask = q.ask,
-                        hasRealSpread = q.spread != null,
-                        kind = "STREAM"
+                        source = if (q != null) "Deriv WebSocket" else "Deriv REST/WS",
+                        bid = q?.bid ?: (price - 0.00005),
+                        ask = q?.ask ?: (price + 0.00005),
+                        hasRealSpread = q?.spread != null,
+                        kind = if (q != null) "STREAM" else "POLLED_LAST"
                     )
                 }
             }

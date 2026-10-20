@@ -65,7 +65,10 @@ class SignalGenerationUseCaseImpl(
             }
 
             val tf = Timeframe.parse(timeframe) ?: return unavailable(symbol, timeframe, "Unsupported timeframe '$timeframe'", "INVALID")
-            val ticker = market.tickerFlow.value[symbol]
+            var ticker = market.tickerFlow.value[symbol]
+            if (ticker == null) {
+                ticker = market.refreshSymbol(symbol)
+            }
             if (ticker == null) return unavailable(symbol, timeframe, "WAITING FOR LIVE DATA", "DISCONNECTED")
             if (ticker.kind == "DAILY_REFERENCE") return unavailable(symbol, timeframe, "Only a daily reference rate is available - not usable for analysis or trading", "STALE")
             val quote = toQuote(ticker)
