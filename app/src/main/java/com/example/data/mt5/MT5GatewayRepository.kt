@@ -153,13 +153,50 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                 }
                 accountId = accountJson.optString("id").ifBlank { accountJson.optString("_id") }
                 accountState = accountJson.optString("state")
-                val responseRegion = accountJson.optString("region").trim()
-                if (responseRegion.matches(Regex("[A-Za-z0-9-]+"))) {
-                    s.saveMetaApiRegion(responseRegion)
-                }
                 if (accountId.isBlank()) {
                     s.saveMetaApiPendingTransactionId("")
                     return@withContext Result.failure(Exception("MetaAPI accepted the request but returned no account ID."))
+                }
+
+                // The create response may omit the deployment region. Read the account metadata
+                // so the MT client API is routed to the actual data center, not always London.
+                val responseRegion = accountJson.optString("region").trim()
+                if (responseRegion.matches(Regex("[A-Za-z0-9-]+"))) {
+                    s.saveMetaApiRegion(responseRegion)
+                } else {
+                    val detailsRequest = Request.Builder()
+                        .url("$PROVISIONING_BASE/users/current/accounts/" + accountId)
+                        .header("auth-token", bridgeToken)
+                        .header("Accept", "application/json")
+                        .get()
+                        .build()
+                    val detailsData = try {
+                        client.newCall(detailsRequest).execute().use { response ->
+                            Triple(response.code, response.body?.string().orEmpty(), response.isSuccessful)
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        return@withContext Result.failure(
+                            Exception("MT5 account creation was accepted, but its MetaAPI region could not be read. Retry shortly; the same provisioning transaction is retained to prevent duplicates.")
+                        )
+                    }
+                    if (!detailsData.third) {
+                        return@withContext Result.failure(
+                            Exception("MT5 account was created, but MetaAPI could not return its region (HTTP " + detailsData.first + "). Retry shortly; duplicate provisioning is prevented.")
+                        )
+                    }
+                    val accountDetails = try {
+                        JSONObject(detailsData.second)
+                    } catch (_: Exception) {
+                        return@withContext Result.failure(Exception("MetaAPI account details response was invalid; retry without creating a new account."))
+                    }
+                    val detectedRegion = accountDetails.optString("region").trim()
+                    if (!detectedRegion.matches(Regex("[A-Za-z0-9-]+"))) {
+                        return@withContext Result.failure(Exception("MetaAPI did not provide the new account's data-center region. Retry after the account finishes provisioning."))
+                    }
+                    s.saveMetaApiRegion(detectedRegion)
+                    accountState = accountDetails.optString("state").ifBlank { accountState }
                 }
                 break
             }
