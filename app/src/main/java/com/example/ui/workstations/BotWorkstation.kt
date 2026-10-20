@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
     val botActive by viewModel.botActive.collectAsStateWithLifecycle()
+    val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val activeBrokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
     val activeBrokerGateway by viewModel.activeBrokerGateway.collectAsStateWithLifecycle()
     val brokerConnStatus by activeBrokerGateway.connectionStatus.collectAsStateWithLifecycle()
@@ -51,6 +52,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val riskPercent by viewModel.riskPercent.collectAsStateWithLifecycle()
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var brokerConnectionMessage by remember { mutableStateOf<String?>(null) }
     var derivTokenInput by remember { mutableStateOf(viewModel.getDerivApiToken()) }
     var derivAppIdInput by remember { mutableStateOf(viewModel.getDerivAppId()) }
     var metaApiTokenInput by remember { mutableStateOf(viewModel.getMetaApiToken()) }
@@ -260,6 +262,38 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             }
         }
 
+        // App account and broker account are separate authorizations. Keep the terminal usable in guest mode.
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().testTag("bot_account_authorization_card"),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF111A28)),
+                border = BorderStroke(1.dp, if (currentUser == null) WarningAmber.copy(alpha = 0.4f) else ProfitGreen.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("DESTINEDFX ACCOUNT AUTHORIZATION", fontSize = 10.sp, color = ElectricCyan,
+                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                    Text(
+                        if (currentUser == null)
+                            "You are using the guest terminal. Charts and analysis remain available, but automated bot activation requires a signed-in account with a verified email."
+                        else
+                            "Signed in as ${currentUser?.email ?: "DestinedFX user"}. Automated activation also checks server session validity and email verification.",
+                        fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp
+                    )
+                    if (currentUser == null) {
+                        Button(
+                            onClick = { viewModel.openLoginScreen() },
+                            modifier = Modifier.fillMaxWidth().testTag("bot_open_account_login"),
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("LOGIN / REGISTER TO ACTIVATE BOT", fontWeight = FontWeight.Black, fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        }
+
         // Active Broker Selector & Account Card
         item {
             Card(
@@ -334,10 +368,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         Button(
                             onClick = {
                                 isConnectingBroker = true
-                                statusMessage = null
+                                brokerConnectionMessage = null
                                 viewModel.connectToDeriv(derivTokenInput, derivAppIdInput) { success, message ->
                                     isConnectingBroker = false
-                                    statusMessage = message ?: if (success) "Deriv account connected." else "Deriv login failed."
+                                    brokerConnectionMessage = message ?: if (success) "Deriv account connected." else "Deriv login failed."
                                 }
                             },
                             enabled = !isConnectingBroker && derivTokenInput.isNotBlank() && derivAppIdInput.isNotBlank(),
@@ -369,10 +403,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         Button(
                             onClick = {
                                 isConnectingBroker = true
-                                statusMessage = null
+                                brokerConnectionMessage = null
                                 viewModel.connectToMetaApiAccount(metaApiTokenInput, metaApiAccountIdInput) { success, message ->
                                     isConnectingBroker = false
-                                    statusMessage = message ?: if (success) "MT5/MetaAPI account connected." else "MT5 login failed."
+                                    brokerConnectionMessage = message ?: if (success) "MT5/MetaAPI account connected." else "MT5 login failed."
                                 }
                             },
                             enabled = !isConnectingBroker && metaApiTokenInput.isNotBlank() && metaApiAccountIdInput.isNotBlank(),
@@ -385,11 +419,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Text(if (isConnectingBroker) "CONNECTING..." else "LOGIN TO MT5", fontWeight = FontWeight.Black)
                         }
                     }
-                    statusMessage?.let { message ->
+                    brokerConnectionMessage?.let { message ->
                         Text(
                             text = message, fontSize = 10.sp,
                             color = if (message.contains("failed", true) || message.contains("error", true)) LossRed else ElectricCyan,
-                            lineHeight = 15.sp, modifier = Modifier.testTag("bot_connection_status")
+                            lineHeight = 15.sp, modifier = Modifier.testTag("bot_broker_connection_status")
                         )
                     }
                     HorizontalDivider(color = CardBorder)
