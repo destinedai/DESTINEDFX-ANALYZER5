@@ -289,7 +289,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Symbol & Timeframe Selectors
@@ -624,6 +624,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                 }
             }
         }
+
+        EngineInsightsPanel(viewModel)
     }
 }
 
