@@ -241,6 +241,7 @@ open class DestinedFXViewModel(
     // Selected ticker and timeframe for the chart
     val selectedTicker = MutableStateFlow("EUR/USD")
     val selectedTimeframe = MutableStateFlow("M15")
+    val selectedMtfTimeframes = MutableStateFlow(setOf("M5", "M15", "M30", "H1", "H4", "D1", "W1"))
     val riskPercent = MutableStateFlow(1.0)
     val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
 
@@ -254,14 +255,33 @@ open class DestinedFXViewModel(
 
     fun selectTimeframe(tf: String) {
         selectedTimeframe.value = tf
+        if (selectedMtfTimeframes.value.none { it != tf }) {
+            val alternative = listOf("H4", "D1", "W1", "H1", "M30", "M15", "M5").firstOrNull { it != tf }
+            if (alternative != null) selectedMtfTimeframes.value = selectedMtfTimeframes.value + alternative
+        }
+    }
+
+    fun toggleMtfTimeframe(tf: String) {
+        val allowed = setOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")
+        if (tf !in allowed) return
+        val current = selectedMtfTimeframes.value
+        if (tf !in current) {
+            selectedMtfTimeframes.value = current + tf
+            return
+        }
+        val without = current - tf
+        if (without.isEmpty() || without.none { it != selectedTimeframe.value }) return
+        selectedMtfTimeframes.value = without
     }
 
     fun setRiskPercent(value: Double) {
         riskPercent.value = value.coerceIn(0.1, 1.0)
     }
 
-    // Dynamic high-fidelity candlestick history for each symbol
+    // Keep legacy symbol history plus an exact symbol/timeframe series for chart correctness.
     val candlestickHistory = androidx.compose.runtime.mutableStateMapOf<String, List<Candle>>()
+    val candlestickHistoryByTimeframe = androidx.compose.runtime.mutableStateMapOf<String, List<Candle>>()
+    val marketDataStatus = MutableStateFlow("Connecting to public market feeds…")
 
     // Real-time market candle fetch errors exposed to UI
     val candleFetchErrors: StateFlow<Map<String, String>> =
@@ -274,6 +294,35 @@ open class DestinedFXViewModel(
 
     fun getDataSourceForSymbol(symbol: String): String =
         if (isPreview) "Deriv WebSocket" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
+
+    fun refreshMarketData(symbol: String = selectedTicker.value, timeframe: String = selectedTimeframe.value) {
+        if (isPreview) return
+        viewModelScope.launch {
+            marketDataStatus.value = "REFRESHING • " + symbol + " • " + timeframe
+            try {
+                withTimeoutOrNull(4_000L) { app.marketDataRepository.refreshSymbol(symbol) }
+                val candles = withTimeoutOrNull(20_000L) {
+                    app.marketDataRepository.getCandles(symbol, timeframe, 150)
+                } ?: emptyList()
+                if (candles.isNotEmpty()) {
+                    candlestickHistory[symbol] = candles
+                    candlestickHistoryByTimeframe[symbol + "-" + timeframe] = candles
+                    marketDataStatus.value = "READY • " + candles.size + " candles • " +
+                        app.marketDataRepository.getDataSource(symbol, timeframe)
+                } else {
+                    val reason = app.marketDataRepository.getCandleError(symbol, timeframe)
+                        ?: "The public feed returned no OHLC candles for this symbol/timeframe."
+                    marketDataStatus.value = "UNAVAILABLE • " + reason
+                }
+                runSignalScan(symbol, timeframe)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                marketDataStatus.value = "UNAVAILABLE • " + (e.message ?: e.javaClass.simpleName)
+                Log.w("DestinedFXViewModel", "Manual market refresh failed: " + e.javaClass.simpleName)
+            }
+        }
+    }
 
     fun isDataFresh(symbol: String): Boolean =
         if (isPreview) true else app.marketDataRepository.isFresh(symbol)
@@ -654,13 +703,19 @@ open class DestinedFXViewModel(
     val currentDynamicAnalysis = MutableStateFlow<DynamicAnalysisInfo?>(null)
     val isSignalScanning = MutableStateFlow(false)
 
-    fun runSignalScan(symbol: String, timeframe: String) {
+    fun runSignalScan(
+        symbol: String,
+        timeframe: String,
+        mtfTimeframes: Set<String> = selectedMtfTimeframes.value
+    ) {
         if (isPreview) return
         viewModelScope.launch {
             isSignalScanning.value = true
             isAnalyzing.value = true
             try {
-                val sig = app.signalGenerationUseCase.generateSignal(symbol, timeframe, selectedStrategyId.value)
+                val sig = app.signalGenerationUseCase.generateSignal(
+                    symbol, timeframe, selectedStrategyId.value, mtfTimeframes
+                )
                 currentTradeSignal.value = sig
                 val mapped = mapTradeSignalToUiModel(sig)
                 currentDynamicAnalysis.value = mapped
@@ -1062,6 +1117,13 @@ open class DestinedFXViewModel(
                     val candles = app.marketDataRepository.getCandles(symbol, tfKey, 150)
                     if (candles.isNotEmpty()) {
                         candlestickHistory[symbol] = candles
+                        candlestickHistoryByTimeframe[symbol + "-" + tfKey] = candles
+                        marketDataStatus.value = "READY • " + candles.size + " candles • " +
+                            app.marketDataRepository.getDataSource(symbol, tfKey)
+                    } else {
+                        val reason = app.marketDataRepository.getCandleError(symbol, tfKey)
+                            ?: "Waiting for valid candles from the public feed."
+                        marketDataStatus.value = "WAIT • " + reason
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1082,6 +1144,7 @@ open class DestinedFXViewModel(
                     val candles = app.marketDataRepository.getCandles(sym, tfKey, 150)
                     if (candles.isNotEmpty()) {
                         candlestickHistory[sym] = candles
+                        candlestickHistoryByTimeframe[sym + "-" + tfKey] = candles
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {

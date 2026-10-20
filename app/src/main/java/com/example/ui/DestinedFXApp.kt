@@ -308,12 +308,21 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
     val analysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val isScanning by viewModel.isSignalScanning.collectAsStateWithLifecycle()
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
+    val selectedMtfTimeframes by viewModel.selectedMtfTimeframes.collectAsStateWithLifecycle()
+    val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val ticker = tickers[activeSymbol]
-    val symbols = listOf("XAU/USD", "EUR/USD", "GBP/USD", "USD/JPY", "BTC/USD")
+    val symbols = listOf(
+        "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",
+        "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "EUR/CHF", "GBP/CHF",
+        "XAU/USD", "XAG/USD", "SPX500", "NAS100", "DJ30", "USOIL",
+        "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD", "XRP/USD"
+    )
     val timeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
+    var chartSymbolMenuExpanded by remember { mutableStateOf(false) }
+    var chartTimeframeMenuExpanded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(activeSymbol, selectedTimeframe, selectedStrategyId) {
-        viewModel.runSignalScan(activeSymbol, selectedTimeframe)
+    LaunchedEffect(activeSymbol, selectedTimeframe, selectedStrategyId, selectedMtfTimeframes) {
+        viewModel.runSignalScan(activeSymbol, selectedTimeframe, selectedMtfTimeframes)
     }
 
     LazyColumn(
@@ -399,6 +408,17 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         }
                     }
                     OutlinedButton(
+                        onClick = { viewModel.refreshMarketData(activeSymbol, selectedTimeframe) },
+                        modifier = Modifier.fillMaxWidth().height(40.dp).testTag("refresh_market_data"),
+                        border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.55f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("REFRESH MARKET DATA", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                    }
+                    OutlinedButton(
                         onClick = onExportAnalysis,
                         modifier = Modifier.fillMaxWidth().height(42.dp).testTag("export_analysis_button"),
                         border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.65f)),
@@ -422,9 +442,50 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text("TRADINGVIEW", fontSize = 11.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                            Text("$activeSymbol • $selectedTimeframe", fontSize = 10.sp, color = TextPrimary, fontFamily = FontFamily.Monospace)
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Box {
+                                    TextButton(onClick = { chartSymbolMenuExpanded = true }, contentPadding = PaddingValues(0.dp)) {
+                                        Text(activeSymbol, fontSize = 10.sp, color = TextPrimary, fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold)
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Select chart symbol",
+                                            tint = ElectricCyan, modifier = Modifier.size(17.dp))
+                                    }
+                                    DropdownMenu(expanded = chartSymbolMenuExpanded, onDismissRequest = { chartSymbolMenuExpanded = false }) {
+                                        symbols.forEach { sym ->
+                                            DropdownMenuItem(
+                                                text = { Text(sym, fontFamily = FontFamily.Monospace) },
+                                                onClick = { viewModel.selectTicker(sym); chartSymbolMenuExpanded = false }
+                                            )
+                                        }
+                                    }
+                                }
+                                Text("•", fontSize = 10.sp, color = TextMuted)
+                                Box {
+                                    TextButton(onClick = { chartTimeframeMenuExpanded = true }, contentPadding = PaddingValues(0.dp)) {
+                                        Text(selectedTimeframe, fontSize = 10.sp, color = ElectricCyan,
+                                            fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Select chart timeframe",
+                                            tint = ElectricCyan, modifier = Modifier.size(17.dp))
+                                    }
+                                    DropdownMenu(expanded = chartTimeframeMenuExpanded, onDismissRequest = { chartTimeframeMenuExpanded = false }) {
+                                        timeframes.forEach { tf ->
+                                            DropdownMenuItem(
+                                                text = { Text(tf, fontFamily = FontFamily.Monospace) },
+                                                onClick = { viewModel.selectTimeframe(tf); chartTimeframeMenuExpanded = false }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        Text("CHART", fontSize = 9.sp, color = TextMuted, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        TextButton(
+                            onClick = { viewModel.refreshMarketData(activeSymbol, selectedTimeframe) },
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh market data",
+                                tint = ElectricCyan, modifier = Modifier.size(15.dp))
+                            Text("REFRESH", color = ElectricCyan, fontSize = 8.sp, fontWeight = FontWeight.Black)
+                        }
                     }
                     TradingChartContainer(
                         activeSymbol = activeSymbol,
@@ -432,12 +493,25 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         currentSpotPrice = ticker?.price ?: 0.0,
                         activeStrategy = selectedStrategyId,
                         dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
-                        candles = viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
+                        candles = viewModel.candlestickHistoryByTimeframe[activeSymbol + "-" + selectedTimeframe]
+                            ?: viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
                         isRealTradingViewEnabled = true,
                         onToggleChartType = {},
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
                 }
+                Text(
+                    text = marketDataStatus,
+                    fontSize = 9.sp,
+                    color = when {
+                        marketDataStatus.startsWith("READY") -> ProfitGreen
+                        marketDataStatus.startsWith("UNAVAILABLE") -> LossRed
+                        else -> WarningAmber
+                    },
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 2,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
+                )
             }
         }
         item {
@@ -504,22 +578,35 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         items(listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")) { tf ->
-                            val bias = analysis?.getTfBias(tf) ?: "N/A"
+                            val enabled = tf in selectedMtfTimeframes
+                            val bias = if (enabled) analysis?.getTfBias(tf) ?: "N/A" else "OFF"
                             val tone = when (bias) {
                                 "BULLISH" -> ProfitGreen
                                 "BEARISH" -> LossRed
                                 "NEUTRAL" -> TextSecondary
+                                "OFF" -> TextMuted
                                 else -> WarningAmber
                             }
-                            Column(modifier = Modifier.width(66.dp).clip(RoundedCornerShape(9.dp)).background(DarkSurfaceVariant)
-                                .padding(vertical = 10.dp, horizontal = 6.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(tf, fontSize = 10.sp, color = TextSecondary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Column(
+                                modifier = Modifier.width(72.dp)
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .background(if (enabled) ElectricCyan.copy(alpha = 0.08f) else DarkSurfaceVariant)
+                                    .border(1.dp, if (enabled) ElectricCyan.copy(alpha = 0.7f) else CardBorder, RoundedCornerShape(9.dp))
+                                    .clickable { viewModel.toggleMtfTimeframe(tf) }
+                                    .padding(vertical = 10.dp, horizontal = 6.dp)
+                                    .testTag("mtf_toggle_" + tf),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(tf, fontSize = 10.sp, color = if (enabled) ElectricCyan else TextSecondary,
+                                    fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                                 Box(Modifier.size(7.dp).clip(CircleShape).background(tone))
                                 Text(bias, fontSize = 8.sp, color = tone, fontWeight = FontWeight.Black)
                             }
                         }
                     }
+                    Text("Tap timeframe cards to include/exclude them from MTF analysis. At least one context timeframe must remain enabled.",
+                        fontSize = 9.sp, color = TextMuted, lineHeight = 14.sp)
                     Text(analysis?.mtfSummary?.takeIf { it.isNotBlank() } ?: "No multi-timeframe verdict available yet.",
                         fontSize = 11.sp, color = TextPrimary, lineHeight = 16.sp)
                 }

@@ -55,7 +55,20 @@ class SignalGenerationUseCaseImpl(
 
     private val failedFetches = ConcurrentHashMap<String, Long>() // key: "symbol-tf", value: last failed timestamp
 
-    override suspend fun generateSignal(symbol: String, timeframe: String, strategyId: String): TradeSignal {
+    override suspend fun generateSignal(symbol: String, timeframe: String, strategyId: String): TradeSignal =
+        generateSignal(
+            symbol = symbol,
+            timeframe = timeframe,
+            strategyId = strategyId,
+            selectedMtfTimeframes = setOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")
+        )
+
+    suspend fun generateSignal(
+        symbol: String,
+        timeframe: String,
+        strategyId: String,
+        selectedMtfTimeframes: Set<String>
+    ): TradeSignal {
         val startTotal = clock()
         return try {
             val now = clock()
@@ -66,23 +79,43 @@ class SignalGenerationUseCaseImpl(
 
             val tf = Timeframe.parse(timeframe) ?: return unavailable(symbol, timeframe, "Unsupported timeframe '$timeframe'", "INVALID")
             var ticker = market.tickerFlow.value[symbol]
-            if (ticker == null) {
-                ticker = market.refreshSymbol(symbol)
-            }
-            if (ticker == null) return unavailable(symbol, timeframe, "WAITING FOR LIVE DATA", "DISCONNECTED")
-            if (ticker.kind == "DAILY_REFERENCE") return unavailable(symbol, timeframe, "Only a daily reference rate is available - not usable for analysis or trading", "STALE")
-            val quote = toQuote(ticker)
-            val hc = if (ticker.kind == "STREAM") HealthConfig() else HealthConfig.polled(pollIntervalMs)
-            val health = MarketDataHealthEvaluator.evaluate(quote, now, connected = true, cfg = hc)
-            // Analysis may use LIVE or DELAYED (labelled); STALE/INVALID/etc. never produce a signal.
-            if (health != MarketDataHealth.LIVE && health != MarketDataHealth.DELAYED) return unavailable(symbol, timeframe, "Market data ${health.name}", health.name)
+            if (ticker == null) ticker = market.refreshSymbol(symbol)
+            // A daily reference rate is not a market quote. Look for real timestamped OHLC instead.
+            if (ticker?.kind == "DAILY_REFERENCE") ticker = null
 
             val cls = AssetClassifier.of(symbol)
+            var quote: MarketQuote? = ticker?.let { toQuote(it) }
+            if (quote == null) {
+                val referenceCandle = market.getCandles(symbol, timeframe, 2)
+                    .lastOrNull { it.close.isFinite() && it.close > 0.0 && it.timestamp > 0L }
+                if (referenceCandle != null) {
+                    val source = market.candleSources[symbol] ?: "Historical candles"
+                    // This timestamp is historical by construction. It can support analysis only.
+                    quote = MarketQuote.lastOnly(
+                        symbol = symbol,
+                        cls = cls,
+                        last = referenceCandle.close,
+                        tsMs = referenceCandle.timestamp,
+                        rxMs = referenceCandle.timestamp,
+                        source = source + " • historical reference (analysis only)"
+                    )
+                }
+            }
+            if (quote == null) {
+                return unavailable(symbol, timeframe, "NO QUOTE OR VALID HISTORICAL CANDLE for " + symbol + " " + timeframe, "DISCONNECTED")
+            }
+            val hc = if (ticker?.kind == "STREAM") HealthConfig() else HealthConfig.polled(pollIntervalMs)
+            val health = if (ticker == null) MarketDataHealth.STALE
+                else MarketDataHealthEvaluator.evaluate(quote, now, connected = true, cfg = hc)
+            // STALE is accepted for a historical research readout, but is never executable below.
+            if (health !in setOf(MarketDataHealth.LIVE, MarketDataHealth.DELAYED, MarketDataHealth.STALE)) {
+                return unavailable(symbol, timeframe, "Market data " + health.name, health.name)
+            }
             val startLoad = clock()
             suspend fun load(t: Timeframe, n: Int): List<CoreCandle> {
                 val cacheKey = "$symbol-${t.label}"
                 val lastFailed = failedFetches[cacheKey] ?: 0L
-                if (now - lastFailed < 15_000L) {
+                if (now - lastFailed < 2_000L) {
                     return emptyList()
                 }
 
@@ -102,23 +135,20 @@ class SignalGenerationUseCaseImpl(
             val chk = CandleValidator.validate(main, tf, 60, tolerateWeekendGaps = cls != AssetClass.CRYPTO)
             if (!chk.ok) return unavailable(symbol, timeframe, "DATA ERROR: " + chk.problems.firstOrNull(), "GAP_DETECTED")
             
-            val htfTargets = when (tf) {
-                Timeframe.M1 -> listOf(Timeframe.M5, Timeframe.M15, Timeframe.H1)
-                Timeframe.M5 -> listOf(Timeframe.M15, Timeframe.H1, Timeframe.H4)
-                Timeframe.M15 -> listOf(Timeframe.H1, Timeframe.H4, Timeframe.D1)
-                Timeframe.M30 -> listOf(Timeframe.H1, Timeframe.H4, Timeframe.D1)
-                Timeframe.H1 -> listOf(Timeframe.H4, Timeframe.D1, Timeframe.W1)
-                Timeframe.H4 -> listOf(Timeframe.D1, Timeframe.W1)
-                Timeframe.D1 -> listOf(Timeframe.W1)
-                Timeframe.W1 -> listOf(Timeframe.D1, Timeframe.H4)
+            val displayTargets = selectedMtfTimeframes
+                .mapNotNull { Timeframe.parse(it) }
+                .distinct()
+                .filter { it != tf }
+            // Defensive fallback; UI ensures an MTF context other than the primary timeframe is selected.
+            val effectiveMtfTargets = displayTargets.ifEmpty {
+                listOf(Timeframe.H4, Timeframe.D1, Timeframe.W1).filter { it != tf }.take(1)
             }
-            val displayTargets = listOf(Timeframe.M5, Timeframe.M15, Timeframe.M30, Timeframe.H1, Timeframe.H4, Timeframe.D1, Timeframe.W1)
-            val targets = (htfTargets + cfg.mtf.required + displayTargets).distinct().filter { it != tf }
+            val targets = effectiveMtfTargets.distinct()
             val htf = coroutineScope {
                 targets.map { t ->
                     async {
                         try {
-                            withTimeout(8_000) {
+                            withTimeout(19_000) {
                                 t to load(t, if (t == Timeframe.W1) 80 else 150)
                             }
                         } catch (e: TimeoutCancellationException) {
@@ -134,7 +164,7 @@ class SignalGenerationUseCaseImpl(
             val spec = SpecRegistry.get(symbol)
             val prevComputations = SignalEngine.structureComputations.get()
             val startCompute = clock()
-            val dynamicCfg = cfg.copy(mtf = MtfConfig(required = htfTargets))
+            val dynamicCfg = cfg.copy(mtf = MtfConfig(required = effectiveMtfTargets))
             val report = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { 
                 SignalEngine.analyse(AnalysisInput(symbol, tf, chk.cleanClosed, htf, quote, spec, now, strategyId = strategyId), dynamicCfg)
             }
@@ -165,7 +195,7 @@ class SignalGenerationUseCaseImpl(
             if (spread != null && atr != null && spread > 0.15 * atr) { blockers += "SPREAD TOO WIDE: %.5f > 15%% of ATR".format(spread); state = SignalState.BLOCKED }
             if (newsVerdict.status == NewsStatus.HIGH_IMPACT_WINDOW) { blockers += newsVerdict.detail; state = SignalState.BLOCKED }
             if (newsVerdict.status == NewsStatus.UNKNOWN) blockers += newsVerdict.detail
-            if (health != MarketDataHealth.LIVE) blockers += "Data is DELAYED (polled feed): analysis only, not executable"
+            if (health != MarketDataHealth.LIVE) blockers += "Market data is " + health.name + " (historical/delayed): analysis only, not executable"
             if (spread == null) blockers += "Spread unknown (source provides no bid/ask): not executable"
             val tradeable = state in setOf(SignalState.STRONG_BUY, SignalState.BUY, SignalState.STRONG_SELL, SignalState.SELL)
             val final = report.copy(state = state, blockers = blockers)

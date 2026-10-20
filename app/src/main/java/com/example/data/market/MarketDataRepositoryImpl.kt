@@ -415,6 +415,40 @@ class MarketDataRepositoryImpl(
         }
     }
 
+    private fun aggregateDailyCandlesToWeekly(source: List<Candle>): List<Candle> {
+        val dayMs = 86_400_000L
+        val weekMs = dayMs * 7L
+        // 1970-01-05 was a Monday. Group real daily bars by Monday 00:00 UTC.
+        val mondayOffsetMs = dayMs * 4L
+        return source.filter { it.timestamp > 0L }
+            .sortedBy { it.timestamp }
+            .groupBy { Math.floorDiv(it.timestamp - mondayOffsetMs, weekMs) }
+            .toSortedMap()
+            .map { (weekIndex, bars) ->
+                val ordered = bars.sortedBy { it.timestamp }
+                val first = ordered.first()
+                val last = ordered.last()
+                Candle(
+                    timestamp = weekIndex * weekMs + mondayOffsetMs,
+                    open = first.open,
+                    high = ordered.maxOf { it.high },
+                    low = ordered.minOf { it.low },
+                    close = last.close,
+                    volume = ordered.sumOf { it.volume },
+                    complete = ordered.all { it.complete }
+                )
+            }
+    }
+
+    private fun currentCandleOpenFor(nowMs: Long, timeframe: com.destinedfx.core.marketdata.Timeframe): Long {
+        if (timeframe == com.destinedfx.core.marketdata.Timeframe.W1) {
+            val weekMs = 7L * 86_400_000L
+            val mondayOffsetMs = 4L * 86_400_000L
+            return Math.floorDiv(nowMs - mondayOffsetMs, weekMs) * weekMs + mondayOffsetMs
+        }
+        return (nowMs / timeframe.millis) * timeframe.millis
+    }
+
     override suspend fun getCandles(symbol: String, timeframe: String, count: Int): List<Candle> = withContext(Dispatchers.IO) {
         val key = "$symbol-$timeframe"
         val now = clock()
@@ -425,7 +459,7 @@ class MarketDataRepositoryImpl(
         val tf = com.destinedfx.core.marketdata.Timeframe.parse(timeframe)
         val isExpired = if (cached != null && tf != null && cached.candles.isNotEmpty()) {
             val lastCandleTime = cached.candles.last().timestamp
-            val currentCandleOpen = (now / tf.millis) * tf.millis
+            val currentCandleOpen = currentCandleOpenFor(now, tf)
             (now - cached.timestamp) >= ttl || currentCandleOpen > lastCandleTime
         } else true
 
@@ -442,11 +476,18 @@ class MarketDataRepositoryImpl(
 
         // 1. Deriv WebSocket priority: when DERIV is selected, default, or for Deriv symbols
         val derivSymbol = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(symbol)
-        if ((preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank() || derivSymbol?.startsWith("R_") == true || derivSymbol?.startsWith("1HZ") == true || derivSymbol?.startsWith("BOOM") == true || derivSymbol?.startsWith("CRASH") == true) && derivMarketDataGateway != null && derivSymbol != null) {
-            val granSec = (tf?.minutes ?: 60) * 60
-            candles = withTimeoutOrNull(18_000L) { derivMarketDataGateway.fetchCandles(derivSymbol, granSec, count) } ?: emptyList()
+        if ((preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank() || derivSymbol?.startsWith("R_") == true || derivSymbol?.startsWith("1HZ") == true || derivSymbol?.startsWith("BOOM") == true || derivSymbol?.startsWith("CRASH") == true) &&
+            derivMarketDataGateway != null && derivSymbol != null &&
+            com.destinedfx.core.instrument.AssetClassifier.of(symbol) != com.destinedfx.core.marketdata.AssetClass.CRYPTO) {
+            val weekly = tf == com.destinedfx.core.marketdata.Timeframe.W1
+            val granSec = if (weekly) 86_400 else (tf?.minutes ?: 60) * 60
+            val requestCount = if (weekly) (count * 7 + 14).coerceAtMost(1_800) else count
+            val fetched = withTimeoutOrNull(18_000L) {
+                derivMarketDataGateway.fetchCandles(derivSymbol, granSec, requestCount)
+            } ?: emptyList()
+            candles = if (weekly) aggregateDailyCandlesToWeekly(fetched).takeLast(count) else fetched
             if (candles.isNotEmpty()) {
-                sourceUsed = "Deriv WebSocket"
+                sourceUsed = if (weekly) "Deriv daily candles aggregated into UTC weeks" else "Deriv WebSocket"
                 isDelayed = false
             }
         }
@@ -472,7 +513,7 @@ class MarketDataRepositoryImpl(
         if (candles.isNotEmpty()) {
             val finalSource = if (isDelayed) "$sourceUsed | DELAYED - analysis only" else sourceUsed
             
-            val currentCandleOpen = tf?.let { (now / it.millis) * it.millis } ?: candles.last().timestamp
+            val currentCandleOpen = tf?.let { currentCandleOpenFor(now, it) } ?: candles.last().timestamp
             candles = candles.map { c ->
                 if (c.timestamp == currentCandleOpen) c.copy(complete = false)
                 else if (c.timestamp < currentCandleOpen) c.copy(complete = true)
