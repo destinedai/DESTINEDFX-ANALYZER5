@@ -171,14 +171,80 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
             }
         }
     ) { innerPadding ->
-        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-            when (selectedScreen) {
-                DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
-                DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel)
-                DestinedFXScreen.Calendar -> CalendarTab(viewModel)
-                DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
-                DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
-                DestinedFXScreen.Settings -> SettingsTab(viewModel)
+        var isApiKeyBannerDismissed by remember { mutableStateOf(false) }
+        val hasBrokerKeys = remember(viewModel) { viewModel.hasLiveBrokerKeys() }
+
+        Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            if (!hasBrokerKeys && !isApiKeyBannerDismissed && selectedScreen != DestinedFXScreen.Settings) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF131B2A)),
+                    shape = RoundedCornerShape(0.dp),
+                    border = BorderStroke(1.dp, CyanPrimary.copy(alpha = 0.35f)),
+                    modifier = Modifier.fillMaxWidth().testTag("inline_api_key_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Key Status",
+                                tint = CyanPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Analysis & simulation mode active.",
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                maxLines = 1
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = { viewModel.selectScreen(DestinedFXScreen.Settings) },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("add_key_in_settings_button")
+                            ) {
+                                Text(
+                                    text = "Add key in Settings",
+                                    fontSize = 11.sp,
+                                    color = CyanPrimary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            IconButton(
+                                onClick = { isApiKeyBannerDismissed = true },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss notice",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                when (selectedScreen) {
+                    DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
+                    DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel)
+                    DestinedFXScreen.Calendar -> CalendarTab(viewModel)
+                    DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
+                    DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
+                    DestinedFXScreen.Settings -> SettingsTab(viewModel)
+                }
             }
         }
 

@@ -241,7 +241,7 @@ open class DestinedFXViewModel(
     val selectedTicker = MutableStateFlow("EUR/USD")
     val selectedTimeframe = MutableStateFlow("M15")
     val riskPercent = MutableStateFlow(1.0)
-    val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
+    val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Strategies)
 
     fun selectScreen(screen: DestinedFXScreen) {
         selectedScreen.value = screen
@@ -818,6 +818,7 @@ open class DestinedFXViewModel(
                 Log.w("DestinedFXViewModel", "signOut failed: ${e.message}")
             }
             currentUser.value = null
+            selectedScreen.value = DestinedFXScreen.Strategies
             closeAuthScreen()
             speakText("Session closed. Reverted to Guest mode.")
         }
@@ -1488,6 +1489,15 @@ open class DestinedFXViewModel(
     fun getDerivAppId(): String = if (isPreview) "1089" else app.secretsManager.getDerivAppId()
     fun getTelegramBotToken(): String = if (isPreview) "" else app.secretsManager.getTelegramToken()
     fun getTelegramChatId(): String = if (isPreview) "" else app.secretsManager.getTelegramChatId()
+    fun hasLiveBrokerKeys(): Boolean = if (isPreview) false else {
+        try {
+            app.secretsManager.getDerivApiToken().isNotBlank() ||
+            app.secretsManager.getMetaApiToken().isNotBlank() ||
+            app.secretsManager.getOandaApiKey().isNotBlank()
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     fun exportPdfDossier(info: DynamicAnalysisInfo) {
         exportChartData(getApplication(), info.symbol, "SMC Order Blocks")

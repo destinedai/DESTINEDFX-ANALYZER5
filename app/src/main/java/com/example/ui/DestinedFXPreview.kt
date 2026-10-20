@@ -33,6 +33,7 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
     vm.selectTimeframe("M15")
     vm.setRiskPercent(1.0)
     vm.configuredEquity.value = 10.0
+    vm.selectScreen(DestinedFXScreen.Analyzer)
 
     // High-fidelity sample candles for EUR/USD M15
     val now = System.currentTimeMillis()
