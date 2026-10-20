@@ -1618,6 +1618,118 @@ open class DestinedFXViewModel(
         }
     }
 
+    /**
+     * Link an MT5 trading account through the existing MetaAPI bridge. The broker's trading
+     * password provisions the cloud terminal; the MetaAPI access token authorizes the bridge.
+     */
+    fun connectToMT5Credentials(
+        login: String,
+        password: String,
+        server: String,
+        investorPassword: String,
+        metaApiToken: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        if (isPreview) {
+            onResult(false, "Broker login is disabled in preview mode.")
+            return
+        }
+        val cleanLogin = login.trim()
+        val cleanServer = server.trim()
+        val cleanBridgeToken = metaApiToken.trim()
+        if (cleanLogin.isBlank() || !cleanLogin.all { it.isDigit() }) {
+            onResult(false, "Enter the numeric MT5 Login provided by your broker.")
+            return
+        }
+        if (password.isBlank() || cleanServer.isBlank()) {
+            onResult(false, "MT5 master Password and Server are required.")
+            return
+        }
+        if (cleanBridgeToken.isBlank()) {
+            onResult(false, "Enter the MetaAPI bridge access token to connect MT5 in this app.")
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                app.secretsManager.saveMetaApiToken(cleanBridgeToken)
+                val existingAccountId = app.secretsManager.getMT5AccountNumber()
+                val sameLinkedAccount = existingAccountId.isNotBlank() &&
+                    app.secretsManager.getMT5Login() == cleanLogin &&
+                    app.secretsManager.getMT5BrokerServer().equals(cleanServer, ignoreCase = true)
+
+                if (existingAccountId.isNotBlank() && !sameLinkedAccount) {
+                    onResult(
+                        false,
+                        "A MetaAPI account ID is already configured but is not linked to these saved MT5 credentials. Clear the old Account ID in Settings > Broker Connection before linking a different account; this prevents duplicate cloud accounts."
+                    )
+                    return@launch
+                }
+                if (sameLinkedAccount && app.secretsManager.getMT5Password() != password) {
+                    onResult(
+                        false,
+                        "This MT5 login/server already has a linked MetaAPI account, but the saved password differs. Update the password for that account in MetaAPI first; no duplicate account was created."
+                    )
+                    return@launch
+                }
+
+                // Save fields before provisioning so a pending MetaAPI request can be retried
+                // after app restart without re-entering the broker credentials.
+                app.secretsManager.saveMT5Login(cleanLogin)
+                app.secretsManager.saveMT5Password(password)
+                app.secretsManager.saveMT5BrokerServer(cleanServer)
+                app.secretsManager.saveMT5InvestorPassword(investorPassword)
+
+                val accountId = if (sameLinkedAccount) {
+                    existingAccountId
+                } else {
+                    val provision = app.mt5GatewayRepository.provisionAccount(cleanLogin, password, cleanServer)
+                    if (provision.isFailure) {
+                        onResult(false, provision.exceptionOrNull()?.message ?: "MT5 account provisioning failed.")
+                        return@launch
+                    }
+                    provision.getOrThrow()
+                }
+
+                // Persist the ID after provisioning. Retries reuse the same cloud account
+                // instead of creating duplicates or potentially incurring duplicate costs.
+                app.secretsManager.saveMT5AccountNumber(accountId)
+                app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
+                var connectedMetrics: com.example.domain.repository.AccountMetrics? = null
+                var lastConnectError: String? = null
+                for (attempt in 0 until 8) {
+                    val result = app.mt5GatewayAdapter.connect()
+                    if (result.isSuccess) {
+                        connectedMetrics = app.mt5GatewayAdapter.accountMetrics.value
+                        if (connectedMetrics != null) break
+                    }
+                    lastConnectError = result.exceptionOrNull()?.message
+                    if (attempt < 7) delay(2_500L)
+                }
+
+                val metrics = connectedMetrics
+                if (metrics != null) {
+                    prefetchWatchlistSpecs()
+                    onResult(
+                        true,
+                        "MT5 connected • Login $cleanLogin • Balance " +
+                            String.format(java.util.Locale.US, "%.2f", metrics.balance) + " " + metrics.currency
+                    )
+                } else {
+                    onResult(
+                        false,
+                        "MT5 credentials were saved and the MetaAPI account was linked, but the cloud terminal is not ready yet. Wait 30–60 seconds and retry. " +
+                            (lastConnectError?.let { "Latest connection response: $it" } ?: "")
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onResult(false, "MT5 connection failed: " + (e.message ?: e.javaClass.simpleName))
+            }
+        }
+    }
+
     fun selectBroker(type: com.example.data.broker.BrokerType) {
         if (!isPreview) app.brokerManager.selectBroker(type)
     }
@@ -1634,6 +1746,10 @@ open class DestinedFXViewModel(
     fun getDerivAppId(): String = if (isPreview) "1089" else app.secretsManager.getDerivAppId()
     fun getMetaApiToken(): String = if (isPreview) "" else app.secretsManager.getMetaApiToken()
     fun getMetaApiAccountId(): String = if (isPreview) "" else app.secretsManager.getMT5AccountNumber()
+    fun getMT5Login(): String = if (isPreview) "" else app.secretsManager.getMT5Login()
+    fun getMT5Password(): String = if (isPreview) "" else app.secretsManager.getMT5Password()
+    fun getMT5BrokerServer(): String = if (isPreview) "" else app.secretsManager.getMT5BrokerServer()
+    fun getMT5InvestorPassword(): String = if (isPreview) "" else app.secretsManager.getMT5InvestorPassword()
     fun getTelegramBotToken(): String = if (isPreview) "" else app.secretsManager.getTelegramToken()
     fun getTelegramChatId(): String = if (isPreview) "" else app.secretsManager.getTelegramChatId()
     fun hasLiveBrokerKeys(): Boolean = if (isPreview) false else {

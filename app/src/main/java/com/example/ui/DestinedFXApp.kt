@@ -946,8 +946,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         modifier = Modifier.fillMaxWidth().testTag("settings_metaapi_account_id"),
                         singleLine = true
                     )
-                    Text("The integrated adapter uses a MetaAPI token and account ID, not a raw terminal password.",
-                        fontSize = 9.sp, color = TextMuted)
+                    Text("Recommended: use the Bot tab to enter MT5 Login, trading Password, Server and optional investor password. The MetaAPI bridge token is still required. Leave Account ID blank before linking a new MT5 account, or keep it for an already-linked account.",
+                        fontSize = 9.sp, color = TextMuted, lineHeight = 14.sp)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {

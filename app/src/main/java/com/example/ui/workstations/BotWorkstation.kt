@@ -54,8 +54,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var brokerConnectionMessage by remember { mutableStateOf<String?>(null) }
     var derivTokenInput by remember { mutableStateOf(viewModel.getDerivApiToken()) }
     var derivAppIdInput by remember { mutableStateOf(viewModel.getDerivAppId()) }
+    var mt5LoginInput by remember { mutableStateOf(viewModel.getMT5Login()) }
+    var mt5PasswordInput by remember { mutableStateOf(viewModel.getMT5Password()) }
+    var mt5ServerInput by remember { mutableStateOf(viewModel.getMT5BrokerServer()) }
+    var mt5InvestorPasswordInput by remember { mutableStateOf(viewModel.getMT5InvestorPassword()) }
     var metaApiTokenInput by remember { mutableStateOf(viewModel.getMetaApiToken()) }
-    var metaApiAccountIdInput by remember { mutableStateOf(viewModel.getMetaApiAccountId()) }
     var isConnectingBroker by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
@@ -351,32 +354,60 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Text(if (isConnectingBroker) "CONNECTING..." else "LOGIN TO DERIV", fontWeight = FontWeight.Black)
                         }
                     } else {
-                        Text("MT5 ACCOUNT LOGIN VIA METAAPI", fontSize = 9.sp, color = ElectricCyan,
+                        Text("MT5 BROKER LOGIN", fontSize = 9.sp, color = ElectricCyan,
                             fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                        Text("This integrated adapter requires a MetaAPI access token and account ID, not a raw terminal password.",
+                        Text("Use your MT5 trading/master password. The investor password is optional and read-only; it cannot authorize orders. The MetaAPI bridge token is required by this app's MT5 cloud connector.",
                             fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
                         OutlinedTextField(
+                            value = mt5LoginInput, onValueChange = { mt5LoginInput = it.filter { char -> char.isDigit() } },
+                            label = { Text("Login / Account number") },
+                            placeholder = { Text("Numeric MT5 account login") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_login")
+                        )
+                        OutlinedTextField(
+                            value = mt5PasswordInput, onValueChange = { mt5PasswordInput = it },
+                            label = { Text("Password (trading/master)") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_password")
+                        )
+                        OutlinedTextField(
+                            value = mt5ServerInput, onValueChange = { mt5ServerInput = it },
+                            label = { Text("Server") },
+                            placeholder = { Text("Exact server name from your broker") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_server")
+                        )
+                        OutlinedTextField(
+                            value = mt5InvestorPasswordInput, onValueChange = { mt5InvestorPasswordInput = it },
+                            label = { Text("Investor Password (optional, read-only)") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_investor_password")
+                        )
+                        OutlinedTextField(
                             value = metaApiTokenInput, onValueChange = { metaApiTokenInput = it },
-                            label = { Text("MetaAPI access token") },
+                            label = { Text("MetaAPI bridge access token") },
+                            placeholder = { Text("Required for the MT5 cloud connection") },
                             visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_metaapi_token")
-                        )
-                        OutlinedTextField(
-                            value = metaApiAccountIdInput, onValueChange = { metaApiAccountIdInput = it },
-                            label = { Text("MetaAPI account ID") },
-                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_metaapi_account_id")
                         )
                         Button(
                             onClick = {
                                 isConnectingBroker = true
                                 brokerConnectionMessage = null
-                                viewModel.connectToMetaApiAccount(metaApiTokenInput, metaApiAccountIdInput) { success, message ->
+                                viewModel.connectToMT5Credentials(
+                                    mt5LoginInput, mt5PasswordInput, mt5ServerInput,
+                                    mt5InvestorPasswordInput, metaApiTokenInput
+                                ) { success, message ->
                                     isConnectingBroker = false
-                                    brokerConnectionMessage = message ?: if (success) "MT5/MetaAPI account connected." else "MT5 login failed."
+                                    brokerConnectionMessage = message ?: if (success) "MT5 account connected." else "MT5 login failed."
                                 }
                             },
-                            enabled = !isConnectingBroker && metaApiTokenInput.isNotBlank() && metaApiAccountIdInput.isNotBlank(),
+                            enabled = !isConnectingBroker && mt5LoginInput.isNotBlank() &&
+                                mt5PasswordInput.isNotBlank() && mt5ServerInput.isNotBlank() &&
+                                metaApiTokenInput.isNotBlank(),
                             modifier = Modifier.fillMaxWidth().testTag("bot_connect_mt5"),
                             colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen, contentColor = DarkBackground)
                         ) {

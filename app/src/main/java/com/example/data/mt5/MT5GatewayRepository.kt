@@ -6,7 +6,9 @@ import com.example.domain.repository.AccountMetrics
 import com.example.domain.repository.MT5Repository
 import com.example.security.SecretsManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.util.UUID
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -22,7 +24,7 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
 
     companion object {
         private const val TAG  = "MT5GW"
-        private const val BASE = "https://mt-client-api-v1.london.agiliumtrade.ai"
+        private const val PROVISIONING_BASE = "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai"
         private val JSON_MT    = "application/json; charset=utf-8".toMediaType()
     }
 
@@ -30,11 +32,176 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
     private var connected = false
 
-    private fun req(path: String) = Request.Builder()
-        .url("$BASE/users/current/accounts/${s.getMT5AccountNumber()}$path")
-        .addHeader("auth-token", s.getMetaApiToken())
+    private fun req(path: String): Request.Builder {
+        val requestedRegion = s.getMetaApiRegion()
+        val region = requestedRegion.takeIf { it.matches(Regex("[A-Za-z0-9-]+")) } ?: "london"
+        return Request.Builder()
+            .url("https://mt-client-api-v1.$region.agiliumtrade.ai/users/current/accounts/" + s.getMT5AccountNumber() + path)
+            .addHeader("auth-token", s.getMetaApiToken())
+    }
 
     private var cachedBrokerSymbols: List<String> = emptyList()
+
+    private fun retryDelayMillis(retryAfter: String?): Long {
+        if (retryAfter.isNullOrBlank()) return 15_000L
+        retryAfter.toLongOrNull()?.let { return (it * 1000L).coerceIn(1_000L, 60_000L) }
+        val dateMillis = try {
+            java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", java.util.Locale.US)
+                .parse(retryAfter)?.time
+        } catch (_: Exception) {
+            null
+        }
+        return if (dateMillis != null) {
+            (dateMillis - System.currentTimeMillis()).coerceIn(1_000L, 60_000L)
+        } else 15_000L
+    }
+
+    /**
+     * Provision an MT5 cloud terminal from real broker credentials. MetaAPI's token is the bridge
+     * credential; it is separate from the MT5 trading password.
+     */
+    suspend fun provisionAccount(login: String, password: String, server: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            val cleanLogin = login.trim()
+            val cleanServer = server.trim()
+            val bridgeToken = s.getMetaApiToken()
+
+            if (bridgeToken.isBlank()) {
+                return@withContext Result.failure(Exception("MetaAPI bridge access token is required for MT5 cloud execution."))
+            }
+            if (cleanLogin.isBlank() || !cleanLogin.all { it.isDigit() }) {
+                return@withContext Result.failure(Exception("MT5 Login must contain the numeric account login supplied by your broker."))
+            }
+            if (password.isBlank() || cleanServer.isBlank()) {
+                return@withContext Result.failure(Exception("MT5 master Password and Server are required."))
+            }
+
+            // Keep the same transaction ID across HTTP 202 responses and user retries. MetaAPI
+            // uses this header to poll the original request instead of provisioning duplicates.
+            val transactionId = s.getMetaApiPendingTransactionId().ifBlank {
+                UUID.randomUUID().toString().replace("-", "").also {
+                    s.saveMetaApiPendingTransactionId(it)
+                }
+            }
+            val body = JSONObject().apply {
+                put("name", "DestinedFX MT5 " + cleanLogin.takeLast(4))
+                put("login", cleanLogin)
+                put("password", password)
+                put("server", cleanServer)
+                put("platform", "mt5")
+                put("magic", 734021)
+                put("type", "cloud-g2")
+            }.toString().toRequestBody(JSON_MT)
+            val request = Request.Builder()
+                .url("$PROVISIONING_BASE/users/current/accounts")
+                .header("auth-token", bridgeToken)
+                .header("transaction-id", transactionId)
+                .header("Accept", "application/json")
+                .post(body)
+                .build()
+
+            var accountId = ""
+            var accountState = ""
+            var pendingMessage = "MetaAPI is still detecting the broker server settings. Wait, then retry."
+            for (attempt in 0 until 2) {
+                val responseData = try {
+                    client.newCall(request).execute().use { response ->
+                        Triple(response.code, response.header("Retry-After"), response.body?.string().orEmpty())
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return@withContext Result.failure(
+                        Exception("MetaAPI account provisioning network error: " + (e.message ?: e.javaClass.simpleName))
+                    )
+                }
+
+                val (statusCode, retryAfter, rawBody) = responseData
+                if (statusCode == 202) {
+                    pendingMessage = try {
+                        JSONObject(rawBody).optString("message").ifBlank {
+                            "MetaAPI is still preparing the MT5 account. Wait, then retry."
+                        }
+                    } catch (_: Exception) {
+                        "MetaAPI is still preparing the MT5 account. Wait, then retry."
+                    }
+                    if (attempt == 0) {
+                        delay(retryDelayMillis(retryAfter))
+                        continue
+                    }
+                    break
+                }
+
+                if (statusCode !in 200..299) {
+                    s.saveMetaApiPendingTransactionId("")
+                    val apiMessage = try {
+                        JSONObject(rawBody).optString("message").ifBlank {
+                            JSONObject(rawBody).optString("details")
+                        }
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    val reason = apiMessage.takeIf { it.isNotBlank() } ?: "check the login, master password, exact broker server name and MetaAPI token permissions"
+                    return@withContext Result.failure(Exception("MetaAPI could not provision this MT5 account (HTTP $statusCode): $reason"))
+                }
+
+                val accountJson = try {
+                    JSONObject(rawBody)
+                } catch (_: Exception) {
+                    s.saveMetaApiPendingTransactionId("")
+                    return@withContext Result.failure(Exception("MetaAPI returned an invalid account-provisioning response."))
+                }
+                accountId = accountJson.optString("id").ifBlank { accountJson.optString("_id") }
+                accountState = accountJson.optString("state")
+                val responseRegion = accountJson.optString("region").trim()
+                if (responseRegion.matches(Regex("[A-Za-z0-9-]+"))) {
+                    s.saveMetaApiRegion(responseRegion)
+                }
+                if (accountId.isBlank()) {
+                    s.saveMetaApiPendingTransactionId("")
+                    return@withContext Result.failure(Exception("MetaAPI accepted the request but returned no account ID."))
+                }
+                break
+            }
+
+            if (accountId.isBlank()) {
+                return@withContext Result.failure(Exception(pendingMessage))
+            }
+
+            if (!accountState.equals("DEPLOYED", ignoreCase = true)) {
+                val deployRequest = Request.Builder()
+                    .url("$PROVISIONING_BASE/users/current/accounts/" + accountId + "/deploy")
+                    .header("auth-token", bridgeToken)
+                    .header("Accept", "application/json")
+                    .post(ByteArray(0).toRequestBody(JSON_MT))
+                    .build()
+                val deployResult = try {
+                    client.newCall(deployRequest).execute().use { response ->
+                        Triple(response.code, response.body?.string().orEmpty(), response.isSuccessful)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return@withContext Result.failure(
+                        Exception("MT5 account was created, but MetaAPI could not start the cloud terminal: " + (e.message ?: e.javaClass.simpleName))
+                    )
+                }
+                if (!deployResult.third) {
+                    val apiMessage = try {
+                        JSONObject(deployResult.second).optString("message").ifBlank {
+                            JSONObject(deployResult.second).optString("details")
+                        }
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    val reason = apiMessage.takeIf { it.isNotBlank() } ?: "MetaAPI could not deploy the cloud terminal."
+                    return@withContext Result.failure(Exception("MT5 account " + accountId + " was created but deployment failed (HTTP " + deployResult.first + "): " + reason))
+                }
+            }
+
+            s.saveMetaApiPendingTransactionId("")
+            Result.success(accountId)
+        }
 
     suspend fun resolveSymbol(symbol: String): String? = withContext(Dispatchers.IO) {
         if (cachedBrokerSymbols.isEmpty()) {

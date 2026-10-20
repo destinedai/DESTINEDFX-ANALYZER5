@@ -18,9 +18,13 @@ class SecretsManager(private val ctx: Context) {
         private const val WA_KEY  = "whatsapp_api_key"
         private const val WA_PHN  = "whatsapp_phone"
         private const val MT5_PW  = "mt5_broker_password"
+        private const val MT5_LOGIN = "mt5_broker_login"
+        private const val MT5_INVESTOR_PW = "mt5_investor_password"
         private const val MT5_AC  = "mt5_account_number"
         private const val MT5_SV  = "mt5_broker_server"
         private const val META    = "metaapi_token"
+        private const val METAAPI_REGION = "metaapi_region"
+        private const val META_PENDING_TX = "metaapi_pending_transaction_id"
         private const val FMP_KEY = "fmp_api_key"
         private const val SB_URL  = "supabase_url"
         private const val SB_KEY  = "supabase_anon_key"
@@ -67,9 +71,13 @@ class SecretsManager(private val ctx: Context) {
     fun saveWhatsAppApiKey(v: String)   = prefs.edit().putString(WA_KEY,  v).apply()
     fun saveWhatsAppPhone(v: String)    = prefs.edit().putString(WA_PHN,  v).apply()
     fun saveMT5Password(v: String)      = prefs.edit().putString(MT5_PW,  v).apply()
+    fun saveMT5Login(v: String)         = prefs.edit().putString(MT5_LOGIN, v).apply()
+    fun saveMT5InvestorPassword(v: String) = prefs.edit().putString(MT5_INVESTOR_PW, v).apply()
     fun saveMT5AccountNumber(v: String) = prefs.edit().putString(MT5_AC,  v).apply()
     fun saveMT5BrokerServer(v: String)  = prefs.edit().putString(MT5_SV,  v).apply()
     fun saveMetaApiToken(v: String)     = prefs.edit().putString(META,    v).apply()
+    fun saveMetaApiRegion(v: String)    = prefs.edit().putString(METAAPI_REGION, v).apply()
+    fun saveMetaApiPendingTransactionId(v: String) = prefs.edit().putString(META_PENDING_TX, v).apply()
     fun saveFmpKey(v: String)           = prefs.edit().putString(FMP_KEY, v).apply()
     fun saveSupabaseUrl(v: String)      = prefs.edit().putString(SB_URL,  v).apply()
     fun saveSupabaseAnonKey(v: String)  = prefs.edit().putString(SB_KEY,  v).apply()
@@ -96,9 +104,13 @@ class SecretsManager(private val ctx: Context) {
     fun getWhatsAppApiKey(): String    = prefs.getString(WA_KEY,  "") ?: ""
     fun getWhatsAppPhone(): String     = prefs.getString(WA_PHN,  "") ?: ""
     fun getMT5Password(): String       = prefs.getString(MT5_PW,  "") ?: ""
+    fun getMT5Login(): String          = prefs.getString(MT5_LOGIN, "") ?: ""
+    fun getMT5InvestorPassword(): String = prefs.getString(MT5_INVESTOR_PW, "") ?: ""
     fun getMT5AccountNumber(): String  = prefs.getString(MT5_AC,  "") ?: ""
     fun getMT5BrokerServer(): String   = prefs.getString(MT5_SV,  "") ?: ""
     fun getMetaApiToken(): String      = prefs.getString(META,    "") ?: ""
+    fun getMetaApiRegion(): String     = prefs.getString(METAAPI_REGION, "london")?.takeIf { it.isNotBlank() } ?: "london"
+    fun getMetaApiPendingTransactionId(): String = prefs.getString(META_PENDING_TX, "") ?: ""
     fun getFmpKey(): String            = prefs.getString(FMP_KEY, "") ?: ""
     fun getSupabaseUrl(): String {
         val saved = prefs.getString(SB_URL, "") ?: ""
