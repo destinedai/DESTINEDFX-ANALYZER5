@@ -1,10 +1,8 @@
 package com.example.ui.theme
 
 import android.app.Activity
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
@@ -12,42 +10,24 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+// Force premium dark trading terminal color scheme
 private val DestinedFxDarkColorScheme =
   darkColorScheme(
     primary = CyanPrimary,
-    secondary = PurpleSecondary,
-    tertiary = GreenTertiary,
+    secondary = BlueAccent,
+    tertiary = ProfitGreen,
     background = DarkBackground,
     surface = DarkSurface,
     surfaceVariant = DarkSurfaceVariant,
-    onPrimary = Color.Black,
-    onSecondary = Color.Black,
-    onTertiary = Color.Black,
+    onPrimary = Color(0xFF070B14),
+    onSecondary = Color(0xFF070B14),
+    onTertiary = Color(0xFF070B14),
     onBackground = TextPrimary,
     onSurface = TextPrimary,
     onSurfaceVariant = TextSecondary,
-    error = RedAccent,
-    outline = BorderColor,
-    outlineVariant = BorderColor
-  )
-
-private val DestinedFxLightColorScheme =
-  lightColorScheme(
-    primary = Color(0xFF007A8C),      // Vibrant, professional Teal
-    secondary = Color(0xFF6200EA),    // Deep Royal Purple
-    tertiary = Color(0xFF00A254),     // Safe Green
-    background = Color(0xFFF1F5F9),   // Slate light background
-    surface = Color(0xFFFFFFFF),      // Clean white surfaces
-    surfaceVariant = Color(0xFFE2E8F0), // Border/Card background accents
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF0F172A),  // Deep slate for dark text
-    onSurface = Color(0xFF0F172A),
-    onSurfaceVariant = Color(0xFF475569),
-    error = Color(0xFFD50000),         // Clean error red
-    outline = Color(0xFFCBD5E1),
-    outlineVariant = Color(0xFFCBD5E1)
+    error = LossRed,
+    outline = TabBorder,
+    outlineVariant = TabBorder
   )
 
 private tailrec fun android.content.Context.findActivity(): Activity? = when (this) {
@@ -58,17 +38,12 @@ private tailrec fun android.content.Context.findActivity(): Activity? = when (th
 
 @Composable
 fun DestinedFXTheme(
-  themeMode: String = "System",
+  themeMode: String = "Dark",
   content: @Composable () -> Unit,
 ) {
-  val isDark = when (themeMode) {
-    "Light" -> false
-    "Dark" -> true
-    else -> isSystemInDarkTheme()
-  }
+  // Always enforce dark theme for authentic trading terminal atmosphere
+  val colorScheme = DestinedFxDarkColorScheme
 
-  val colorScheme = if (isDark) DestinedFxDarkColorScheme else DestinedFxLightColorScheme
-  
   val view = LocalView.current
   if (!view.isInEditMode) {
     SideEffect {
@@ -76,10 +51,10 @@ fun DestinedFXTheme(
         val activity = view.context.findActivity()
         val window = activity?.window
         if (window != null) {
-          window.statusBarColor = Color.Transparent.toArgb()
-          window.navigationBarColor = Color.Transparent.toArgb()
-          WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !isDark
-          WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !isDark
+          window.statusBarColor = Color(0xFF070B14).toArgb()
+          window.navigationBarColor = Color(0xFF070B14).toArgb()
+          WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+          WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = false
         }
       } catch (ignored: Exception) {}
     }

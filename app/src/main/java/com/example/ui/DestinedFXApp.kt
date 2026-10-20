@@ -42,6 +42,7 @@ import com.example.ui.export.AnalysisExportSelectionDialog
 import com.example.ui.workstations.CalendarTab
 import com.example.ui.workstations.BotWorkstationTab
 import com.example.ui.DestinedFXScreen
+import com.example.ui.components.*
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import java.util.Locale
@@ -97,77 +98,185 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
 
     var showExportDialog by remember { mutableStateOf(false) }
     val dynamicAnalysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
+    val tickers by viewModel.tickers.collectAsStateWithLifecycle()
+    val currentTicker = tickers[activeSymbol]
+    val currentPrice = currentTicker?.price ?: 0.0
+    val priceChange = currentTicker?.changePercent
+    val brokerConnected by viewModel.brokerConnected.collectAsStateWithLifecycle()
+    val isFeedLive = brokerConnected || currentPrice > 0.0
 
     Scaffold(
         containerColor = DarkBackground,
         topBar = {
-            TopAppBar(
-                title = {
+            Surface(
+                color = DarkSurface,
+                border = BorderStroke(1.dp, CardBorder.copy(alpha = 0.6f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Row 1: Logo & App Name (left) | PulsingDot + Status + Actions (right)
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .border(1.dp, CyanPrimary, CircleShape),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.destinedfx_icon_1791382332866),
-                                contentDescription = "DestinedFX Emblem",
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .border(1.dp, ElectricCyan.copy(alpha = 0.8f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.destinedfx_icon_1791382332866),
+                                    contentDescription = "DestinedFX Emblem",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "DESTINEDFX",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = TextPrimary,
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = "INSTITUTIONAL TERMINAL",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = ElectricCyan,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
                         }
-                        Column {
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            // Live status indicator pill
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(DarkSurfaceVariant)
+                                    .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    PulsingDot(connected = isFeedLive)
+                                    Text(
+                                        text = if (isFeedLive) "LIVE" else "OFFLINE",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isFeedLive) ProfitGreen else WarningAmber
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { showExportDialog = true },
+                                modifier = Modifier.size(32.dp).testTag("export_button")
+                            ) {
+                                Icon(
+                                    Icons.Default.Share,
+                                    contentDescription = "Export Analysis",
+                                    tint = ElectricCyan,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { /* App lock disabled by default to keep terminal open */ },
+                                modifier = Modifier.size(32.dp).testTag("lock_button")
+                            ) {
+                                Icon(
+                                    Icons.Default.Lock,
+                                    contentDescription = "Lock App",
+                                    tint = TextSecondary.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Row 2: Selected symbol and price under it
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             Text(
-                                text = "DESTINEDFX ANALYZER (v1.0.1-rev1)",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Black,
+                                text = activeSymbol,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace,
-                                color = TextPrimary
+                                color = ElectricCyan
                             )
                             Text(
-                                text = "Institutional Trading & SMC Engine",
-                                fontSize = 9.sp,
+                                text = "• $selectedTimeframe",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
                                 color = TextSecondary
                             )
                         }
+                        PriceText(
+                            value = currentPrice,
+                            change = priceChange,
+                            symbol = activeSymbol
+                        )
                     }
-                },
-                actions = {
-                    IconButton(onClick = { showExportDialog = true }, modifier = Modifier.testTag("export_button")) {
-                        Icon(Icons.Default.Share, contentDescription = "Export Analysis", tint = CyanPrimary)
-                    }
-                    IconButton(onClick = { /* App lock disabled by default to keep terminal open */ }, modifier = Modifier.testTag("lock_button")) {
-                        Icon(Icons.Default.Lock, contentDescription = "Lock App", tint = OrangeAccent.copy(alpha = 0.5f))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkSurface)
-            )
+                }
+            }
         },
         bottomBar = {
             NavigationBar(
                 containerColor = DarkSurface,
-                tonalElevation = 8.dp
+                tonalElevation = 0.dp,
+                modifier = Modifier.border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.6f)), shape = RoundedCornerShape(0.dp))
             ) {
-            DestinedFXScreen.allScreens.forEach { screen ->
-                NavigationBarItem(
-                    selected = selectedScreen == screen,
-                    onClick = { viewModel.selectScreen(screen) },
-                    icon = { Icon(screen.icon, contentDescription = null) },
-                    label = { Text(screen.title, fontSize = 9.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = CyanPrimary,
-                        selectedTextColor = CyanPrimary,
-                        unselectedIconColor = TextSecondary,
-                        unselectedTextColor = TextSecondary,
-                        indicatorColor = CyanPrimary.copy(alpha = 0.15f)
-                    ),
-                    modifier = Modifier.testTag(screen.tag)
-                )
-            }
+                DestinedFXScreen.allScreens.forEach { screen ->
+                    NavigationBarItem(
+                        selected = selectedScreen == screen,
+                        onClick = { viewModel.selectScreen(screen) },
+                        icon = { Icon(screen.icon, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                        label = {
+                            Text(
+                                text = screen.title,
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (selectedScreen == screen) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = ElectricCyan,
+                            selectedTextColor = ElectricCyan,
+                            unselectedIconColor = TextSecondary,
+                            unselectedTextColor = TextSecondary,
+                            indicatorColor = ElectricCyan.copy(alpha = 0.12f)
+                        ),
+                        modifier = Modifier.testTag(screen.tag)
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -293,19 +402,24 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Symbol & Timeframe Selectors
-        // Symbol & Timeframe Selectors
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(symbols) { sym ->
                     FilterChip(
                         selected = activeSymbol == sym,
                         onClick = { viewModel.selectTicker(sym) },
-                        label = { Text(sym, fontWeight = FontWeight.Bold, fontSize = 11.sp) },
+                        label = { Text(sym, fontWeight = FontWeight.Bold, fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CyanPrimary,
+                            selectedContainerColor = ElectricCyan,
                             selectedLabelColor = DarkBackground,
                             containerColor = DarkSurface,
                             labelColor = TextPrimary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            borderColor = if (activeSymbol == sym) ElectricCyan else CardBorder,
+                            selectedBorderColor = ElectricCyan,
+                            enabled = true,
+                            selected = activeSymbol == sym
                         ),
                         modifier = Modifier.testTag("symbol_chip_$sym")
                     )
@@ -316,12 +430,18 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
                     FilterChip(
                         selected = selectedTimeframe == tf,
                         onClick = { viewModel.selectTimeframe(tf) },
-                        label = { Text(tf, fontSize = 11.sp) },
+                        label = { Text(tf, fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CyanPrimary,
+                            selectedContainerColor = ElectricCyan,
                             selectedLabelColor = DarkBackground,
                             containerColor = DarkSurface,
                             labelColor = TextSecondary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            borderColor = if (selectedTimeframe == tf) ElectricCyan else CardBorder,
+                            selectedBorderColor = ElectricCyan,
+                            enabled = true,
+                            selected = selectedTimeframe == tf
                         ),
                         modifier = Modifier.testTag("tf_chip_$tf")
                     )
@@ -329,240 +449,204 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
             }
             Button(
                 onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe) },
-                colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
                 modifier = Modifier.fillMaxWidth().height(40.dp).testTag("analyze_button"),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("Analyze Market", color = DarkBackground, fontWeight = FontWeight.Bold)
+                Text("Analyze Market", color = DarkBackground, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
             }
         }
 
-        // Data Source & Chart Banner
+        // Live Market Stat Chips
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = "CHART: TradingView Widget ($selectedTimeframe)",
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
-                color = CyanPrimary
+            val highVal = ticker?.high?.let { formatPrice(it, activeSymbol) } ?: "--"
+            val lowVal = ticker?.low?.let { formatPrice(it, activeSymbol) } ?: "--"
+            val biasVal = ticker?.bias ?: analysis?.direction ?: "NEUTRAL"
+            val confVal = "${analysis?.confidencePct ?: (ticker?.confidence ?: 85)}%"
+
+            StatChip(label = "24h High", value = highVal, modifier = Modifier.weight(1f), color = ProfitGreen)
+            StatChip(label = "24h Low", value = lowVal, modifier = Modifier.weight(1f), color = LossRed)
+            StatChip(
+                label = "SMC Bias",
+                value = biasVal,
+                modifier = Modifier.weight(1f),
+                color = if (biasVal.contains("BULL")) ProfitGreen else if (biasVal.contains("BEAR")) LossRed else WarningAmber
             )
-            Text(
-                text = "FEED: ${analysis?.dataSource?.ifBlank { "Deriv WebSocket" } ?: "Deriv WebSocket"}",
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
-                color = TextSecondary
-            )
+            StatChip(label = "Confidence", value = confVal, modifier = Modifier.weight(1f), color = ElectricCyan)
         }
 
-        // TradingView Chart WebView Container
-        Card(
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, TabBorder),
-            modifier = Modifier.fillMaxWidth().height(320.dp)
+        // TradingView Chart Container with GlassCard
+        GlassCard(
+            title = "CHART: TradingView Widget ($selectedTimeframe)",
+            action = {
+                Text(
+                    text = "FEED: ${analysis?.dataSource?.ifBlank { "Deriv WebSocket" } ?: "Deriv WebSocket"}",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    color = TextSecondary
+                )
+            }
         ) {
-            TradingChartContainer(
-                activeSymbol = activeSymbol,
-                selectedTimeframe = selectedTimeframe,
-                currentSpotPrice = spotPrice,
-                activeStrategy = selectedStrategyId,
-                dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
-                candles = viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
-                isRealTradingViewEnabled = isRealTradingViewEnabled,
-                onToggleChartType = { isRealTradingViewEnabled = it },
-                modifier = Modifier.fillMaxSize()
-            )
+            Box(modifier = Modifier.fillMaxWidth().height(320.dp)) {
+                TradingChartContainer(
+                    activeSymbol = activeSymbol,
+                    selectedTimeframe = selectedTimeframe,
+                    currentSpotPrice = spotPrice,
+                    activeStrategy = selectedStrategyId,
+                    dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
+                    candles = viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
+                    isRealTradingViewEnabled = isRealTradingViewEnabled,
+                    onToggleChartType = { isRealTradingViewEnabled = it },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
 
         // Native Trade Plan Card
-        // Native Trade Plan Card
-        Card(
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, TabBorder),
-            modifier = Modifier.fillMaxWidth()
+        GlassCard(
+            title = "INSTITUTIONAL TRADE PLAN",
+            action = {
+                SignalBadge(state = analysis?.signalState ?: "WAIT")
+            }
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            if (isScanning) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = ElectricCyan)
+            }
+
+            val a = analysis
+            val isTradeValid = a != null && a.entry != 0.0 && (a.signalState == "STRONG_BUY" || a.signalState == "BUY" || a.signalState == "WEAK_BUY" || a.signalState == "STRONG_SELL" || a.signalState == "SELL" || a.signalState == "WEAK_SELL")
+            if (isTradeValid && a != null) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Assessment, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(20.dp))
-                        Text("INSTITUTIONAL TRADE PLAN", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(
-                                when (analysis?.signalState) {
-                                    "STRONG_BUY", "BUY", "WEAK_BUY" -> Color(0xFF00FF99).copy(alpha = 0.2f)
-                                    "STRONG_SELL", "SELL", "WEAK_SELL" -> Color(0xFFFF4560).copy(alpha = 0.2f)
-                                    "INVALIDATED" -> Color(0xFFFF4560).copy(alpha = 0.3f)
-                                    else -> Color(0xFFFFB300).copy(alpha = 0.2f)
-                                }
-                            )
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = analysis?.signalState ?: "WAIT",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when (analysis?.signalState) {
-                                "STRONG_BUY", "BUY", "WEAK_BUY" -> Color(0xFF00FF99)
-                                "STRONG_SELL", "SELL", "WEAK_SELL" -> Color(0xFFFF4560)
-                                "INVALIDATED" -> Color(0xFFFF4560)
-                                else -> Color(0xFFFFB300)
-                            }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        StatChip(
+                            label = "Direction",
+                            value = a.direction,
+                            color = if (a.direction == "BUY") ProfitGreen else LossRed
+                        )
+                        StatChip(
+                            label = "Reward / Risk",
+                            value = a.tp1RR,
+                            color = ProfitGreen
                         )
                     }
-                }
-
-                if (isScanning) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = CyanPrimary)
-                }
-
-                val a = analysis
-                val isTradeValid = a != null && a.entry != 0.0 && (a.signalState == "STRONG_BUY" || a.signalState == "BUY" || a.signalState == "WEAK_BUY" || a.signalState == "STRONG_SELL" || a.signalState == "SELL" || a.signalState == "WEAK_SELL")
-                if (isTradeValid && a != null) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Text("Direction:", fontSize = 10.sp, color = TextSecondary)
-                            Text(a.direction, fontWeight = FontWeight.Bold, color = if (a.direction == "BUY") Color(0xFF00FF99) else Color(0xFFFF4560))
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("Reward-to-Risk:", fontSize = 10.sp, color = TextSecondary)
-                            Text(a.tp1RR, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = Color(0xFF00FF99))
-                        }
-                    }
-
-                    HorizontalDivider(color = TabBorder)
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Text("Entry Price:", fontSize = 10.sp, color = TextSecondary)
-                            Text(formatPrice(a.entry, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Stop Loss (SL):", fontSize = 10.sp, color = TextSecondary)
-                            Text(formatPrice(a.stopLoss, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = Color(0xFFFF5252))
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("Take Profit (TP):", fontSize = 10.sp, color = TextSecondary)
-                            Text(formatPrice(a.tp1, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = Color(0xFF00FF99))
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text("SL Reason: ${a.slReason}", fontSize = 10.sp, color = TextSecondary)
-                    Text("TP Reason: ${a.tpReason}", fontSize = 10.sp, color = TextSecondary)
-                    Text("Strategy: ${a.strategyVersion}", fontSize = 10.sp, color = TextSecondary)
-                } else {
-                    Text(
-                        text = analysis?.blockReasons?.firstOrNull() ?: analysis?.smcAnalysis ?: "WAIT: Gathering confluence & structural validation...",
-                        fontSize = 11.sp,
-                        color = Color(0xFFFFB300)
+                    StatChip(
+                        label = "Yield (Pips)",
+                        value = "${a.tp1YieldPips} pips",
+                        color = ElectricCyan
                     )
                 }
+
+                HorizontalDivider(color = CardBorder.copy(alpha = 0.5f))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column {
+                        Text("Entry Price", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                        Text(formatPrice(a.entry, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary, fontSize = 13.sp)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Stop Loss (SL)", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                        Text(formatPrice(a.stopLoss, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = LossRed, fontSize = 13.sp)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Take Profit (TP)", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                        Text(formatPrice(a.tp1, activeSymbol), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = ProfitGreen, fontSize = 13.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+                Text("SL Reason: ${a.slReason}", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                Text("TP Reason: ${a.tpReason}", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                Text("Strategy: ${a.strategyVersion}", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+            } else {
+                Text(
+                    text = analysis?.blockReasons?.firstOrNull() ?: analysis?.smcAnalysis ?: "WAIT: Gathering confluence & structural validation...",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = WarningAmber
+                )
             }
         }
 
         // Multi-Timeframe Alignment & Confluence Card
-        Card(
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, TabBorder),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Layers, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(18.dp))
-                        Text("MULTI-TIMEFRAME CONFLUENCE", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-                    }
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(
-                                when {
-                                    analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> Color(0xFF00FF99).copy(alpha = 0.2f)
-                                    analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> Color(0xFFFF4560).copy(alpha = 0.2f)
-                                    analysis?.mtfStatus?.contains("PARTIAL") == true -> CyanPrimary.copy(alpha = 0.2f)
-                                    analysis?.mtfStatus?.contains("CONFLICT") == true -> Color(0xFFFF4560).copy(alpha = 0.2f)
-                                    else -> Color(0xFFFFB300).copy(alpha = 0.2f)
-                                }
-                            )
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = analysis?.mtfSummary?.ifBlank { "EVALUATING" } ?: "EVALUATING",
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when {
-                                analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> Color(0xFF00FF99)
-                                analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> Color(0xFFFF4560)
-                                analysis?.mtfStatus?.contains("PARTIAL") == true -> CyanPrimary
-                                analysis?.mtfStatus?.contains("CONFLICT") == true -> Color(0xFFFF4560)
-                                else -> Color(0xFFFFB300)
+        GlassCard(
+            title = "MULTI-TIMEFRAME CONFLUENCE",
+            action = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            when {
+                                analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> ProfitGreen.copy(alpha = 0.2f)
+                                analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> LossRed.copy(alpha = 0.2f)
+                                analysis?.mtfStatus?.contains("PARTIAL") == true -> ElectricCyan.copy(alpha = 0.2f)
+                                analysis?.mtfStatus?.contains("CONFLICT") == true -> LossRed.copy(alpha = 0.2f)
+                                else -> WarningAmber.copy(alpha = 0.2f)
                             }
                         )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
-                    val mtfDisplayTfs = listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")
-                    mtfDisplayTfs.forEach { tfKey ->
-                        val isSelected = selectedTimeframe == tfKey
-                        val bias = analysis?.getTfBias(tfKey) ?: "N/A"
-                        val (badgeColor, badgeBg) = when (bias) {
-                            "BULLISH" -> Color(0xFF00FF99) to Color(0xFF00FF99).copy(alpha = 0.15f)
-                            "BEARISH" -> Color(0xFFFF4560) to Color(0xFFFF4560).copy(alpha = 0.15f)
-                            "NEUTRAL" -> TextSecondary to Color(0xFF222834)
-                            "MISSING" -> Color(0xFFFFB300) to Color(0xFFFFB300).copy(alpha = 0.15f)
-                            else -> TextSecondary.copy(alpha = 0.5f) to Color.Transparent
+                    Text(
+                        text = analysis?.mtfSummary?.ifBlank { "EVALUATING" } ?: "EVALUATING",
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = when {
+                            analysis?.mtfStatus?.contains("FULL_BULLISH") == true -> ProfitGreen
+                            analysis?.mtfStatus?.contains("FULL_BEARISH") == true -> LossRed
+                            analysis?.mtfStatus?.contains("PARTIAL") == true -> ElectricCyan
+                            analysis?.mtfStatus?.contains("CONFLICT") == true -> LossRed
+                            else -> WarningAmber
                         }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    )
+                }
+            }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val mtfDisplayTfs = listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")
+                mtfDisplayTfs.forEach { tfKey ->
+                    val isSelected = selectedTimeframe == tfKey
+                    val bias = analysis?.getTfBias(tfKey) ?: "N/A"
+                    val (badgeColor, badgeBg) = when (bias) {
+                        "BULLISH" -> ProfitGreen to ProfitGreen.copy(alpha = 0.15f)
+                        "BEARISH" -> LossRed to LossRed.copy(alpha = 0.15f)
+                        "NEUTRAL" -> TextSecondary to DarkSurfaceVariant
+                        "MISSING" -> WarningAmber to WarningAmber.copy(alpha = 0.15f)
+                        else -> TextSecondary.copy(alpha = 0.5f) to Color.Transparent
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = tfKey,
+                            fontSize = 9.sp,
+                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (isSelected) ElectricCyan else TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(badgeBg)
+                                .border(if (isSelected) 1.dp else 0.dp, if (isSelected) ElectricCyan else Color.Transparent, RoundedCornerShape(3.dp))
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
                             Text(
-                                text = tfKey,
-                                fontSize = 9.sp,
-                                fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
-                                color = if (isSelected) CyanPrimary else TextSecondary
+                                text = bias.take(4),
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                color = badgeColor
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(badgeBg)
-                                    .border(if (isSelected) 1.dp else 0.dp, if (isSelected) CyanPrimary else Color.Transparent, RoundedCornerShape(3.dp))
-                                    .padding(horizontal = 5.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = bias.take(4),
-                                    fontSize = 8.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = badgeColor
-                                )
-                            }
                         }
                     }
                 }
@@ -572,53 +656,48 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel) {
         // Detailed Market Structure Elements
         val smc = analysis
         if (smc != null && (smc.orderBlocks.isNotEmpty() || smc.keyLevels.isNotEmpty())) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, TabBorder),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("SMC STRUCTURAL INVENTORY", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CyanPrimary)
-                    
-                    if (smc.orderBlocks.isNotEmpty()) {
-                        Text("Active Order Blocks", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                        smc.orderBlocks.take(4).forEach { ob ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Box(
-                                        modifier = Modifier.size(8.dp).clip(CircleShape)
-                                            .background(if (ob.type == "BULLISH") Color(0xFF00FF99) else Color(0xFFFF4560))
-                                    )
-                                    Text(ob.type, fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
-                                }
-                                Text(ob.zone, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = TextSecondary)
-                                Text(ob.strength, fontSize = 9.sp, color = CyanPrimary, fontWeight = FontWeight.Black)
+            GlassCard(title = "SMC STRUCTURAL INVENTORY") {
+                if (smc.orderBlocks.isNotEmpty()) {
+                    Text("Active Order Blocks", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary)
+                    smc.orderBlocks.take(4).forEach { ob ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Box(
+                                    modifier = Modifier.size(8.dp).clip(CircleShape)
+                                        .background(if (ob.type == "BULLISH") ProfitGreen else LossRed)
+                                )
+                                Text(ob.type, fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                             }
+                            Text(ob.zone, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = TextSecondary)
+                            Text(ob.strength, fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                         }
                     }
+                }
 
-                    if (smc.keyLevels.isNotEmpty()) {
-                        HorizontalDivider(color = TabBorder.copy(alpha = 0.5f))
-                        Text("Verified Key Levels", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            smc.keyLevels.take(6).forEach { level ->
-                                SuggestionChip(
-                                    onClick = { },
-                                    label = { Text(level, fontSize = 9.sp) },
-                                    colors = SuggestionChipDefaults.suggestionChipColors(
-                                        labelColor = TextSecondary,
-                                        containerColor = DarkSurfaceVariant
-                                    )
+                if (smc.keyLevels.isNotEmpty()) {
+                    HorizontalDivider(color = CardBorder.copy(alpha = 0.5f))
+                    Text("Verified Key Levels", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextPrimary)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        smc.keyLevels.take(6).forEach { level ->
+                            SuggestionChip(
+                                onClick = { },
+                                label = { Text(level, fontSize = 9.sp, fontFamily = FontFamily.Monospace) },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    labelColor = TextSecondary,
+                                    containerColor = DarkSurfaceVariant
+                                ),
+                                border = SuggestionChipDefaults.suggestionChipBorder(
+                                    borderColor = CardBorder,
+                                    enabled = true
                                 )
-                            }
+                            )
                         }
                     }
                 }
