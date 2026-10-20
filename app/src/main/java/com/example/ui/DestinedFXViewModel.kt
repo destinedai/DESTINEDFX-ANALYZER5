@@ -878,7 +878,7 @@ open class DestinedFXViewModel(
         viewModelScope.launch {
             val resolvedPrice = resolveRealPrice(symbol, timeframe)
             if (resolvedPrice == null) {
-                val err = "Live price unavailable for $symbol. Check OANDA keys or connection."
+                val err = "No supported market quote is available for $symbol. Check instrument support and market-data connectivity; no signal was generated."
                 actionAlertMessage.value = err
                 return@launch
             }
@@ -1301,7 +1301,7 @@ open class DestinedFXViewModel(
 
             val resolvedPrice = resolveRealPrice(symbol, timeframe)
             if (resolvedPrice == null) {
-                val err = "Live price unavailable for $symbol. Check OANDA keys or connection."
+                val err = "No supported market quote is available for $symbol. Check instrument support and market-data connectivity; no signal was generated."
                 aiAnalysisResult.value = err
                 actionAlertMessage.value = err
                 isAnalyzing.value = false
