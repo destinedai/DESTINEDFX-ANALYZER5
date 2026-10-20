@@ -445,7 +445,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         Column(horizontalAlignment = Alignment.End) {
                             Text("Balance:", fontSize = 10.sp, color = TextSecondary)
                             Text(
-                                text = "$${String.format("%.2f", accountMetrics?.balance ?: 0.0)}",
+                                text = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null) {
+                                    "${String.format(java.util.Locale.US, "%.2f", accountMetrics!!.balance)} ${accountMetrics!!.currency}"
+                                } else "—",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
                                 color = TextPrimary

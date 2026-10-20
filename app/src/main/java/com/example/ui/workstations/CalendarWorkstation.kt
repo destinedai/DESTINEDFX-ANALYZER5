@@ -40,8 +40,6 @@ import java.util.*
 @Composable
 fun CalendarTab(viewModel: DestinedFXViewModel) {
     val isPreviewMode = LocalInspectionMode.current || viewModel.isPreview
-    val sampleEvents = emptyList<NewsEvent>()
-
     var events by remember { mutableStateOf<List<NewsEvent>>(emptyList()) }
     var isLoading by remember { mutableStateOf(!isPreviewMode) }
     var newsStatus by remember { mutableStateOf(NewsStatus.UNKNOWN) }
