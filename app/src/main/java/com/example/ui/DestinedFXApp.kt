@@ -48,6 +48,7 @@ import kotlinx.coroutines.delay
 import java.util.Locale
 import androidx.compose.ui.res.painterResource
 import com.example.R
+import com.example.BuildConfig
 import com.example.MyApplication
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -640,6 +641,7 @@ private val selectedIdVersion = "smc-confluence-1.0.0"
 fun StrategiesTab(viewModel: DestinedFXViewModel) {
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     val strategies = StrategyRegistry.allStrategies
+    val selectedStrategy = strategies.firstOrNull { it.id == selectedStrategyId }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -662,6 +664,40 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
                     modifier = Modifier.weight(1f),
                     color = ProfitGreen
                 )
+            }
+        }
+
+        item {
+            val selected = selectedStrategy
+            if (selected != null) {
+                GlassCard(
+                    title = "ACTIVE RULESET",
+                    action = {
+                        Text(
+                            text = if (selected.isImplemented) "READY" else "UNAVAILABLE",
+                            color = if (selected.isImplemented) ProfitGreen else WarningAmber,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                ) {
+                    Text(selected.name, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                    Text(selected.description, fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
+                    Text(
+                        text = selected.rulesSummary,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = ElectricCyan
+                    )
+                    Button(
+                        onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
+                    ) {
+                        Text("Analyze with this strategy", color = DarkBackground, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
 
@@ -1089,6 +1125,25 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                 }
             }
         }
+        item {
+            GlassCard(title = "APPLICATION BUILD") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("DestinedFX Analyzer", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                        Text("Native Android • Kotlin / Compose", fontSize = 10.sp, color = TextSecondary)
+                    }
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = ElectricCyan)
+                        Text("BUILD #${BuildConfig.VERSION_CODE}", fontSize = 9.sp, fontFamily = FontFamily.Monospace, color = TextSecondary)
+                    }
+                }
+            }
+        }
+
     }
 }
 
