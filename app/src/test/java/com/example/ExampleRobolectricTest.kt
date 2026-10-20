@@ -108,7 +108,7 @@ class ExampleRobolectricTest {
     assertNull(vm.currentUser.value)
     assertFalse(vm.showAuthScreen.value)
     assertFalse(vm.isAppLocked.value)
-    assertEquals(com.example.ui.DestinedFXScreen.Strategies, vm.selectedScreen.value)
+    assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
   }
 
   @Test
