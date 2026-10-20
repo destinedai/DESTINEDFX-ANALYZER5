@@ -828,7 +828,7 @@ open class DestinedFXViewModel(
                 Log.w("DestinedFXViewModel", "signOut failed: ${e.message}")
             }
             currentUser.value = null
-            selectedScreen.value = DestinedFXScreen.Strategies
+            selectedScreen.value = DestinedFXScreen.Analyzer
             closeAuthScreen()
             speakText("Session closed. Reverted to Guest mode.")
         }
