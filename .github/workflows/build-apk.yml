@@ -34,10 +34,13 @@ jobs:
       - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
 
-      - name: Build debug APK
+      - name: Run unit tests
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
