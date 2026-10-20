@@ -702,6 +702,8 @@ open class DestinedFXViewModel(
     val currentTradeSignal = MutableStateFlow<com.example.domain.model.TradeSignal?>(null)
     val currentDynamicAnalysis = MutableStateFlow<DynamicAnalysisInfo?>(null)
     val isSignalScanning = MutableStateFlow(false)
+    private var signalScanGeneration: Long = 0L
+    private var signalScanJob: Job? = null
 
     fun runSignalScan(
         symbol: String,
@@ -709,27 +711,41 @@ open class DestinedFXViewModel(
         mtfTimeframes: Set<String> = selectedMtfTimeframes.value
     ) {
         if (isPreview) return
-        viewModelScope.launch {
+        signalScanJob?.cancel()
+        val generation = ++signalScanGeneration
+        currentDynamicAnalysis.value = null
+        currentTradeSignal.value = null
+        signalScanJob = viewModelScope.launch {
             isSignalScanning.value = true
             isAnalyzing.value = true
             try {
                 val sig = app.signalGenerationUseCase.generateSignal(
                     symbol, timeframe, selectedStrategyId.value, mtfTimeframes
                 )
+                // A superseded scan must never overwrite the currently selected symbol/timeframe.
+                if (generation != signalScanGeneration) return@launch
                 currentTradeSignal.value = sig
-                val mapped = mapTradeSignalToUiModel(sig)
-                currentDynamicAnalysis.value = mapped
+                currentDynamicAnalysis.value = mapTradeSignalToUiModel(sig)
                 smcBiasConfidence.value = sig.confidenceScore
                 structureAlignment.value = if (sig.mtfSummary.isNotBlank()) sig.mtfSummary else "${sig.direction} [${sig.signalState}]"
                 modelSentimentScores.value = sig.strategyScores.mapValues { (_, score) ->
                     Pair(if (score >= 50) "BULLISH" else "BEARISH", score)
                 }
                 triggerAlgorithmicAnalysisScan(symbol)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.e("DestinedFXViewModel", "Signal scan failed: ${e.message}")
+                if (generation == signalScanGeneration) {
+                    marketDataStatus.value = "UNAVAILABLE • Analysis failed: " + (e.message ?: e.javaClass.simpleName)
+                    currentDynamicAnalysis.value = null
+                    currentTradeSignal.value = null
+                }
+                Log.e("DestinedFXViewModel", "Signal scan failed: " + (e.message ?: e.javaClass.simpleName))
             } finally {
-                isSignalScanning.value = false
-                isAnalyzing.value = false
+                if (generation == signalScanGeneration) {
+                    isSignalScanning.value = false
+                    isAnalyzing.value = false
+                }
             }
         }
     }

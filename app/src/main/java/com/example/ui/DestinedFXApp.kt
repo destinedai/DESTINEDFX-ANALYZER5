@@ -579,7 +579,14 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         items(listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")) { tf ->
                             val enabled = tf in selectedMtfTimeframes
-                            val bias = if (enabled) analysis?.getTfBias(tf) ?: "N/A" else "OFF"
+                            val bias = if (!enabled) "OFF" else if (tf == selectedTimeframe) {
+                                when (analysis?.direction?.uppercase()) {
+                                    "BUY", "LONG", "BULLISH", "STRONG_BUY", "WEAK_BUY" -> "BULLISH"
+                                    "SELL", "SHORT", "BEARISH", "STRONG_SELL", "WEAK_SELL" -> "BEARISH"
+                                    "WAIT" -> "WAIT"
+                                    else -> "N/A"
+                                }
+                            } else analysis?.getTfBias(tf) ?: "N/A"
                             val tone = when (bias) {
                                 "BULLISH" -> ProfitGreen
                                 "BEARISH" -> LossRed
