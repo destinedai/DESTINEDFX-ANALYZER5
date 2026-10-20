@@ -246,3 +246,58 @@ fun PulsingDot(
         )
     }
 }
+
+/** Premium header shared by the actual production workspaces. */
+@Composable
+fun TerminalPageHeader(
+    eyebrow: String,
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = DarkSurfaceVariant,
+        border = BorderStroke(1.dp, CardBorder),
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = eyebrow.uppercase(Locale.US),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.1.sp,
+                    color = ElectricCyan
+                )
+                Text(
+                    text = title,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Black,
+                    color = TextPrimary,
+                    lineHeight = 24.sp
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 11.sp,
+                    color = TextSecondary,
+                    lineHeight = 15.sp
+                )
+            }
+            if (trailing != null) {
+                Box(contentAlignment = Alignment.Center) { trailing() }
+            }
+        }
+    }
+}
+
