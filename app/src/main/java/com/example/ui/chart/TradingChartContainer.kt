@@ -258,6 +258,8 @@ fun TradingViewWebView(
         return
     }
 
+    val widgetUrl = TradingViewMapper.buildWidgetUrl(symbol, timeframe)
+        ?: return
     val currentKey = "${mappedSymbol}_$mappedInterval"
     var isLoading by remember(currentKey) { mutableStateOf(true) }
     var isChartError by remember(currentKey) { mutableStateOf(false) }
@@ -288,7 +290,7 @@ fun TradingViewWebView(
             </style>
         </head>
         <body>
-            <iframe src="https://s.tradingview.com/widgetembed/?frameElementId=destinedfx_tv&symbol=${android.net.Uri.encode(mappedSymbol)}&interval=$mappedInterval&hidesidetoolbar=0&symboledit=0&saveimage=0&toolbarbg=0B0E14&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&locale=en&hideideas=1&calendar=0&hotlist=0&news=0" allowtransparency="true" scrolling="no" allowfullscreen="true"></iframe>
+            <iframe id="destinedfx-tv" src="$widgetUrl" onload="if(window.DestinedFXChartBridge){window.DestinedFXChartBridge.onWidgetLoaded();}" allowtransparency="true" scrolling="no" allowfullscreen="true"></iframe>
         </body>
         </html>
     """.trimIndent()
@@ -334,16 +336,20 @@ fun TradingViewWebView(
                         WebView(context).apply {
                             tag = "$currentKey-$retryTrigger"
                             setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                            val chartView = this
+                            addJavascriptInterface(object {
+                                @android.webkit.JavascriptInterface
+                                fun onWidgetLoaded() {
+                                    chartView.post {
+                                        if (!isChartError) isLoading = false
+                                    }
+                                }
+                            }, "DestinedFXChartBridge")
                             webViewClient = object : WebViewClient() {
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
-                                    if (!isChartError) {
-                                        view?.postDelayed({
-                                            if (!isChartError) {
-                                                isLoading = false
-                                            }
-                                        }, 1_500L)
-                                    }
+                                    // The wrapper HTML finishing does not mean the nested TradingView chart loaded.
+                                    // The iframe's onload callback below controls the loading indicator.
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                                     handler?.cancel() // STRICT SSL: Never bypass SSL certificate errors
@@ -885,5 +891,16 @@ internal object TradingViewMapper {
             "W1", "W", "1W" -> "W"
             else -> null
         }
+    }
+
+    /** Build the supported TradingView embed URL in one testable place. */
+    fun buildWidgetUrl(symbol: String, timeframe: String): String? {
+        val mappedSymbol = mapSymbol(symbol) ?: return null
+        val mappedInterval = mapInterval(timeframe) ?: return null
+        return "https://s.tradingview.com/widgetembed/?frameElementId=destinedfx_tv" +
+            "&symbol=${android.net.Uri.encode(mappedSymbol)}" +
+            "&interval=$mappedInterval&hidesidetoolbar=0&symboledit=0&saveimage=0" +
+            "&toolbarbg=0B0E14&theme=dark&style=1&timezone=Etc%2FUTC" +
+            "&withdateranges=1&locale=en&hideideas=1&calendar=0&hotlist=0&news=0"
     }
 }
