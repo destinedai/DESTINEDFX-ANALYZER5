@@ -107,107 +107,7 @@ fun TradingChartContainer(
             )
         }
 
-        // Floating Top HUD: Live Market Structure & Flow status
-        LiveStructureHud(
-            analysis = dynamicAnalysis,
-            symbol = activeSymbol,
-            currentSpotPrice = currentSpotPrice,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp)
-        )
-
-        // Floating Bottom-Right Controls (Canvas / TV switcher & Structure toggle)
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(8.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(Color(0xFF101520).copy(alpha = 0.92f))
-                .border(1.dp, TabBorder, RoundedCornerShape(6.dp))
-                .padding(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            if (isRealTradingViewEnabled) {
-                // Structure Overlay Toggle button
-                Box(
-                    modifier = Modifier
-                        .height(26.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(
-                            if (showStructureOverlayOnTv) CyanPrimary.copy(alpha = 0.18f)
-                            else Color.Transparent
-                        )
-                        .clickable { showStructureOverlayOnTv = !showStructureOverlayOnTv }
-                        .padding(horizontal = 6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (showStructureOverlayOnTv) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                            contentDescription = null,
-                            tint = if (showStructureOverlayOnTv) CyanPrimary else TextSecondary,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = if (showStructureOverlayOnTv) "SMC: ON" else "SMC: OFF",
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (showStructureOverlayOnTv) CyanPrimary else TextSecondary
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(2.dp))
-            }
-
-            Button(
-                onClick = { onToggleChartType(false) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (!isRealTradingViewEnabled) CyanPrimary else Color.Transparent
-                ),
-                shape = RoundedCornerShape(4.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                modifier = Modifier.height(26.dp)
-            ) {
-                Text(
-                    text = "CANVAS",
-                    fontSize = 8.5.sp,
-                    fontWeight = FontWeight.Black,
-                    color = if (!isRealTradingViewEnabled) Color.Black else TextSecondary
-                )
-            }
-
-            Button(
-                onClick = { onToggleChartType(true) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isRealTradingViewEnabled) CyanPrimary else Color.Transparent
-                ),
-                shape = RoundedCornerShape(4.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                modifier = Modifier.height(26.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .size(5.dp)
-                            .clip(RoundedCornerShape(2.5.dp))
-                            .background(Color(0xFF00FF99))
-                    )
-                    Text(
-                        text = "LIVE TV",
-                        fontSize = 8.5.sp,
-                        fontWeight = FontWeight.Black,
-                        color = if (isRealTradingViewEnabled) Color.Black else TextSecondary
-                    )
-                }
-            }
-        }
+        // Keep the TradingView chart unobstructed; analysis details are shown below it.
     }
 }
 
@@ -336,16 +236,6 @@ fun TradingViewWebView(
                 color = TextSecondary,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
-            if (onSwitchToCanvas != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onSwitchToCanvas,
-                    colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text("Switch to CANVAS Chart", color = DarkBackground, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                }
-            }
         }
         return
     }
@@ -379,7 +269,7 @@ fun TradingViewWebView(
         isLoading = true
         isChartError = false
         errorMessage = ""
-        kotlinx.coroutines.delay(15_000L)
+        kotlinx.coroutines.delay(25_000L)
         if (isLoading && !isChartError) {
             isChartError = true
             isLoading = false
@@ -398,7 +288,7 @@ fun TradingViewWebView(
             </style>
         </head>
         <body>
-            <iframe src="https://s.tradingview.com/widgetembed/?symbol=$mappedSymbol&interval=$mappedInterval&theme=dark&style=1&timezone=Etc/UTC&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=0&save_image=0&details=0&calendar=0&hotlist=0&news=0" allowtransparency="true" scrolling="no" allowfullscreen="true"></iframe>
+            <iframe src="https://s.tradingview.com/widgetembed/?frameElementId=destinedfx_tv&symbol=${android.net.Uri.encode(mappedSymbol)}&interval=$mappedInterval&hidesidetoolbar=0&symboledit=0&saveimage=0&toolbarbg=0B0E14&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&locale=en&hideideas=1&calendar=0&hotlist=0&news=0" allowtransparency="true" scrolling="no" allowfullscreen="true"></iframe>
         </body>
         </html>
     """.trimIndent()
@@ -452,7 +342,7 @@ fun TradingViewWebView(
                                             if (!isChartError) {
                                                 isLoading = false
                                             }
-                                        }, 800L)
+                                        }, 1_500L)
                                     }
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
@@ -633,7 +523,7 @@ fun TradingViewPreviewPlaceholder(
                         .background(Color(0xFF00FF99))
                 )
                 Text(
-                    text = "TradingView chart (live on device)",
+                    text = "TradingView appears in the running Android app",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = CyanPrimary,
