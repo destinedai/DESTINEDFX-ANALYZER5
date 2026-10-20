@@ -241,7 +241,7 @@ open class DestinedFXViewModel(
     val selectedTicker = MutableStateFlow("EUR/USD")
     val selectedTimeframe = MutableStateFlow("M15")
     val riskPercent = MutableStateFlow(1.0)
-    val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Strategies)
+    val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
 
     fun selectScreen(screen: DestinedFXScreen) {
         selectedScreen.value = screen
