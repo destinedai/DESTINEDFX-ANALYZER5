@@ -242,8 +242,10 @@ class DerivMarketDataGateway(
             }
             result
         } catch (e: CancellationException) {
-            if (e is TimeoutCancellationException) {
+            if (e is TimeoutCancellationException && currentCoroutineContext().isActive) {
+                // This is the inner candle-response timeout, not cancellation of the caller.
                 lastCandleErrors[symbol] = "Timed out waiting for Deriv historical candles"
+                return@withContext emptyList<Candle>()
             }
             throw e
         } catch (e: Exception) {
