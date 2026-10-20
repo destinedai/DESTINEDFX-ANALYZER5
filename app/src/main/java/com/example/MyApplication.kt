@@ -175,11 +175,7 @@ class MyApplication : Application() {
                 newsRepo = newsRepository,
                 tradeUseCase = tradeUseCase,
                 tradeRepo = tradeRepository,
-                brokerManager = brokerManager,
-                secretsManager = secrets,
-                isEmailVerified = { secrets.getSupabaseEmailConfirmedAt() != null },
-                isAuthenticated = { secrets.getSupabaseAccessToken().isNotBlank() },
-                validateSession = { authUseCase.validateCurrentSession().isSuccess }
+                brokerManager = brokerManager
             )
             
             initStatus.value = InitState.Ready

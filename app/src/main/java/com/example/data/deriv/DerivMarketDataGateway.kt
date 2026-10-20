@@ -163,11 +163,17 @@ class DerivMarketDataGateway(
 
         if (_connectionState.value != DerivConnectionState.CONNECTED) {
             connect()
-            // Wait up to 5 seconds for connection
-            withTimeoutOrNull(5000) {
+            // Wait for the actual websocket handshake before sending a history request.
+            val connected = withTimeoutOrNull(7_000L) {
                 while (_connectionState.value != DerivConnectionState.CONNECTED) {
                     delay(100)
                 }
+                true
+            } ?: false
+            if (!connected || _connectionState.value != DerivConnectionState.CONNECTED) {
+                pendingRequests.remove(reqId)
+                Log.w(TAG, "Candle request skipped: Deriv WebSocket did not connect for " + symbol)
+                return@withContext emptyList<Candle>()
             }
         }
 
@@ -188,6 +194,11 @@ class DerivMarketDataGateway(
 
         try {
             val response = withTimeout(10_000) { deferred.await() }
+            val apiError = response.optJSONObject("error")
+            if (apiError != null) {
+                Log.w(TAG, "Deriv candle request rejected for " + symbol + ": " + apiError.toString())
+                return@withContext emptyList<Candle>()
+            }
             val candlesArr = response.optJSONArray("candles") ?: return@withContext emptyList<Candle>()
             val result = mutableListOf<Candle>()
             for (i in 0 until candlesArr.length()) {

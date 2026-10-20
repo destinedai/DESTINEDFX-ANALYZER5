@@ -143,7 +143,7 @@ class MarketDataRepositoryImpl(
         }
         // Historical candles are one-sided historical data, not a live quote. Keep original
         // timestamp and do not invent bid, ask, spread, or live status.
-        val candle = withTimeoutOrNull(6_000L) { gateway.fetchCandles(derivSymbol, 60, 2).lastOrNull() }
+        val candle = withTimeoutOrNull(18_000L) { gateway.fetchCandles(derivSymbol, 60, 2).lastOrNull() }
             ?: return null
         if (!candle.close.isFinite() || candle.close <= 0.0 || candle.timestamp <= 0L) return null
         return MarketTicker(
@@ -163,7 +163,7 @@ class MarketDataRepositoryImpl(
             }
         }
         val preferred = selectedApiSource.value
-        if (preferred == "DERIV" || preferred.isBlank()) {
+        if (preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank()) {
             derivTickerForSymbol(sym, 15_000L)?.let { return it }
         }
         if (preferred == "OANDA" || secrets.getOandaApiKey().isNotBlank()) {
@@ -180,7 +180,7 @@ class MarketDataRepositoryImpl(
             }
         }
         val preferred = selectedApiSource.value
-        if (preferred == "DERIV" || preferred.isBlank()) {
+        if (preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank()) {
             derivTickerForSymbol(sym, 20_000L)?.let { return it }
         }
         if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
@@ -442,9 +442,9 @@ class MarketDataRepositoryImpl(
 
         // 1. Deriv WebSocket priority: when DERIV is selected, default, or for Deriv symbols
         val derivSymbol = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(symbol)
-        if ((preferred == "DERIV" || preferred.isBlank() || derivSymbol?.startsWith("R_") == true || derivSymbol?.startsWith("1HZ") == true || derivSymbol?.startsWith("BOOM") == true || derivSymbol?.startsWith("CRASH") == true) && derivMarketDataGateway != null && derivSymbol != null) {
+        if ((preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank() || derivSymbol?.startsWith("R_") == true || derivSymbol?.startsWith("1HZ") == true || derivSymbol?.startsWith("BOOM") == true || derivSymbol?.startsWith("CRASH") == true) && derivMarketDataGateway != null && derivSymbol != null) {
             val granSec = (tf?.minutes ?: 60) * 60
-            candles = withTimeoutOrNull(6000) { derivMarketDataGateway.fetchCandles(derivSymbol, granSec, count) } ?: emptyList()
+            candles = withTimeoutOrNull(18_000L) { derivMarketDataGateway.fetchCandles(derivSymbol, granSec, count) } ?: emptyList()
             if (candles.isNotEmpty()) {
                 sourceUsed = "Deriv WebSocket"
                 isDelayed = false

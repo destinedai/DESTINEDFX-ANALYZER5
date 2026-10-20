@@ -39,7 +39,6 @@ import kotlinx.coroutines.launch
 fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
     val botActive by viewModel.botActive.collectAsStateWithLifecycle()
-    val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val activeBrokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
     val activeBrokerGateway by viewModel.activeBrokerGateway.collectAsStateWithLifecycle()
     val brokerConnStatus by activeBrokerGateway.connectionStatus.collectAsStateWithLifecycle()
@@ -258,38 +257,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
-                }
-            }
-        }
-
-        // App account and broker account are separate authorizations. Keep the terminal usable in guest mode.
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("bot_account_authorization_card"),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111A28)),
-                border = BorderStroke(1.dp, if (currentUser == null) WarningAmber.copy(alpha = 0.4f) else ProfitGreen.copy(alpha = 0.4f)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("DESTINEDFX ACCOUNT AUTHORIZATION", fontSize = 10.sp, color = ElectricCyan,
-                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                    Text(
-                        if (currentUser == null)
-                            "You are using the guest terminal. Charts and analysis remain available, but automated bot activation requires a signed-in account with a verified email."
-                        else
-                            "Signed in as ${currentUser?.email ?: "DestinedFX user"}. Automated activation also checks server session validity and email verification.",
-                        fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp
-                    )
-                    if (currentUser == null) {
-                        Button(
-                            onClick = { viewModel.openLoginScreen() },
-                            modifier = Modifier.fillMaxWidth().testTag("bot_open_account_login"),
-                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("LOGIN / REGISTER TO ACTIVATE BOT", fontWeight = FontWeight.Black, fontSize = 10.sp)
-                        }
-                    }
                 }
             }
         }

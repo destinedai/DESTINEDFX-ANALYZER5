@@ -17,7 +17,6 @@ import com.example.domain.model.TradeSignal
 import com.example.domain.repository.MarketDataRepository
 import com.example.domain.repository.NewsRepository
 import com.example.domain.usecase.TradeUseCase
-import com.example.security.SecretsManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -53,27 +52,23 @@ data class BotStatusSummary(
 /**
  * Autonomous Bot Engine with strict institutional safety gates.
  * Refuses execution unless:
- * 1. Supabase session is authenticated
- * 2. User email is verified
- * 3. Active broker is authenticated & connected
- * 4. Market data stream is LIVE
- * 5. Selected strategy is implemented
- * 6. Signal is VALID (not WAIT / INVALIDATED)
- * 7. Economic calendar news gate is CLEAR
- * 8. Risk <= 1.0%
- * 9. Reward-to-Risk >= 2.0
- * 10. No duplicate position on the active instrument
+ * 1. The selected broker is authenticated and connected with the user's broker credentials
+ * 2. Market data is LIVE (stale/historical data is analysis-only)
+ * 3. The selected strategy is implemented
+ * 4. Signal is VALID (not WAIT / INVALIDATED)
+ * 5. Economic calendar news gate is CLEAR
+ * 6. Risk is no more than 1.0%
+ * 7. Reward-to-risk is at least 2.0R
+ * 8. No duplicate position exists on the active instrument
+ *
+ * DestinedFX/Supabase app login is optional and is deliberately not an execution gate.
  */
 class AutonomousBotEngine(
     private val marketDataRepo: MarketDataRepository,
     private val newsRepo: NewsRepository,
     private val tradeUseCase: TradeUseCase,
     private val tradeRepo: TradeRepository,
-    private val brokerManager: BrokerManager,
-    private val secretsManager: SecretsManager,
-    private val isEmailVerified: () -> Boolean,
-    private val isAuthenticated: () -> Boolean,
-    private val validateSession: (suspend () -> Boolean)? = null
+    private val brokerManager: BrokerManager
 ) {
     companion object {
         private const val TAG = "AutonomousBotEngine"
@@ -91,27 +86,7 @@ class AutonomousBotEngine(
         timeframe: String,
         riskPercent: Double
     ): Result<Boolean> = withContext(Dispatchers.IO) {
-        // Gate 1: Supabase authentication
-        if (!isAuthenticated()) {
-            val err = "AUTH_REQUIRED: Valid Supabase user session required to activate bot."
-            _status.value = _status.value.copy(state = BotLifecycleState.ERROR, lastError = err, lastAction = "Activation rejected: unauthenticated")
-            return@withContext Result.failure(Exception(err))
-        }
-
-        if (validateSession != null && !validateSession.invoke()) {
-            val err = "SESSION_EXPIRED: Authoritative session check failed or session expired. Re-authentication required."
-            _status.value = _status.value.copy(state = BotLifecycleState.ERROR, lastError = err, lastAction = "Activation rejected: session expired")
-            return@withContext Result.failure(Exception(err))
-        }
-
-        // Gate 2: Email verification
-        if (!isEmailVerified()) {
-            val err = "EMAIL_VERIFICATION_REQUIRED: Account email must be verified before automated execution."
-            _status.value = _status.value.copy(state = BotLifecycleState.ERROR, lastError = err, lastAction = "Activation rejected: unverified email")
-            return@withContext Result.failure(Exception(err))
-        }
-
-        // Gate 3: Strategy implementation
+        // Gate 1: Strategy implementation
         val strat = StrategyRegistry.allStrategies.find { it.id == strategyId }
         if (strat == null || !strat.isImplemented) {
             val err = "STRATEGY_NOT_IMPLEMENTED: Strategy '$strategyId' is not implemented."
@@ -119,7 +94,7 @@ class AutonomousBotEngine(
             return@withContext Result.failure(Exception(err))
         }
 
-        // Gate 4: Timeframe execution eligibility (15m minimum for website/institutional strategy workflows)
+        // Gate 2: Timeframe execution eligibility (15m minimum for website/institutional strategy workflows)
         val tfParsed = Timeframe.parse(timeframe)
         val executionEligibleTimeframes = setOf(Timeframe.M15, Timeframe.M30, Timeframe.H1, Timeframe.H4, Timeframe.D1, Timeframe.W1)
         if (tfParsed == null || tfParsed !in executionEligibleTimeframes) {
@@ -128,7 +103,7 @@ class AutonomousBotEngine(
             return@withContext Result.failure(Exception(err))
         }
 
-        // Gate 5: Instrument resolution
+        // Gate 3: Instrument resolution
         val isDerivActive = brokerManager.activeBroker.value.brokerType == com.example.data.broker.BrokerType.DERIV
         if (isDerivActive && !com.destinedfx.core.broker.DerivInstrumentResolver.isSupported(symbol)) {
             val err = "UNSUPPORTED_INSTRUMENT: Symbol '$symbol' is not supported on Deriv."
@@ -136,7 +111,7 @@ class AutonomousBotEngine(
             return@withContext Result.failure(Exception(err))
         }
 
-        // Gate 6: Risk limit strictly <= 1%
+        // Gate 4: Risk limit strictly <= 1%
         val clampedRisk = riskPercent.coerceIn(0.1, 1.0)
 
         // Cancel previous job if running
