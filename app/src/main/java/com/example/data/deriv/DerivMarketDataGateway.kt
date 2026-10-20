@@ -47,7 +47,10 @@ class DerivMarketDataGateway(
     private val activeSubscriptions = ConcurrentHashMap<String, String>() // symbol -> subscriptionId
     private val tickListeners = ConcurrentHashMap<String, (Tick) -> Unit>()
     private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
+    private val lastCandleErrors = ConcurrentHashMap<String, String>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    fun getLastCandleError(symbol: String): String? = lastCandleErrors[symbol]
 
     fun connect() {
         if (_connectionState.value == DerivConnectionState.CONNECTING || _connectionState.value == DerivConnectionState.CONNECTED) {
@@ -157,6 +160,7 @@ class DerivMarketDataGateway(
     }
 
     suspend fun fetchCandles(symbol: String, granularitySeconds: Int, count: Int = 300): List<Candle> = withContext(Dispatchers.IO) {
+        lastCandleErrors.remove(symbol)
         val reqId = reqIdCounter.getAndIncrement()
         val deferred = CompletableDeferred<JSONObject>()
         pendingRequests[reqId] = deferred
@@ -171,6 +175,7 @@ class DerivMarketDataGateway(
                 true
             } ?: false
             if (!connected || _connectionState.value != DerivConnectionState.CONNECTED) {
+                lastCandleErrors[symbol] = "Deriv WebSocket did not connect within 7 seconds"
                 pendingRequests.remove(reqId)
                 Log.w(TAG, "Candle request skipped: Deriv WebSocket did not connect for " + symbol)
                 return@withContext emptyList<Candle>()
@@ -188,6 +193,7 @@ class DerivMarketDataGateway(
 
         val sent = webSocket?.send(json.toString()) ?: false
         if (!sent) {
+            lastCandleErrors[symbol] = "WebSocket rejected the candle request before it was sent"
             pendingRequests.remove(reqId)
             return@withContext emptyList<Candle>()
         }
@@ -196,10 +202,15 @@ class DerivMarketDataGateway(
             val response = withTimeout(10_000) { deferred.await() }
             val apiError = response.optJSONObject("error")
             if (apiError != null) {
+                lastCandleErrors[symbol] = apiError.optString("message").ifBlank { apiError.toString() }
                 Log.w(TAG, "Deriv candle request rejected for " + symbol + ": " + apiError.toString())
                 return@withContext emptyList<Candle>()
             }
-            val candlesArr = response.optJSONArray("candles") ?: return@withContext emptyList<Candle>()
+            val candlesArr = response.optJSONArray("candles")
+            if (candlesArr == null) {
+                lastCandleErrors[symbol] = "History response did not include OHLC candles (msg_type=" + response.optString("msg_type") + ")"
+                return@withContext emptyList<Candle>()
+            }
             val result = mutableListOf<Candle>()
             for (i in 0 until candlesArr.length()) {
                 val c = candlesArr.getJSONObject(i)
@@ -224,9 +235,20 @@ class DerivMarketDataGateway(
                 }
             }
             result.sortBy { it.timestamp }
+            if (result.isEmpty()) {
+                lastCandleErrors[symbol] = "Deriv returned no valid OHLC rows for granularity " + granularitySeconds
+            } else {
+                lastCandleErrors.remove(symbol)
+            }
             result
+        } catch (e: CancellationException) {
+            if (e is TimeoutCancellationException) {
+                lastCandleErrors[symbol] = "Timed out waiting for Deriv historical candles"
+            }
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch Deriv candles for $symbol: ${e.message}")
+            lastCandleErrors[symbol] = e.message ?: e.javaClass.simpleName
+            Log.e(TAG, "Failed to fetch Deriv candles for " + symbol + ": " + (e.message ?: e.javaClass.simpleName))
             emptyList()
         } finally {
             pendingRequests.remove(reqId)

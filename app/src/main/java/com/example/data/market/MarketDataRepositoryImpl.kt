@@ -471,6 +471,7 @@ class MarketDataRepositoryImpl(
         var candles = emptyList<Candle>()
         var sourceUsed = ""
         var isDelayed = false
+        var derivFetchAttempted = false
 
         val preferred = selectedApiSource.value
 
@@ -479,6 +480,7 @@ class MarketDataRepositoryImpl(
         if ((preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank() || derivSymbol?.startsWith("R_") == true || derivSymbol?.startsWith("1HZ") == true || derivSymbol?.startsWith("BOOM") == true || derivSymbol?.startsWith("CRASH") == true) &&
             derivMarketDataGateway != null && derivSymbol != null &&
             com.destinedfx.core.instrument.AssetClassifier.of(symbol) != com.destinedfx.core.marketdata.AssetClass.CRYPTO) {
+            derivFetchAttempted = true
             val weekly = tf == com.destinedfx.core.marketdata.Timeframe.W1
             val granSec = if (weekly) 86_400 else (tf?.minutes ?: 60) * 60
             val requestCount = if (weekly) (count * 7 + 14).coerceAtMost(1_800) else count
@@ -541,8 +543,19 @@ class MarketDataRepositoryImpl(
             _candleFetchErrors.update { it - key }
             return@withContext processedCandles.takeLast(count)
         } else {
-            val errorMsg = "Data unavailable for $symbol $timeframe"
+            val providerError = if (derivFetchAttempted && derivSymbol != null) {
+                derivMarketDataGateway?.getLastCandleError(derivSymbol)
+            } else null
+            val errorMsg = when {
+                !providerError.isNullOrBlank() -> "Deriv feed: " + providerError
+                derivSymbol == null && BinanceSymbols.toBinance(symbol) == null && secrets.getOandaApiKey().isBlank() ->
+                    "No configured keyless candle feed supports " + symbol +
+                        ". Select a supported public Deriv market or a Binance-listed crypto pair."
+                else -> "No valid OHLC candles received for " + symbol + " " + timeframe +
+                    ". Check network access and the upstream feed response."
+            }
             _candleFetchErrors.update { it + (key to errorMsg) }
+            _candleSources.remove(symbol)
             return@withContext emptyList()
         }
     }

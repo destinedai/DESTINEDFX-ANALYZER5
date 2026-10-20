@@ -314,7 +314,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
     val symbols = listOf(
         "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",
         "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "EUR/CHF", "GBP/CHF",
-        "XAU/USD", "XAG/USD", "SPX500", "NAS100", "DJ30", "USOIL",
+        "XAU/USD", "XAG/USD", "USOIL",
         "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD", "XRP/USD"
     )
     val timeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
