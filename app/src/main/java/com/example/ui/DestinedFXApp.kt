@@ -286,11 +286,11 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                 analysis = exportAnalysis,
                 onDismiss = { showExportDialog = false },
                 onExportPdf = {
-                    viewModel.exportPdfDossier(currentAnalysis)
+                    viewModel.exportPdfDossier(exportAnalysis)
                     showExportDialog = false
                 },
                 onExportImage = {
-                    viewModel.exportImageSnapshot(currentAnalysis)
+                    viewModel.exportImageSnapshot(exportAnalysis)
                     showExportDialog = false
                 },
                 isExporting = false
