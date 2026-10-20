@@ -56,14 +56,14 @@ fun RiskRewardCalculatorComponent(
         mutableStateOf(if (ticker != null && ticker.price > 0) formatPrice(ticker.price, symbol) else "")
     }
     var stopLossText by remember(symbol) {
-        val p = ticker?.price ?: 1.08500
-        val defaultSl = if (isJpy) p - 0.200 else p * 0.997
-        mutableStateOf(formatPrice(defaultSl, symbol))
+        val p = ticker?.price?.takeIf { it > 0.0 }
+        val defaultSl = p?.let { if (isJpy) it - 0.200 else it * 0.997 }
+        mutableStateOf(defaultSl?.let { formatPrice(it, symbol) } ?: "")
     }
     var takeProfitText by remember(symbol) {
-        val p = ticker?.price ?: 1.08500
-        val defaultTp = if (isJpy) p + 0.400 else p * 1.006
-        mutableStateOf(formatPrice(defaultTp, symbol))
+        val p = ticker?.price?.takeIf { it > 0.0 }
+        val defaultTp = p?.let { if (isJpy) it + 0.400 else it * 1.006 }
+        mutableStateOf(defaultTp?.let { formatPrice(it, symbol) } ?: "")
     }
 
     val equity = equityText.toDoubleOrNull() ?: 10.0
