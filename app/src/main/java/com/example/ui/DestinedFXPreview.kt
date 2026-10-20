@@ -69,8 +69,8 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
             bias = "BULLISH",
             confidence = 88,
             lastUpdateMillis = now,
-            isLive = true,
-            source = "Deriv WebSocket"
+            isLive = false,
+            source = "PREVIEW SAMPLE — NOT LIVE"
         )
     )
 
@@ -91,7 +91,7 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
         slReason = "Discount Bullish Order Block invalidation at 1.08500",
         tpReason = "External range liquidity harvest at 1.09250",
         strategyVersion = "smc-confluence-1.0.0",
-        dataSource = "Deriv WebSocket",
+        dataSource = "PREVIEW SAMPLE — NOT LIVE",
         mtfSummary = "FULL BULLISH ALIGNMENT",
         mtfStatus = "FULL_BULLISH",
         smcAnalysis = "Bullish structure confirmed. Clean BOS with unmitigated M15 Order Block and FVG CE at discount.",
@@ -179,10 +179,10 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
     vm.correspondenceRows.value = listOf(
         com.destinedfx.core.marketdata.DataCorrespondenceRow(
             symbol = "EUR/USD",
-            analysisSource = "Deriv WebSocket",
+            analysisSource = "PREVIEW SAMPLE — NOT LIVE",
             kind = "STREAM",
             analysisAgeMs = 120L,
-            candleSource = "Deriv WebSocket",
+            candleSource = "PREVIEW SAMPLE — NOT LIVE",
             resolvedBrokerSymbol = "frxEURUSD",
             brokerBid = 1.08748,
             brokerAsk = 1.08752,
@@ -192,10 +192,10 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
         ),
         com.destinedfx.core.marketdata.DataCorrespondenceRow(
             symbol = "XAU/USD",
-            analysisSource = "Deriv WebSocket",
+            analysisSource = "PREVIEW SAMPLE — NOT LIVE",
             kind = "STREAM",
             analysisAgeMs = 80L,
-            candleSource = "Deriv WebSocket",
+            candleSource = "PREVIEW SAMPLE — NOT LIVE",
             resolvedBrokerSymbol = "frxXAUUSD",
             brokerBid = 2345.10,
             brokerAsk = 2345.50,
@@ -220,7 +220,7 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
             stopsLevelPoints = 0,
             profitCurrency = "USD",
             baseCurrency = "EUR",
-            source = "Broker Demo"
+            source = "PREVIEW SAMPLE — NOT LIVE"
         )
     )
 
