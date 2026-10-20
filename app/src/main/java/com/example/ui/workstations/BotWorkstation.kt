@@ -28,6 +28,8 @@ import com.example.ui.DestinedFXViewModel
 import com.example.ui.InsightCard
 import com.example.ui.InsightLine
 import com.example.ui.theme.*
+import com.example.ui.components.TerminalPageHeader
+import com.example.ui.components.StatChip
 import kotlinx.coroutines.launch
 
 @Composable
@@ -55,46 +57,51 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Workstation Title & Mode
+        // Clear production command header
+        item {
+            val isConnected = brokerConnStatus == BrokerConnectionStatus.CONNECTED
+            val modeColor = if (isConnected) ProfitGreen else WarningAmber
+            TerminalPageHeader(
+                eyebrow = "AUTOMATION / EXECUTION",
+                title = "Bot Workstation",
+                subtitle = if (isConnected) "Execution gateway connected • ${activeBrokerType.name}"
+                    else "Execution offline • chart and analysis remain separate",
+                trailing = {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(modeColor.copy(alpha = 0.15f))
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = if (isConnected) "CONNECTED" else "OFFLINE",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            color = modeColor,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            )
+        }
+
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column {
-                    Text(
-                        text = "AUTONOMOUS BOT CENTER",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 15.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "Automated Quantitative Execution Engine",
-                        fontSize = 10.sp,
-                        color = TextSecondary
-                    )
-                }
-
-                val isConnected = brokerConnStatus == BrokerConnectionStatus.CONNECTED
-                val modeText = if (isConnected) "LIVE TRADING (${activeBrokerType.name})" else "PAPER / OFFLINE"
-                val modeColor = if (isConnected) Color(0xFF00FF99) else OrangeAccent
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(modeColor.copy(alpha = 0.15f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = modeText,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Black,
-                        color = modeColor,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
+                StatChip(
+                    label = "BOT STATE",
+                    value = botSummary.state.name.replace('_', ' '),
+                    modifier = Modifier.weight(1f),
+                    color = if (botSummary.isRunning || botActive) ProfitGreen else WarningAmber
+                )
+                StatChip(
+                    label = "RISK CAP",
+                    value = "${riskPercent.coerceAtMost(1.0)}%",
+                    modifier = Modifier.weight(1f),
+                    color = WarningAmber
+                )
             }
         }
 
@@ -206,7 +213,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                 InsightLine("Account Capital", "$${"%.2f".format(capital)}")
                 InsightLine("NFP Safeguard", if (nfpArmed) "ARMED (High-Impact Guard Active)" else "DISARMED")
                 InsightLine("Execution Status", if (isHalted) "HALTED (News Filter Lock)" else "NORMAL")
-                InsightLine("Multi-AI Scan State", if (isMultiScanning) "SCANNING (H1 / M15 / H4)" else consensusStatus)
+                InsightLine("Deterministic MTF Scan", if (isMultiScanning) "SCANNING (H1 / M15 / H4)" else consensusStatus)
                 if (isHalted) {
                     Text(
                         text = "Trading halted due to high-impact economic event window.",
