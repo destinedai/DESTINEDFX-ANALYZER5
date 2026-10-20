@@ -289,7 +289,7 @@ fun TradingViewWebView(
                                     isChartError = false
                                 }
                                 override fun onPageFinished(view: WebView?, url: String?) {
-                                    super.onPageFinished(view, url, favicon = null)
+                                    super.onPageFinished(view, url)
                                     if (url?.startsWith("https://") == true) isLoading = false
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
