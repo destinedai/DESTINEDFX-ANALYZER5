@@ -79,10 +79,10 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
 
     var events by remember { mutableStateOf<List<NewsEvent>>(if (isPreviewMode) sampleEvents else emptyList()) }
     var isLoading by remember { mutableStateOf(!isPreviewMode) }
-    var newsStatus by remember { mutableStateOf(if (isPreviewMode) NewsStatus.CLEAR else NewsStatus.UNKNOWN) }
+    var newsStatus by remember { mutableStateOf(NewsStatus.UNKNOWN) }
     var statusDetail by remember {
         mutableStateOf(
-            if (isPreviewMode) "No high-impact event window active. Automated trading permitted."
+            if (isPreviewMode) "Sample events are for layout only. Calendar safety status is unknown."
             else "Evaluating economic calendar news filter and event windows..."
         )
     }
@@ -136,6 +136,32 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                     }
                 }
             )
+        }
+
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                com.example.ui.components.StatChip(
+                    label = "EVENTS LOADED",
+                    value = events.size.toString(),
+                    modifier = Modifier.weight(1f),
+                    color = ElectricCyan
+                )
+                com.example.ui.components.StatChip(
+                    label = "HIGH IMPACT",
+                    value = events.count { it.impact.equals("high", ignoreCase = true) }.toString(),
+                    modifier = Modifier.weight(1f),
+                    color = Color(0xFFFF4560)
+                )
+                com.example.ui.components.StatChip(
+                    label = "MEDIUM",
+                    value = events.count { it.impact.equals("medium", ignoreCase = true) }.toString(),
+                    modifier = Modifier.weight(1f),
+                    color = OrangeAccent
+                )
+            }
         }
 
         // Live News Gate Status Banner
