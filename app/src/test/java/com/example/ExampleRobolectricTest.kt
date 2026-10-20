@@ -87,7 +87,9 @@ class ExampleRobolectricTest {
     assertFalse(vm.isAppLocked.value)
     assertFalse(vm.showAuthScreen.value)
 
-    // 3. Navigation screens accessible in guest mode
+    // 3. Open the redesigned Analyzer/TradingView workspace first; every tab remains accessible.
+    assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
+    vm.selectScreen(com.example.ui.DestinedFXScreen.Strategies)
     assertEquals(com.example.ui.DestinedFXScreen.Strategies, vm.selectedScreen.value)
     vm.selectScreen(com.example.ui.DestinedFXScreen.Analyzer)
     assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
