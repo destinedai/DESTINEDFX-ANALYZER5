@@ -132,7 +132,7 @@ fun EngineInsightsPanel(viewModel: DestinedFXViewModel) {
     }
 
     if (!aiText.isNullOrBlank()) {
-        InsightCard("GEMINI ANALYSIS") {
+        InsightCard("ALGORITHMIC ENGINE ANALYSIS") {
             Text(aiText ?: "", fontSize = 10.sp, color = TextPrimary)
         }
     }
