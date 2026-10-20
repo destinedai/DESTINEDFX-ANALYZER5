@@ -127,7 +127,7 @@ class SecretsManager(private val ctx: Context) {
     fun getSupabaseEmailConfirmedAt(): String? = prefs.getString(SB_EMAIL_CONFIRMED_AT, "")?.takeUnless { it.isBlank() || it == "null" }
     fun getOandaApiKey(): String       = prefs.getString(OANDA_KEY, "") ?: ""
     fun getOandaAccountId(): String    = prefs.getString(OANDA_ACC, "") ?: ""
-    fun getConfiguredEquity(): Double  = prefs.getString(CONFIGURED_EQUITY, "10.0")?.toDoubleOrNull() ?: 10.0
+    fun getConfiguredEquity(): Double  = prefs.getString(CONFIGURED_EQUITY, "0.0")?.toDoubleOrNull() ?: 0.0
     fun getSelectedStrategy(): String  = prefs.getString(SELECTED_STRATEGY, "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0"
 
     fun hasCredentials() = getMetaApiToken().isNotBlank() || getMT5AccountNumber().isNotBlank()

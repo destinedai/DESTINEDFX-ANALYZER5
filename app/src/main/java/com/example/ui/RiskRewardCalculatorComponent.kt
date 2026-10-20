@@ -38,49 +38,48 @@ import kotlin.math.abs
 fun RiskRewardCalculatorComponent(
     viewModel: DestinedFXViewModel,
     symbol: String,
-    defaultBalance: Double = 10.0,
+    defaultBalance: Double = 0.0,
     defaultRisk: Double = 1.0,
     modifier: Modifier = Modifier
 ) {
-    var equityText by remember { mutableStateOf(String.format(Locale.US, "%.2f", defaultBalance)) }
+    var equityText by remember { mutableStateOf(if (defaultBalance > 0.0) String.format(Locale.US, "%.2f", defaultBalance) else "") }
     var riskPercentText by remember { mutableStateOf(defaultRisk.toString()) }
 
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
     val ticker = tickers[symbol]
+    val analysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val spec = com.destinedfx.core.instrument.SpecRegistry.get(symbol)
     val isSpecLoaded = spec != null
 
     val isJpy = symbol.contains("JPY", ignoreCase = true)
 
-    var entryPriceText by remember(symbol) {
-        mutableStateOf(if (ticker != null && ticker.price > 0) formatPrice(ticker.price, symbol) else "")
+    var entryPriceText by remember(symbol, analysis?.entry) {
+        mutableStateOf(
+            analysis?.entry?.takeIf { it > 0.0 }?.let { formatPrice(it, symbol) }
+                ?: ticker?.price?.takeIf { it > 0.0 }?.let { formatPrice(it, symbol) }
+                ?: ""
+        )
     }
-    var stopLossText by remember(symbol) {
-        val p = ticker?.price?.takeIf { it > 0.0 }
-        val defaultSl = p?.let { if (isJpy) it - 0.200 else it * 0.997 }
-        mutableStateOf(defaultSl?.let { formatPrice(it, symbol) } ?: "")
+    var stopLossText by remember(symbol, analysis?.stopLoss) {
+        mutableStateOf(analysis?.stopLoss?.takeIf { it > 0.0 }?.let { formatPrice(it, symbol) } ?: "")
     }
-    var takeProfitText by remember(symbol) {
-        val p = ticker?.price?.takeIf { it > 0.0 }
-        val defaultTp = p?.let { if (isJpy) it + 0.400 else it * 1.006 }
-        mutableStateOf(defaultTp?.let { formatPrice(it, symbol) } ?: "")
+    var takeProfitText by remember(symbol, analysis?.tp1) {
+        mutableStateOf(analysis?.tp1?.takeIf { it > 0.0 }?.let { formatPrice(it, symbol) } ?: "")
     }
-
-    val equity = equityText.toDoubleOrNull() ?: 10.0
-    val riskPct = riskPercentText.toDoubleOrNull() ?: 1.0
+    val equity = equityText.toDoubleOrNull() ?: 0.0
+    val riskPct = riskPercentText.toDoubleOrNull() ?: 0.0
+    val riskIsValid = riskPct.isFinite() && riskPct in 0.1..1.0
     val entry = entryPriceText.toDoubleOrNull() ?: 0.0
     val sl = stopLossText.toDoubleOrNull() ?: 0.0
     val tp = takeProfitText.toDoubleOrNull() ?: 0.0
-
-    val maxRiskDollars = equity * (riskPct / 100.0)
+    val maxRiskDollars = if (equity > 0.0 && riskIsValid) equity * (riskPct / 100.0) else 0.0
     val slDistance = if (entry > 0 && sl > 0) abs(entry - sl) else 0.0
     val rrRatio = if (entry > 0 && sl > 0 && tp > 0 && abs(entry - sl) > 0) {
         abs(tp - entry) / abs(entry - sl)
     } else null
 
-    // Compute exact position sizing via deterministic RiskEngine
     val sizingResult = remember(equity, riskPct, entry, sl, spec) {
-        if (spec != null && entry > 0.0 && sl > 0.0 && equity > 0.0 && riskPct > 0.0) {
+        if (spec != null && entry > 0.0 && sl > 0.0 && equity > 0.0 && riskIsValid) {
             val acc = AccountState(balance = equity, equity = equity, freeMargin = equity, leverage = 100, currency = "USD")
             RiskEngine.positionSize(acc, riskPct, entry, sl, spec)
         } else null
@@ -131,7 +130,7 @@ fun RiskRewardCalculatorComponent(
                         .padding(horizontal = 6.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = if (isSpecLoaded) "SPEC ACTIVE" else "DEFAULT SPEC",
+                        text = if (isSpecLoaded) "SPEC ACTIVE" else "SPEC UNAVAILABLE",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (isSpecLoaded) Color(0xFF00FF99) else OrangeAccent
@@ -150,7 +149,7 @@ fun RiskRewardCalculatorComponent(
                         equityText = it
                         it.toDoubleOrNull()?.let { v -> viewModel.saveConfiguredEquity(v) }
                     },
-                    label = { Text("Configured Equity (DEMO) $") },
+                    label = { Text("Manual Equity (USD)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1.2f),
                     singleLine = true

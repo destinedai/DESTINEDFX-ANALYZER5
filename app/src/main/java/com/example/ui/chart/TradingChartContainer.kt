@@ -1,11 +1,14 @@
 package com.example.ui.chart
 
+import android.content.Intent
+import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
 import android.view.View
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -40,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -234,6 +238,7 @@ fun TradingViewWebView(
     }
 
     val currentKey = "${mappedSymbol}_${mappedInterval}"
+    val context = LocalContext.current
     var isLoading by remember(currentKey) { mutableStateOf(true) }
     var isChartError by remember(currentKey) { mutableStateOf(false) }
     var errorMessage by remember(currentKey) { mutableStateOf("") }
@@ -272,6 +277,17 @@ fun TradingViewWebView(
                     shape = RoundedCornerShape(9.dp), modifier = Modifier.testTag("tradingview_retry")) {
                     Text("RETRY TRADINGVIEW", color = DarkBackground, fontWeight = FontWeight.Black)
                 }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(widgetUrl))) }
+                            .onFailure { errorMessage = "Could not open browser: ${it.message ?: it.javaClass.simpleName}" }
+                    },
+                    border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.6f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan)
+                ) {
+                    Text("OPEN CHART IN BROWSER", fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                }
             }
         } else {
             AndroidView(
@@ -283,6 +299,7 @@ fun TradingViewWebView(
                             overScrollMode = View.OVER_SCROLL_NEVER
                             isVerticalScrollBarEnabled = false
                             isHorizontalScrollBarEnabled = false
+                            webChromeClient = WebChromeClient()
                             webViewClient = object : WebViewClient() {
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                     super.onPageStarted(view, url, favicon)
@@ -291,14 +308,26 @@ fun TradingViewWebView(
                                 }
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
-                                    // The embed document finishes before its async chart bundle has
-                                    // completed initialization. Give the widget a short settle
-                                    // window before removing the loading overlay.
-                                    if (url?.startsWith("https://") == true) {
-                                        view?.postDelayed({
-                                            if (!isChartError) isLoading = false
-                                        }, 2500L)
+                                    // A finished HTML page is not proof the chart has rendered.
+                                    if (view == null || url?.contains("tradingview.com") != true) return
+                                    fun verifyChart(attempt: Int) {
+                                        if (isChartError || !isLoading) return
+                                        view.evaluateJavascript(
+                                            "(function(){return document.querySelectorAll('canvas').length>0 || Array.from(document.querySelectorAll('iframe')).some(function(f){return !!f.src;});})()"
+                                        ) { result ->
+                                            if (result == "true") {
+                                                isLoading = false
+                                                isChartError = false
+                                            } else if (attempt < 10) {
+                                                view.postDelayed({ verifyChart(attempt + 1) }, 1000L)
+                                            } else {
+                                                isLoading = false
+                                                isChartError = true
+                                                errorMessage = "TradingView opened, but the chart did not initialize. Retry or open the chart externally."
+                                            }
+                                        }
                                     }
+                                    view.postDelayed({ verifyChart(0) }, 1000L)
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                                     handler?.cancel()

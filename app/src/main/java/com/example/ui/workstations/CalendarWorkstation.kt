@@ -40,49 +40,14 @@ import java.util.*
 @Composable
 fun CalendarTab(viewModel: DestinedFXViewModel) {
     val isPreviewMode = LocalInspectionMode.current || viewModel.isPreview
-    val sampleEvents = remember {
-        listOf(
-            NewsEvent(
-                title = "Non-Farm Employment Change (USD)",
-                currency = "USD",
-                impact = "High",
-                dateTimeUtcMs = System.currentTimeMillis() + 3600000,
-                forecast = "180K",
-                previous = "175K"
-            ),
-            NewsEvent(
-                title = "ECB Main Refinancing Rate",
-                currency = "EUR",
-                impact = "High",
-                dateTimeUtcMs = System.currentTimeMillis() + 7200000,
-                forecast = "3.75%",
-                previous = "3.75%"
-            ),
-            NewsEvent(
-                title = "Core CPI m/m",
-                currency = "USD",
-                impact = "High",
-                dateTimeUtcMs = System.currentTimeMillis() + 10800000,
-                forecast = "0.3%",
-                previous = "0.2%"
-            ),
-            NewsEvent(
-                title = "German Prelim Flash Manufacturing PMI",
-                currency = "EUR",
-                impact = "Medium",
-                dateTimeUtcMs = System.currentTimeMillis() + 14400000,
-                forecast = "42.8",
-                previous = "42.4"
-            )
-        )
-    }
+    val sampleEvents = emptyList<NewsEvent>()
 
-    var events by remember { mutableStateOf<List<NewsEvent>>(if (isPreviewMode) sampleEvents else emptyList()) }
+    var events by remember { mutableStateOf<List<NewsEvent>>(emptyList()) }
     var isLoading by remember { mutableStateOf(!isPreviewMode) }
     var newsStatus by remember { mutableStateOf(NewsStatus.UNKNOWN) }
     var statusDetail by remember {
         mutableStateOf(
-            if (isPreviewMode) "Sample events are for layout only. Calendar safety status is unknown."
+            if (isPreviewMode) "Preview only — live calendar data is not loaded in preview mode."
             else "Evaluating economic calendar news filter and event windows..."
         )
     }
@@ -94,17 +59,22 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
         if (isPreviewMode) return
         coroutineScope.launch {
             isLoading = true
-            val evts = withContext(Dispatchers.IO) {
-                viewModel.app.newsRepository.fetchUpcomingEvents()
+            try {
+                val fetchedEvents = withContext(Dispatchers.IO) { viewModel.app.newsRepository.fetchUpcomingEvents() }
+                events = fetchedEvents
+                val result = withContext(Dispatchers.IO) { viewModel.app.newsRepository.calendar() }
+                val verdict = NewsFilter.evaluate(result, AssetClassifier.newsCurrencies(activeSymbol), System.currentTimeMillis())
+                newsStatus = verdict.status
+                statusDetail = verdict.detail
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                events = emptyList()
+                newsStatus = NewsStatus.UNKNOWN
+                statusDetail = "Calendar unavailable (${e.javaClass.simpleName}). Automated execution remains blocked until verified news data is available."
+            } finally {
+                isLoading = false
             }
-            events = evts
-            val cal = withContext(Dispatchers.IO) {
-                viewModel.app.newsRepository.calendar()
-            }
-            val verdict = NewsFilter.evaluate(cal, AssetClassifier.newsCurrencies(activeSymbol), System.currentTimeMillis())
-            newsStatus = verdict.status
-            statusDetail = verdict.detail
-            isLoading = false
         }
     }
 
@@ -139,7 +109,7 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                             Text("EVENT RISK DESK", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                             Text("Economic calendar", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                            Text(if (isPreviewMode) "DESIGN PREVIEW · SAMPLE DATA ONLY" else "Currency relevance: $activeSymbol",
+                            Text(if (isPreviewMode) "PREVIEW · NO LIVE CALENDAR DATA" else "Currency relevance: $activeSymbol",
                                 fontSize = 10.sp, color = TextSecondary)
                         }
                         IconButton(onClick = { refreshCalendar() }, modifier = Modifier.testTag("refresh_calendar_button")) {
