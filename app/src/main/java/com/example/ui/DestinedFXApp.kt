@@ -101,7 +101,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     val dynamicAnalysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
     val currentTicker = tickers[activeSymbol]
-    val currentPrice = currentTicker?.price ?: 0.0
+    val headerPrice = currentTicker?.price?.takeIf { it > 0.0 }
     val priceChange = currentTicker?.changePercent
 
     Scaffold(
@@ -185,17 +185,6 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
-                            IconButton(
-                                onClick = { /* App lock disabled by default to keep terminal open */ },
-                                modifier = Modifier.size(32.dp).testTag("lock_button")
-                            ) {
-                                Icon(
-                                    Icons.Default.Lock,
-                                    contentDescription = "Lock App",
-                                    tint = TextSecondary.copy(alpha = 0.5f),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
                         }
                     }
 
@@ -223,11 +212,21 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                 color = TextSecondary
                             )
                         }
-                        PriceText(
-                            value = currentPrice,
-                            change = priceChange,
-                            symbol = activeSymbol
-                        )
+                        if (headerPrice != null) {
+                            PriceText(
+                                value = headerPrice,
+                                change = priceChange,
+                                symbol = activeSymbol
+                            )
+                        } else {
+                            Text(
+                                text = "PRICE —",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                color = TextSecondary
+                            )
+                        }
                     }
                 }
             }
