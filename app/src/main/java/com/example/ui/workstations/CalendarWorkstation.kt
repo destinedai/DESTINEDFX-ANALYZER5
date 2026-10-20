@@ -29,6 +29,7 @@ import com.destinedfx.core.news.NewsStatus
 import com.example.domain.repository.NewsEvent
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.theme.*
+import com.example.ui.components.TerminalPageHeader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -121,32 +122,20 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "ECONOMIC CALENDAR",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 15.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "High-Impact News Safeguards (NFP, CPI, FOMC)",
-                        fontSize = 10.sp,
-                        color = TextSecondary
-                    )
+            TerminalPageHeader(
+                eyebrow = "EVENT RISK / UTC",
+                title = "Economic Calendar",
+                subtitle = if (isPreviewMode) "DESIGN PREVIEW • SAMPLE EVENTS — NOT LIVE"
+                    else "Verified event schedule for $activeSymbol",
+                trailing = {
+                    IconButton(
+                        onClick = { refreshCalendar() },
+                        modifier = Modifier.testTag("refresh_calendar_button")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh Calendar", tint = ElectricCyan)
+                    }
                 }
-                IconButton(
-                    onClick = { refreshCalendar() },
-                    modifier = Modifier.testTag("refresh_calendar_button")
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh Calendar", tint = CyanPrimary)
-                }
-            }
+            )
         }
 
         // Live News Gate Status Banner
@@ -219,7 +208,7 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "No upcoming high-impact economic releases in current window.",
+                        text = "No verified events are available for this window. Calendar status remains unknown; this is not confirmation of a clear market.",
                         color = TextSecondary,
                         fontSize = 11.sp,
                         modifier = Modifier.padding(16.dp)
