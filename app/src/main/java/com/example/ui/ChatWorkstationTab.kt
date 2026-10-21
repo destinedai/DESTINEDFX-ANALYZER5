@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -32,6 +33,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,6 +67,7 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
     val timeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
     val analysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
     val messages = remember {
         mutableStateListOf(
             AssistantMessage(
@@ -75,6 +78,10 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
     }
     var draft by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    }
 
     fun answer(question: String): String {
         val q = question.lowercase()
@@ -162,6 +169,7 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
