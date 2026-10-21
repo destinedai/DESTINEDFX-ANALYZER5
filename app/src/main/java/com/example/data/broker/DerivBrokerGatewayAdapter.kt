@@ -89,7 +89,12 @@ class DerivBrokerGatewayAdapter(
             return Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Worst-case loss ($worstCaseLoss USD) exceeds maximum permitted risk budget (${String.format(java.util.Locale.US, "%.2f", maxAllowedRisk)} USD)"))
         }
 
-        val res = derivGateway.executeOrder(derivSymbol, stake, isBuy)
+        val res = derivGateway.executeOrder(
+            symbol = derivSymbol,
+            stake = stake,
+            isBuy = isBuy,
+            rewardToRisk = plan.rr
+        )
         return if (res.isSuccess) {
             val bought = res.getOrThrow()
             Result.success("Deriv Contract #${bought.contractId} (Tx: ${bought.transactionId})")
