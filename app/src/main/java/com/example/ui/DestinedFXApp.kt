@@ -263,6 +263,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                 tonalElevation = 0.dp,
                 shadowElevation = 12.dp,
                 modifier = Modifier.fillMaxWidth()
+                    .navigationBarsPadding()
                     .border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.8f)))
             ) {
                 // Website-inspired navigation on a phone: swipe horizontally to reach every route.
@@ -383,7 +384,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("MARKET WORKSPACE / DETERMINISTIC", fontSize = 9.sp, color = ElectricCyan,
+                    Text("LIVE ALGORITHMIC ANALYZER", fontSize = 9.sp, color = ElectricCyan,
                         fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                     Text(activeSymbol, fontSize = 25.sp, color = TextPrimary, fontWeight = FontWeight.Black)
                     Text("Chart display: TradingView • Analysis: algorithmic rules", fontSize = 10.sp, color = TextSecondary)
