@@ -54,6 +54,41 @@ class TradingCoreValidationTest {
     }
 
     @Test
+    fun testMinimumExecutionLotIsAtLeast001WhenRiskBudgetAllows() {
+        val spec = eurUsdSpec.copy(volumeMin = 0.001, volumeStep = 0.001)
+        val account = AccountState(balance = 1000.0, equity = 1000.0, freeMargin = 1000.0, leverage = 100, currency = "USD")
+        val result = RiskEngine.positionSize(
+            account = account,
+            riskPercent = 1.0,
+            entry = 1.0807,
+            stopLoss = 1.0800,
+            spec = spec
+        )
+        when (result) {
+            is SizingResult.Sized -> {
+                assertTrue("Execution lot must be at least 0.01", result.lots >= 0.01 - 1e-12)
+                assertTrue("Actual risk may not exceed the 1% budget", result.moneyRiskActual <= 10.0 + 1e-9)
+            }
+            is SizingResult.Rejected -> fail("Budget should permit >= 0.01 lots: ${result.reason}")
+        }
+    }
+
+    @Test
+    fun testMinimumExecutionLotRejectsRoundingUpBeyondRiskBudget() {
+        val spec = eurUsdSpec.copy(volumeMin = 0.001, volumeStep = 0.001)
+        val account = AccountState(balance = 50.0, equity = 50.0, freeMargin = 50.0, leverage = 100, currency = "USD")
+        val result = RiskEngine.positionSize(
+            account = account,
+            riskPercent = 1.0,
+            entry = 1.0900,
+            stopLoss = 1.0800,
+            spec = spec
+        )
+        assertTrue(result is SizingResult.Rejected)
+        assertTrue((result as SizingResult.Rejected).reason.contains("0.01-lot policy"))
+    }
+
+    @Test
     fun testRiskBudgetEnforcement_FourHundredDollars_OnePercent() {
         val account = AccountState(balance = 400.0, equity = 400.0, freeMargin = 400.0, leverage = 100, currency = "USD")
         val result = RiskEngine.positionSize(
