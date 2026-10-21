@@ -243,25 +243,26 @@ fun TradingViewWebView(
     var isChartError by remember(currentKey) { mutableStateOf(false) }
     var errorMessage by remember(currentKey) { mutableStateOf("") }
     var retryTrigger by remember(currentKey) { mutableIntStateOf(0) }
-    var useDirectEmbed by remember(currentKey) { mutableStateOf(false) }
+    var useDirectEmbed by remember(currentKey) { mutableStateOf(true) }
 
-    // The widget script is the official first path. A few Android WebView builds fail to
-    // initialize its nested iframe, so automatically recreate the WebView with TradingView's
-    // direct widget URL if the chart has not rendered after 20 seconds.
+    // Load TradingView's hosted chart page first. This avoids depending on an external
+    // script running inside a loadDataWithBaseURL document, which is unreliable on some
+    // Android WebView versions. If it does not render promptly, recreate the WebView with
+    // TradingView's official Advanced Chart widget HTML as a fallback.
     LaunchedEffect(currentKey, retryTrigger) {
         isLoading = true
         isChartError = false
         errorMessage = ""
-        useDirectEmbed = false
-        kotlinx.coroutines.delay(20_000L)
-        if (isLoading && !isChartError && !useDirectEmbed) {
-            useDirectEmbed = true
+        useDirectEmbed = true
+        kotlinx.coroutines.delay(15_000L)
+        if (isLoading && !isChartError && useDirectEmbed) {
+            useDirectEmbed = false
         }
         kotlinx.coroutines.delay(35_000L)
         if (isLoading && !isChartError) {
             isChartError = true
             isLoading = false
-            errorMessage = "TradingView did not render through either the official widget or direct embed. Check internet access and update Android System WebView/Chrome, then retry."
+            errorMessage = "TradingView did not finish rendering through either loading path. Check internet access, disable any DNS/ad blocker for TradingView, update Android System WebView and Chrome, then retry."
         }
     }
 
@@ -280,7 +281,7 @@ fun TradingViewWebView(
                 Button(onClick = {
                     isChartError = false
                     isLoading = true
-                    useDirectEmbed = false
+                    useDirectEmbed = true
                     errorMessage = ""
                     retryTrigger++
                 }, colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
@@ -339,10 +340,10 @@ fun TradingViewWebView(
                                                     errorMessage = state.removePrefix("ERROR:")
                                                 }
                                                 attempt < 30 -> view.postDelayed({ verifyChart(attempt + 1) }, 1000L)
-                                                !useDirectEmbed -> {
-                                                    // Start the direct embed path rather than showing
-                                                    // the unavailable page after only one failed mode.
-                                                    useDirectEmbed = true
+                                                useDirectEmbed -> {
+                                                    // Switch to the official widget HTML if the hosted
+                                                    // chart page cannot expose a visible chart surface.
+                                                    useDirectEmbed = false
                                                     isLoading = true
                                                 }
                                                 else -> {
@@ -357,8 +358,8 @@ fun TradingViewWebView(
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                                     handler?.cancel()
-                                    if (!useDirectEmbed) {
-                                        useDirectEmbed = true
+                                    if (useDirectEmbed) {
+                                        useDirectEmbed = false
                                         isLoading = true
                                         isChartError = false
                                         errorMessage = ""
@@ -370,8 +371,8 @@ fun TradingViewWebView(
                                 }
                                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                                     if (request?.isForMainFrame == true && view?.isAttachedToWindow == true) {
-                                        if (!useDirectEmbed) {
-                                            useDirectEmbed = true
+                                        if (useDirectEmbed) {
+                                            useDirectEmbed = false
                                             isLoading = true
                                             isChartError = false
                                             errorMessage = ""
@@ -390,8 +391,8 @@ fun TradingViewWebView(
                                 ) {
                                     if (request?.isForMainFrame == true && view?.isAttachedToWindow == true &&
                                         (errorResponse?.statusCode ?: 200) >= 400) {
-                                        if (!useDirectEmbed) {
-                                            useDirectEmbed = true
+                                        if (useDirectEmbed) {
+                                            useDirectEmbed = false
                                             isLoading = true
                                             isChartError = false
                                             errorMessage = ""
@@ -441,7 +442,8 @@ fun TradingViewWebView(
                         isLoading = true
                         isChartError = false
                         errorMessage = ""
-                        view.loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
+                        if (useDirectEmbed) view.loadUrl(widgetUrl)
+                        else view.loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
                     }
                     },
                     modifier = Modifier.fillMaxSize()
