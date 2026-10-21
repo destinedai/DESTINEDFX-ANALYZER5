@@ -620,6 +620,7 @@ class MarketDataRepositoryImpl(
     }
 
     fun getDataSource(symbol: String, timeframe: String): String {
-        return dataSourceMap["$symbol-$timeframe"] ?: "Deriv WebSocket"
+        return dataSourceMap["$symbol-$timeframe"]
+            ?: "UNAVAILABLE • No validated OHLC source is cached for $symbol $timeframe"
     }
 }
