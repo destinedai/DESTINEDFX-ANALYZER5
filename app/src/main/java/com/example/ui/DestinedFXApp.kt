@@ -694,13 +694,11 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 22.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("SYSTEMATIC PLAYBOOKS / RULE-BASED", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
-                    fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                Text("Strategy desk", fontSize = 27.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                Text("Select a registered ruleset. Only implemented strategies can be activated.",
-                    fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
-            }
+            TerminalPageHeader(
+                eyebrow = "SYSTEMATIC PLAYBOOKS / RULE-BASED",
+                title = "Strategy desk",
+                subtitle = "Choose a registered ruleset. Only implemented strategies can be activated."
+            )
         }
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -713,7 +711,7 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
         }
         item {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF10232A)),
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                 border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
                 Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("ACTIVE RULESET", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
@@ -786,13 +784,11 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 22.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("ACCOUNT DEFENCE / POSITION CONTROL", fontSize = 9.sp, color = ElectricCyan,
-                    fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                Text("Risk control", fontSize = 27.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                Text("RiskEngine remains the authority for sizing and trade-plan validation.",
-                    fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
-            }
+            TerminalPageHeader(
+                eyebrow = "ACCOUNT DEFENCE / POSITION CONTROL",
+                title = "Risk control",
+                subtitle = "RiskEngine remains the authority for sizing and trade-plan validation."
+            )
         }
         item {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),

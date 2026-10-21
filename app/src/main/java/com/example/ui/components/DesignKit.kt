@@ -289,16 +289,16 @@ fun TerminalPageHeader(
                 )
                 Text(
                     text = title,
-                    fontSize = 20.sp,
+                    fontSize = 23.sp,
                     fontWeight = FontWeight.Black,
                     color = TextPrimary,
-                    lineHeight = 24.sp
+                    lineHeight = 28.sp
                 )
                 Text(
                     text = subtitle,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     color = TextSecondary,
-                    lineHeight = 15.sp
+                    lineHeight = 16.sp
                 )
             }
             if (trailing != null) {
