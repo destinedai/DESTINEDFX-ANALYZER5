@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
@@ -149,7 +148,7 @@ class DerivBrokerGateway(
                 .header("Authorization", "Bearer $token")
                 .header("Deriv-App-ID", appId)
                 .header("Accept", "application/json")
-                .post(ByteArray(0).toRequestBody("application/json".toMediaType()))
+                .post(ByteArray(0).toRequestBody())
                 .build()
             val otpJson = executeRestJson(otpRequest)
             val authenticatedUrl = otpJson.optJSONObject("data")?.optString("url")?.trim().orEmpty()
@@ -361,27 +360,31 @@ class DerivBrokerGateway(
             }
             val tickObj = resp.optJSONObject("tick")
                 ?: return@withContext Result.failure(Exception("DATA_UNAVAILABLE: Missing tick object in Deriv quote for $symbol"))
-            val quoteVal = tickObj.optDouble("quote", 0.0)
-            val bidVal = tickObj.optDouble("bid", quoteVal)
-            val askVal = tickObj.optDouble("ask", quoteVal)
-            val epoch = tickObj.optLong("epoch", System.currentTimeMillis() / 1000)
+            val quoteVal = tickObj.optDouble("quote", Double.NaN)
+            val bidVal = tickObj.optDouble("bid", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
+            val askVal = tickObj.optDouble("ask", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
+            val epoch = tickObj.optLong("epoch", 0L)
+            if (!quoteVal.isFinite() || quoteVal <= 0.0 || epoch <= 0L) {
+                return@withContext Result.failure(Exception("DATA_UNAVAILABLE: Deriv returned an invalid quote timestamp or price for $symbol"))
+            }
             val timeMs = epoch * 1000L
-
             val now = System.currentTimeMillis()
-            if (now - timeMs > 15_000L) {
-                return@withContext Result.failure(Exception("DATA_STALE: Deriv broker quote for $symbol is older than 15s (age: ${(now - timeMs) / 1000}s)"))
+            val ageMs = now - timeMs
+            if (ageMs < -2_000L || ageMs > 15_000L) {
+                return@withContext Result.failure(Exception("DATA_STALE: Deriv broker quote for $symbol is not current (age: ${ageMs / 1000}s)"))
             }
 
+            val validTwoSided = bidVal != null && askVal != null && askVal >= bidVal
             val cls = com.destinedfx.core.instrument.AssetClassifier.of(symbol)
             val marketQuote = MarketQuote(
                 symbol = symbol,
                 assetClass = cls,
-                bid = bidVal,
-                ask = askVal,
+                bid = if (validTwoSided) bidVal else null,
+                ask = if (validTwoSided) askVal else null,
                 last = quoteVal,
                 timestampMs = timeMs,
                 receivedAtMs = now,
-                source = "Deriv WebSocket"
+                source = "Deriv Options WebSocket"
             )
             cachedQuotes[symbol] = marketQuote
             Result.success(marketQuote)
@@ -392,16 +395,41 @@ class DerivBrokerGateway(
         }
     }
 
-    suspend fun executeOrder(symbol: String, stake: Double, isBuy: Boolean): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
+    /**
+     * Buy a Deriv multiplier contract through the authenticated Options WebSocket.
+     * The limit_order values are cash-denominated P/L thresholds in account currency; they are
+     * not the same as chart-price stops on an MT5/CFD position. Stake is the maximum risk amount.
+     */
+    suspend fun executeOrder(
+        symbol: String,
+        stake: Double,
+        isBuy: Boolean,
+        rewardToRisk: Double = 2.0
+    ): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.CONNECTED) {
-            return@withContext Result.failure(Exception("Deriv broker is not connected. Please connect in Settings."))
+            return@withContext Result.failure(Exception("Deriv broker is not connected. Please connect in the Bot tab."))
+        }
+        if (!stake.isFinite() || stake <= 0.0) {
+            return@withContext Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Stake must be positive and finite."))
+        }
+        if (!rewardToRisk.isFinite() || rewardToRisk < 2.0) {
+            return@withContext Result.failure(Exception("TRADE_PLAN_INVALID: Deriv multiplier execution requires a validated minimum 2.0R plan."))
+        }
+        if (symbol.isBlank()) {
+            return@withContext Result.failure(Exception("UNSUPPORTED_INSTRUMENT: Missing Deriv underlying symbol."))
         }
 
-        // 1. Request price proposal
+        // Conservative multiplier size; this is NOT a conventional lot size.
+        val multiplier = 10
+        val rewardLimit = stake * rewardToRisk
+        if (!rewardLimit.isFinite() || rewardLimit <= 0.0) {
+            return@withContext Result.failure(Exception("TRADE_PLAN_INVALID: Monetary take-profit could not be calculated."))
+        }
+
+        // 1. Request a proposal using the current API schema and cash-based protective limits.
         val propReqId = reqIdCounter.getAndIncrement()
         val propDeferred = CompletableDeferred<JSONObject>()
         pendingRequests[propReqId] = propDeferred
-
         val propType = if (isBuy) "MULTUP" else "MULTDOWN"
         val propPayload = JSONObject().apply {
             put("proposal", 1)
@@ -409,10 +437,20 @@ class DerivBrokerGateway(
             put("basis", "stake")
             put("contract_type", propType)
             put("currency", _accountInfo.value?.currency ?: "USD")
-            put("symbol", symbol)
+            put("duration_unit", "s")
+            put("multiplier", multiplier)
+            put("underlying_symbol", symbol)
+            put("limit_order", JSONObject().apply {
+                put("stop_loss", stake)
+                put("take_profit", rewardLimit)
+            })
+            put("subscribe", 1)
             put("req_id", propReqId)
         }
-        webSocket?.send(propPayload.toString())
+        if (webSocket?.send(propPayload.toString()) != true) {
+            pendingRequests.remove(propReqId)
+            return@withContext Result.failure(Exception("BROKER_DISCONNECTED: Deriv WebSocket rejected the proposal request before it was sent."))
+        }
 
         val proposalId: String
         val askPrice: Double
@@ -420,48 +458,62 @@ class DerivBrokerGateway(
             val propResp = withTimeout(10_000) { propDeferred.await() }
             val err = propResp.optJSONObject("error")
             if (err != null) {
-                return@withContext Result.failure(Exception("Deriv Proposal Rejected: ${err.optString("message")}"))
+                return@withContext Result.failure(
+                    Exception("Deriv proposal rejected (${err.optString("code")}): ${err.optString("message")}")
+                )
             }
-            val p = propResp.optJSONObject("proposal") ?: return@withContext Result.failure(Exception("No proposal returned"))
-            proposalId = p.optString("id")
-            askPrice = p.optDouble("ask_price", stake)
-        } catch (e: Exception) {
-            return@withContext Result.failure(Exception("Proposal timeout: ${e.message}"))
+            val p = propResp.optJSONObject("proposal")
+                ?: return@withContext Result.failure(Exception("Deriv did not return a proposal object."))
+            proposalId = p.optString("id").trim()
+            askPrice = p.optDouble("ask_price", Double.NaN)
+            if (proposalId.isBlank() || !askPrice.isFinite() || askPrice <= 0.0) {
+                return@withContext Result.failure(Exception("Deriv proposal omitted a valid ID or ask_price; no order was sent."))
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return@withContext Result.failure(Exception("Deriv proposal request failed: ${error.message ?: error.javaClass.simpleName}"))
         } finally {
             pendingRequests.remove(propReqId)
         }
 
-        // 2. Buy contract using proposal id
+        // 2. Buy only the proposal ID/price returned by Deriv.
         val buyReqId = reqIdCounter.getAndIncrement()
         val buyDeferred = CompletableDeferred<JSONObject>()
         pendingRequests[buyReqId] = buyDeferred
-
         val buyPayload = JSONObject().apply {
             put("buy", proposalId)
             put("price", askPrice)
             put("req_id", buyReqId)
         }
-        webSocket?.send(buyPayload.toString())
+        if (webSocket?.send(buyPayload.toString()) != true) {
+            pendingRequests.remove(buyReqId)
+            return@withContext Result.failure(Exception("BROKER_DISCONNECTED: Deriv WebSocket rejected the buy request before it was sent."))
+        }
 
         try {
             val buyResp = withTimeout(10_000) { buyDeferred.await() }
             val buyErr = buyResp.optJSONObject("error")
             if (buyErr != null) {
-                return@withContext Result.failure(Exception("Deriv Order Execution Rejected: ${buyErr.optString("message")}"))
+                return@withContext Result.failure(
+                    Exception("Deriv order rejected (${buyErr.optString("code")}): ${buyErr.optString("message")}")
+                )
             }
-            val buyData = buyResp.optJSONObject("buy") ?: return@withContext Result.failure(Exception("Invalid buy response"))
+            val buyData = buyResp.optJSONObject("buy")
+                ?: return@withContext Result.failure(Exception("Deriv returned no buy confirmation object."))
             val contractId = buyData.optLong("contract_id", 0L)
             val txId = buyData.optLong("transaction_id", 0L)
-            val boughtPrice = buyData.optDouble("buy_price", askPrice)
-
-            if (contractId > 0) {
-                subscribeOpenContract(contractId)
+            val boughtPrice = buyData.optDouble("buy_price", Double.NaN)
+            if (contractId <= 0L || !boughtPrice.isFinite() || boughtPrice <= 0.0) {
+                return@withContext Result.failure(Exception("Deriv buy response did not confirm a valid contract ID and purchase price."))
             }
-
+            subscribeOpenContract(contractId)
             fetchPortfolio()
             Result.success(DerivBuyResult(contractId, txId, boughtPrice))
-        } catch (e: Exception) {
-            Result.failure(Exception("Order buy timeout: ${e.message}"))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Result.failure(Exception("Deriv buy request failed: ${error.message ?: error.javaClass.simpleName}"))
         } finally {
             pendingRequests.remove(buyReqId)
         }
