@@ -11,6 +11,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -19,9 +21,19 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
+ * Canonical active instrument returned by Deriv's public active_symbols endpoint.
+ * Display labels are kept separately from broker symbols to avoid guessed market codes.
+ */
+data class DerivActiveSymbol(
+    val symbol: String,
+    val displayName: String,
+    val market: String = "",
+    val symbolType: String = ""
+)
+
+/**
  * Real-time WebSocket Gateway for Deriv market data.
- * Connects to Deriv public WebSocket endpoint: wss://ws.derivws.com/websockets/v3?app_id=...
- * Streams real live ticks, subscribes/unsubscribes symbols, and fetches real historical candles.
+ * Uses the public active_symbols, ticks, and ticks_history endpoints for market data.
  */
 class DerivMarketDataGateway(
     private val appId: String = "1089",
@@ -45,10 +57,16 @@ class DerivMarketDataGateway(
     private var webSocket: WebSocket? = null
     private val reqIdCounter = AtomicInteger(1)
     private val activeSubscriptions = ConcurrentHashMap<String, String>() // symbol -> subscriptionId
+    private val requestedSubscriptions = ConcurrentHashMap.newKeySet<String>()
     private val tickListeners = ConcurrentHashMap<String, (Tick) -> Unit>()
     private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
     private val lastCandleErrors = ConcurrentHashMap<String, String>()
+    private val activeSymbolsMutex = Mutex()
+    @Volatile private var cachedActiveSymbols: List<DerivActiveSymbol> = emptyList()
+    @Volatile private var activeSymbolsFetchedAtMs: Long = 0L
     @Volatile private var lastConnectionError: String? = null
+    @Volatile private var manuallyDisconnected = false
+    private val reconnectAttempts = AtomicInteger(0)
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun getLastCandleError(symbol: String): String? = lastCandleErrors[symbol] ?: lastConnectionError
