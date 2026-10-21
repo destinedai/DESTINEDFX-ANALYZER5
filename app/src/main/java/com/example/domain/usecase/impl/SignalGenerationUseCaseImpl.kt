@@ -71,7 +71,7 @@ class SignalGenerationUseCaseImpl(
     ): TradeSignal {
         val startTotal = clock()
         return try {
-            val now = clock()
+            var now = clock()
             val stratDef = com.destinedfx.core.strategy.StrategyRegistry.allStrategies.find { it.id == strategyId }
             if (stratDef != null && !stratDef.isImplemented) {
                 return unavailable(symbol, timeframe, "Strategy '${stratDef.name}' is not implemented", "NOT_IMPLEMENTED")
@@ -109,6 +109,10 @@ class SignalGenerationUseCaseImpl(
             if (quote == null) {
                 return unavailable(symbol, timeframe, "NO QUOTE OR VALID HISTORICAL CANDLE for " + symbol + " " + timeframe, "DISCONNECTED")
             }
+            // refreshSymbol() may return a quote captured after the scan began. Anchor health,
+            // strategy analysis, news and session checks to the current clock after refresh so
+            // a valid freshly-received quote is not falsely treated as future-dated.
+            now = clock()
             val hc = if (ticker?.kind == "STREAM") HealthConfig() else HealthConfig.polled(pollIntervalMs)
             val health = if (ticker == null) MarketDataHealth.STALE
                 else MarketDataHealthEvaluator.evaluate(quote, now, connected = true, cfg = hc)
