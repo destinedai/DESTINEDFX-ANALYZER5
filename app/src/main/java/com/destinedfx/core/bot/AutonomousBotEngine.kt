@@ -105,10 +105,23 @@ class AutonomousBotEngine(
             return@withContext Result.failure(Exception(err))
         }
 
-        // Gate 3: Instrument resolution
+        // Gate 3: Instrument resolution. For valid symbols not in the static registry, let the
+        // market-data repository resolve the canonical name against Deriv's live active_symbols
+        // directory before rejecting it; never guess a broker code.
         val isDerivActive = brokerManager.activeBroker.value.brokerType == com.example.data.broker.BrokerType.DERIV
         if (isDerivActive && !com.destinedfx.core.broker.DerivInstrumentResolver.isSupported(symbol)) {
-            val err = "UNSUPPORTED_INSTRUMENT: Symbol '$symbol' is not supported on Deriv."
+            try {
+                kotlinx.coroutines.withTimeoutOrNull(19_000L) {
+                    marketDataRepo.getCandles(symbol, timeframe, 2)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Instrument preflight failed for $symbol: ${error.message}")
+            }
+        }
+        if (isDerivActive && !com.destinedfx.core.broker.DerivInstrumentResolver.isSupported(symbol)) {
+            val err = "UNSUPPORTED_INSTRUMENT: Symbol '$symbol' is not available in Deriv's active-symbol directory."
             _status.value = _status.value.copy(state = BotLifecycleState.ERROR, lastError = err, lastAction = "Activation rejected: unsupported instrument")
             return@withContext Result.failure(Exception(err))
         }
