@@ -79,7 +79,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                 else -> if (isConnected) ProfitGreen else WarningAmber
             }
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111A28)),
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                 border = BorderStroke(1.dp, statusColor.copy(alpha = 0.42f))) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {

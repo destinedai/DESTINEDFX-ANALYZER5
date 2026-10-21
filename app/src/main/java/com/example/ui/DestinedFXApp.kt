@@ -100,6 +100,17 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     var showExportDialog by remember { mutableStateOf(false) }
     val dynamicAnalysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
+    val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
+    val feedStatusColor = when {
+        marketDataStatus.startsWith("READY", ignoreCase = true) -> ProfitGreen
+        marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> LossRed
+        else -> WarningAmber
+    }
+    val feedStatusLabel = when {
+        marketDataStatus.startsWith("READY", ignoreCase = true) -> "Data ready"
+        marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "Feed unavailable"
+        else -> "Checking feed"
+    }
     val currentTicker = tickers[activeSymbol]
     val headerPrice = currentTicker?.price?.takeIf { it > 0.0 }
     val priceChange = currentTicker?.changePercent
@@ -115,8 +126,13 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color(0xFF17243A), DarkSurface, DarkBackground)
+                            )
+                        )
                         .statusBarsPadding()
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     // Row 1: Logo & App Name (left) | PulsingDot + Status + Actions (right)
@@ -162,28 +178,38 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                             }
                         }
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            Text(
-                                text = "TRADINGVIEW",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace,
-                                color = ElectricCyan
+                            TerminalStatusPill(
+                                label = feedStatusLabel,
+                                tint = feedStatusColor,
+                                modifier = Modifier.testTag("market_feed_status")
                             )
-
-                            IconButton(
-                                onClick = { showExportDialog = true },
-                                modifier = Modifier.size(32.dp).testTag("export_button")
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.Share,
-                                    contentDescription = "Export Analysis",
-                                    tint = ElectricCyan,
-                                    modifier = Modifier.size(16.dp)
+                                Text(
+                                    text = "TRADINGVIEW",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = ElectricCyan,
+                                    letterSpacing = 0.4.sp
                                 )
+                                IconButton(
+                                    onClick = { showExportDialog = true },
+                                    modifier = Modifier.size(30.dp).testTag("export_button")
+                                ) {
+                                    Icon(
+                                        Icons.Default.Share,
+                                        contentDescription = "Export Analysis",
+                                        tint = ElectricCyan,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -390,7 +416,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         }
                     }
                     Button(
-                        onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe) },
+                        onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe, selectedMtfTimeframes) },
                         enabled = !isScanning,
                         modifier = Modifier.fillMaxWidth().height(46.dp).testTag("analyze_button"),
                         shape = RoundedCornerShape(10.dp),
@@ -838,7 +864,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111A28)),
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                 border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

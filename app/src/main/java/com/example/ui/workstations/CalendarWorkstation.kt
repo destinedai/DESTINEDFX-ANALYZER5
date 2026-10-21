@@ -96,7 +96,7 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                 NewsStatus.UNKNOWN -> WarningAmber
             }
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111A28)), border = BorderStroke(1.dp, CardBorder)) {
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), border = BorderStroke(1.dp, CardBorder.copy(alpha = 0.9f))) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(ElectricCyan.copy(alpha = 0.12f)),

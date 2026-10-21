@@ -2,13 +2,25 @@ package com.example.ui.theme
 
 import android.app.Activity
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+
+// Unified rounded component geometry across Analyzer, Strategies, Calendar, Bot, Risk, and Settings.
+private val DestinedFxShapes = Shapes(
+  extraSmall = RoundedCornerShape(8.dp),
+  small = RoundedCornerShape(10.dp),
+  medium = RoundedCornerShape(14.dp),
+  large = RoundedCornerShape(18.dp),
+  extraLarge = RoundedCornerShape(24.dp)
+)
 
 // Force premium dark trading terminal color scheme
 private val DestinedFxDarkColorScheme =
@@ -60,5 +72,5 @@ fun DestinedFXTheme(
     }
   }
 
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+  MaterialTheme(colorScheme = colorScheme, typography = Typography, shapes = DestinedFxShapes, content = content)
 }

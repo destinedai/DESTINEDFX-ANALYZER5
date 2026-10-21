@@ -257,9 +257,16 @@ fun TerminalPageHeader(
     trailing: (@Composable () -> Unit)? = null
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF1A2940), DarkSurfaceVariant, DarkSurface)
+                )
+            ),
         shape = RoundedCornerShape(14.dp),
-        color = DarkSurfaceVariant,
+        color = Color.Transparent,
         border = BorderStroke(1.dp, CardBorder),
         tonalElevation = 0.dp
     ) {
@@ -301,3 +308,42 @@ fun TerminalPageHeader(
     }
 }
 
+
+
+/** Compact, honest feed/connection indicator shared by the terminal shell and workspaces. */
+@Composable
+fun TerminalStatusPill(
+    label: String,
+    tint: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        color = tint.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(50),
+        border = BorderStroke(1.dp, tint.copy(alpha = 0.38f)),
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(tint)
+            )
+            Text(
+                text = label.uppercase(Locale.US),
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 0.35.sp,
+                color = tint,
+                maxLines = 1
+            )
+        }
+    }
+}
