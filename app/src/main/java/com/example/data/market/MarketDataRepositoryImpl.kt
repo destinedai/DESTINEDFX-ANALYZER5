@@ -165,9 +165,18 @@ class MarketDataRepositoryImpl(
         val names = derivLookupNames(canonicalSymbol)
         if (names.all { it.isBlank() }) return null
         val discovered = withTimeoutOrNull(18_000L) { gateway.fetchActiveSymbols() } ?: emptyList()
+        fun comparableDerivCode(value: String): String {
+            val normalizedCode = normalizeMarketSymbol(value)
+            return when {
+                normalizedCode.startsWith("FRX") -> normalizedCode.removePrefix("FRX")
+                normalizedCode.startsWith("CRY") -> normalizedCode.removePrefix("CRY")
+                else -> normalizedCode
+            }
+        }
         val match = discovered.firstOrNull { candidate ->
             normalizeMarketSymbol(candidate.displayName) in names ||
-                normalizeMarketSymbol(candidate.symbol) in names
+                normalizeMarketSymbol(candidate.symbol) in names ||
+                comparableDerivCode(candidate.symbol) in names
         } ?: return null
 
         // Register only codes that actually appeared in Deriv's active symbol directory.
