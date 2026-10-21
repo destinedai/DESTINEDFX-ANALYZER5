@@ -106,6 +106,8 @@ class TradingViewAndMtfValidationTest {
         assertTrue(html.contains("\"save_image\":false"))
         assertTrue(html.contains("\"withdateranges\":true"))
         assertTrue(html.contains("\"studies\":[\"STD;EMA\",\"STD;RSI\"]"))
+        assertTrue(html.contains("data-destinedfx-tv-loaded-at"))
+        assertTrue(html.contains("selected TradingView market has rendered"))
         assertTrue(html.contains("#0F0F0F"))
         assertNull(TradingViewMapper.buildWidgetHtml("R_100", "M15"))
         assertNull(TradingViewMapper.buildWidgetHtml("EUR/USD", "M2"))
