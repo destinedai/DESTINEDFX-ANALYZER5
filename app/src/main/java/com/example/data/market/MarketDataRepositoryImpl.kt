@@ -79,6 +79,8 @@ class MarketDataRepositoryImpl(
     private val candleCache = mutableMapOf<String, CachedCandles>()
     private val dataSourceMap = mutableMapOf<String, String>()
     private val _candleSources = ConcurrentHashMap<String, String>()
+    // Canonical app symbols discovered from Deriv's live active_symbols directory.
+    private val dynamicCanonicalByDerivSymbol = ConcurrentHashMap<String, String>()
     override val candleSources: Map<String, String> get() = _candleSources
 
     private val _tickers = MutableStateFlow<Map<String, MarketTicker>>(emptyMap())
@@ -133,36 +135,67 @@ class MarketDataRepositoryImpl(
         }
     }
 
-    private suspend fun derivTickerForSymbol(sym: String, maxQuoteAgeMs: Long): MarketTicker? {
+    private fun normalizeMarketSymbol(value: String): String =
+        value.trim().uppercase().filter { it.isLetterOrDigit() }
+
+    /**
+     * Resolve only against the fixed, audited resolver or Deriv's real active-symbol directory.
+     * Never construct a synthetic feed code from a display label.
+     */
+    private suspend fun resolveDerivSymbol(canonicalSymbol: String): String? {
+        com.destinedfx.core.broker.DerivInstrumentResolver.resolve(canonicalSymbol)?.let { return it }
         val gateway = derivMarketDataGateway ?: return null
-        val derivSymbol = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(sym) ?: return null
-        val now = clock()
-        val quote = gateway.latestQuotes.value[derivSymbol]
-        if (quote != null) {
-            val ageMs = now - quote.receivedAtMs
+        val normalized = normalizeMarketSymbol(canonicalSymbol)
+        if (normalized.isBlank()) return null
+        val discovered = withTimeoutOrNull(18_000L) { gateway.fetchActiveSymbols() } ?: emptyList()
+        val match = discovered.firstOrNull { candidate ->
+            normalizeMarketSymbol(candidate.displayName) == normalized ||
+                normalizeMarketSymbol(candidate.symbol) == normalized
+        } ?: return null
+
+        com.destinedfx.core.broker.DerivInstrumentResolver.registerAlias(canonicalSymbol, match.symbol)
+        dynamicCanonicalByDerivSymbol[match.symbol] = canonicalSymbol
+        return match.symbol
+    }
+
+    private suspend fun derivTickerForSymbol(
+        sym: String,
+        maxQuoteAgeMs: Long,
+        waitForFreshQuote: Boolean = false
+    ): MarketTicker? {
+        val gateway = derivMarketDataGateway ?: return null
+        val derivSymbol = resolveDerivSymbol(sym) ?: return null
+        val requestStartedAt = clock()
+
+        fun liveTickerIfFresh(quote: MarketQuote?): MarketTicker? {
+            quote ?: return null
+            val ageMs = clock() - quote.receivedAtMs
             val price = quote.mid ?: quote.last ?: 0.0
-            if (ageMs >= 0L && ageMs <= maxQuoteAgeMs && price.isFinite() && price > 0.0) {
-                return MarketTicker(
-                    symbol = sym, price = price, changePercent = 0.0, high = 0.0, low = 0.0,
-                    spread = quote.spread ?: 0.0, bias = "NEUTRAL", confidence = 0,
-                    lastUpdateMillis = quote.receivedAtMs, isLive = true,
-                    source = "Deriv WebSocket",
-                    bid = quote.bid, ask = quote.ask, hasRealSpread = quote.spread != null, kind = "STREAM"
-                )
+            if (ageMs < 0L || ageMs > maxQuoteAgeMs || !price.isFinite() || price <= 0.0) return null
+            return MarketTicker(
+                symbol = sym, price = price, changePercent = 0.0, high = 0.0, low = 0.0,
+                spread = quote.spread ?: 0.0, bias = "NEUTRAL", confidence = 0,
+                lastUpdateMillis = quote.receivedAtMs, isLive = true,
+                source = "Deriv WebSocket",
+                bid = quote.bid, ask = quote.ask, hasRealSpread = quote.spread != null, kind = "STREAM"
+            )
+        }
+
+        liveTickerIfFresh(gateway.latestQuotes.value[derivSymbol])?.let { return it }
+
+        // Register the selected symbol on demand, not just the startup watchlist.
+        gateway.subscribeTicks(derivSymbol) { _ -> }
+        if (waitForFreshQuote) {
+            withTimeoutOrNull(5_000L) {
+                gateway.latestQuotes.first { quotes ->
+                    val quote = quotes[derivSymbol]
+                    quote != null && quote.receivedAtMs >= requestStartedAt &&
+                        ((quote.mid ?: quote.last ?: 0.0) > 0.0)
+                }
             }
         }
-        // Historical candles are one-sided historical data, not a live quote. Keep original
-        // timestamp and do not invent bid, ask, spread, or live status.
-        val candle = withTimeoutOrNull(30_000L) { gateway.fetchCandles(derivSymbol, 60, 2).lastOrNull() }
-            ?: return null
-        if (!candle.close.isFinite() || candle.close <= 0.0 || candle.timestamp <= 0L) return null
-        return MarketTicker(
-            symbol = sym, price = candle.close, changePercent = 0.0, high = candle.high, low = candle.low,
-            spread = 0.0, bias = "NEUTRAL", confidence = 0,
-            lastUpdateMillis = candle.timestamp, isLive = false,
-            source = "Deriv historical candle (analysis only)",
-            bid = null, ask = null, hasRealSpread = false, kind = "POLLED_LAST"
-        )
+        // Historical candle closes are never exposed as if they were a real-time quote.
+        return liveTickerIfFresh(gateway.latestQuotes.value[derivSymbol])
     }
 
     private suspend fun fetchLiveQuoteForSymbol(sym: String): MarketTicker? {
@@ -174,7 +207,7 @@ class MarketDataRepositoryImpl(
         }
         val preferred = selectedApiSource.value
         if (preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank()) {
-            derivTickerForSymbol(sym, 15_000L)?.let { return it }
+            derivTickerForSymbol(sym, 15_000L, waitForFreshQuote = true)?.let { return it }
         }
         if (preferred == "OANDA" || secrets.getOandaApiKey().isNotBlank()) {
             withTimeoutOrNull(3_000L) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }?.let { return it }
@@ -191,7 +224,7 @@ class MarketDataRepositoryImpl(
         }
         val preferred = selectedApiSource.value
         if (preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank()) {
-            derivTickerForSymbol(sym, 20_000L)?.let { return it }
+            derivTickerForSymbol(sym, 20_000L, waitForFreshQuote = false)?.let { return it }
         }
         if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
             return withTimeoutOrNull(2_000L) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }
@@ -346,6 +379,7 @@ class MarketDataRepositoryImpl(
                 derivGw.latestQuotes.collect { quotes ->
                     val updated = quotes.mapNotNull { (derivSymbol, q) ->
                         val canonicalSymbol = canonicalByDerivSymbol[derivSymbol]
+                            ?: dynamicCanonicalByDerivSymbol[derivSymbol]
                             ?: return@mapNotNull null
                         val price = (q.mid ?: q.last ?: 0.0)
                         if (price <= 0.0) return@mapNotNull null
@@ -487,7 +521,7 @@ class MarketDataRepositoryImpl(
         val preferred = selectedApiSource.value
 
         // 1. Deriv WebSocket priority: when DERIV is selected, default, or for Deriv symbols
-        val derivSymbol = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(symbol)
+        val derivSymbol = withTimeoutOrNull(19_000L) { resolveDerivSymbol(symbol) }
         if ((preferred == "DERIV" || preferred.isBlank() || secrets.getOandaApiKey().isBlank() || derivSymbol?.startsWith("R_") == true || derivSymbol?.startsWith("1HZ") == true || derivSymbol?.startsWith("BOOM") == true || derivSymbol?.startsWith("CRASH") == true) &&
             derivMarketDataGateway != null && derivSymbol != null &&
             com.destinedfx.core.instrument.AssetClassifier.of(symbol) != com.destinedfx.core.marketdata.AssetClass.CRYPTO) {
