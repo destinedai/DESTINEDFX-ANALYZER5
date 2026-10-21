@@ -16,6 +16,7 @@ sealed class DestinedFXScreen(val title: String, val icon: ImageVector, val tag:
     object Calendar : DestinedFXScreen("Calendar", Icons.Default.CalendarMonth, "nav_tab_calendar")
     object Bot : DestinedFXScreen("Bot", Icons.Default.SmartToy, "nav_tab_bot")
     object Watchlist : DestinedFXScreen("Watchlist", Icons.Default.BookmarkBorder, "nav_tab_watchlist")
+    object Chat : DestinedFXScreen("Chat", Icons.Default.Chat, "nav_tab_chat")
     object More : DestinedFXScreen("More", Icons.Default.MoreHoriz, "nav_tab_more")
     object Risk : DestinedFXScreen("Risk", Icons.Default.Calculate, "nav_tab_risk")
     object Settings : DestinedFXScreen("Settings", Icons.Default.Settings, "nav_tab_settings")
@@ -25,9 +26,9 @@ sealed class DestinedFXScreen(val title: String, val icon: ImageVector, val tag:
             get() = listOf(Home, Analyzer, Strategies, Calendar, More)
 
         val moreScreens: List<DestinedFXScreen>
-            get() = listOf(ImageAnalyzer, Bot, Watchlist, Risk, Settings)
+            get() = listOf(Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings)
 
         val allScreens: List<DestinedFXScreen>
-            get() = listOf(Home, Analyzer, Strategies, Calendar, More, ImageAnalyzer, Bot, Watchlist, Risk, Settings)
+            get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings)
     }
 }
