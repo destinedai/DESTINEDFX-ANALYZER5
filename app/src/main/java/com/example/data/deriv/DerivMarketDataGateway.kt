@@ -36,7 +36,7 @@ data class DerivActiveSymbol(
  * Uses the public active_symbols, ticks, and ticks_history endpoints for market data.
  */
 class DerivMarketDataGateway(
-    private val appId: String = "1089",
+    @Suppress("UNUSED_PARAMETER") private val appId: String = "1089",
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -45,7 +45,9 @@ class DerivMarketDataGateway(
 ) {
     companion object {
         private const val TAG = "DerivMDGateway"
-        private const val WS_URL_BASE = "wss://ws.derivws.com/websockets/v3?app_id="
+        // Current Deriv Options API public endpoint. No token or App ID query parameter is
+        // required for read-only market data on this channel.
+        private const val WS_PUBLIC_URL = "wss://api.derivws.com/trading/v1/options/ws/public"
     }
 
     private val _connectionState = MutableStateFlow(DerivConnectionState.DISCONNECTED)
@@ -80,7 +82,7 @@ class DerivMarketDataGateway(
         lastConnectionError = null
         _connectionState.value = DerivConnectionState.CONNECTING
         val request = Request.Builder()
-            .url("$WS_URL_BASE$appId")
+            .url(WS_PUBLIC_URL)
             .build()
 
         try {
