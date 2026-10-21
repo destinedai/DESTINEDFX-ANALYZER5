@@ -39,6 +39,7 @@ class SecretsManager(private val ctx: Context) {
         private const val BROKER_SYMBOL_OVERRIDES = "broker_symbol_overrides"
         private const val DERIV_API_TOKEN = "deriv_api_token"
         private const val DERIV_APP_ID = "deriv_app_id"
+        private const val DERIV_ACCOUNT_MODE = "deriv_account_mode"
         private const val TG_STATUS = "telegram_connection_status"
         private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
     }
@@ -91,11 +92,13 @@ class SecretsManager(private val ctx: Context) {
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
     fun saveDerivApiToken(v: String)    = prefs.edit().putString(DERIV_API_TOKEN, v).apply()
     fun saveDerivAppId(v: String)       = prefs.edit().putString(DERIV_APP_ID, v).apply()
+    fun saveDerivAccountMode(v: String) = prefs.edit().putString(DERIV_ACCOUNT_MODE, v.trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo").apply()
     fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
 
     fun getDerivApiToken(): String     = prefs.getString(DERIV_API_TOKEN, "") ?: ""
     fun getDerivAppId(): String        = prefs.getString(DERIV_APP_ID, "1089") ?: "1089"
+    fun getDerivAccountMode(): String  = (prefs.getString(DERIV_ACCOUNT_MODE, "demo") ?: "demo").trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo"
     fun getTelegramConnectionStatus(): String = prefs.getString(TG_STATUS, "Not configured") ?: "Not configured"
     fun getTelegramNotificationsEnabled(): Boolean = prefs.getBoolean(TG_NOTIF_ENABLED, false)
 
