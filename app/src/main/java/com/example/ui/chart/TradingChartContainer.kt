@@ -127,7 +127,7 @@ fun LiveStructureHud(
     modifier: Modifier = Modifier
 ) {
     val isBuy = analysis.direction == "BUY"
-    val dirCol = if (isBuy) Color(0xFF00FF99) else Color(0xFFFF4560)
+    val dirCol = if (isBuy) ProfitGreen else LossRed
     val dirBg = if (isBuy) Color(0xFF132A20) else Color(0xFF2E131C)
 
     Row(
@@ -148,7 +148,7 @@ fun LiveStructureHud(
                 modifier = Modifier
                     .size(8.dp)
                     .clip(RoundedCornerShape(4.dp))
-                    .background(Color(0xFF00FF99))
+                    .background(ProfitGreen)
             )
 
             // Flow Direction Badge
@@ -183,7 +183,7 @@ fun LiveStructureHud(
             // Target TP1 Harvest
             Text(
                 text = "TARGET: ${formatPrice(analysis.tp1, symbol)} (+${String.format(Locale.US, "%.1f", analysis.tp1YieldPips)} pts)",
-                color = Color(0xFF00FF99),
+                color = ProfitGreen,
                 fontSize = 8.5.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace
@@ -468,7 +468,7 @@ fun AlgorithmicCanvasChart(
         ) {
             Text(
                 text = "No live candles available",
-                color = Color(0xFF5A6978),
+                color = TextMuted,
                 fontSize = 14.sp,
                 fontFamily = FontFamily.Monospace
             )
@@ -509,7 +509,7 @@ fun AlgorithmicCanvasChart(
                 val gridY = h * (i.toFloat() / gridCount)
                 val gridPrice = minPrice + ((h - gridY) / h) * priceRange
                 drawLine(
-                    color = Color(0xFF1E2638).copy(alpha = 0.5f),
+                    color = ChartGrid.copy(alpha = 0.5f),
                     start = Offset(0f, gridY),
                     end = Offset(w - 70f, gridY),
                     strokeWidth = 1f
@@ -536,12 +536,12 @@ fun AlgorithmicCanvasChart(
                 val obY2 = priceToY(obBottomPrice)
 
                 drawRect(
-                    color = Color(0xFF00FF99).copy(alpha = 0.12f),
+                    color = ProfitGreen.copy(alpha = 0.12f),
                     topLeft = Offset(w * 0.25f, min(obY1, obY2)),
                     size = Size(w * 0.75f, abs(obY2 - obY1))
                 )
                 drawLine(
-                    color = Color(0xFF00FF99).copy(alpha = 0.6f),
+                    color = ProfitGreen.copy(alpha = 0.6f),
                     start = Offset(w * 0.25f, min(obY1, obY2)),
                     end = Offset(w, min(obY1, obY2)),
                     strokeWidth = 1.5f,
@@ -557,12 +557,12 @@ fun AlgorithmicCanvasChart(
                 val obY2 = priceToY(obBottomPrice)
 
                 drawRect(
-                    color = Color(0xFFFF4560).copy(alpha = 0.12f),
+                    color = LossRed.copy(alpha = 0.12f),
                     topLeft = Offset(w * 0.25f, min(obY1, obY2)),
                     size = Size(w * 0.75f, abs(obY2 - obY1))
                 )
                 drawLine(
-                    color = Color(0xFFFF4560).copy(alpha = 0.6f),
+                    color = LossRed.copy(alpha = 0.6f),
                     start = Offset(w * 0.25f, max(obY1, obY2)),
                     end = Offset(w, max(obY1, obY2)),
                     strokeWidth = 1.5f,
@@ -576,7 +576,7 @@ fun AlgorithmicCanvasChart(
             val fvgMidPrice = if (isBuy) drawConfluences.entry + (obHeightPips * 0.5) else drawConfluences.entry - (obHeightPips * 0.5)
             val fvgY = priceToY(fvgMidPrice)
             drawLine(
-                color = Color(0xFF00E5FF).copy(alpha = 0.5f),
+                color = ElectricCyan.copy(alpha = 0.5f),
                 start = Offset(w * 0.4f, fvgY),
                 end = Offset(w * 0.85f, fvgY),
                 strokeWidth = 1.5f,
@@ -589,7 +589,7 @@ fun AlgorithmicCanvasChart(
             val bosPrice = if (isBuy) candleMax else candleMin
             val bosY = priceToY(bosPrice)
             drawLine(
-                color = if (isBuy) Color(0xFF00FF99).copy(alpha = 0.7f) else Color(0xFFFF4560).copy(alpha = 0.7f),
+                color = if (isBuy) ProfitGreen.copy(alpha = 0.7f) else LossRed.copy(alpha = 0.7f),
                 start = Offset(w * 0.15f, bosY),
                 end = Offset(w * 0.75f, bosY),
                 strokeWidth = 1.5f,
@@ -612,7 +612,7 @@ fun AlgorithmicCanvasChart(
                 val yClose = priceToY(c.close)
 
                 val isGreen = c.close >= c.open
-                val cColor = if (isGreen) Color(0xFF00FF99) else Color(0xFFFF4560)
+                val cColor = if (isGreen) ProfitGreen else LossRed
 
                 // Wick
                 drawLine(
@@ -641,7 +641,7 @@ fun AlgorithmicCanvasChart(
 
             // Entry Line (Blue)
             drawLine(
-                color = Color(0xFF448AFF),
+                color = ElectricCyan,
                 start = Offset(0f, entryY),
                 end = Offset(w - 70f, entryY),
                 strokeWidth = 2f,
@@ -652,7 +652,7 @@ fun AlgorithmicCanvasChart(
 
             // Stop Loss Line (Red with buffer)
             drawLine(
-                color = Color(0xFFFF5252),
+                color = LossRed,
                 start = Offset(0f, slY),
                 end = Offset(w - 70f, slY),
                 strokeWidth = 2f,
@@ -663,7 +663,7 @@ fun AlgorithmicCanvasChart(
 
             // TP1 Line (Green)
             drawLine(
-                color = Color(0xFF00FF99),
+                color = ProfitGreen,
                 start = Offset(0f, tp1Y),
                 end = Offset(w - 70f, tp1Y),
                 strokeWidth = 2f,
@@ -674,7 +674,7 @@ fun AlgorithmicCanvasChart(
 
             // TP2 Line (Cyan)
             drawLine(
-                color = Color(0xFF00E5FF),
+                color = ElectricCyan,
                 start = Offset(0f, tp2Y),
                 end = Offset(w - 70f, tp2Y),
                 strokeWidth = 2f,
@@ -686,7 +686,7 @@ fun AlgorithmicCanvasChart(
             // 7. Live Spot Price Cursor & Pulsating Beacon
             val spotY = priceToY(currentSpotPrice)
             drawLine(
-                color = Color(0xFFFFD700).copy(alpha = 0.8f),
+                color = ElectricCyan.copy(alpha = 0.8f),
                 start = Offset(0f, spotY),
                 end = Offset(w, spotY),
                 strokeWidth = 1f,
@@ -695,19 +695,19 @@ fun AlgorithmicCanvasChart(
 
             val lastX = (candles.size - 1) * candleSpacing + candleSpacing / 2f
             drawCircle(
-                color = Color(0xFFFFD700),
+                color = ElectricCyan,
                 radius = 5f,
                 center = Offset(lastX, spotY)
             )
             drawCircle(
-                color = Color(0xFFFFD700).copy(alpha = 0.25f),
+                color = ElectricCyan.copy(alpha = 0.25f),
                 radius = 12f,
                 center = Offset(lastX, spotY)
             )
 
             // Spot Price Pill on the Right Axis
             drawRect(
-                color = Color(0xFFFFD700),
+                color = ElectricCyan,
                 topLeft = Offset(w - 70f, spotY - 12f),
                 size = Size(70f, 24f)
             )

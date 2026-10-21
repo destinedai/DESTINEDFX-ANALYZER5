@@ -148,11 +148,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         item {
             val isRunning = botSummary.isRunning || botActive
             val statusColor = when (botSummary.state) {
-                BotLifecycleState.ACTIVE_SCANNING -> Color(0xFF00FF99)
+                BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
                 BotLifecycleState.EXECUTING -> CyanPrimary
                 BotLifecycleState.CONNECTING_BROKER -> OrangeAccent
-                BotLifecycleState.ERROR -> Color(0xFFFF4560)
-                else -> if (isRunning) Color(0xFF00FF99) else Color(0xFF8892A4)
+                BotLifecycleState.ERROR -> LossRed
+                else -> if (isRunning) ProfitGreen else TextSecondary
             }
 
             Card(
@@ -199,7 +199,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = DarkBackground,
-                                checkedTrackColor = Color(0xFF00FF99),
+                                checkedTrackColor = ProfitGreen,
                                 uncheckedThumbColor = TextSecondary,
                                 uncheckedTrackColor = DarkSurfaceVariant
                             ),
@@ -222,7 +222,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             text = "ERROR: ${botSummary.lastError}",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = Color(0xFFFF4560)
+                            color = LossRed
                         )
                     }
 
@@ -256,7 +256,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                 if (isHalted) {
                     Text(
                         text = "Trading halted due to high-impact economic event window.",
-                        color = Color(0xFFFF4560),
+                        color = LossRed,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -436,7 +436,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 text = brokerConnStatus.name,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
-                                color = if (brokerConnStatus.name == "CONNECTED") Color(0xFF00FF99) else OrangeAccent
+                                color = if (brokerConnStatus.name == "CONNECTED") ProfitGreen else OrangeAccent
                             )
                         }
 
@@ -490,12 +490,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Max Risk per Trade:", fontSize = 11.sp, color = TextSecondary)
-                        Text("${riskPercent}% (Capped strictly <= 1.0%)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00FF99))
+                        Text("${riskPercent}% (Capped strictly <= 1.0%)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ProfitGreen)
                     }
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Minimum Executable RR:", fontSize = 11.sp, color = TextSecondary)
-                        Text("1:2.0 (Absolute minimum)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00FF99))
+                        Text("1:2.0 (Absolute minimum)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ProfitGreen)
                     }
                 }
             }
@@ -545,7 +545,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 text = "${pos.direction.name} ${pos.symbol}",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp,
-                                color = if (pos.direction.name == "LONG") Color(0xFF00FF99) else Color(0xFFFF4560)
+                                color = if (pos.direction.name == "LONG") ProfitGreen else LossRed
                             )
                             Text(
                                 text = "Entry: ${pos.entryPrice} | Lot/Stake: ${pos.lotSize}",
@@ -560,7 +560,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     activeBrokerGateway.closePosition(pos.id)
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4560)),
+                            colors = ButtonDefaults.buttonColors(containerColor = LossRed),
                             shape = RoundedCornerShape(4.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                             modifier = Modifier.testTag("close_position_${pos.id}")

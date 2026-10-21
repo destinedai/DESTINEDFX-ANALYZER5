@@ -63,8 +63,8 @@ fun DestinedFXTheme(
         val activity = view.context.findActivity()
         val window = activity?.window
         if (window != null) {
-          window.statusBarColor = Color(0xFF070B14).toArgb()
-          window.navigationBarColor = Color(0xFF070B14).toArgb()
+          window.statusBarColor = Color(0xFF171B27).toArgb()
+          window.navigationBarColor = Color(0xFF171B27).toArgb()
           WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
           WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = false
         }

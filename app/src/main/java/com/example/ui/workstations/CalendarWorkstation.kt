@@ -150,7 +150,7 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                     label = "HIGH IMPACT",
                     value = events.count { it.impact.equals("high", ignoreCase = true) }.toString(),
                     modifier = Modifier.weight(1f),
-                    color = Color(0xFFFF4560)
+                    color = LossRed
                 )
                 com.example.ui.components.StatChip(
                     label = "MEDIUM",
@@ -164,13 +164,13 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
         // Live News Gate Status Banner
         item {
             val bannerBg = when (newsStatus) {
-                NewsStatus.CLEAR -> Color(0xFF00FF99).copy(alpha = 0.12f)
-                NewsStatus.HIGH_IMPACT_WINDOW -> Color(0xFFFF4560).copy(alpha = 0.15f)
+                NewsStatus.CLEAR -> ProfitGreen.copy(alpha = 0.12f)
+                NewsStatus.HIGH_IMPACT_WINDOW -> LossRed.copy(alpha = 0.15f)
                 NewsStatus.UNKNOWN -> OrangeAccent.copy(alpha = 0.15f)
             }
             val bannerBorder = when (newsStatus) {
-                NewsStatus.CLEAR -> Color(0xFF00FF99)
-                NewsStatus.HIGH_IMPACT_WINDOW -> Color(0xFFFF4560)
+                NewsStatus.CLEAR -> ProfitGreen
+                NewsStatus.HIGH_IMPACT_WINDOW -> LossRed
                 NewsStatus.UNKNOWN -> OrangeAccent
             }
             val bannerTitle = when (newsStatus) {
@@ -249,9 +249,9 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
 @Composable
 fun EconomicEventCard(evt: NewsEvent) {
     val impactColor = when (evt.impact.lowercase()) {
-        "high" -> Color(0xFFFF4560)
+        "high" -> LossRed
         "medium" -> OrangeAccent
-        else -> Color(0xFF00FF99)
+        else -> ProfitGreen
     }
 
     val dateFmt = remember { SimpleDateFormat("EEE, MMM dd HH:mm 'UTC'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") } }

@@ -45,7 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.di.AppContainer
 import com.example.ui.DestinedFXApp
 import com.example.ui.DestinedFXViewModel
-import com.example.ui.theme.DestinedFXTheme
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.RiskViewModel
 
 class MainActivity : FragmentActivity() {
@@ -85,7 +85,7 @@ class MainActivity : FragmentActivity() {
                     DestinedFXTheme {
                         Surface(
                             modifier = Modifier.fillMaxSize().safeDrawingPadding(),
-                            color = Color(0xFF0B0E14)
+                            color = DarkBackground
                         ) {
                             Box(
                                 modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -98,7 +98,7 @@ class MainActivity : FragmentActivity() {
                                     Icon(
                                         imageVector = Icons.Default.Warning,
                                         contentDescription = "Initialization Error",
-                                        tint = Color(0xFFFF5252),
+                                        tint = LossRed,
                                         modifier = Modifier.size(56.dp)
                                     )
                                     Text(
@@ -116,12 +116,12 @@ class MainActivity : FragmentActivity() {
                                     Button(
                                         onClick = { app.retryInitialization() },
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFF00E5FF)
+                                            containerColor = ElectricCyan
                                         )
                                     ) {
                                         Text(
                                             text = "Retry Initialization",
-                                            color = Color(0xFF0B0E14),
+                                            color = DarkBackground,
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
@@ -134,7 +134,7 @@ class MainActivity : FragmentActivity() {
                     DestinedFXTheme {
                         Surface(
                             modifier = Modifier.fillMaxSize().safeDrawingPadding(),
-                            color = Color(0xFF0B0E14)
+                            color = DarkBackground
                         ) {
                             Box(
                                 modifier = Modifier.fillMaxSize(),
@@ -145,7 +145,7 @@ class MainActivity : FragmentActivity() {
                                     verticalArrangement = Arrangement.spacedBy(16.dp)
                                 ) {
                                     CircularProgressIndicator(
-                                        color = Color(0xFF00E5FF)
+                                        color = ElectricCyan
                                     )
                                     Text(
                                         text = "Initializing DestinedFX Engine...",

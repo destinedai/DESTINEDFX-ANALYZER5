@@ -126,14 +126,14 @@ fun RiskRewardCalculatorComponent(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .background(if (isSpecLoaded) Color(0xFF00FF99).copy(alpha = 0.15f) else Color(0xFFFF9F43).copy(alpha = 0.15f))
+                        .background(if (isSpecLoaded) ProfitGreen.copy(alpha = 0.15f) else WarningAmber.copy(alpha = 0.15f))
                         .padding(horizontal = 6.dp, vertical = 3.dp)
                 ) {
                     Text(
                         text = if (isSpecLoaded) "SPEC ACTIVE" else "SPEC UNAVAILABLE",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (isSpecLoaded) Color(0xFF00FF99) else OrangeAccent
+                        color = if (isSpecLoaded) ProfitGreen else OrangeAccent
                     )
                 }
             }
@@ -208,7 +208,7 @@ fun RiskRewardCalculatorComponent(
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace,
-                        color = Color(0xFF00FF99)
+                        color = ProfitGreen
                     )
                 }
                 Column(horizontalAlignment = Alignment.End) {
@@ -218,7 +218,7 @@ fun RiskRewardCalculatorComponent(
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
-                        color = Color(0xFFFF5252)
+                        color = LossRed
                     )
                 }
             }
@@ -240,7 +240,7 @@ fun RiskRewardCalculatorComponent(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
-                        color = if ((rrRatio ?: 0.0) >= 2.0) Color(0xFF00FF99) else Color(0xFFFF9F43)
+                        color = if ((rrRatio ?: 0.0) >= 2.0) ProfitGreen else WarningAmber
                     )
                 }
             }
@@ -254,17 +254,17 @@ fun RiskRewardCalculatorComponent(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (!isExceeding) Color(0xFF132A20) else Color(0xFF2E131C))
-                            .border(1.dp, if (!isExceeding) Color(0xFF00FF99).copy(alpha = 0.5f) else Color(0xFFFF4560), RoundedCornerShape(8.dp))
+                            .border(1.dp, if (!isExceeding) ProfitGreen.copy(alpha = 0.5f) else LossRed, RoundedCornerShape(8.dp))
                             .padding(12.dp)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("FINAL POSITION SIZE:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) Color(0xFF00FF99) else Color(0xFFFF4560))
+                                Text("FINAL POSITION SIZE:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) ProfitGreen else LossRed)
                                 Text("${sizingResult.lots} LOTS (stepped down)", fontSize = 13.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextPrimary)
                             }
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Estimated Loss at SL:", fontSize = 11.sp, color = TextSecondary)
-                                Text("$${String.format(Locale.US, "%.2f", sizingResult.moneyRiskActual)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) TextPrimary else Color(0xFFFF4560))
+                                Text("$${String.format(Locale.US, "%.2f", sizingResult.moneyRiskActual)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) TextPrimary else LossRed)
                             }
                             Text(
                                 "Enforced: Rounded down to broker step (${spec?.volumeStep ?: 0.01}). Never rounded up.",
@@ -280,17 +280,17 @@ fun RiskRewardCalculatorComponent(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .background(Color(0xFF2E131C))
-                            .border(1.dp, Color(0xFFFF4560).copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                            .border(1.dp, LossRed.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                             .padding(12.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFF4560), modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = LossRed, modifier = Modifier.size(20.dp))
                             Column {
                                 Text(
                                     text = "CANNOT_SIZE_WITHIN_RISK_LIMIT",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Black,
-                                    color = Color(0xFFFF4560)
+                                    color = LossRed
                                 )
                                 Text(
                                     text = if (sizingResult.reason.contains("below broker minimum")) "Minimum broker volume exceeds the 1% risk limit." else sizingResult.reason,

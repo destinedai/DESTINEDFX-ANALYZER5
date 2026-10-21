@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import com.example.ui.theme.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,7 +75,7 @@ fun MarketStructureWidget(
     )
 
     val isBuy = analysis.direction == "BUY"
-    val dirColor = if (isBuy) Color(0xFF00FF99) else Color(0xFFFF4560)
+    val dirColor = if (isBuy) ProfitGreen else LossRed
     val dirBg = if (isBuy) Color(0xFF132A20) else Color(0xFF2E131C)
 
     val unmitigatedFvgs = currentSignal?.fvgs?.filter { !it.mitigated } ?: emptyList()
@@ -165,7 +166,7 @@ fun MarketStructureWidget(
                     if (obList.isNotEmpty()) {
                         for (ob in obList) {
                             val isBullOb = ob.type == "BULLISH"
-                            val obCol = if (isBullOb) Color(0xFF00FF99) else Color(0xFFFF4560)
+                            val obCol = if (isBullOb) ProfitGreen else LossRed
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -211,18 +212,18 @@ fun MarketStructureWidget(
                 // 2. Fair Value Gap (FVG) Section
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("⚡ FAIR VALUE GAP (FVG & 50% CE)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00E5FF))
+                        Text("⚡ FAIR VALUE GAP (FVG & 50% CE)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = ElectricCyan)
                     }
 
                     if (nearestUnmitigatedFvg != null) {
                         val fvgCe = (nearestUnmitigatedFvg.topPrice + nearestUnmitigatedFvg.bottomPrice) / 2.0
-                        val fvgCol = if (nearestUnmitigatedFvg.type == FVGType.BULLISH) Color(0xFF00FF99) else Color(0xFFFF4560)
+                        val fvgCol = if (nearestUnmitigatedFvg.type == FVGType.BULLISH) ProfitGreen else LossRed
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(MaterialTheme.colorScheme.background)
-                                .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                .border(1.dp, ElectricCyan.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
                                 .padding(10.dp)
                         ) {
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -240,10 +241,10 @@ fun MarketStructureWidget(
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(3.dp))
-                                            .background(Color(0xFF00E5FF).copy(alpha = 0.12f))
+                                            .background(ElectricCyan.copy(alpha = 0.12f))
                                             .padding(horizontal = 4.dp, vertical = 1.dp)
                                     ) {
-                                        Text("UNMITIGATED", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00E5FF))
+                                        Text("UNMITIGATED", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = ElectricCyan)
                                     }
                                 }
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -252,12 +253,12 @@ fun MarketStructureWidget(
                                         "${formatPrice(nearestUnmitigatedFvg.bottomPrice, activeSymbol)} - ${formatPrice(nearestUnmitigatedFvg.topPrice, activeSymbol)}",
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF00E5FF)
+                                        color = ElectricCyan
                                     )
                                 }
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     Text("50% Consequent Encroachment (CE):", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(formatPrice(fvgCe, activeSymbol), fontSize = 10.sp, fontWeight = FontWeight.Black, color = Color(0xFF00FF99))
+                                    Text(formatPrice(fvgCe, activeSymbol), fontSize = 10.sp, fontWeight = FontWeight.Black, color = ProfitGreen)
                                 }
                             }
                         }

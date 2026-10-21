@@ -123,14 +123,14 @@ fun AnalysisExportCard(
                         .weight(1f)
                         .height(34.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF142E25)),
-                    border = BorderStroke(1.dp, Color(0xFF00FF99).copy(alpha = 0.5f)),
+                    border = BorderStroke(1.dp, ProfitGreen.copy(alpha = 0.5f)),
                     shape = RoundedCornerShape(4.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Image,
                         contentDescription = null,
-                        tint = Color(0xFF00FF99),
+                        tint = ProfitGreen,
                         modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
@@ -138,7 +138,7 @@ fun AnalysisExportCard(
                         text = "IMAGE (PNG)",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF00FF99)
+                        color = ProfitGreen
                     )
                 }
 
@@ -309,7 +309,7 @@ fun AnalysisExportSelectionDialog(
                             .clickable { onExportImage() },
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF10241E)),
                         shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, Color(0xFF00FF99).copy(alpha = 0.4f))
+                        border = BorderStroke(1.dp, ProfitGreen.copy(alpha = 0.4f))
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
@@ -320,13 +320,13 @@ fun AnalysisExportSelectionDialog(
                                 modifier = Modifier
                                     .size(40.dp)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(Color(0xFF00FF99).copy(alpha = 0.15f)),
+                                    .background(ProfitGreen.copy(alpha = 0.15f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Image,
                                     contentDescription = null,
-                                    tint = Color(0xFF00FF99),
+                                    tint = ProfitGreen,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
@@ -346,7 +346,7 @@ fun AnalysisExportSelectionDialog(
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = "Saved to: Pictures/DestinedFX",
-                                    color = Color(0xFF00FF99),
+                                    color = ProfitGreen,
                                     fontSize = 8.sp,
                                     fontFamily = FontFamily.Monospace
                                 )
@@ -354,7 +354,7 @@ fun AnalysisExportSelectionDialog(
                             Icon(
                                 imageVector = Icons.Default.ChevronRight,
                                 contentDescription = null,
-                                tint = Color(0xFF00FF99)
+                                tint = ProfitGreen
                             )
                         }
                     }
@@ -381,7 +381,7 @@ fun AnalysisExportResultDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(8.dp),
-            border = BorderStroke(1.dp, if (result.success) Color(0xFF00FF99) else RedAccent)
+            border = BorderStroke(1.dp, if (result.success) ProfitGreen else RedAccent)
         ) {
             Column(
                 modifier = Modifier.padding(20.dp),
@@ -393,7 +393,7 @@ fun AnalysisExportResultDialog(
                         .size(48.dp)
                         .clip(RoundedCornerShape(24.dp))
                         .background(
-                            if (result.success) Color(0xFF00FF99).copy(alpha = 0.15f)
+                            if (result.success) ProfitGreen.copy(alpha = 0.15f)
                             else RedAccent.copy(alpha = 0.15f)
                         ),
                     contentAlignment = Alignment.Center
@@ -401,14 +401,14 @@ fun AnalysisExportResultDialog(
                     Icon(
                         imageVector = if (result.success) Icons.Default.CheckCircle else Icons.Default.ErrorOutline,
                         contentDescription = null,
-                        tint = if (result.success) Color(0xFF00FF99) else RedAccent,
+                        tint = if (result.success) ProfitGreen else RedAccent,
                         modifier = Modifier.size(28.dp)
                     )
                 }
 
                 Text(
                     text = if (result.success) "SAVED TO PHONE!" else "EXPORT FAILED",
-                    color = if (result.success) Color(0xFF00FF99) else RedAccent,
+                    color = if (result.success) ProfitGreen else RedAccent,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace

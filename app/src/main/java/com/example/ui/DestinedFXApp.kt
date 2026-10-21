@@ -483,7 +483,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
         }
         item {
             Card(modifier = Modifier.fillMaxWidth().height(470.dp).testTag("tradingview_chart_panel"),
-                shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0B0E14)),
+                shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = DarkBackground),
                 border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     Row(modifier = Modifier.fillMaxWidth().background(DarkSurface).padding(horizontal = 12.dp, vertical = 10.dp),
@@ -1145,8 +1145,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = when (telegramStatus) {
-                                    "Connected" -> Color(0xFF00FF99)
-                                    "Connection failed" -> Color(0xFFFF4560)
+                                    "Connected" -> ProfitGreen
+                                    "Connection failed" -> LossRed
                                     else -> OrangeAccent
                                 }
                             )
@@ -1204,7 +1204,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         Button(
                             onClick = { viewModel.sendTelegramTestNotification() },
                             enabled = !isTelegramLoading && telegramStatus == "Connected",
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FF99)),
+                            colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen),
                             modifier = Modifier.weight(1f).testTag("test_telegram_button")
                         ) {
                             Text("Test Message", color = DarkBackground, fontWeight = FontWeight.Bold)
@@ -1221,7 +1221,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
 
                         OutlinedButton(
                             onClick = { viewModel.unlinkTelegram() },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF4560)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = LossRed),
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("Unlink", fontSize = 11.sp)
@@ -1248,7 +1248,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                     val res = telegramResult
                     if (res != null) {
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(res, fontSize = 11.sp, color = if (telegramStatus == "Connected") Color(0xFF00FF99) else Color(0xFFFF4560))
+                        Text(res, fontSize = 11.sp, color = if (telegramStatus == "Connected") ProfitGreen else LossRed)
                     }
                 }
             }
@@ -1258,7 +1258,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
             val lastCrash by viewModel.lastCrashText.collectAsStateWithLifecycle()
             InsightCard("SYSTEM DIAGNOSTICS & INCIDENT LOG") {
                 if (!lastCrash.isNullOrBlank()) {
-                    Text("Previous Incident Trace Recorded:", fontSize = 10.sp, color = Color(0xFFFF4560), fontWeight = FontWeight.Bold)
+                    Text("Previous Incident Trace Recorded:", fontSize = 10.sp, color = LossRed, fontWeight = FontWeight.Bold)
                     Text(
                         text = lastCrash ?: "",
                         fontSize = 9.sp,
@@ -1294,9 +1294,9 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                 if (currentUser != null) {
                     Button(
                         onClick = { viewModel.logoutUser() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4560).copy(alpha = 0.2f))
+                        colors = ButtonDefaults.buttonColors(containerColor = LossRed.copy(alpha = 0.2f))
                     ) {
-                        Text("Sign Out", color = Color(0xFFFF4560), fontWeight = FontWeight.Bold)
+                        Text("Sign Out", color = LossRed, fontWeight = FontWeight.Bold)
                     }
                 } else {
                     Button(
@@ -1380,7 +1380,7 @@ fun LoginScreen(viewModel: DestinedFXViewModel, onDismiss: () -> Unit = {}) {
                 )
 
                 if (errorMessage.isNotBlank()) {
-                    Text(errorMessage, fontSize = 11.sp, color = Color(0xFFFF4560), textAlign = TextAlign.Center)
+                    Text(errorMessage, fontSize = 11.sp, color = LossRed, textAlign = TextAlign.Center)
                 }
 
                 Button(
@@ -1530,7 +1530,7 @@ fun BacktestSection(viewModel: DestinedFXViewModel) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column {
                         Text("Win Rate", fontSize = 10.sp, color = TextSecondary)
-                        Text("${String.format(java.util.Locale.US, "%.1f", currentReport.winRate)}%", fontWeight = FontWeight.Bold, color = Color(0xFF00FF99))
+                        Text("${String.format(java.util.Locale.US, "%.1f", currentReport.winRate)}%", fontWeight = FontWeight.Bold, color = ProfitGreen)
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Profit Factor", fontSize = 10.sp, color = TextSecondary)
@@ -1538,13 +1538,13 @@ fun BacktestSection(viewModel: DestinedFXViewModel) {
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("Max Drawdown", fontSize = 10.sp, color = TextSecondary)
-                        Text("${String.format(java.util.Locale.US, "%.1f", currentReport.maxDrawdown)}%", fontWeight = FontWeight.Bold, color = Color(0xFFFF4560))
+                        Text("${String.format(java.util.Locale.US, "%.1f", currentReport.maxDrawdown)}%", fontWeight = FontWeight.Bold, color = LossRed)
                     }
                 }
                 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Net Profit:", fontSize = 11.sp, color = TextSecondary)
-                    Text("${String.format(java.util.Locale.US, "%.2f", currentReport.netProfitPercent)}%", fontWeight = FontWeight.Black, color = Color(0xFF00FF99), fontFamily = FontFamily.Monospace)
+                    Text("${String.format(java.util.Locale.US, "%.2f", currentReport.netProfitPercent)}%", fontWeight = FontWeight.Black, color = ProfitGreen, fontFamily = FontFamily.Monospace)
                 }
             }
         }
