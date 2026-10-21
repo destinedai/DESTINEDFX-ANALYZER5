@@ -437,6 +437,7 @@ class DerivMarketDataGateway(
                 "tick" -> {
                     val tickObj = json.optJSONObject("tick") ?: return
                     val symbol = tickObj.optString("symbol")
+                        .ifBlank { tickObj.optString("underlying_symbol") }
                     val quote = tickObj.optDouble("quote", 0.0)
                     // Do not synthesize bid/ask from the last price. A quote without both sides
                     // is useful for display, but cannot pass the bot's real-spread execution gate.
