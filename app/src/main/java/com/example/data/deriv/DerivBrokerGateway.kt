@@ -667,21 +667,27 @@ class DerivBrokerGateway(
                     val tickObj = json.optJSONObject("tick")
                     if (tickObj != null) {
                         val sym = tickObj.optString("symbol")
-                        val quoteVal = tickObj.optDouble("quote", 0.0)
-                        val bidVal = tickObj.optDouble("bid", quoteVal)
-                        val askVal = tickObj.optDouble("ask", quoteVal)
-                        val epoch = tickObj.optLong("epoch", System.currentTimeMillis() / 1000)
+                            .ifBlank { tickObj.optString("underlying_symbol") }
+                        val quoteVal = tickObj.optDouble("quote", Double.NaN)
+                        val bidVal = tickObj.optDouble("bid", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
+                        val askVal = tickObj.optDouble("ask", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
+                        val epoch = tickObj.optLong("epoch", 0L)
+                        if (sym.isBlank() || !quoteVal.isFinite() || quoteVal <= 0.0 || epoch <= 0L) {
+                            Log.w(TAG, "Ignoring invalid Deriv tick without a valid symbol, price, and epoch")
+                            return
+                        }
                         val timeMs = epoch * 1000L
+                        val validTwoSided = bidVal != null && askVal != null && askVal >= bidVal
                         val cls = com.destinedfx.core.instrument.AssetClassifier.of(sym)
                         val mq = MarketQuote(
                             symbol = sym,
                             assetClass = cls,
-                            bid = bidVal,
-                            ask = askVal,
+                            bid = if (validTwoSided) bidVal else null,
+                            ask = if (validTwoSided) askVal else null,
                             last = quoteVal,
                             timestampMs = timeMs,
                             receivedAtMs = System.currentTimeMillis(),
-                            source = "Deriv WebSocket"
+                            source = "Deriv Options WebSocket"
                         )
                         cachedQuotes[sym] = mq
                     }
