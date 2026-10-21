@@ -89,11 +89,15 @@ class DerivBrokerGatewayAdapter(
             return Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Worst-case loss ($worstCaseLoss USD) exceeds maximum permitted risk budget (${String.format(java.util.Locale.US, "%.2f", maxAllowedRisk)} USD)"))
         }
 
+        val targetRr = plan.rr
+        if (!targetRr.isFinite() || targetRr < 2.0) {
+            return Result.failure(Exception("TRADE_PLAN_INVALID: Deriv execution requires a validated minimum 2.0R plan."))
+        }
         val res = derivGateway.executeOrder(
             symbol = derivSymbol,
             stake = stake,
             isBuy = isBuy,
-            rewardToRisk = plan.rr
+            rewardToRisk = targetRr
         )
         return if (res.isSuccess) {
             val bought = res.getOrThrow()
