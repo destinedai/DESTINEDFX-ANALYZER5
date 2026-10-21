@@ -173,20 +173,26 @@ class DerivBrokerGateway(
                         append(t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName)
                         if (response != null) append(" (HTTP ${response.code} ${response.message})")
                     }
-                    lastConnectionError = "Deriv authenticated WebSocket failed: $detail"
-                    Log.e(TAG, lastConnectionError ?: "Deriv authenticated WebSocket failure")
-                    _connectionState.value = DerivConnectionState.ERROR
-                    pendingRequests.values.forEach { it.completeExceptionally(t) }
+                    val ownsCurrentSession = webSocket === ws
+                    if (ownsCurrentSession) {
+                        lastConnectionError = "Deriv authenticated WebSocket failed: $detail"
+                        Log.e(TAG, lastConnectionError ?: "Deriv authenticated WebSocket failure")
+                        _connectionState.value = DerivConnectionState.ERROR
+                        pendingRequests.values.forEach { it.completeExceptionally(t) }
+                    }
                     wsDeferred.complete(false)
                 }
 
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                    if (code != 1000) {
-                        lastConnectionError = "Deriv closed the authenticated WebSocket (code $code" +
-                            (reason.takeIf { it.isNotBlank() }?.let { ", $it" } ?: "") + ")."
+                    val ownsCurrentSession = webSocket === ws
+                    if (ownsCurrentSession) {
+                        if (code != 1000) {
+                            lastConnectionError = "Deriv closed the authenticated WebSocket (code $code" +
+                                (reason.takeIf { it.isNotBlank() }?.let { ", $it" } ?: "") + ")."
+                        }
+                        _connectionState.value = DerivConnectionState.DISCONNECTED
                     }
                     if (!wsDeferred.isCompleted) wsDeferred.complete(false)
-                    _connectionState.value = DerivConnectionState.DISCONNECTED
                 }
             })
 
