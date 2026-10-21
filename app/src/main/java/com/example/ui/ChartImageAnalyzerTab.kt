@@ -338,14 +338,21 @@ fun ChartImageAnalyzerTab(viewModel: DestinedFXViewModel) {
                         TextButton(
                             onClick = {
                                 val requested = pairHint.trim().uppercase().replace(" ", "")
-                                val supported = listOf(
-                                    "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",
-                                    "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "EUR/CHF", "GBP/CHF",
-                                    "XAU/USD", "XAG/USD", "USOIL", "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD", "XRP/USD"
-                                )
-                                supported.firstOrNull { it == requested || it.replace("/", "") == requested }
-                                    ?.let { viewModel.selectTicker(it) }
-                                viewModel.selectScreen(DestinedFXScreen.Analyzer)
+                                val supported = com.example.data.market.SymbolRegistry.getAllCanonical()
+                                val resolvedPair = supported.firstOrNull {
+                                    it.equals(requested, ignoreCase = true) ||
+                                        it.replace("/", "").equals(requested, ignoreCase = true)
+                                }
+                                if (resolvedPair == null) {
+                                    errorMessage = "Pair '$pairHint' was not found in the supported instrument registry. Correct the pair hint before opening price-based analysis."
+                                } else {
+                                    errorMessage = null
+                                    viewModel.selectTicker(resolvedPair)
+                                    // The image analyzer has its own strategy lens; carry it into the live
+                                    // deterministic scan instead of silently reverting to the global strategy.
+                                    viewModel.selectStrategy(selectedStrategyId)
+                                    viewModel.selectScreen(DestinedFXScreen.Analyzer)
+                                }
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
