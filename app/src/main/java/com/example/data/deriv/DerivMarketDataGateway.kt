@@ -193,6 +193,8 @@ class DerivMarketDataGateway(
                 try {
                     val requestJson = JSONObject().apply {
                         put("active_symbols", "brief")
+                        // Match Deriv's documented public market-data workflow.
+                        put("product_type", "basic")
                         put("req_id", reqId)
                     }
                     if (webSocket?.send(requestJson.toString()) != true) {
