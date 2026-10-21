@@ -272,6 +272,132 @@ class SevenStrategiesBehavioralTest {
     }
 
     @Test
+    fun testMeanReversionPlanTargetsTheTwentyPeriodMeanAndRequiresTwoR() {
+        val candles = generateConsolidationCandles(count = 120, center = 1.0850)
+        val quote = MarketQuote.twoSided(
+            "EUR/USD", AssetClass.FOREX, 1.0800, 1.0801,
+            System.currentTimeMillis(), System.currentTimeMillis(), "test"
+        )
+        val input = AnalysisInput(
+            symbol = "EUR/USD",
+            tf = Timeframe.H1,
+            candles = candles,
+            htf = emptyMap(),
+            quote = quote,
+            spec = null,
+            nowMs = System.currentTimeMillis(),
+            strategyId = "mean-reversion"
+        )
+        val stopSwing = Swing(
+            index = 90,
+            timeMs = candles[90].timeMs,
+            price = 1.0780,
+            type = SwingType.LOW,
+            strengthAtr = 1.0,
+            confirmedAtIndex = 90
+        )
+        val structure = StructureAnalysis(
+            swings = listOf(stopSwing),
+            events = emptyList(),
+            trend = Trend.RANGE,
+            atr = 0.001,
+            lastDisplacementIndex = null,
+            consolidation = true
+        )
+        val (plan, reason) = SignalEngine.plan(
+            input, quote, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig(minRR = 2.0)
+        )
+        assertNull(reason)
+        assertNotNull(plan)
+        assertEquals(1.0850, plan!!.primary.price, 0.000001)
+        assertTrue(plan.primary.source.contains("20-period mean"))
+        assertTrue(plan.primary.rr >= 2.0)
+    }
+
+    @Test
+    fun testBreakoutPlanUsesExplicitAtLeastTwoPointFiveRVolatilityExtension() {
+        val candles = generateTrendingCandles(count = 120, isBullish = true)
+        val quote = MarketQuote.twoSided(
+            "EUR/USD", AssetClass.FOREX, 1.1279, 1.1280,
+            System.currentTimeMillis(), System.currentTimeMillis(), "test"
+        )
+        val input = AnalysisInput(
+            symbol = "EUR/USD",
+            tf = Timeframe.H1,
+            candles = candles,
+            htf = emptyMap(),
+            quote = quote,
+            spec = null,
+            nowMs = System.currentTimeMillis(),
+            strategyId = "breakout-momentum"
+        )
+        val stopSwing = Swing(
+            index = 90,
+            timeMs = candles[90].timeMs,
+            price = 1.1250,
+            type = SwingType.LOW,
+            strengthAtr = 1.0,
+            confirmedAtIndex = 90
+        )
+        val structure = StructureAnalysis(
+            swings = listOf(stopSwing),
+            events = emptyList(),
+            trend = Trend.BULLISH,
+            atr = 0.001,
+            lastDisplacementIndex = null,
+            consolidation = false
+        )
+        val (plan, reason) = SignalEngine.plan(
+            input, quote, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig(minRR = 2.0)
+        )
+        assertNull(reason)
+        assertNotNull(plan)
+        assertTrue(plan!!.primary.source.contains("Volatility extension"))
+        assertTrue(plan.primary.rr >= 2.5)
+    }
+
+    @Test
+    fun testIctSilverBulletPlanWaitsWhenNoDirectionalFvgExists() {
+        val candles = generateTrendingCandles(count = 120, isBullish = true)
+        val lastPrice = candles.last().close
+        val quote = MarketQuote.twoSided(
+            "EUR/USD", AssetClass.FOREX, lastPrice, lastPrice + 0.0001,
+            System.currentTimeMillis(), System.currentTimeMillis(), "test"
+        )
+        val input = AnalysisInput(
+            symbol = "EUR/USD",
+            tf = Timeframe.H1,
+            candles = candles,
+            htf = emptyMap(),
+            quote = quote,
+            spec = null,
+            nowMs = System.currentTimeMillis(),
+            strategyId = "ict-silver-bullet"
+        )
+        val stopSwing = Swing(
+            index = 90,
+            timeMs = candles[90].timeMs,
+            price = lastPrice - 0.003,
+            type = SwingType.LOW,
+            strengthAtr = 1.0,
+            confirmedAtIndex = 90
+        )
+        val structure = StructureAnalysis(
+            swings = listOf(stopSwing),
+            events = emptyList(),
+            trend = Trend.BULLISH,
+            atr = 0.001,
+            lastDisplacementIndex = null,
+            consolidation = false
+        )
+        val (plan, reason) = SignalEngine.plan(
+            input, quote, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig()
+        )
+        assertNull(plan)
+        assertTrue(reason.orEmpty().startsWith("ICT SILVER BULLET WAIT"))
+    }
+
+    @Test
     fun testGlobalMinimumTwoRewardToRiskEnforced() {
         // Any generated trade plan must satisfy RR >= 2.0
         val candles = generateTrendingCandles(count = 120, isBullish = true)
