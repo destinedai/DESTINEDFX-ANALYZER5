@@ -101,19 +101,23 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     val dynamicAnalysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
+    val currentTicker = tickers[activeSymbol]
+    val hasFreshQuote = currentTicker?.price?.let { it.isFinite() && it > 0.0 } == true &&
+        viewModel.isDataFresh(activeSymbol)
+    val headerPrice = currentTicker?.price?.takeIf { it.isFinite() && it > 0.0 && hasFreshQuote }
+    val priceChange = currentTicker?.changePercent
     val feedStatusColor = when {
-        marketDataStatus.startsWith("READY", ignoreCase = true) -> ProfitGreen
+        hasFreshQuote && marketDataStatus.startsWith("READY", ignoreCase = true) -> ProfitGreen
         marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> LossRed
         else -> WarningAmber
     }
     val feedStatusLabel = when {
-        marketDataStatus.startsWith("READY", ignoreCase = true) -> "Data ready"
+        hasFreshQuote && marketDataStatus.startsWith("READY", ignoreCase = true) -> "Live market data"
         marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "Feed unavailable"
-        else -> "Checking feed"
+        hasFreshQuote -> "Live quote • candles pending"
+        marketDataStatus.startsWith("READY", ignoreCase = true) -> "Candles ready • quote missing"
+        else -> "Checking live quote"
     }
-    val currentTicker = tickers[activeSymbol]
-    val headerPrice = currentTicker?.price?.takeIf { it > 0.0 }
-    val priceChange = currentTicker?.changePercent
 
     Scaffold(
         containerColor = DarkBackground,
