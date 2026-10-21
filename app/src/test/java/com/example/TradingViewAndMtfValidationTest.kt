@@ -138,6 +138,9 @@ class TradingViewAndMtfValidationTest {
             listOf("Image Analyzer", "Bot", "Watchlist", "Risk", "Settings")
         ))
         assertTrue(DestinedFXScreen.allScreens.contains(DestinedFXScreen.Watchlist))
+        assertFalse("Watchlist belongs under More, not the primary bottom bar",
+            DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Watchlist))
+        assertEquals("nav_tab_more", DestinedFXScreen.More.tag)
     }
 
     @Test
