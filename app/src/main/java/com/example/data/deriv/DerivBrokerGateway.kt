@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -46,7 +48,8 @@ class DerivBrokerGateway(
 ) {
     companion object {
         private const val TAG = "DerivBrokerGW"
-        private const val WS_URL_BASE = "wss://ws.derivws.com/websockets/v3?app_id="
+        private const val REST_BASE = "https://api.derivws.com"
+        private const val AUTHENTICATED_WS_PREFIX = "wss://api.derivws.com/trading/v1/options/ws/"
     }
 
     private val _connectionState = MutableStateFlow(DerivConnectionState.DISCONNECTED)
@@ -72,123 +75,177 @@ class DerivBrokerGateway(
     private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    /**
+     * Connects directly to the current Deriv Options API without MetaAPI:
+     * 1) Use the user's PAT to list their Options accounts over REST.
+     * 2) Request a single-use account OTP.
+     * 3) Open the exact authenticated WebSocket URL returned by Deriv.
+     *
+     * Deriv API tokens from the old v3 "authorize" flow are not interchangeable with current
+     * Personal Access Tokens. If the token is legacy or missing the trade scope, the REST error
+     * is surfaced so the user can create the correct token.
+     */
     suspend fun connectAndAuthorize(apiToken: String? = null): Result<DerivAccountInfo> = withContext(Dispatchers.IO) {
         val token = (apiToken ?: secrets.getDerivApiToken()).trim()
         if (token.isBlank()) {
             _connectionState.value = DerivConnectionState.AUTH_FAILED
-            return@withContext Result.failure(Exception("Deriv API token is not configured. Please set it in Settings."))
+            return@withContext Result.failure(Exception("Enter a current Deriv Personal Access Token with Trade scope."))
         }
 
         val appId = secrets.getDerivAppId().trim().ifBlank { "1089" }
         if (!appId.all { it.isDigit() }) {
             _connectionState.value = DerivConnectionState.ERROR
-            return@withContext Result.failure(Exception("Invalid Deriv App ID. Use the numeric App ID from your Deriv application settings."))
+            return@withContext Result.failure(Exception("Invalid Deriv App ID. Enter the numeric App ID registered for your application."))
         }
+
         lastConnectionError = null
         _connectionState.value = DerivConnectionState.CONNECTING
-
-        val wsDeferred = CompletableDeferred<Boolean>()
-        val request = Request.Builder().url("$WS_URL_BASE$appId").build()
-
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
-                Log.i(TAG, "Deriv Broker WebSocket connected.")
-                wsDeferred.complete(true)
-            }
-
-            override fun onMessage(ws: WebSocket, text: String) {
-                handleIncomingMessage(text)
-            }
-
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                val transportDetail = buildString {
-                    append(t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName)
-                    if (response != null) append(" (HTTP ${response.code} ${response.message})")
-                }
-                lastConnectionError = "Deriv WebSocket connection failed: $transportDetail"
-                Log.e(TAG, lastConnectionError ?: "Deriv WebSocket failure")
-                _connectionState.value = DerivConnectionState.ERROR
-                pendingRequests.values.forEach { it.completeExceptionally(t) }
-                wsDeferred.complete(false)
-            }
-
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "Deriv Broker WS closed: $code / $reason")
-                if (!wsDeferred.isCompleted) {
-                    lastConnectionError = "Deriv closed the WebSocket before connecting (code $code" +
-                        (reason.takeIf { it.isNotBlank() }?.let { ", $it" } ?: "") + ")."
-                    wsDeferred.complete(false)
-                }
-                _connectionState.value = DerivConnectionState.DISCONNECTED
-            }
-        })
-
-        val connected = withTimeoutOrNull(8000) { wsDeferred.await() } ?: false
-        if (!connected) {
-            _connectionState.value = DerivConnectionState.ERROR
-            val detail = lastConnectionError ?: "The WebSocket handshake did not complete within 8 seconds."
-            return@withContext Result.failure(Exception(detail))
-        }
-
-        // Send authorize request
-        _connectionState.value = DerivConnectionState.AUTHENTICATING
-        val authReqId = reqIdCounter.getAndIncrement()
-        val authDeferred = CompletableDeferred<JSONObject>()
-        pendingRequests[authReqId] = authDeferred
-
-        val authPayload = JSONObject().apply {
-            put("authorize", token)
-            put("req_id", authReqId)
-        }
-        if (webSocket?.send(authPayload.toString()) != true) {
-            pendingRequests.remove(authReqId)
-            _connectionState.value = DerivConnectionState.ERROR
-            return@withContext Result.failure(Exception("The Deriv authorization request could not be sent because the WebSocket is no longer open."))
-        }
+        // Ensure a retry never leaves old request waiters attached to the previous socket.
+        webSocket?.close(1000, "Replacing old Deriv session")
+        webSocket = null
+        pendingRequests.values.forEach { it.cancel() }
+        pendingRequests.clear()
 
         try {
-            val authResp = withTimeout(10_000) { authDeferred.await() }
-            val error = authResp.optJSONObject("error")
-            if (error != null) {
-                val code = error.optString("code")
-                val msg = error.optString("message")
-                _connectionState.value = DerivConnectionState.AUTH_FAILED
-                return@withContext Result.failure(Exception("Deriv Auth Failed ($code): $msg"))
+            _connectionState.value = DerivConnectionState.AUTHENTICATING
+            val accountsRequest = Request.Builder()
+                .url("$REST_BASE/trading/v1/options/accounts")
+                .header("Authorization", "Bearer $token")
+                .header("Deriv-App-ID", appId)
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            val accountJson = executeRestJson(accountsRequest)
+            val accounts = accountJson.optJSONArray("data")
+                ?: throw IllegalStateException("Deriv account-list response did not contain a data array.")
+
+            val requestedMode = secrets.getDerivAccountMode().lowercase()
+                .takeIf { it == "real" || it == "demo" } ?: "demo"
+            val activeAccounts = buildList {
+                for (i in 0 until accounts.length()) {
+                    val account = accounts.optJSONObject(i) ?: continue
+                    if (account.optString("status").equals("active", ignoreCase = true)) add(account)
+                }
+            }
+            val account = activeAccounts.firstOrNull {
+                it.optString("account_type").equals(requestedMode, ignoreCase = true)
+            }
+            if (account == null) {
+                val available = activeAccounts.map { it.optString("account_type").ifBlank { "unknown" } }.distinct()
+                throw IllegalStateException(
+                    "No active ${requestedMode.uppercase()} Options account was returned for this token" +
+                        (if (available.isEmpty()) "." else ". Available account types: " + available.joinToString() + ".") +
+                        " Choose the matching Demo/Real mode or check this token's account/trade permissions."
+                )
             }
 
-            val authData = authResp.optJSONObject("authorize") ?: return@withContext Result.failure(Exception("Empty authorize payload from Deriv"))
-            val balance = authData.optDouble("balance", 0.0)
-            val currency = authData.optString("currency", "USD")
-            val loginId = authData.optString("loginid", "")
-            val email = authData.optString("email", "")
+            val accountId = account.optString("account_id").trim()
+            val currency = account.optString("currency").ifBlank { "USD" }
+            val initialBalance = account.optDouble("balance", 0.0)
+            if (accountId.isBlank()) throw IllegalStateException("Deriv returned an account with no account_id.")
 
-            val info = DerivAccountInfo(loginId, currency, balance, email)
+            val otpRequest = Request.Builder()
+                .url("$REST_BASE/trading/v1/options/accounts/${java.net.URLEncoder.encode(accountId, "UTF-8")}/otp")
+                .header("Authorization", "Bearer $token")
+                .header("Deriv-App-ID", appId)
+                .header("Accept", "application/json")
+                .post(ByteArray(0).toRequestBody("application/json".toMediaType()))
+                .build()
+            val otpJson = executeRestJson(otpRequest)
+            val authenticatedUrl = otpJson.optJSONObject("data")?.optString("url")?.trim().orEmpty()
+            if (!authenticatedUrl.startsWith(AUTHENTICATED_WS_PREFIX)) {
+                throw IllegalStateException("Deriv OTP response did not include a valid authenticated WebSocket URL.")
+            }
+
+            val wsDeferred = CompletableDeferred<Boolean>()
+            val request = Request.Builder().url(authenticatedUrl).build()
+            webSocket = client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(ws: WebSocket, response: Response) {
+                    Log.i(TAG, "Deriv authenticated Options WebSocket connected; account type=$requestedMode")
+                    wsDeferred.complete(true)
+                }
+
+                override fun onMessage(ws: WebSocket, text: String) {
+                    handleIncomingMessage(text)
+                }
+
+                override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                    val detail = buildString {
+                        append(t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName)
+                        if (response != null) append(" (HTTP ${response.code} ${response.message})")
+                    }
+                    lastConnectionError = "Deriv authenticated WebSocket failed: $detail"
+                    Log.e(TAG, lastConnectionError ?: "Deriv authenticated WebSocket failure")
+                    _connectionState.value = DerivConnectionState.ERROR
+                    pendingRequests.values.forEach { it.completeExceptionally(t) }
+                    wsDeferred.complete(false)
+                }
+
+                override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                    if (code != 1000) {
+                        lastConnectionError = "Deriv closed the authenticated WebSocket (code $code" +
+                            (reason.takeIf { it.isNotBlank() }?.let { ", $it" } ?: "") + ")."
+                    }
+                    if (!wsDeferred.isCompleted) wsDeferred.complete(false)
+                    _connectionState.value = DerivConnectionState.DISCONNECTED
+                }
+            })
+
+            val connected = withTimeoutOrNull(12_000L) { wsDeferred.await() } ?: false
+            if (!connected) {
+                _connectionState.value = DerivConnectionState.ERROR
+                return@withContext Result.failure(
+                    Exception(lastConnectionError ?: "Deriv authenticated WebSocket did not connect before the OTP expired.")
+                )
+            }
+
+            val info = DerivAccountInfo(accountId, currency, initialBalance, "")
             _accountInfo.value = info
             _accountMetrics.value = AccountMetrics(
-                balance = balance,
-                equity = balance,
+                balance = initialBalance,
+                equity = initialBalance,
                 margin = 0.0,
-                freeMargin = balance,
+                freeMargin = initialBalance,
                 marginLevel = 0.0,
                 currency = currency
             )
             _connectionState.value = DerivConnectionState.CONNECTED
-
-            // Subscribe to balance updates
+            // The authenticated WebSocket already carries the account scope; no legacy
+            // "authorize" message is sent after the OTP handshake.
             sendBalanceSubscription()
-            // Fetch open positions
             fetchPortfolio()
-
             Result.success(info)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
             _connectionState.value = DerivConnectionState.ERROR
-            val detail = lastConnectionError ?: (e.message ?: e.javaClass.simpleName)
-            Result.failure(Exception("Deriv authorization failed or timed out: $detail"))
-        } finally {
-            pendingRequests.remove(authReqId)
+            val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+            lastConnectionError = detail
+            Log.e(TAG, "Deriv direct-API connection failed: $detail")
+            Result.failure(Exception("Deriv connection failed: $detail"))
         }
+    }
+
+    private fun executeRestJson(request: Request): JSONObject {
+        client.newBuilder()
+            .callTimeout(20, TimeUnit.SECONDS)
+            .build()
+            .newCall(request)
+            .execute()
+            .use { response ->
+                val body = response.body?.string().orEmpty()
+                val json = runCatching { JSONObject(body) }.getOrElse { JSONObject() }
+                if (!response.isSuccessful) {
+                    val errors = json.optJSONArray("errors")
+                    val apiMessage = errors?.optJSONObject(0)?.optString("message")
+                        ?.takeIf { it.isNotBlank() }
+                        ?: json.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+                        ?: json.optString("message").takeIf { it.isNotBlank() }
+                        ?: body.take(240).ifBlank { response.message }
+                    throw IllegalStateException("HTTP ${response.code}: $apiMessage")
+                }
+                json
+            }
     }
 
     private fun sendBalanceSubscription() {
