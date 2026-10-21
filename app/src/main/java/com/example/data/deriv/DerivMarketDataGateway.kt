@@ -45,7 +45,7 @@ class DerivMarketDataGateway(
 ) {
     companion object {
         private const val TAG = "DerivMDGateway"
-        private const val WS_URL_BASE = "wss://ws.binaryws.com/websockets/v3?app_id="
+        private const val WS_URL_BASE = "wss://ws.derivws.com/websockets/v3?app_id="
     }
 
     private val _connectionState = MutableStateFlow(DerivConnectionState.DISCONNECTED)
