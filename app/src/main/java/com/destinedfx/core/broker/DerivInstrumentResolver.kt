@@ -55,15 +55,31 @@ object DerivInstrumentResolver {
     )
 
     private val dynamicActiveSymbols = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val dynamicAliases = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     fun registerActiveSymbols(symbols: Collection<String>) {
         dynamicActiveSymbols.addAll(symbols.map { it.trim() })
+    }
+
+    /**
+     * Register a canonical UI symbol against the exact broker code returned by Deriv active_symbols.
+     * The discovered code is used for feed requests; it is not treated as proof the instrument can
+     * be traded through a different broker.
+     */
+    fun registerAlias(canonicalSymbol: String, derivSymbol: String) {
+        val key = canonicalSymbol.trim().uppercase()
+            .replace("/", "")
+            .replace(" ", "")
+            .replace("_", "")
+        val value = derivSymbol.trim()
+        if (key.isNotBlank() && value.isNotBlank()) dynamicAliases[key] = value
     }
 
     fun getKnownSymbols(): Set<String> = MAPPING.keys + dynamicActiveSymbols
 
     fun resolve(symbol: String): String? {
         val clean = symbol.trim().uppercase().replace("/", "").replace(" ", "").replace("_", "")
+        dynamicAliases[clean]?.let { return it }
         for ((k, v) in MAPPING) {
             val normK = k.uppercase().replace("/", "").replace(" ", "").replace("_", "")
             if (normK == clean) return v
