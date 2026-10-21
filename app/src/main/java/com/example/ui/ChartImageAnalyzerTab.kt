@@ -39,6 +39,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.io.IOException
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -56,7 +64,12 @@ data class ChartPixelScanReport(
     val bearishToneSharePercent: Double,
     val evidenceStatus: String,
     val visualBalance: String,
-    val explanation: String
+    val explanation: String,
+    val recognizedChartText: String = "",
+    val detectedPair: String? = null,
+    val detectedTimeframe: String? = null,
+    val visibleNumericLabels: List<String> = emptyList(),
+    val ocrStatus: String = "NOT RUN"
 )
 
 @Composable
@@ -240,7 +253,28 @@ fun ChartImageAnalyzerTab(viewModel: DestinedFXViewModel) {
                             report = null
                             scope.launch {
                                 try {
-                                    report = withContext(Dispatchers.Default) { scanChartBitmap(selectedBitmap) }
+                                    val pixelReport = withContext(Dispatchers.Default) {
+                                        scanChartBitmap(selectedBitmap)
+                                    }
+                                    var recognizedText = ""
+                                    var ocrStatus = "NO TEXT DETECTED"
+                                    try {
+                                        recognizedText = recognizeChartText(selectedBitmap)
+                                        ocrStatus = if (recognizedText.isBlank()) "NO TEXT DETECTED" else "OCR COMPLETE • ON DEVICE"
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (ocrError: Exception) {
+                                        ocrStatus = "OCR UNAVAILABLE"
+                                    }
+                                    val detectedPair = detectPairFromChartText(recognizedText)
+                                    if (detectedPair != null) pairHint = detectedPair
+                                    report = pixelReport.copy(
+                                        recognizedChartText = recognizedText.take(1600),
+                                        detectedPair = detectedPair,
+                                        detectedTimeframe = detectTimeframeFromChartText(recognizedText),
+                                        visibleNumericLabels = extractVisibleNumericLabels(recognizedText),
+                                        ocrStatus = ocrStatus
+                                    )
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
                                 } catch (error: Exception) {
@@ -271,7 +305,7 @@ fun ChartImageAnalyzerTab(viewModel: DestinedFXViewModel) {
                     }
 
                     Text(
-                        "This feature does not use Gemini, a vision API or network AI service. It does not OCR the price axis, so it will not fabricate a trade entry, stop-loss, take-profit or trade confidence from a screenshot.",
+                        "Pixel survey and OCR run locally on this device. OCR can surface visible pair/timeframe/number labels, but it cannot reliably assign chart prices to entry, SL, or TP. Live quotes and the deterministic engine must validate any trade plan.",
                         color = TextMuted, fontSize = 9.sp, lineHeight = 14.sp
                     )
                 }
@@ -329,7 +363,33 @@ fun ChartImageAnalyzerTab(viewModel: DestinedFXViewModel) {
                         PixelShareBar("Red pixels", result.bearishToneSharePercent, LossRed)
                         Text(result.explanation, color = TextPrimary, fontSize = 11.sp, lineHeight = 17.sp)
                         HorizontalDivider(color = CardBorder)
-                        Text("NO TRADE PLAN GENERATED FROM IMAGE PIXELS", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text("ON-DEVICE TEXT RECOGNITION", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text(result.ocrStatus, color = if (result.ocrStatus == "OCR COMPLETE • ON DEVICE") ProfitGreen else WarningAmber,
+                            fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        if (result.detectedPair != null) {
+                            Text("Possible pair label: ${result.detectedPair} • confirm it against the chart before analysis",
+                                color = TextPrimary, fontSize = 11.sp, lineHeight = 15.sp)
+                        }
+                        if (result.detectedTimeframe != null) {
+                            Text("Possible timeframe label: ${result.detectedTimeframe}",
+                                color = TextPrimary, fontSize = 11.sp)
+                        }
+                        if (result.visibleNumericLabels.isNotEmpty()) {
+                            Text(
+                                "Numbers recognized (unclassified labels, not trade levels): " +
+                                    result.visibleNumericLabels.take(12).joinToString(" · "),
+                                color = TextSecondary, fontSize = 10.sp, lineHeight = 15.sp
+                            )
+                        }
+                        if (result.recognizedChartText.isNotBlank()) {
+                            Text("Recognized chart text", color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            Text(result.recognizedChartText.take(1200), color = TextPrimary, fontSize = 10.sp, lineHeight = 15.sp)
+                        } else {
+                            Text("No readable chart text was detected. Try a clearer screenshot with the symbol and timeframe visible.",
+                                color = TextSecondary, fontSize = 10.sp, lineHeight = 15.sp)
+                        }
+                        HorizontalDivider(color = CardBorder)
+                        Text("NO TRADE PLAN GENERATED FROM IMAGE PIXELS OR OCR", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Black)
                         Text(
                             "Pair hint: ${pairHint.ifBlank { "Not supplied" }} · Strategy note: ${strategies.firstOrNull { it.id == selectedStrategyId }?.name ?: "Not selected"}",
                             color = TextSecondary, fontSize = 10.sp, lineHeight = 15.sp
@@ -395,6 +455,86 @@ private fun PixelShareBar(label: String, share: Double, color: androidx.compose.
         }
     }
 }
+
+private suspend fun recognizeChartText(bitmap: Bitmap): String =
+    suspendCancellableCoroutine { continuation ->
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val closed = AtomicBoolean(false)
+        fun closeOnce() {
+            if (closed.compareAndSet(false, true)) recognizer.close()
+        }
+        continuation.invokeOnCancellation { closeOnce() }
+        try {
+            recognizer.process(InputImage.fromBitmap(bitmap, 0))
+                .addOnSuccessListener { result ->
+                    if (continuation.isActive) continuation.resume(result.text)
+                    closeOnce()
+                }
+                .addOnFailureListener { error ->
+                    if (continuation.isActive) continuation.resumeWithException(error)
+                    closeOnce()
+                }
+                .addOnCanceledListener {
+                    if (continuation.isActive) continuation.cancel(CancellationException("On-device chart OCR was cancelled."))
+                    closeOnce()
+                }
+        } catch (error: Exception) {
+            if (continuation.isActive) continuation.resumeWithException(error)
+            closeOnce()
+        }
+    }
+
+/** Match text only to canonical registered symbols; OCR hints never become broker symbols themselves. */
+internal fun detectPairFromChartText(
+    text: String,
+    supportedSymbols: List<String> = com.example.data.market.SymbolRegistry.getAllCanonical()
+): String? {
+    if (text.isBlank()) return null
+    val tokenList = Regex("[A-Z0-9]+")
+        .findAll(text.uppercase(Locale.US))
+        .map { it.value }
+        .toList()
+    val tokenSet = tokenList.toSet()
+    val compactText = text.uppercase(Locale.US).filter { it.isLetterOrDigit() }
+    return supportedSymbols
+        .filter { it.isNotBlank() }
+        .sortedByDescending { it.filter(Char::isLetterOrDigit).length }
+        .firstOrNull { canonical ->
+            val normalized = canonical.uppercase(Locale.US).filter { it.isLetterOrDigit() }
+            normalized.length >= 6 && (
+                normalized in tokenSet ||
+                    compactText.contains(normalized) ||
+                    tokenList.zipWithNext().any { (left, right) -> left + right == normalized }
+                )
+        }
+}
+
+/** Convert visible TradingView/MT5 timeframe labels into the app's canonical interval labels. */
+internal fun detectTimeframeFromChartText(text: String): String? {
+    val upper = text.uppercase(Locale.US)
+    val match = Regex("(?<![A-Z0-9])(M1|M5|M15|M30|H1|H4|D1|W1|1M|5M|15M|30M|1H|4H|1D|1W)(?![A-Z0-9])")
+        .find(upper)?.value ?: return null
+    return when (match) {
+        "1M", "M1" -> "M1"
+        "5M", "M5" -> "M5"
+        "15M", "M15" -> "M15"
+        "30M", "M30" -> "M30"
+        "1H", "H1" -> "H1"
+        "4H", "H4" -> "H4"
+        "1D", "D1" -> "D1"
+        "1W", "W1" -> "W1"
+        else -> null
+    }
+}
+
+/** Return numeric OCR spans for inspection only; these are deliberately not assigned trade semantics. */
+internal fun extractVisibleNumericLabels(text: String): List<String> =
+    Regex("(?<![A-Z0-9])\\d{1,6}(?:[.,]\\d{1,8})?(?![A-Z0-9])")
+        .findAll(text)
+        .map { it.value }
+        .distinct()
+        .take(30)
+        .toList()
 
 private fun decodeChartBitmap(context: Context, uri: Uri): Bitmap {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
