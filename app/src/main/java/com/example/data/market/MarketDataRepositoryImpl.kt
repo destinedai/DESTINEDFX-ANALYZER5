@@ -142,17 +142,35 @@ class MarketDataRepositoryImpl(
      * Resolve only against the fixed, audited resolver or Deriv's real active-symbol directory.
      * Never construct a synthetic feed code from a display label.
      */
+    private fun derivLookupNames(canonicalSymbol: String): Set<String> {
+        val normalized = normalizeMarketSymbol(canonicalSymbol)
+        val aliases = when (normalized) {
+            "SPX500" -> setOf("SPX500", "US500", "SP500", "SPX", "SP500INDEX")
+            "NAS100" -> setOf("NAS100", "US100", "USTECH100", "NASDAQ100", "USTEC")
+            "DJ30" -> setOf("DJ30", "US30", "WALLSTREET30", "DOWJONES30")
+            "FTSE100" -> setOf("FTSE100", "UK100", "UKFTSE100")
+            "DAX40", "GER40", "GER30" -> setOf("DAX40", "GER40", "GER30", "GERMANY40", "DE40")
+            "NATGAS" -> setOf("NATGAS", "NATURALGAS", "GAS")
+            "XPTUSD" -> setOf("XPTUSD", "PLATINUM", "PLATINUMUSD")
+            "XPDUSD" -> setOf("XPDUSD", "PALLADIUM", "PALLADIUMUSD")
+            "UKOIL" -> setOf("UKOIL", "BRENT", "UKBRENT", "OILBRENT")
+            else -> emptySet()
+        }
+        return aliases + normalized
+    }
+
     private suspend fun resolveDerivSymbol(canonicalSymbol: String): String? {
         com.destinedfx.core.broker.DerivInstrumentResolver.resolve(canonicalSymbol)?.let { return it }
         val gateway = derivMarketDataGateway ?: return null
-        val normalized = normalizeMarketSymbol(canonicalSymbol)
-        if (normalized.isBlank()) return null
+        val names = derivLookupNames(canonicalSymbol)
+        if (names.all { it.isBlank() }) return null
         val discovered = withTimeoutOrNull(18_000L) { gateway.fetchActiveSymbols() } ?: emptyList()
         val match = discovered.firstOrNull { candidate ->
-            normalizeMarketSymbol(candidate.displayName) == normalized ||
-                normalizeMarketSymbol(candidate.symbol) == normalized
+            normalizeMarketSymbol(candidate.displayName) in names ||
+                normalizeMarketSymbol(candidate.symbol) in names
         } ?: return null
 
+        // Register only codes that actually appeared in Deriv's active symbol directory.
         com.destinedfx.core.broker.DerivInstrumentResolver.registerAlias(canonicalSymbol, match.symbol)
         dynamicCanonicalByDerivSymbol[match.symbol] = canonicalSymbol
         return match.symbol
