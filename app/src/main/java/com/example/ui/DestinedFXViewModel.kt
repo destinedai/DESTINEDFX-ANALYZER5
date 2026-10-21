@@ -1557,28 +1557,45 @@ open class DestinedFXViewModel(
         }
     }
 
-    fun connectToDeriv(token: String, appId: String = "1089", onResult: (Boolean, String?) -> Unit) {
+    fun connectToDeriv(
+        token: String,
+        appId: String = "",
+        accountMode: String? = null,
+        onResult: (Boolean, String?) -> Unit
+    ) {
         if (isPreview) {
             onResult(false, "Broker login is disabled in preview mode.")
             return
         }
         val cleanToken = token.trim()
-        val cleanAppId = appId.trim().ifBlank { "1089" }
+        val cleanAppId = appId.trim()
+        val cleanMode = (accountMode ?: app.secretsManager.getDerivAccountMode())
+            .trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo"
         if (cleanToken.isBlank()) {
-            onResult(false, "Enter your Deriv API token before connecting.")
+            onResult(false, "Enter a current Deriv Personal Access Token (PAT) with Trade scope.")
+            return
+        }
+        if (cleanAppId.isBlank() || !cleanAppId.all { it.isDigit() }) {
+            onResult(false, "Enter the numeric App ID from a newly registered Deriv API application. Legacy App IDs are not accepted by the current API.")
             return
         }
         viewModelScope.launch {
             try {
                 app.secretsManager.saveDerivApiToken(cleanToken)
                 app.secretsManager.saveDerivAppId(cleanAppId)
+                app.secretsManager.saveDerivAccountMode(cleanMode)
                 app.derivBrokerGateway.disconnect()
                 val result = app.derivBrokerGateway.connectAndAuthorize(cleanToken)
                 if (result.isSuccess) {
                     val info = result.getOrThrow()
                     app.brokerManager.selectBroker(com.example.data.broker.BrokerType.DERIV)
-                    onResult(true, "Deriv connected: ${info.loginId} • ${info.balance} ${info.currency}")
-                } else onResult(false, result.exceptionOrNull()?.message ?: "Deriv authentication failed.")
+                    onResult(
+                        true,
+                        "Deriv ${cleanMode.uppercase()} Options account connected: ${info.loginId} • ${info.balance} ${info.currency}"
+                    )
+                } else {
+                    onResult(false, result.exceptionOrNull()?.message ?: "Deriv authentication failed.")
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1743,7 +1760,8 @@ open class DestinedFXViewModel(
     fun getSupabaseUrl(): String = if (isPreview) "" else app.secretsManager.getSupabaseUrl()
     fun getSupabaseAnonKey(): String = if (isPreview) "" else app.secretsManager.getSupabaseAnonKey()
     fun getDerivApiToken(): String = if (isPreview) "" else app.secretsManager.getDerivApiToken()
-    fun getDerivAppId(): String = if (isPreview) "1089" else app.secretsManager.getDerivAppId()
+    fun getDerivAppId(): String = if (isPreview) "" else app.secretsManager.getDerivAppId()
+    fun getDerivAccountMode(): String = if (isPreview) "demo" else app.secretsManager.getDerivAccountMode()
     fun getMetaApiToken(): String = if (isPreview) "" else app.secretsManager.getMetaApiToken()
     fun getMetaApiAccountId(): String = if (isPreview) "" else app.secretsManager.getMT5AccountNumber()
     fun getMT5Login(): String = if (isPreview) "" else app.secretsManager.getMT5Login()
