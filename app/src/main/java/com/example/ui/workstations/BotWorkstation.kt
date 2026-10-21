@@ -54,6 +54,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var brokerConnectionMessage by remember { mutableStateOf<String?>(null) }
     var derivTokenInput by remember { mutableStateOf(viewModel.getDerivApiToken()) }
     var derivAppIdInput by remember { mutableStateOf(viewModel.getDerivAppId()) }
+    var derivAccountModeInput by remember { mutableStateOf(viewModel.getDerivAccountMode()) }
     var mt5LoginInput by remember { mutableStateOf(viewModel.getMT5Login()) }
     var mt5PasswordInput by remember { mutableStateOf(viewModel.getMT5Password()) }
     var mt5ServerInput by remember { mutableStateOf(viewModel.getMT5BrokerServer()) }
@@ -319,19 +320,47 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
 
                     if (activeBrokerType == BrokerType.DERIV) {
-                        Text("DERIV ACCOUNT LOGIN", fontSize = 9.sp, color = ElectricCyan,
+                        Text("DERIV OPTIONS API • DIRECT CONNECTION", fontSize = 9.sp, color = ElectricCyan,
                             fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        Text(
+                            "Uses Deriv's current REST + one-time WebSocket login directly; MetaAPI is not used for Deriv. Enter a current Personal Access Token (PAT) with Trade scope and an App ID from a newly registered Deriv API application. Demo/Real selects the Options account. These are stake-based Deriv contracts, not standard MT5 lots.",
+                            fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { derivAccountModeInput = "demo" },
+                                modifier = Modifier.weight(1f).testTag("deriv_mode_demo"),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (derivAccountModeInput == "demo") ProfitGreen else DarkSurfaceVariant,
+                                    contentColor = if (derivAccountModeInput == "demo") DarkBackground else TextPrimary
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) { Text("DEMO ACCOUNT", fontWeight = FontWeight.Black, fontSize = 10.sp) }
+                            Button(
+                                onClick = { derivAccountModeInput = "real" },
+                                modifier = Modifier.weight(1f).testTag("deriv_mode_real"),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (derivAccountModeInput == "real") LossRed else DarkSurfaceVariant,
+                                    contentColor = if (derivAccountModeInput == "real") Color.White else TextPrimary
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) { Text("REAL ACCOUNT", fontWeight = FontWeight.Black, fontSize = 10.sp) }
+                        }
                         OutlinedTextField(
                             value = derivTokenInput, onValueChange = { derivTokenInput = it },
-                            label = { Text("Deriv API token") },
-                            placeholder = { Text("Token with required account permissions") },
+                            label = { Text("Deriv Personal Access Token (PAT)") },
+                            placeholder = { Text("PAT with Trade scope") },
                             visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_deriv_token")
                         )
                         OutlinedTextField(
-                            value = derivAppIdInput, onValueChange = { derivAppIdInput = it },
-                            label = { Text("Deriv App ID") },
+                            value = derivAppIdInput, onValueChange = { derivAppIdInput = it.filter(Char::isDigit) },
+                            label = { Text("New Deriv API App ID") },
+                            placeholder = { Text("Numeric App ID from developers.deriv.com") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_deriv_app_id")
                         )
@@ -339,12 +368,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             onClick = {
                                 isConnectingBroker = true
                                 brokerConnectionMessage = null
-                                viewModel.connectToDeriv(derivTokenInput, derivAppIdInput) { success, message ->
+                                viewModel.connectToDeriv(derivTokenInput, derivAppIdInput, derivAccountModeInput) { success, message ->
                                     isConnectingBroker = false
                                     brokerConnectionMessage = message ?: if (success) "Deriv account connected." else "Deriv login failed."
                                 }
                             },
-                            enabled = !isConnectingBroker && derivTokenInput.isNotBlank() && derivAppIdInput.isNotBlank(),
+                            enabled = !isConnectingBroker && derivTokenInput.isNotBlank() && derivAppIdInput.isNotBlank() && derivAppIdInput.all(Char::isDigit),
                             modifier = Modifier.fillMaxWidth().testTag("bot_connect_deriv"),
                             colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
                         ) {
