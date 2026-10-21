@@ -175,7 +175,8 @@ class MyApplication : Application() {
                 newsRepo = newsRepository,
                 tradeUseCase = tradeUseCase,
                 tradeRepo = tradeRepository,
-                brokerManager = brokerManager
+                brokerManager = brokerManager,
+                signalGenerationUseCase = signalGenerationUseCase
             )
             
             initStatus.value = InitState.Ready
