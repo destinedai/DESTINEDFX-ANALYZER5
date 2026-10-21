@@ -257,7 +257,7 @@ fun TradingViewWebView(
         if (isLoading && !isChartError && !useDirectEmbed) {
             useDirectEmbed = true
         }
-        kotlinx.coroutines.delay(25_000L)
+        kotlinx.coroutines.delay(35_000L)
         if (isLoading && !isChartError) {
             isChartError = true
             isLoading = false
@@ -339,12 +339,13 @@ fun TradingViewWebView(
                                                     errorMessage = state.removePrefix("ERROR:")
                                                 }
                                                 attempt < 30 -> view.postDelayed({ verifyChart(attempt + 1) }, 1000L)
-                                                else if (!useDirectEmbed) {
+                                                !useDirectEmbed -> {
                                                     // Start the direct embed path rather than showing
                                                     // the unavailable page after only one failed mode.
                                                     useDirectEmbed = true
                                                     isLoading = true
-                                                } else {
+                                                }
+                                                else -> {
                                                     isLoading = false
                                                     isChartError = true
                                                     errorMessage = "TradingView opened, but its chart surface remained blank on both loading paths. Update Android System WebView/Chrome or check whether the network blocks TradingView."
