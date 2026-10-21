@@ -101,9 +101,12 @@ class DerivMarketDataGateway(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    lastConnectionError = t.message?.takeIf { it.isNotBlank() }
-                        ?: "Network connection to Deriv WebSocket failed"
-                    Log.e(TAG, "Deriv WebSocket failure: " + (lastConnectionError ?: "unknown"))
+                    val detail = buildString {
+                        append(t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName)
+                        if (response != null) append(" (HTTP ${response.code} ${response.message})")
+                    }
+                    lastConnectionError = "Deriv public market-data WebSocket failed: $detail"
+                    Log.e(TAG, lastConnectionError ?: "Deriv WebSocket failure")
                     _connectionState.value = DerivConnectionState.ERROR
                     cleanup()
                     scheduleReconnect()
@@ -111,7 +114,10 @@ class DerivMarketDataGateway(
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     Log.i(TAG, "Deriv WebSocket closed: $code / $reason")
-                    if (code != 1000 && reason.isNotBlank()) lastConnectionError = "WebSocket closed: " + code + " / " + reason
+                    if (code != 1000) {
+                        lastConnectionError = "Deriv market-data WebSocket closed (code $code" +
+                            (reason.takeIf { it.isNotBlank() }?.let { ", $it" } ?: "") + ")."
+                    }
                     _connectionState.value = DerivConnectionState.DISCONNECTED
                     cleanup()
                     if (code != 1000) scheduleReconnect()
