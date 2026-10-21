@@ -65,6 +65,7 @@ class DerivBrokerGateway(
     val activeContracts: StateFlow<Map<Long, DerivContractInfo>> = _activeContracts.asStateFlow()
 
     private val cachedQuotes = ConcurrentHashMap<String, MarketQuote>()
+    @Volatile private var lastConnectionError: String? = null
 
     private var webSocket: WebSocket? = null
     private val reqIdCounter = AtomicInteger(100)
@@ -78,7 +79,12 @@ class DerivBrokerGateway(
             return@withContext Result.failure(Exception("Deriv API token is not configured. Please set it in Settings."))
         }
 
-        val appId = secrets.getDerivAppId().ifBlank { "1089" }
+        val appId = secrets.getDerivAppId().trim().ifBlank { "1089" }
+        if (!appId.all { it.isDigit() }) {
+            _connectionState.value = DerivConnectionState.ERROR
+            return@withContext Result.failure(Exception("Invalid Deriv App ID. Use the numeric App ID from your Deriv application settings."))
+        }
+        lastConnectionError = null
         _connectionState.value = DerivConnectionState.CONNECTING
 
         val wsDeferred = CompletableDeferred<Boolean>()
@@ -95,13 +101,24 @@ class DerivBrokerGateway(
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Deriv Broker WS failure: ${t.message}")
+                val transportDetail = buildString {
+                    append(t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName)
+                    if (response != null) append(" (HTTP ${response.code} ${response.message})")
+                }
+                lastConnectionError = "Deriv WebSocket connection failed: $transportDetail"
+                Log.e(TAG, lastConnectionError ?: "Deriv WebSocket failure")
                 _connectionState.value = DerivConnectionState.ERROR
+                pendingRequests.values.forEach { it.completeExceptionally(t) }
                 wsDeferred.complete(false)
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "Deriv Broker WS closed: $code")
+                Log.i(TAG, "Deriv Broker WS closed: $code / $reason")
+                if (!wsDeferred.isCompleted) {
+                    lastConnectionError = "Deriv closed the WebSocket before connecting (code $code" +
+                        (reason.takeIf { it.isNotBlank() }?.let { ", $it" } ?: "") + ")."
+                    wsDeferred.complete(false)
+                }
                 _connectionState.value = DerivConnectionState.DISCONNECTED
             }
         })
@@ -109,7 +126,8 @@ class DerivBrokerGateway(
         val connected = withTimeoutOrNull(8000) { wsDeferred.await() } ?: false
         if (!connected) {
             _connectionState.value = DerivConnectionState.ERROR
-            return@withContext Result.failure(Exception("Failed to establish WebSocket connection to Deriv."))
+            val detail = lastConnectionError ?: "The WebSocket handshake did not complete within 8 seconds."
+            return@withContext Result.failure(Exception(detail))
         }
 
         // Send authorize request
@@ -122,7 +140,11 @@ class DerivBrokerGateway(
             put("authorize", token)
             put("req_id", authReqId)
         }
-        webSocket?.send(authPayload.toString())
+        if (webSocket?.send(authPayload.toString()) != true) {
+            pendingRequests.remove(authReqId)
+            _connectionState.value = DerivConnectionState.ERROR
+            return@withContext Result.failure(Exception("The Deriv authorization request could not be sent because the WebSocket is no longer open."))
+        }
 
         try {
             val authResp = withTimeout(10_000) { authDeferred.await() }
@@ -158,9 +180,12 @@ class DerivBrokerGateway(
             fetchPortfolio()
 
             Result.success(info)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             _connectionState.value = DerivConnectionState.ERROR
-            Result.failure(Exception("Authorization timeout or error: ${e.message}"))
+            val detail = lastConnectionError ?: (e.message ?: e.javaClass.simpleName)
+            Result.failure(Exception("Deriv authorization failed or timed out: $detail"))
         } finally {
             pendingRequests.remove(authReqId)
         }
