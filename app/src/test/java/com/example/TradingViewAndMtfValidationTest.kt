@@ -15,6 +15,9 @@ import com.example.security.SecretsManager
 import com.example.ui.chart.TradingViewMapper
 import com.example.ui.mapTradeSignalToUiModel
 import com.example.ui.scanChartBitmap
+import com.example.ui.detectPairFromChartText
+import com.example.ui.detectTimeframeFromChartText
+import com.example.ui.extractVisibleNumericLabels
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -32,6 +35,30 @@ class TradingViewAndMtfValidationTest {
     }
 
     // --- 1. TRADINGVIEW MAPPING TESTS ---
+
+    @Test
+    fun testImageAnalyzerOcrHintsDetectCanonicalPairAndTimeframe() {
+        assertEquals(
+            "EUR/USD",
+            detectPairFromChartText("TradingView EUR/USD M15", listOf("EUR/USD", "XAU/USD"))
+        )
+        assertEquals(
+            "XAU/USD",
+            detectPairFromChartText("GOLD XAUUSD H4", listOf("EUR/USD", "XAU/USD"))
+        )
+        assertEquals("M15", detectTimeframeFromChartText("EURUSD 15m"))
+        assertEquals("H4", detectTimeframeFromChartText("XAUUSD • 4H"))
+    }
+
+    @Test
+    fun testImageAnalyzerOcrNumericLabelsAreVisibleLabelsOnly() {
+        val labels = extractVisibleNumericLabels("EURUSD 1.08450 1.09000 1.07500 M15")
+        assertTrue(labels.contains("1.08450"))
+        assertTrue(labels.contains("1.09000"))
+        assertTrue(labels.contains("1.07500"))
+        // OCR extraction returns raw labels; it must not create an Entry/SL/TP object.
+        assertEquals(3, labels.size)
+    }
 
     @Test
     fun testTradingViewSymbolMapping_SupportedAssets() {
