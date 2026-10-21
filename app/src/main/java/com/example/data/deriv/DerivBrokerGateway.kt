@@ -226,7 +226,7 @@ class DerivBrokerGateway(
         }
     }
 
-    private fun executeRestJson(request: Request): JSONObject {
+    private fun executeRestJson(request: Request): JSONObject =
         client.newBuilder()
             .callTimeout(20, TimeUnit.SECONDS)
             .build()
@@ -246,7 +246,6 @@ class DerivBrokerGateway(
                 }
                 json
             }
-    }
 
     private fun sendBalanceSubscription() {
         val reqId = reqIdCounter.getAndIncrement()
