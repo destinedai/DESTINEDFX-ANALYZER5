@@ -476,11 +476,34 @@ object SignalEngine {
     private fun pick(d: Dir, level: Int) = if (d == Dir.BULL) when (level) { 3 -> SignalState.STRONG_BUY; 2 -> SignalState.BUY; else -> SignalState.WEAK_BUY }
     else when (level) { 3 -> SignalState.STRONG_SELL; 2 -> SignalState.SELL; else -> SignalState.WEAK_SELL }
 
-    /** SL from structural invalidation + volatility/spread buffer; TPs from opposing liquidity. Returns (plan, failureReason). */
+    /**
+     * Structural stop + strategy-specific target plan. Live orders are only emitted when the
+     * chosen strategy's setup location and minimum-R:R rules are satisfied.
+     */
     fun plan(i: AnalysisInput, q: MarketQuote, st: StructureAnalysis, obs: List<OrderBlock>, levels: List<LiquidityLevel>, dir: Dir, atr: Double, cfg: SignalConfig): Pair<TradePlan?, String?> {
         val long = dir == Dir.BULL
         val entry = (if (long) q.ask else q.bid) ?: q.mid ?: return null to "No executable price"
         val spread = q.spread ?: 0.0
+        val priceMid = q.mid ?: entry
+
+        // ICT Silver Bullet is a location-specific setup, not a generic direction signal.
+        // A current price far away from the 50% consequent-encroachment level is a WAIT.
+        if (i.strategyId == "ict-silver-bullet") {
+            val atrSeries = Indicators.atr(i.candles, cfg.structure.atrPeriod)
+            val recentFvgs = ZoneEngine.fvgs(i.candles, atrSeries, i.tf, cfg.zones)
+                .filter {
+                    it.dir == dir &&
+                        it.fill != FillState.FULLY_FILLED &&
+                        i.candles.lastIndex - it.createdIndex in 0..cfg.recentBars
+                }
+            val fvg = recentFvgs.minByOrNull { abs(priceMid - (it.top + it.bottom) / 2.0) }
+                ?: return null to "ICT SILVER BULLET WAIT: no recent unfilled directional FVG for a CE 50% entry."
+            val ce = (fvg.top + fvg.bottom) / 2.0
+            val maxCeDistance = maxOf(0.25 * atr, 2.0 * spread)
+            if (abs(priceMid - ce) > maxCeDistance) {
+                return null to "ICT SILVER BULLET WAIT: price is not near FVG CE 50% (${"%.5f".format(java.util.Locale.US, ce)}); do not chase the move."
+            }
+        }
         val aligned = obs.filter { it.dir == dir && it.state != ZoneState.MITIGATED && (if (long) it.low < entry else it.high > entry) }.maxByOrNull { it.createdIndex }
         val sw = st.swings.lastOrNull { it.type == (if (long) SwingType.LOW else SwingType.HIGH) && (if (long) it.price < entry else it.price > entry) }
         val inv = when { aligned != null -> if (long) aligned.low else aligned.high; sw != null -> sw.price; else -> return null to "No structural invalidation level (no OB/swing) -> WAIT" }
@@ -505,16 +528,91 @@ object SignalEngine {
         val cands = levels.filter { !it.swept && (if (long) it.side == LiquiditySide.BUY_SIDE && it.price > entry + minDist else it.side == LiquiditySide.SELL_SIDE && it.price < entry - minDist) }
             .sortedBy { abs(it.price - entry) }
         val ts = mutableListOf<Target>()
-        fun addLevel(label: String, lv: LiquidityLevel) { RiskEngine.rewardToRisk(entry, sl, lv.price, long)?.let { ts += Target(label, lv.price, it, lv.kind.name) } }
-        fun addPrice(label: String, targetPx: Double, source: String) { RiskEngine.rewardToRisk(entry, sl, targetPx, long)?.let { ts += Target(label, targetPx, it, source) } }
-
-        if (cands.isNotEmpty()) {
-            addLevel("TP1", cands.first())
-            cands.firstOrNull { it.price != cands.first().price && (it.kind == LevelKind.EQUAL_HIGHS || it.kind == LevelKind.EQUAL_LOWS || it.higherTimeframe) }?.let { addLevel("TP2", it) }
-            cands.lastOrNull { it.higherTimeframe }?.takeIf { h -> ts.none { it.price == h.price } }?.let { addLevel("TP3", it) }
+        fun addLevel(label: String, lv: LiquidityLevel) {
+            RiskEngine.rewardToRisk(entry, sl, lv.price, long)?.let { ts += Target(label, lv.price, it, lv.kind.name) }
+        }
+        fun addPrice(label: String, targetPx: Double, source: String) {
+            RiskEngine.rewardToRisk(entry, sl, targetPx, long)?.let { ts += Target(label, targetPx, it, source) }
         }
 
-        val primary = ts.firstOrNull { it.rr >= cfg.minRR } ?: return null to "NO_VALID_TARGET: No structural target reaches RR >= ${cfg.minRR} (best %.2f) -> WAIT".format(ts.maxOfOrNull { it.rr } ?: 0.0)
+        when (i.strategyId) {
+            "mean-reversion" -> {
+                // The scored playbook targets the Bollinger middle line / 20-period mean.
+                // Do not substitute a more distant liquidity level if the mean cannot meet 2R.
+                val closes = i.candles.map { it.close }
+                val bands = Indicators.lastBollingerBands(closes, 20, 2.0)
+                    ?: return null to "MEAN REVERSION WAIT: insufficient bars to compute the 20-period mean."
+                val rr = RiskEngine.rewardToRisk(entry, sl, bands.middle, long)
+                    ?: return null to "MEAN REVERSION WAIT: the 20-period mean is not a valid target on the trade side."
+                if (rr < cfg.minRR) {
+                    return null to "MEAN REVERSION WAIT: target at 20-period mean gives only ${"%.2f".format(java.util.Locale.US, rr)}R; minimum is ${cfg.minRR}R."
+                }
+                ts += Target("TP1", bands.middle, rr, "Bollinger 20-period mean")
+            }
+
+            "breakout-momentum" -> {
+                // Explicit 2.5R volatility-extension target; structure/liquidity levels are
+                // added as secondary references and cannot replace this primary target.
+                val extension = maxOf(2.5 * dist, 2.5 * atr)
+                val target = if (long) entry + extension else entry - extension
+                addPrice("TP1", target, "Volatility extension (max of 2.5R or 2.5 ATR)")
+            }
+
+            else -> Unit
+        }
+
+        // Add a strategy-specific structural target where there is enough evidence to identify it.
+        if (i.strategyId == "supply-and-demand") {
+            val opposingZone = obs
+                .filter { it.dir != dir && it.state != ZoneState.MITIGATED }
+                .filter { if (long) it.low > entry + minDist else it.high < entry - minDist }
+                .minByOrNull { abs((if (long) it.low else it.high) - entry) }
+            if (opposingZone != null) {
+                addPrice(
+                    if (ts.isEmpty()) "TP1" else "TP2",
+                    if (long) opposingZone.low else opposingZone.high,
+                    "Opposing unmitigated supply/demand zone"
+                )
+            }
+        }
+
+        if (i.strategyId == "wyckoff-schematics" && st.consolidation) {
+            val rangeBoundary = st.swings
+                .filter {
+                    if (long) it.type == SwingType.HIGH && it.price > entry + minDist
+                    else it.type == SwingType.LOW && it.price < entry - minDist
+                }
+                .let { swings -> if (long) swings.maxByOrNull { it.price } else swings.minByOrNull { it.price } }
+            if (rangeBoundary != null) {
+                addPrice(
+                    if (ts.isEmpty()) "TP1" else "TP2",
+                    rangeBoundary.price,
+                    "Wyckoff opposite trading-range boundary"
+                )
+            }
+        }
+
+        if (i.strategyId != "mean-reversion") {
+            if (i.strategyId != "breakout-momentum" && cands.isNotEmpty()) {
+                addLevel(if (ts.isEmpty()) "TP1" else "TP2", cands.first())
+                cands.firstOrNull {
+                    it.price != cands.first().price &&
+                        (it.kind == LevelKind.EQUAL_HIGHS || it.kind == LevelKind.EQUAL_LOWS || it.higherTimeframe)
+                }?.let { addLevel("TP3", it) }
+                cands.lastOrNull { it.higherTimeframe }
+                    ?.takeIf { h -> ts.none { it.price == h.price } }
+                    ?.let { addLevel("TP4", it) }
+            } else if (i.strategyId == "breakout-momentum" && cands.isNotEmpty()) {
+                addLevel("TP2", cands.first())
+                cands.firstOrNull {
+                    it.price != cands.first().price &&
+                        (it.kind == LevelKind.EQUAL_HIGHS || it.kind == LevelKind.EQUAL_LOWS || it.higherTimeframe)
+                }?.let { addLevel("TP3", it) }
+            }
+        }
+
+        val primary = ts.firstOrNull { it.rr >= cfg.minRR }
+            ?: return null to "NO_VALID_TARGET: strategy-specific target set does not reach RR >= ${cfg.minRR} (best %.2f) -> WAIT".format(ts.maxOfOrNull { it.rr } ?: 0.0)
         return TradePlan(long, entry, sl, dist / atr, ts, primary, "SL $reason + max(${cfg.slBufferAtr} ATR, 2x spread) buffer") to null
     }
 
