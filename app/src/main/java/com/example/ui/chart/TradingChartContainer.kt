@@ -202,10 +202,9 @@ fun LiveStructureHud(
 }
 
 /**
- * Bulletproof TradingView WebView embed that NEVER stays blank!
- * 1. Uses direct iframe embed URL (https://s.tradingview.com/widgetembed/...)
- * 2. Checks webView.tag to prevent reloading on Compose timer recompositions
- * 3. Modern Chrome UserAgent and full DOM storage support
+ * TradingView's official Advanced Chart script embed, matching the HTML/React snippet used
+ * on the DestinedFX site. The wrapper lives inside Android WebView; the surrounding app remains
+ * native Compose. Pair/timeframe changes rebuild the widget config without allowing symbol drift.
  */
 @Composable
 fun TradingViewWebView(
@@ -221,8 +220,9 @@ fun TradingViewWebView(
     val mappedSymbol = TradingViewMapper.mapSymbol(symbol)
     val mappedInterval = TradingViewMapper.mapInterval(timeframe)
     val widgetUrl = TradingViewMapper.buildWidgetUrl(symbol, timeframe)
+    val widgetHtml = TradingViewMapper.buildWidgetHtml(symbol, timeframe)
 
-    if (mappedSymbol == null || mappedInterval == null || widgetUrl == null) {
+    if (mappedSymbol == null || mappedInterval == null || widgetUrl == null || widgetHtml == null) {
         Column(modifier = modifier.fillMaxSize().background(Color(0xFF171B27)).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
@@ -313,7 +313,7 @@ fun TradingViewWebView(
                                     fun verifyChart(attempt: Int) {
                                         if (isChartError || !isLoading) return
                                         view.evaluateJavascript(
-                                            "(function(){var b=document.body;var t=(b&&b.innerText||'').toLowerCase();if(t.includes('invalid symbol')||t.includes('symbol not found'))return 'ERROR:TradingView could not find this symbol';var c=document.querySelectorAll('canvas');for(var i=0;i<c.length;i++){var r=c[i].getBoundingClientRect();if(r.width>100&&r.height>100)return 'READY';}var f=document.querySelector('iframe');if(f){var fr=f.getBoundingClientRect();if(fr.width>100&&fr.height>100)return 'READY';}return 'WAIT';})()"
+                                            "(function(){var e=document.documentElement.getAttribute('data-tv-widget-error');if(e)return 'ERROR:'+e;var b=document.body;var t=(b&&b.innerText||'').toLowerCase();if(t.includes('invalid symbol')||t.includes('symbol not found'))return 'ERROR:TradingView could not find this symbol';var c=document.querySelector('.tradingview-widget-container__widget');var f=c?c.querySelector('iframe'):null;if(f&&f.src&&/tradingview/i.test(f.src)){var r=f.getBoundingClientRect();if(r.width>100&&r.height>100)return 'READY';}var canvases=document.querySelectorAll('canvas');for(var i=0;i<canvases.length;i++){var cr=canvases[i].getBoundingClientRect();if(cr.width>100&&cr.height>100)return 'READY';}return 'WAIT';})()"
                                         ) { result ->
                                             val state = result?.removeSurrounding("\"") ?: "WAIT"
                                             when {
@@ -382,7 +382,7 @@ fun TradingViewWebView(
                             // outdated Chrome version. TradingView can then serve a compatible UI.
                             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                            loadUrl(widgetUrl)
+                            loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
                         }
                     } catch (error: Throwable) {
                         isChartError = true
@@ -397,7 +397,7 @@ fun TradingViewWebView(
                         isLoading = true
                         isChartError = false
                         errorMessage = ""
-                        view.loadUrl(widgetUrl)
+                        view.loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -821,20 +821,21 @@ internal object TradingViewMapper {
             put("style", "1")
             put("locale", "en")
             put("enable_publishing", false)
-            put("backgroundColor", "#171B27")
-            put("gridColor", "rgba(65,74,90,0.18)")
             put("allow_symbol_change", false)
-            put("hide_side_toolbar", false)
+            put("calendar", false)
+            put("details", false)
+            put("hide_side_toolbar", true)
             put("hide_top_toolbar", false)
             put("hide_legend", false)
-            put("save_image", false)
-            put("withdateranges", true)
-            put("details", true)
+            put("hide_volume", false)
             put("hotlist", false)
-            put("calendar", true)
-            put("news", false)
-            // Match the website chart studies, without using them as the analysis feed.
-            put("studies", org.json.JSONArray().put("STD;EMA").put("STD;RSI"))
+            put("save_image", true)
+            put("backgroundColor", "#0F0F0F")
+            put("gridColor", "rgba(242,242,242,0.2)")
+            put("watchlist", org.json.JSONArray())
+            put("withdateranges", false)
+            put("compareSymbols", org.json.JSONArray())
+            put("studies", org.json.JSONArray())
             put("support_host", "https://www.tradingview.com")
         }.toString()
 
@@ -846,10 +847,10 @@ internal object TradingViewMapper {
               <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
               <meta name="referrer" content="strict-origin-when-cross-origin">
               <style>
-                html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#171B27; }
-                .tradingview-widget-container { position:relative; width:100%; height:100%; background:#171B27; }
-                .tradingview-widget-container__widget { width:100%; height:calc(100% - 18px); }
-                .tradingview-widget-copyright { height:18px; line-height:18px; text-align:right; padding-right:7px; font:9px Arial,sans-serif; background:#171B27; }
+                html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0F0F0F; }
+                .tradingview-widget-container { position:relative; width:100%; height:100%; background:#0F0F0F; }
+                .tradingview-widget-container__widget { width:100%; height:calc(100% - 32px); }
+                .tradingview-widget-copyright { height:32px; line-height:32px; text-align:right; padding-right:9px; font:10px Arial,sans-serif; background:#0F0F0F; }
                 .tradingview-widget-copyright a { color:#8B98A9; text-decoration:none; }
               </style>
               <script>
@@ -867,7 +868,7 @@ internal object TradingViewMapper {
               <div class="tradingview-widget-container">
                 <div class="tradingview-widget-container__widget"></div>
                 <div class="tradingview-widget-copyright">
-                  <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">Charts by TradingView</a>
+                  <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">Chart by TradingView</a>
                 </div>
                 <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
                 ${config}
