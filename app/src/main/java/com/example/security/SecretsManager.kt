@@ -97,8 +97,10 @@ class SecretsManager(private val ctx: Context) {
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
 
     fun getDerivApiToken(): String     = prefs.getString(DERIV_API_TOKEN, "") ?: ""
-    // New Deriv REST/Options API requires a newly registered App ID; legacy 1089 must not be assumed.
-    fun getDerivAppId(): String        = prefs.getString(DERIV_APP_ID, "") ?: ""
+    // New Deriv REST/Options API rejects legacy App ID 1089; don't prefill a stale stored default.
+    fun getDerivAppId(): String = (prefs.getString(DERIV_APP_ID, "") ?: "")
+        .trim()
+        .takeUnless { it.isBlank() || it == "1089" } ?: ""
     fun getDerivAccountMode(): String  = (prefs.getString(DERIV_ACCOUNT_MODE, "demo") ?: "demo").trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo"
     fun getTelegramConnectionStatus(): String = prefs.getString(TG_STATUS, "Not configured") ?: "Not configured"
     fun getTelegramNotificationsEnabled(): Boolean = prefs.getBoolean(TG_NOTIF_ENABLED, false)
