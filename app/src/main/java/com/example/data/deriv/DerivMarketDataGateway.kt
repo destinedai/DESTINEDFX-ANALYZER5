@@ -192,9 +192,9 @@ class DerivMarketDataGateway(
                 pendingRequests[reqId] = deferred
                 try {
                     val requestJson = JSONObject().apply {
+                        // Deriv's current active_symbols schema removed product_type.
+                        // Send only documented fields so symbol discovery succeeds on the new API.
                         put("active_symbols", "brief")
-                        // Match Deriv's documented public market-data workflow.
-                        put("product_type", "basic")
                         put("req_id", reqId)
                     }
                     if (webSocket?.send(requestJson.toString()) != true) {
