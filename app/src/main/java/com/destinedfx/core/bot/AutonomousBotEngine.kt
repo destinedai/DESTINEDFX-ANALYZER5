@@ -17,6 +17,7 @@ import com.example.domain.model.TradeSignal
 import com.example.domain.repository.MarketDataRepository
 import com.example.domain.repository.NewsRepository
 import com.example.domain.usecase.TradeUseCase
+import com.example.domain.usecase.impl.SignalGenerationUseCaseImpl
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -68,7 +69,8 @@ class AutonomousBotEngine(
     private val newsRepo: NewsRepository,
     private val tradeUseCase: TradeUseCase,
     private val tradeRepo: TradeRepository,
-    private val brokerManager: BrokerManager
+    private val brokerManager: BrokerManager,
+    private val signalGenerationUseCase: SignalGenerationUseCaseImpl
 ) {
     companion object {
         private const val TAG = "AutonomousBotEngine"
@@ -235,7 +237,8 @@ class AutonomousBotEngine(
                     continue
                 }
 
-                // 5. Candles & Technical Analysis
+                // 5. Obtain the canonical Analyzer signal. This stores the full validated report
+                // under the signal ID; TradeUseCaseImpl consumes this same report at execution.
                 val candles = marketDataRepo.getCandles(symbol, tf.label, 150)
                 if (candles.size < 60) {
                     _status.value = _status.value.copy(
@@ -245,37 +248,24 @@ class AutonomousBotEngine(
                     continue
                 }
 
-                val coreCandles = candles.map {
-                    Candle(
-                        timeMs = it.timestamp,
-                        open = it.open,
-                        high = it.high,
-                        low = it.low,
-                        close = it.close,
-                        volume = it.volume,
-                        complete = it.complete
-                    )
-                }
-
-                val spec = SpecRegistry.get(symbol) ?: broker.loadSymbolSpec(symbol).getOrNull()
-                val analysisInput = AnalysisInput(
+                val mtfContexts = listOf("M5", "M15", "M30", "H1", "H4", "D1", "W1")
+                    .filter { it != tf.label }
+                    .toSet()
+                val tradeSig = signalGenerationUseCase.generateSignal(
                     symbol = symbol,
-                    tf = tf,
-                    candles = coreCandles,
-                    htf = emptyMap(),
-                    quote = quote,
-                    spec = spec,
-                    nowMs = now,
-                    strategyId = strategyId
+                    timeframe = tf.label,
+                    strategyId = strategyId,
+                    selectedMtfTimeframes = mtfContexts
                 )
-
-                val report = SignalEngine.analyse(analysisInput, SignalConfig(minRR = 2.0))
-                val signalStateStr = report.state.name
+                val signalStateStr = tradeSig.signalState
                 _status.value = _status.value.copy(currentSignal = signalStateStr)
 
-                // 6. Signal State Evaluation
-                if (report.state == SignalState.WAIT || report.state == SignalState.INVALIDATED || report.state == SignalState.DATA_UNAVAILABLE || report.state == SignalState.BLOCKED) {
-                    val waitReason = report.blockers.firstOrNull() ?: report.reasons.firstOrNull() ?: "No valid confluence trigger"
+                if (!tradeSig.executable ||
+                    tradeSig.direction !in setOf(SignalDirection.LONG, SignalDirection.SHORT)
+                ) {
+                    val waitReason = tradeSig.blockReasons.firstOrNull()
+                        ?: tradeSig.reasons.firstOrNull()
+                        ?: "The shared analysis engine did not approve execution"
                     _status.value = _status.value.copy(
                         lastAction = "Scanning: $signalStateStr ($waitReason)"
                     )
@@ -283,70 +273,46 @@ class AutonomousBotEngine(
                     continue
                 }
 
-                val plan = report.plan
-                if (plan == null) {
-                    _status.value = _status.value.copy(lastAction = "WAIT: No trade plan generated")
-                    delay(20_000)
-                    continue
+                val isLong = tradeSig.direction == SignalDirection.LONG
+                val riskDistance = if (isLong) {
+                    tradeSig.entryPrice - tradeSig.stopLoss
+                } else {
+                    tradeSig.stopLoss - tradeSig.entryPrice
                 }
+                val rewardDistance = if (isLong) {
+                    tradeSig.takeProfit - tradeSig.entryPrice
+                } else {
+                    tradeSig.entryPrice - tradeSig.takeProfit
+                }
+                val rr = if (riskDistance > 0.0 && rewardDistance > 0.0) {
+                    rewardDistance / riskDistance
+                } else null
 
-                // 7. Strict 2R Rule Enforcement
-                if (plan.primary.rr < 2.0) {
+                if (rr == null || rr < 2.0) {
                     _status.value = _status.value.copy(
-                        lastAction = "NO_VALID_TARGET: RR (${String.format("%.2f", plan.primary.rr)}) below minimum 2.0R"
+                        lastAction = "NO_VALID_TARGET: R:R (" +
+                            (rr?.let { String.format(java.util.Locale.US, "%.2f", it) } ?: "invalid") +
+                            ") below minimum 2.0R"
                     )
                     delay(20_000)
                     continue
                 }
 
-                // 8. Execute Trade
+                // 6. Execute the SAME signal returned by the Analyzer engine. Never construct a
+                // second signal with a random ID: that would detach the signal from its report.
                 _status.value = _status.value.copy(
                     state = BotLifecycleState.EXECUTING,
-                    lastAction = "Executing ${if (plan.isLong) "BUY" else "SELL"} on $symbol @ ${plan.entry} (RR ${String.format("%.2f", plan.primary.rr)})"
-                )
-
-                val tradeSig = TradeSignal(
-                    id = UUID.randomUUID().toString(),
-                    symbol = symbol,
-                    timeframe = tf.label,
-                    direction = if (plan.isLong) SignalDirection.LONG else SignalDirection.SHORT,
-                    entryPrice = plan.entry,
-                    stopLoss = plan.stopLoss,
-                    takeProfit = plan.primary.price,
-                    confidenceScore = report.confluenceScore,
-                    rationale = report.reasons.joinToString(" | "),
-                    timestamp = now,
-                    invalidationLevel = plan.stopLoss,
-                    entryReason = "Automated execution: $strategyId",
-                    stopLossReason = "Structural invalidation",
-                    takeProfitReason = plan.primary.label,
-                    nearestHighYieldZone = "",
-                    profitZones = emptyList(),
-                    keyLevels = emptyList(),
-                    strategyScores = emptyMap(),
-                    signalState = report.state.name,
-                    executable = true,
-                    blockReasons = emptyList(),
-                    reasons = report.reasons,
-                    dataSource = quote.source,
-                    dataHealth = health.name,
-                    mtfSummary = report.mtf?.state?.name ?: "ALIGNED",
-                    spreadText = "${quote.spread ?: 0.0}",
-                    sessionLabel = "",
-                    newsStatus = "CLEAR",
-                    knowledge = emptyList(),
-                    strategyVersion = report.strategyVersion,
-                    analysisLoadMs = 0L,
-                    analysisComputeMs = 0L,
-                    analysisTotalMs = 0L,
-                    cacheHit = false
+                    lastError = null,
+                    lastAction = "Executing ${tradeSig.direction} on $symbol @ " +
+                        tradeSig.entryPrice + " (RR " +
+                        String.format(java.util.Locale.US, "%.2f", rr) + ")"
                 )
 
                 try {
                     tradeUseCase.executeTrade(tradeSig)
                     _status.value = _status.value.copy(
                         state = BotLifecycleState.ACTIVE_SCANNING,
-                        lastAction = "CONFIRMED: Executed ${tradeSig.direction} on $symbol @ ${plan.entry}",
+                        lastAction = "CONFIRMED: Executed ${tradeSig.direction} on $symbol @ ${tradeSig.entryPrice}",
                         lastExecutionRef = tradeSig.id
                     )
                     Log.i(TAG, "Bot execution successful for $symbol: ${tradeSig.id}")
