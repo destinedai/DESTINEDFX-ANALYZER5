@@ -399,6 +399,21 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
 
     LaunchedEffect(activeSymbol, selectedTimeframe, selectedStrategyId, selectedMtfTimeframes) {
         viewModel.runSignalScan(activeSymbol, selectedTimeframe, selectedMtfTimeframes)
+
+        // A cold start can complete the first scan before the public feed finishes connecting.
+        // Recheck only source/data failures after the prior scan has ended; never loop on a
+        // legitimate WAIT/NEWS/RISK result and never cancel a scan that is still running.
+        var retries = 0
+        while (retries < 3) {
+            while (viewModel.isSignalScanning.value) delay(250L)
+            val lastSignal = viewModel.currentTradeSignal.value
+            val retryable = lastSignal == null ||
+                lastSignal.signalState in setOf("DATA_UNAVAILABLE", "SOURCE_ERROR", "DISCONNECTED", "GAP_DETECTED")
+            if (!retryable) break
+            delay(5_000L)
+            viewModel.runSignalScan(activeSymbol, selectedTimeframe, selectedMtfTimeframes)
+            retries++
+        }
     }
 
     LazyColumn(
