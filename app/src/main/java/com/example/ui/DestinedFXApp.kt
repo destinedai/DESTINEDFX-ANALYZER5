@@ -322,6 +322,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
                     DestinedFXScreen.Watchlist -> WatchlistTab(viewModel)
                     DestinedFXScreen.More -> MoreTab(viewModel)
+                    DestinedFXScreen.Chat -> ChatWorkstationTab(viewModel)
                     DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
                     DestinedFXScreen.Settings -> SettingsTab(viewModel)
                 }
