@@ -13,6 +13,7 @@ import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.security.SecretsManager
 import com.example.ui.chart.TradingViewMapper
+import com.example.ui.DestinedFXScreen
 import com.example.ui.mapTradeSignalToUiModel
 import com.example.ui.scanChartBitmap
 import com.example.ui.detectPairFromChartText
@@ -125,6 +126,27 @@ class TradingViewAndMtfValidationTest {
         assertTrue(url.contains("calendar=1"))
         assertNull("Unsupported synthetic instruments must not get a TradingView URL", TradingViewMapper.buildWidgetUrl("R_100", "M15"))
         assertNull("Unsupported timeframes must not get a TradingView URL", TradingViewMapper.buildWidgetUrl("EUR/USD", "M2"))
+    }
+
+    @Test
+    fun testMobileNavigationMatchesWebsitePrimaryTabsAndSecondaryRoutes() {
+        assertEquals(
+            listOf("Home", "Analyzer", "Strategies", "Calendar", "More"),
+            DestinedFXScreen.primaryScreens.map { it.title }
+        )
+        assertTrue(DestinedFXScreen.moreScreens.map { it.title }.containsAll(
+            listOf("Image Analyzer", "Bot", "Watchlist", "Risk", "Settings")
+        ))
+        assertTrue(DestinedFXScreen.allScreens.contains(DestinedFXScreen.Watchlist))
+    }
+
+    @Test
+    fun testTradingViewXauH1DirectEmbedUrlHasValidInstrumentAndTimeframe() {
+        val url = TradingViewMapper.buildWidgetUrl("XAU/USD", "H1")
+        assertNotNull(url)
+        assertTrue(url!!.contains("symbol=OANDA%3AXAUUSD"))
+        assertTrue(url.contains("interval=60"))
+        assertTrue(url.startsWith("https://s.tradingview.com/widgetembed/?"))
     }
 
     @Test

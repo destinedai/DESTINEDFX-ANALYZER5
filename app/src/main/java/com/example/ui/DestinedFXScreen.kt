@@ -15,11 +15,19 @@ sealed class DestinedFXScreen(val title: String, val icon: ImageVector, val tag:
     object Strategies : DestinedFXScreen("Strategies", Icons.Default.Architecture, "nav_tab_strategies")
     object Calendar : DestinedFXScreen("Calendar", Icons.Default.CalendarMonth, "nav_tab_calendar")
     object Bot : DestinedFXScreen("Bot", Icons.Default.SmartToy, "nav_tab_bot")
+    object Watchlist : DestinedFXScreen("Watchlist", Icons.Default.BookmarkBorder, "nav_tab_watchlist")
+    object More : DestinedFXScreen("More", Icons.Default.MoreHoriz, "nav_tab_more")
     object Risk : DestinedFXScreen("Risk", Icons.Default.Calculate, "nav_tab_risk")
     object Settings : DestinedFXScreen("Settings", Icons.Default.Settings, "nav_tab_settings")
 
     companion object {
+        val primaryScreens: List<DestinedFXScreen>
+            get() = listOf(Home, Analyzer, Strategies, Calendar, More)
+
+        val moreScreens: List<DestinedFXScreen>
+            get() = listOf(ImageAnalyzer, Bot, Watchlist, Risk, Settings)
+
         val allScreens: List<DestinedFXScreen>
-            get() = listOf(Home, Analyzer, ImageAnalyzer, Strategies, Calendar, Bot, Risk, Settings)
+            get() = listOf(Home, Analyzer, Strategies, Calendar, More, ImageAnalyzer, Bot, Watchlist, Risk, Settings)
     }
 }

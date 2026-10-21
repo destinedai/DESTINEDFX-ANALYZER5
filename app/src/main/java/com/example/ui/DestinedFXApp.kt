@@ -270,37 +270,33 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     .navigationBarsPadding()
                     .border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.8f)))
             ) {
-                // Website-inspired navigation on a phone: swipe horizontally to reach every route.
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 5.dp),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                // Primary website navigation stays visible on mobile; secondary tools live under More.
+                val moreDestinations = DestinedFXScreen.moreScreens
+                val bottomSelectedScreen = if (
+                    selectedScreen == DestinedFXScreen.More || selectedScreen in moreDestinations
+                ) DestinedFXScreen.More else selectedScreen
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(DestinedFXScreen.allScreens) { screen ->
-                        val isSelected = selectedScreen == screen
-                        Row(
-                            modifier = Modifier
-                                .height(48.dp)
-                                .widthIn(min = 80.dp, max = 140.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(if (isSelected) ElectricCyan.copy(alpha = 0.14f) else Color.Transparent)
-                                .border(
-                                    1.dp,
-                                    if (isSelected) ElectricCyan.copy(alpha = 0.75f) else Color.Transparent,
-                                    RoundedCornerShape(11.dp)
-                                )
+                    DestinedFXScreen.primaryScreens.forEach { screen ->
+                        val isSelected = bottomSelectedScreen == screen
+                        Column(
+                            modifier = Modifier.weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isSelected) ElectricCyan.copy(alpha = 0.13f) else Color.Transparent)
                                 .clickable { viewModel.selectScreen(screen) }
                                 .testTag(screen.tag)
-                                .padding(horizontal = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                .padding(horizontal = 2.dp, vertical = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
                             Icon(
                                 screen.icon,
                                 contentDescription = screen.title,
                                 tint = if (isSelected) ElectricCyan else TextSecondary,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(19.dp)
                             )
                             Text(
                                 text = screen.title,
@@ -324,6 +320,8 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
                     DestinedFXScreen.Calendar -> CalendarTab(viewModel)
                     DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
+                    DestinedFXScreen.Watchlist -> WatchlistTab(viewModel)
+                    DestinedFXScreen.More -> MoreTab(viewModel)
                     DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
                     DestinedFXScreen.Settings -> SettingsTab(viewModel)
                 }
@@ -1722,6 +1720,152 @@ fun BiometricLockScreen(viewModel: DestinedFXViewModel, onUnlocked: () -> Unit) 
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Unlock Terminal", color = DarkBackground, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun WatchlistTab(viewModel: DestinedFXViewModel) {
+    val tickerMap by viewModel.tickers.collectAsStateWithLifecycle()
+    val rows = remember(tickerMap) { tickerMap.values.sortedByDescending { it.lastUpdateMillis } }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(DarkBackground),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("MARKET TRACKER", fontSize = 9.sp, color = ElectricCyan,
+                    fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                Text("Watchlist", fontSize = 26.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                Text("Live quotes received by this device. Tap an instrument to open its chart and analysis.",
+                    fontSize = 11.sp, color = TextSecondary)
+            }
+        }
+        if (rows.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    border = BorderStroke(1.dp, CardBorder),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Waiting for market quotes", color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text("No live ticker is available yet. The list populates when the public feed provides valid prices.",
+                            color = TextSecondary, fontSize = 11.sp)
+                        Button(onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) }) {
+                            Text("OPEN ANALYZER")
+                        }
+                    }
+                }
+            }
+        } else {
+            items(rows, key = { it.symbol }) { ticker ->
+                val change = ticker.changePercent
+                val movementColor = if ((change ?: 0.0) >= 0.0) ProfitGreen else LossRed
+                val ageMs = (System.currentTimeMillis() - ticker.lastUpdateMillis).coerceAtLeast(0L)
+                val isFresh = ageMs <= 15_000L
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        viewModel.selectTicker(ticker.symbol)
+                        viewModel.selectScreen(DestinedFXScreen.Analyzer)
+                    },
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    border = BorderStroke(1.dp, if (isFresh) CardBorder else WarningAmber.copy(alpha = 0.45f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
+                                .background(ElectricCyan.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.ShowChart, contentDescription = null,
+                                tint = ElectricCyan, modifier = Modifier.size(21.dp))
+                        }
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(ticker.symbol, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                (ticker.source.ifBlank { "Market feed" }) + " • " + if (isFresh) "LIVE" else "STALE",
+                                color = if (isFresh) ProfitGreen else WarningAmber, fontSize = 9.sp
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(
+                                if (ticker.price.isFinite() && ticker.price > 0.0) formatPrice(ticker.price, ticker.symbol) else "—",
+                                color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp
+                            )
+                            Text(
+                                change?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "CHANGE —",
+                                color = movementColor, fontWeight = FontWeight.Bold, fontSize = 10.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoreTab(viewModel: DestinedFXViewModel) {
+    val routes = DestinedFXScreen.moreScreens
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(DarkBackground),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("DESTINEDFX TOOLS", fontSize = 9.sp, color = ElectricCyan,
+                    fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                Text("More", fontSize = 26.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                Text("Secondary workspaces and terminal settings.", fontSize = 11.sp, color = TextSecondary)
+            }
+        }
+        items(routes, key = { it.tag }) { screen ->
+            val description = when (screen) {
+                DestinedFXScreen.ImageAnalyzer -> "Inspect chart screenshots with on-device image evidence."
+                DestinedFXScreen.Bot -> "Configure a broker connection, risk gates and automated scanning."
+                DestinedFXScreen.Watchlist -> "Follow available market quotes and jump into analysis."
+                DestinedFXScreen.Risk -> "Review account sizing, stop-loss and exposure constraints."
+                DestinedFXScreen.Settings -> "Manage account, broker and notification preferences."
+                else -> "Open this DestinedFX workspace."
+            }
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable { viewModel.selectScreen(screen) }
+                    .testTag(screen.tag),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, CardBorder),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(15.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier.size(42.dp).clip(RoundedCornerShape(12.dp))
+                            .background(ElectricCyan.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(screen.icon, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(22.dp))
+                    }
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(screen.title, fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text(description, fontSize = 10.sp, color = TextSecondary, lineHeight = 14.sp)
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = "Open ${screen.title}",
+                        tint = TextSecondary, modifier = Modifier.size(19.dp))
                 }
             }
         }

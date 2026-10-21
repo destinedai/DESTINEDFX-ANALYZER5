@@ -150,8 +150,35 @@ class AutonomousBotEngine(
         if (!broker.isConnected()) {
             val connectResult = broker.connect()
             if (connectResult.isFailure) {
-                val err = "BROKER_DISCONNECTED: Failed to authenticate with ${broker.displayName}: ${connectResult.exceptionOrNull()?.message}"
-                _status.value = _status.value.copy(state = BotLifecycleState.ERROR, lastError = err, isRunning = false, lastAction = "Broker connect failed")
+                val detail = connectResult.exceptionOrNull()?.message ?: "Authentication failed."
+                val setupRequired = detail.contains("credentials not set", ignoreCase = true) ||
+                    detail.contains("credentials not configured", ignoreCase = true) ||
+                    detail.contains("token not configured", ignoreCase = true) ||
+                    detail.contains("Deriv PAT", ignoreCase = true) ||
+                    detail.contains("App ID", ignoreCase = true)
+                if (setupRequired) {
+                    val action = when (broker.brokerType) {
+                        com.example.data.broker.BrokerType.MT5 ->
+                            "BROKER SETUP REQUIRED: MT5 is not authenticated. Complete its broker connection setup first; the bot remains stopped until the selected gateway confirms login."
+                        com.example.data.broker.BrokerType.DERIV ->
+                            "BROKER SETUP REQUIRED: Connect Deriv with a valid Personal Access Token and registered App ID before starting the bot."
+                        else -> "BROKER SETUP REQUIRED: Complete the selected broker's connection setup before starting the bot."
+                    }
+                    _status.value = _status.value.copy(
+                        state = BotLifecycleState.STOPPED,
+                        lastError = null,
+                        isRunning = false,
+                        lastAction = action
+                    )
+                    return@withContext Result.failure(Exception(action))
+                }
+                val err = "BROKER_DISCONNECTED: Failed to authenticate with ${broker.displayName}: $detail"
+                _status.value = _status.value.copy(
+                    state = BotLifecycleState.ERROR,
+                    lastError = err,
+                    isRunning = false,
+                    lastAction = "Broker authentication failed; no trade was sent"
+                )
                 return@withContext Result.failure(Exception(err))
             }
         }

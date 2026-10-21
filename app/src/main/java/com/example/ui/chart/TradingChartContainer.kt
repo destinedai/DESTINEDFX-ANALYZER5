@@ -243,20 +243,29 @@ fun TradingViewWebView(
     var isChartError by remember(currentKey) { mutableStateOf(false) }
     var errorMessage by remember(currentKey) { mutableStateOf("") }
     var retryTrigger by remember(currentKey) { mutableIntStateOf(0) }
+    var useDirectEmbed by remember(currentKey) { mutableStateOf(false) }
 
+    // The widget script is the official first path. A few Android WebView builds fail to
+    // initialize its nested iframe, so automatically recreate the WebView with TradingView's
+    // direct widget URL if the chart has not rendered after 20 seconds.
     LaunchedEffect(currentKey, retryTrigger) {
         isLoading = true
         isChartError = false
         errorMessage = ""
-        kotlinx.coroutines.delay(45_000L)
+        useDirectEmbed = false
+        kotlinx.coroutines.delay(20_000L)
+        if (isLoading && !isChartError && !useDirectEmbed) {
+            useDirectEmbed = true
+        }
+        kotlinx.coroutines.delay(25_000L)
         if (isLoading && !isChartError) {
             isChartError = true
             isLoading = false
-            errorMessage = "TradingView's chart script or market iframe did not initialize within 45 seconds. Update Android System WebView/Chrome, check your connection, then retry."
+            errorMessage = "TradingView did not render through either the official widget or direct embed. Check internet access and update Android System WebView/Chrome, then retry."
         }
     }
 
-    val expectedTag = "${currentKey}_retry_${retryTrigger}"
+    val expectedTag = "${currentKey}_${if (useDirectEmbed) "direct" else "widget"}_retry_${retryTrigger}"
     Box(modifier = modifier.background(Color(0xFF171B27))) {
         if (isChartError) {
             Column(modifier = Modifier.fillMaxSize().padding(18.dp),
@@ -271,6 +280,7 @@ fun TradingViewWebView(
                 Button(onClick = {
                     isChartError = false
                     isLoading = true
+                    useDirectEmbed = false
                     errorMessage = ""
                     retryTrigger++
                 }, colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
@@ -290,8 +300,9 @@ fun TradingViewWebView(
                 }
             }
         } else {
-            AndroidView(
-                factory = { context ->
+            key(expectedTag) {
+                AndroidView(
+                    factory = { context ->
                     try {
                         WebView(context).apply {
                             tag = expectedTag
@@ -316,6 +327,7 @@ fun TradingViewWebView(
                                             "(function(){var e=document.documentElement.getAttribute('data-tv-widget-error');if(e)return 'ERROR:'+e;var b=document.body;var t=(b&&b.innerText||'').toLowerCase();if(t.includes('invalid symbol')||t.includes('symbol not found'))return 'ERROR:TradingView could not find this symbol';var c=document.querySelector('.tradingview-widget-container__widget');var f=c?c.querySelector('iframe'):null;if(f&&f.src&&/tradingview/i.test(f.src)){var r=f.getBoundingClientRect();var loadedAt=parseInt(f.getAttribute('data-destinedfx-tv-loaded-at')||'0',10);if(r.width>100&&r.height>100&&loadedAt>0&&Date.now()-loadedAt>=1500)return 'READY';}var canvases=document.querySelectorAll('canvas');for(var i=0;i<canvases.length;i++){var cr=canvases[i].getBoundingClientRect();if(cr.width>100&&cr.height>100)return 'READY';}return 'WAIT';})()"
                                         ) { result ->
                                             val state = result?.removeSurrounding("\"") ?: "WAIT"
+                                            if (!view.isAttachedToWindow) return@evaluateJavascript
                                             when {
                                                 state == "READY" -> {
                                                     isLoading = false
@@ -327,10 +339,15 @@ fun TradingViewWebView(
                                                     errorMessage = state.removePrefix("ERROR:")
                                                 }
                                                 attempt < 30 -> view.postDelayed({ verifyChart(attempt + 1) }, 1000L)
-                                                else -> {
+                                                else if (!useDirectEmbed) {
+                                                    // Start the direct embed path rather than showing
+                                                    // the unavailable page after only one failed mode.
+                                                    useDirectEmbed = true
+                                                    isLoading = true
+                                                } else {
                                                     isLoading = false
                                                     isChartError = true
-                                                    errorMessage = "TradingView loaded its page, but no visible market chart appeared. Update Android System WebView/Chrome or open the chart externally."
+                                                    errorMessage = "TradingView opened, but its chart surface remained blank on both loading paths. Update Android System WebView/Chrome or check whether the network blocks TradingView."
                                                 }
                                             }
                                         }
@@ -339,16 +356,30 @@ fun TradingViewWebView(
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                                     handler?.cancel()
-                                    isChartError = true
-                                    isLoading = false
-                                    errorMessage = "SSL verification failed. The TradingView connection was cancelled."
-                                }
-                                override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                    if (request?.isForMainFrame == true) {
-                                        val description = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error?.description?.toString() else null
+                                    if (!useDirectEmbed) {
+                                        useDirectEmbed = true
+                                        isLoading = true
+                                        isChartError = false
+                                        errorMessage = ""
+                                    } else {
                                         isChartError = true
                                         isLoading = false
-                                        errorMessage = description?.takeIf { it.isNotBlank() } ?: "The TradingView page could not be reached."
+                                        errorMessage = "SSL verification failed on the direct TradingView page. The connection was cancelled."
+                                    }
+                                }
+                                override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                    if (request?.isForMainFrame == true && view?.isAttachedToWindow == true) {
+                                        if (!useDirectEmbed) {
+                                            useDirectEmbed = true
+                                            isLoading = true
+                                            isChartError = false
+                                            errorMessage = ""
+                                        } else {
+                                            val description = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error?.description?.toString() else null
+                                            isChartError = true
+                                            isLoading = false
+                                            errorMessage = description?.takeIf { it.isNotBlank() } ?: "The direct TradingView page could not be reached."
+                                        }
                                     }
                                 }
                                 override fun onReceivedHttpError(
@@ -356,10 +387,18 @@ fun TradingViewWebView(
                                     request: WebResourceRequest?,
                                     errorResponse: android.webkit.WebResourceResponse?
                                 ) {
-                                    if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 200) >= 400) {
-                                        isChartError = true
-                                        isLoading = false
-                                        errorMessage = "TradingView returned HTTP ${errorResponse?.statusCode ?: "error"}."
+                                    if (request?.isForMainFrame == true && view?.isAttachedToWindow == true &&
+                                        (errorResponse?.statusCode ?: 200) >= 400) {
+                                        if (!useDirectEmbed) {
+                                            useDirectEmbed = true
+                                            isLoading = true
+                                            isChartError = false
+                                            errorMessage = ""
+                                        } else {
+                                            isChartError = true
+                                            isLoading = false
+                                            errorMessage = "TradingView returned HTTP ${errorResponse?.statusCode ?: "error"} on the direct embed."
+                                        }
                                     }
                                 }
                             }
@@ -382,7 +421,11 @@ fun TradingViewWebView(
                             // outdated Chrome version. TradingView can then serve a compatible UI.
                             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                            loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
+                            if (useDirectEmbed) {
+                                loadUrl(widgetUrl)
+                            } else {
+                                loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
+                            }
                         }
                     } catch (error: Throwable) {
                         isChartError = true
@@ -399,15 +442,20 @@ fun TradingViewWebView(
                         errorMessage = ""
                         view.loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
                     }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize().background(Color(0xD90B0E14)), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         CircularProgressIndicator(color = ElectricCyan, strokeWidth = 2.dp, modifier = Modifier.size(30.dp))
-                        Text("OPENING TRADINGVIEW • $symbol • $timeframe", fontSize = 10.sp, color = TextSecondary,
-                            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        Text(
+                            if (useDirectEmbed) "RETRYING DIRECT TRADINGVIEW • $symbol • $timeframe"
+                            else "OPENING TRADINGVIEW • $symbol • $timeframe",
+                            fontSize = 10.sp, color = TextSecondary,
+                            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace
+                        )
                     }
                 }
             }

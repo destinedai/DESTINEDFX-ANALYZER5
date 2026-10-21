@@ -1752,7 +1752,11 @@ open class DestinedFXViewModel(
     }
 
     fun selectBroker(type: com.example.data.broker.BrokerType) {
-        if (!isPreview) app.brokerManager.selectBroker(type)
+        if (isPreview) return
+        // The loop keeps a reference to its selected gateway; stop it before changing routes.
+        app.autonomousBotEngine.stopBot()
+        _botActive.value = false
+        app.brokerManager.selectBroker(type)
     }
 
     val activeBrokerType: StateFlow<com.example.data.broker.BrokerType> =

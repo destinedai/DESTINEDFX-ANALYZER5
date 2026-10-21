@@ -63,6 +63,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var isConnectingBroker by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
+    LaunchedEffect(activeBrokerType) {
+        brokerConnectionMessage = null
+        statusMessage = null
+        isConnectingBroker = false
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
