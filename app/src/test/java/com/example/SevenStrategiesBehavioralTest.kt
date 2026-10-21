@@ -305,7 +305,7 @@ class SevenStrategiesBehavioralTest {
             consolidation = true
         )
         val (plan, reason) = SignalEngine.plan(
-            input, quote, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig(minRR = 2.0)
+            input, quote!!, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig(minRR = 2.0)
         )
         assertNull(reason)
         assertNotNull(plan)
@@ -348,7 +348,7 @@ class SevenStrategiesBehavioralTest {
             consolidation = false
         )
         val (plan, reason) = SignalEngine.plan(
-            input, quote, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig(minRR = 2.0)
+            input, quote!!, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig(minRR = 2.0)
         )
         assertNull(reason)
         assertNotNull(plan)
@@ -391,7 +391,7 @@ class SevenStrategiesBehavioralTest {
             consolidation = false
         )
         val (plan, reason) = SignalEngine.plan(
-            input, quote, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig()
+            input, quote!!, structure, emptyList(), emptyList(), Dir.BULL, 0.001, SignalConfig()
         )
         assertNull(plan)
         assertTrue(reason.orEmpty().startsWith("ICT SILVER BULLET WAIT"))
