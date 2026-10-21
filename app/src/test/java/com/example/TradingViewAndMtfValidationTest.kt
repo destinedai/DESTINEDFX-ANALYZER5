@@ -1,6 +1,8 @@
 package com.example
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
 import androidx.test.core.app.ApplicationProvider
 import com.destinedfx.core.analysis.*
 import com.destinedfx.core.marketdata.*
@@ -12,6 +14,7 @@ import com.example.domain.model.TradeSignal
 import com.example.security.SecretsManager
 import com.example.ui.chart.TradingViewMapper
 import com.example.ui.mapTradeSignalToUiModel
+import com.example.ui.scanChartBitmap
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -63,6 +66,10 @@ class TradingViewAndMtfValidationTest {
         assertTrue(html.contains("\"symbol\":\"FX:EURUSD\""))
         assertTrue(html.contains("\"interval\":\"15\""))
         assertTrue(html.contains("height:100%"))
+        assertTrue(html.contains("\"details\":true"))
+        assertTrue(html.contains("\"calendar\":true"))
+        assertTrue(html.contains("\"studies\":[\"STD;EMA\",\"STD;RSI\"]"))
+        assertTrue(html.contains("#171B27"))
         assertNull(TradingViewMapper.buildWidgetHtml("R_100", "M15"))
         assertNull(TradingViewMapper.buildWidgetHtml("EUR/USD", "M2"))
     }
@@ -260,4 +267,37 @@ class TradingViewAndMtfValidationTest {
         assertFalse("Candle sequence with decreasing timestamp must be rejected", check.ok)
         assertTrue(check.problems.any { it.contains("Non-increasing timestamps") })
     }
+
+    @Test
+    fun testChartImagePixelScannerReportsOnlyMeasuredColourEvidence() {
+        val bitmap = Bitmap.createBitmap(40, 40, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(AndroidColor.rgb(18, 24, 36))
+        for (y in 0 until 40) {
+            for (x in 0 until 20) bitmap.setPixel(x, y, AndroidColor.rgb(30, 220, 100))
+            for (x in 20 until 30) bitmap.setPixel(x, y, AndroidColor.rgb(238, 55, 65))
+        }
+
+        val report = scanChartBitmap(bitmap)
+        assertEquals(1600, report.sampledPixelCount)
+        assertEquals(800, report.bullishTonePixels)
+        assertEquals(400, report.bearishTonePixels)
+        assertEquals(75.00, report.colourCoveragePercent, 0.02)
+        assertTrue(report.visualBalance.contains("GREEN/CYAN COLOUR"))
+        assertTrue(report.explanation.contains("not bullish/bearish market confirmation"))
+        bitmap.recycle()
+    }
+
+    @Test
+    fun testChartImagePixelScannerDoesNotCallDarkImageASetup() {
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(AndroidColor.rgb(12, 16, 26))
+
+        val report = scanChartBitmap(bitmap)
+        assertEquals(0, report.bullishTonePixels)
+        assertEquals(0, report.bearishTonePixels)
+        assertEquals("UNCLEAR", report.visualBalance)
+        assertTrue(report.evidenceStatus.contains("LIMITED"))
+        bitmap.recycle()
+    }
+
 }

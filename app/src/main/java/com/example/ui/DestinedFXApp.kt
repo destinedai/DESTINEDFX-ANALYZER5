@@ -258,33 +258,54 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
             }
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = DarkSurface,
+            Surface(
+                color = DarkSurface,
                 tonalElevation = 0.dp,
-                modifier = Modifier.border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.6f)), shape = RoundedCornerShape(0.dp))
+                shadowElevation = 12.dp,
+                modifier = Modifier.fillMaxWidth()
+                    .border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.8f)))
             ) {
-                DestinedFXScreen.allScreens.forEach { screen ->
-                    NavigationBarItem(
-                        selected = selectedScreen == screen,
-                        onClick = { viewModel.selectScreen(screen) },
-                        icon = { Icon(screen.icon, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                        label = {
+                // Website-inspired navigation on a phone: swipe horizontally to reach every route.
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    items(DestinedFXScreen.allScreens) { screen ->
+                        val isSelected = selectedScreen == screen
+                        Row(
+                            modifier = Modifier
+                                .height(48.dp)
+                                .widthIn(min = 80.dp, max = 140.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(if (isSelected) ElectricCyan.copy(alpha = 0.14f) else Color.Transparent)
+                                .border(
+                                    1.dp,
+                                    if (isSelected) ElectricCyan.copy(alpha = 0.75f) else Color.Transparent,
+                                    RoundedCornerShape(11.dp)
+                                )
+                                .clickable { viewModel.selectScreen(screen) }
+                                .testTag(screen.tag)
+                                .padding(horizontal = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                screen.icon,
+                                contentDescription = screen.title,
+                                tint = if (isSelected) ElectricCyan else TextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
                             Text(
                                 text = screen.title,
+                                maxLines = 1,
                                 fontSize = 9.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (selectedScreen == screen) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (isSelected) FontWeight.Black else FontWeight.Medium,
+                                color = if (isSelected) ElectricCyan else TextSecondary
                             )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = ElectricCyan,
-                            selectedTextColor = ElectricCyan,
-                            unselectedIconColor = TextSecondary,
-                            unselectedTextColor = TextSecondary,
-                            indicatorColor = ElectricCyan.copy(alpha = 0.12f)
-                        ),
-                        modifier = Modifier.testTag(screen.tag)
-                    )
+                        }
+                    }
                 }
             }
         }
@@ -292,8 +313,10 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedScreen) {
-                    DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
+                    DestinedFXScreen.Home -> HomeDashboardTab(viewModel)
                     DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel, onExportAnalysis = { showExportDialog = true })
+                    DestinedFXScreen.ImageAnalyzer -> ChartImageAnalyzerTab(viewModel)
+                    DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
                     DestinedFXScreen.Calendar -> CalendarTab(viewModel)
                     DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
                     DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
@@ -645,33 +668,110 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                 }
             }
         }
-        item {
-            val result = analysis
-            if (result != null && (result.orderBlocks.isNotEmpty() || result.keyLevels.isNotEmpty())) {
-                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface), border = BorderStroke(1.dp, CardBorder)) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("MARKET STRUCTURE", fontSize = 10.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                        result.orderBlocks.take(4).forEach { block ->
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically) {
-                                Text(block.type, color = if (block.type == "BULLISH") ProfitGreen else LossRed,
-                                    fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                Text(block.zone, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
-                                Text(block.strength, color = TextSecondary, fontSize = 9.sp)
-                            }
-                        }
-                        result.keyLevels.take(5).forEach { level ->
-                            Text("• $level", color = TextSecondary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                }
-            }
-        }
+        item { MarketStructureReport(analysis) }
+        item { FullAnalysisReport(analysis) }
         item { EngineInsightsPanel(viewModel) }
     }
 }
+
+
+
+
+@Composable
+private fun MarketStructureReport(result: DynamicAnalysisInfo?) {
+    InsightCard("MARKET STRUCTURE / KEY LEVELS") {
+        if (result == null) {
+            Text("Run live analysis to populate structure, order blocks and levels.", fontSize = 11.sp, color = TextSecondary)
+        } else {
+            Text(
+                result.marketStructureNote.ifBlank { result.smcAnalysis.ifBlank { "No structural narrative was returned for this scan." } },
+                fontSize = 11.sp, color = TextPrimary, lineHeight = 16.sp
+            )
+            HorizontalDivider(color = CardBorder)
+            Text("ORDER BLOCKS", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+            if (result.orderBlocks.isEmpty()) {
+                Text("No validated order blocks in the current analysis output.", fontSize = 10.sp, color = TextSecondary)
+            } else {
+                result.orderBlocks.take(8).forEach { block ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(block.type, color = if (block.type == "BULLISH") ProfitGreen else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text(block.zone, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text(block.strength, color = TextSecondary, fontSize = 9.sp)
+                    }
+                }
+            }
+            HorizontalDivider(color = CardBorder)
+            Text("KEY LEVELS", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+            if (result.keyLevels.isEmpty()) {
+                Text("No validated key levels returned.", fontSize = 10.sp, color = TextSecondary)
+            } else {
+                result.keyLevels.take(12).forEach { level ->
+                    Text("• $level", color = TextPrimary, fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Text("Wyckoff phase: ${result.wyckoffPhase}", color = TextSecondary, fontSize = 10.sp)
+            Text("Elliott wave: ${result.elliottWave}", color = TextSecondary, fontSize = 10.sp)
+            Text("Session bias: ${result.sessionBias.ifBlank { "Not supplied" }}", color = TextSecondary, fontSize = 10.sp)
+        }
+    }
+}
+
+@Composable
+private fun FullAnalysisReport(result: DynamicAnalysisInfo?) {
+    InsightCard("FULL ALGORITHMIC ANALYSIS REPORT") {
+        if (result == null) {
+            Text("No completed report yet. Run Live Analysis to populate every report field.", fontSize = 11.sp, color = TextSecondary)
+            return@InsightCard
+        }
+        InsightLine("Instrument", result.symbol)
+        InsightLine("Signal state", result.signalState.ifBlank { "UNKNOWN" })
+        InsightLine("Direction", result.direction.ifBlank { "WAIT" })
+        InsightLine("Confidence", result.confidencePct.takeIf { it > 0 }?.let { "${it}%" } ?: "Not scored")
+        InsightLine("Data source", result.dataSource.ifBlank { "UNKNOWN" })
+        InsightLine("Ruleset version", result.strategyVersion.ifBlank { "Not supplied" })
+        InsightLine("MTF state", result.mtfStatus.ifBlank { "WAIT" })
+        InsightLine("MTF summary", result.mtfSummary.ifBlank { "No summary returned" })
+        InsightLine("Risk gate", result.riskNote.ifBlank { "No risk note returned" })
+        HorizontalDivider(color = CardBorder)
+        Text("SETUP RATIONALE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        Text(result.smcAnalysis.ifBlank { "No rationale returned for this scan." }, fontSize = 11.sp, color = TextPrimary, lineHeight = 16.sp)
+        HorizontalDivider(color = CardBorder)
+        Text("ENTRY / STOP / TARGET RATIONALE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        InsightLine("Entry reason", result.entryReason.ifBlank { "Not supplied" })
+        InsightLine("Stop-loss reason", result.slReason.ifBlank { "Not supplied" })
+        InsightLine("Take-profit reason", result.tpReason.ifBlank { "Not supplied" })
+        HorizontalDivider(color = CardBorder)
+        Text("DETERMINISTIC STRATEGY SCORES", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        if (result.strategyScores.isEmpty()) {
+            Text("No separate strategy scores returned for this scan.", fontSize = 10.sp, color = TextSecondary)
+        } else {
+            result.strategyScores.entries.sortedByDescending { it.value }.forEach { (name, score) ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(name, color = TextPrimary, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                    Text("$score / 100", color = ElectricCyan, fontFamily = FontFamily.Monospace, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+        HorizontalDivider(color = CardBorder)
+        Text("BLOCKERS / EXECUTION LIMITS", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        if (result.blockReasons.isEmpty()) {
+            Text(
+                "No explicit blocker strings were supplied. Execution still depends on live market health, broker authentication and RiskEngine validation.",
+                color = TextSecondary, fontSize = 10.sp, lineHeight = 15.sp
+            )
+        } else {
+            result.blockReasons.forEach { reason ->
+                Text("• $reason", color = if (reason.contains("invalid", true) || reason.contains("unavailable", true)) LossRed else WarningAmber,
+                    fontSize = 10.sp, lineHeight = 15.sp)
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun PlanLevel(label: String, value: String, valueColor: Color, modifier: Modifier = Modifier) {

@@ -243,7 +243,7 @@ open class DestinedFXViewModel(
     val selectedTimeframe = MutableStateFlow("M15")
     val selectedMtfTimeframes = MutableStateFlow(setOf("M5", "M15", "M30", "H1", "H4", "D1", "W1"))
     val riskPercent = MutableStateFlow(1.0)
-    val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
+    val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Home)
 
     fun selectScreen(screen: DestinedFXScreen) {
         selectedScreen.value = screen
@@ -898,7 +898,7 @@ open class DestinedFXViewModel(
                 Log.w("DestinedFXViewModel", "signOut failed: ${e.message}")
             }
             currentUser.value = null
-            selectedScreen.value = DestinedFXScreen.Analyzer
+            selectedScreen.value = DestinedFXScreen.Home
             closeAuthScreen()
             speakText("Session closed. Reverted to Guest mode.")
         }

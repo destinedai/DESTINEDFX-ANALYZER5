@@ -87,12 +87,14 @@ class ExampleRobolectricTest {
     assertFalse(vm.isAppLocked.value)
     assertFalse(vm.showAuthScreen.value)
 
-    // 3. Open the redesigned Analyzer/TradingView workspace first; every tab remains accessible.
-    assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
-    vm.selectScreen(com.example.ui.DestinedFXScreen.Strategies)
-    assertEquals(com.example.ui.DestinedFXScreen.Strategies, vm.selectedScreen.value)
+    // 3. Open the website-inspired Home dashboard first; all native destinations remain accessible.
+    assertEquals(com.example.ui.DestinedFXScreen.Home, vm.selectedScreen.value)
     vm.selectScreen(com.example.ui.DestinedFXScreen.Analyzer)
     assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
+    vm.selectScreen(com.example.ui.DestinedFXScreen.ImageAnalyzer)
+    assertEquals(com.example.ui.DestinedFXScreen.ImageAnalyzer, vm.selectedScreen.value)
+    vm.selectScreen(com.example.ui.DestinedFXScreen.Strategies)
+    assertEquals(com.example.ui.DestinedFXScreen.Strategies, vm.selectedScreen.value)
 
     // 4. Broker trading remains blocked without credentials
     assertFalse(vm.brokerConnected.value)
@@ -108,7 +110,7 @@ class ExampleRobolectricTest {
     assertNull(vm.currentUser.value)
     assertFalse(vm.showAuthScreen.value)
     assertFalse(vm.isAppLocked.value)
-    assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
+    assertEquals(com.example.ui.DestinedFXScreen.Home, vm.selectedScreen.value)
   }
 
   @Test

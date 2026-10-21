@@ -262,7 +262,7 @@ fun TerminalPageHeader(
             .clip(RoundedCornerShape(14.dp))
             .background(
                 Brush.verticalGradient(
-                    listOf(Color(0xFF1A2940), DarkSurfaceVariant, DarkSurface)
+                    listOf(Color(0xFF4B402C), DarkSurfaceVariant, DarkSurface)
                 )
             ),
         shape = RoundedCornerShape(14.dp),

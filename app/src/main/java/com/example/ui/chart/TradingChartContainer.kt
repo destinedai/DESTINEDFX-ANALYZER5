@@ -81,7 +81,7 @@ fun TradingChartContainer(
         modifier = modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(4.dp))
-            .background(Color(0xFF0B0E14))
+            .background(Color(0xFF171B27))
             .border(1.dp, TabBorder, RoundedCornerShape(4.dp))
     ) {
         val isInspection = LocalInspectionMode.current
@@ -224,7 +224,7 @@ fun TradingViewWebView(
     val widgetHtml = TradingViewMapper.buildWidgetHtml(symbol, timeframe)
 
     if (mappedSymbol == null || mappedInterval == null || widgetUrl == null || widgetHtml == null) {
-        Column(modifier = modifier.fillMaxSize().background(Color(0xFF0B0E14)).padding(20.dp),
+        Column(modifier = modifier.fillMaxSize().background(Color(0xFF171B27)).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
             Spacer(Modifier.height(8.dp))
@@ -258,7 +258,7 @@ fun TradingViewWebView(
     }
 
     val expectedTag = "${currentKey}_retry_${retryTrigger}"
-    Box(modifier = modifier.background(Color(0xFF0B0E14))) {
+    Box(modifier = modifier.background(Color(0xFF171B27))) {
         if (isChartError) {
             Column(modifier = Modifier.fillMaxSize().padding(18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -422,7 +422,7 @@ fun TradingViewPreviewPlaceholder(
     timeframe: String,
     modifier: Modifier = Modifier
 ) {
-    Box(modifier = modifier.fillMaxSize().background(Color(0xFF0B0E14)), contentAlignment = Alignment.Center) {
+    Box(modifier = modifier.fillMaxSize().background(Color(0xFF171B27)), contentAlignment = Alignment.Center) {
         Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Icon(Icons.Default.QueryStats, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(34.dp))
@@ -463,7 +463,7 @@ fun AlgorithmicCanvasChart(
 ) {
     if (candles.isEmpty()) {
         Box(
-            modifier = modifier.background(Color(0xFF0D111A)),
+            modifier = modifier.background(Color(0xFF171B27)),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -476,7 +476,7 @@ fun AlgorithmicCanvasChart(
         return
     }
 
-    Box(modifier = modifier.background(Color(0xFF0D111A))) {
+    Box(modifier = modifier.background(Color(0xFF171B27))) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
@@ -794,7 +794,7 @@ internal object TradingViewMapper {
         return "https://s.tradingview.com/widgetembed/?frameElementId=destinedfx_tv" +
             "&symbol=${android.net.Uri.encode(mappedSymbol)}" +
             "&interval=$mappedInterval&hidesidetoolbar=0&symboledit=0&saveimage=0" +
-            "&toolbarbg=0B0E14&theme=dark&style=1&timezone=Etc%2FUTC" +
+            "&toolbarbg=171B27&theme=dark&style=1&timezone=Etc%2FUTC" +
             "&withdateranges=1&locale=en&hideideas=1&calendar=0&hotlist=0&news=0"
     }
 
@@ -814,18 +814,20 @@ internal object TradingViewMapper {
             put("style", "1")
             put("locale", "en")
             put("enable_publishing", false)
-            put("backgroundColor", "#0B0E14")
-            put("gridColor", "rgba(42,46,57,0.06)")
+            put("backgroundColor", "#171B27")
+            put("gridColor", "rgba(65,74,90,0.18)")
             put("allow_symbol_change", false)
             put("hide_side_toolbar", false)
             put("hide_top_toolbar", false)
             put("hide_legend", false)
             put("save_image", false)
             put("withdateranges", true)
-            put("details", false)
+            put("details", true)
             put("hotlist", false)
-            put("calendar", false)
+            put("calendar", true)
             put("news", false)
+            // Match the website chart studies, without using them as the analysis feed.
+            put("studies", org.json.JSONArray().put("STD;EMA").put("STD;RSI"))
             put("support_host", "https://www.tradingview.com")
         }.toString()
 
@@ -837,10 +839,10 @@ internal object TradingViewMapper {
               <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
               <meta name="referrer" content="strict-origin-when-cross-origin">
               <style>
-                html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0B0E14; }
-                .tradingview-widget-container { position:relative; width:100%; height:100%; background:#0B0E14; }
+                html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#171B27; }
+                .tradingview-widget-container { position:relative; width:100%; height:100%; background:#171B27; }
                 .tradingview-widget-container__widget { width:100%; height:calc(100% - 18px); }
-                .tradingview-widget-copyright { height:18px; line-height:18px; text-align:right; padding-right:7px; font:9px Arial,sans-serif; background:#0B0E14; }
+                .tradingview-widget-copyright { height:18px; line-height:18px; text-align:right; padding-right:7px; font:9px Arial,sans-serif; background:#171B27; }
                 .tradingview-widget-copyright a { color:#8B98A9; text-decoration:none; }
               </style>
               <script>
