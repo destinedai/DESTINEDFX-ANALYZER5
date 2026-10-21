@@ -96,6 +96,8 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
+  // Bundled, offline on-device OCR for chart labels; no screenshots are sent to a service.
+  implementation("com.google.mlkit:text-recognition:16.0.1")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
