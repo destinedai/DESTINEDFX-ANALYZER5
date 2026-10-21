@@ -313,7 +313,7 @@ fun TradingViewWebView(
                                     fun verifyChart(attempt: Int) {
                                         if (isChartError || !isLoading) return
                                         view.evaluateJavascript(
-                                            "(function(){var e=document.documentElement.getAttribute('data-tv-widget-error');if(e)return 'ERROR:'+e;var b=document.body;var t=(b&&b.innerText||'').toLowerCase();if(t.includes('invalid symbol')||t.includes('symbol not found'))return 'ERROR:TradingView could not find this symbol';var c=document.querySelector('.tradingview-widget-container__widget');var f=c?c.querySelector('iframe'):null;if(f&&f.src&&/tradingview/i.test(f.src)){var r=f.getBoundingClientRect();if(r.width>100&&r.height>100)return 'READY';}var canvases=document.querySelectorAll('canvas');for(var i=0;i<canvases.length;i++){var cr=canvases[i].getBoundingClientRect();if(cr.width>100&&cr.height>100)return 'READY';}return 'WAIT';})()"
+                                            "(function(){var e=document.documentElement.getAttribute('data-tv-widget-error');if(e)return 'ERROR:'+e;var b=document.body;var t=(b&&b.innerText||'').toLowerCase();if(t.includes('invalid symbol')||t.includes('symbol not found'))return 'ERROR:TradingView could not find this symbol';var c=document.querySelector('.tradingview-widget-container__widget');var f=c?c.querySelector('iframe'):null;if(f&&f.src&&/tradingview/i.test(f.src)){var r=f.getBoundingClientRect();var loadedAt=parseInt(f.getAttribute('data-destinedfx-tv-loaded-at')||'0',10);if(r.width>100&&r.height>100&&loadedAt>0&&Date.now()-loadedAt>=1500)return 'READY';}var canvases=document.querySelectorAll('canvas');for(var i=0;i<canvases.length;i++){var cr=canvases[i].getBoundingClientRect();if(cr.width>100&&cr.height>100)return 'READY';}return 'WAIT';})()"
                                         ) { result ->
                                             val state = result?.removeSurrounding("\"") ?: "WAIT"
                                             when {
@@ -854,6 +854,15 @@ internal object TradingViewMapper {
                 .tradingview-widget-copyright a { color:#8B98A9; text-decoration:none; }
               </style>
               <script>
+                // Track the iframe's actual load event; the existence of an iframe is not proof
+                // that the selected TradingView market has rendered.
+                document.addEventListener('load', function(event) {
+                  var target = event.target;
+                  if (target && target.tagName === 'IFRAME' &&
+                      target.closest && target.closest('.tradingview-widget-container')) {
+                    target.setAttribute('data-destinedfx-tv-loaded-at', String(Date.now()));
+                  }
+                }, true);
                 window.addEventListener('error', function(event) {
                   var target = event.target;
                   if (target && target.tagName === 'SCRIPT' &&
