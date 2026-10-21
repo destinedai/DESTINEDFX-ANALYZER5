@@ -3,6 +3,7 @@ package com.destinedfx.core.risk
 import com.destinedfx.core.instrument.InstrumentSpec
 import com.destinedfx.core.instrument.VolumeMath
 import kotlin.math.abs
+import kotlin.math.ceil
 
 /**
  * THE one position-size / money-risk implementation. UI, backtester, validation pipeline and execution all call this.
@@ -38,12 +39,30 @@ object RiskEngine {
 
         val slTicks = slDistance / spec.tickSize
         val lossPerLot = slTicks * spec.tickValue + commissionPerLotRoundTurn + estimatedSlippagePerLot
+        if (!lossPerLot.isFinite() || lossPerLot <= 0.0) {
+            return SizingResult.Rejected("Loss per lot is invalid; position size cannot be verified.")
+        }
         val target = base * riskPercent / 100.0
         val raw = target / lossPerLot
         val stepped = VolumeMath.floorToStep(raw, spec.volumeStep).coerceAtMost(spec.volumeMax)
-        if (stepped < spec.volumeMin - 1e-12)
-            return SizingResult.Rejected("Risk budget %.2f buys %.4f lots, below broker minimum %.4f. Not rounding up (would exceed risk)."
-                .format(target, raw, spec.volumeMin))
+
+        // Global app policy: lot-based instruments must not execute below 0.01 lots.
+        // Respect the actual broker minimum/step as well; round the required minimum UP to a
+        // broker-valid step, but never round the calculated risk size up to meet it.
+        val requestedMinimum = maxOf(spec.volumeMin, 0.01)
+        val requiredSteps = ceil(requestedMinimum / spec.volumeStep - 1e-9)
+        val requiredMinimum = VolumeMath.normalise(requiredSteps * spec.volumeStep, spec.volumeStep)
+        if (requiredMinimum > spec.volumeMax + 1e-12) {
+            return SizingResult.Rejected(
+                "Broker volume maximum cannot satisfy the required 0.01-lot execution minimum for ${spec.symbol}."
+            )
+        }
+        if (stepped < requiredMinimum - 1e-12) {
+            return SizingResult.Rejected(
+                "Risk budget %.2f buys %.4f lots, below broker minimum / required 0.01-lot policy (%.4f). Not rounding up because that could exceed the 1%% risk cap."
+                    .format(target, raw, requiredMinimum)
+            )
+        }
         val lots = VolumeMath.normalise(stepped, spec.volumeStep)
         return SizingResult.Sized(lots, target, lots * lossPerLot, lossPerLot, slDistance, slTicks)
     }
