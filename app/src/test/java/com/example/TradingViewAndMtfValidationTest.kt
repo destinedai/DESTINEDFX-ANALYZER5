@@ -35,16 +35,22 @@ class TradingViewAndMtfValidationTest {
 
     @Test
     fun testTradingViewSymbolMapping_SupportedAssets() {
-        assertEquals("FX:EURUSD", TradingViewMapper.mapSymbol("EUR/USD"))
-        assertEquals("FX:GBPUSD", TradingViewMapper.mapSymbol("GBP/USD"))
-        assertEquals("FX:USDJPY", TradingViewMapper.mapSymbol("USD/JPY"))
+        assertEquals("OANDA:EURUSD", TradingViewMapper.mapSymbol("EUR/USD"))
+        assertEquals("OANDA:GBPUSD", TradingViewMapper.mapSymbol("GBP/USD"))
+        assertEquals("OANDA:USDJPY", TradingViewMapper.mapSymbol("USD/JPY"))
         assertEquals("OANDA:XAUUSD", TradingViewMapper.mapSymbol("XAU/USD"))
         assertEquals("OANDA:XAGUSD", TradingViewMapper.mapSymbol("XAG/USD"))
-        assertEquals("BYBIT:BTCUSDT", TradingViewMapper.mapSymbol("BTC/USD"))
-        assertEquals("BYBIT:ETHUSDT", TradingViewMapper.mapSymbol("ETH/USD"))
-        assertEquals("FOREXCOM:SPX500", TradingViewMapper.mapSymbol("SPX500"))
-        assertEquals("FOREXCOM:NAS100", TradingViewMapper.mapSymbol("NAS100"))
+        assertEquals("BINANCE:BTCUSDT", TradingViewMapper.mapSymbol("BTC/USD"))
+        assertEquals("BINANCE:ETHUSDT", TradingViewMapper.mapSymbol("ETH/USD"))
+        assertEquals("OANDA:SPX500USD", TradingViewMapper.mapSymbol("SPX500"))
+        assertEquals("OANDA:NAS100USD", TradingViewMapper.mapSymbol("NAS100"))
         assertEquals("TVC:USOIL", TradingViewMapper.mapSymbol("USOIL"))
+        assertEquals("OANDA:EURCHF", TradingViewMapper.mapSymbol("EUR/CHF"))
+        assertEquals("OANDA:XPTUSD", TradingViewMapper.mapSymbol("XPT/USD"))
+        assertEquals("OANDA:XPDUSD", TradingViewMapper.mapSymbol("XPD/USD"))
+        assertEquals("OANDA:UK100GBP", TradingViewMapper.mapSymbol("FTSE100"))
+        assertEquals("OANDA:DE30EUR", TradingViewMapper.mapSymbol("DAX40"))
+        assertEquals("NYMEX:NG1!", TradingViewMapper.mapSymbol("NATGAS"))
     }
 
     @Test
@@ -63,7 +69,7 @@ class TradingViewAndMtfValidationTest {
         val html = TradingViewMapper.buildWidgetHtml("EUR/USD", "M15")
         assertNotNull(html)
         assertTrue(html!!.contains("https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"))
-        assertTrue(html.contains("\"symbol\":\"FX:EURUSD\""))
+        assertTrue(html.contains("\"symbol\":\"OANDA:EURUSD\""))
         assertTrue(html.contains("\"interval\":\"15\""))
         assertTrue(html.contains("height:100%"))
         assertTrue(html.contains("\"details\":true"))
@@ -79,10 +85,11 @@ class TradingViewAndMtfValidationTest {
         val url = TradingViewMapper.buildWidgetUrl("EUR/USD", "M15")
         assertNotNull(url)
         assertTrue(url!!.startsWith("https://s.tradingview.com/widgetembed/?"))
-        assertTrue(url.contains("symbol=FX%3AEURUSD"))
+        assertTrue(url.contains("symbol=OANDA%3AEURUSD"))
         assertTrue(url.contains("interval=15"))
         assertTrue(url.contains("hidesidetoolbar=0"))
         assertTrue(url.contains("theme=dark"))
+        assertTrue(url.contains("calendar=1"))
         assertNull("Unsupported synthetic instruments must not get a TradingView URL", TradingViewMapper.buildWidgetUrl("R_100", "M15"))
         assertNull("Unsupported timeframes must not get a TradingView URL", TradingViewMapper.buildWidgetUrl("EUR/USD", "M2"))
     }
