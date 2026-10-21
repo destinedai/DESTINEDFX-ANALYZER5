@@ -361,15 +361,41 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
     val selectedMtfTimeframes by viewModel.selectedMtfTimeframes.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val ticker = tickers[activeSymbol]
-    val symbols = listOf(
-        "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",
-        "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "EUR/CHF", "GBP/CHF",
-        "XAU/USD", "XAG/USD", "USOIL",
-        "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD", "XRP/USD"
+    // Group canonical symbols into the same asset families traders expect from the website.
+    // Every selection is shared by the embedded chart and deterministic analysis pipeline.
+    val symbolGroups = linkedMapOf(
+        "FOREX MAJORS" to listOf(
+            "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD"
+        ),
+        "FOREX MINORS" to listOf(
+            "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "EUR/CAD", "EUR/CHF",
+            "GBP/CHF", "GBP/AUD", "GBP/CAD", "CAD/JPY", "CHF/JPY", "USD/TRY", "USD/ZAR",
+            "USD/MXN", "USD/SGD", "EUR/TRY", "GBP/NZD"
+        ),
+        "COMMODITIES" to listOf(
+            "XAU/USD", "XAG/USD", "XPT/USD", "XPD/USD", "USOIL", "UKOIL", "NATGAS",
+            "WHEAT", "CORN", "SOYBEANS", "COFFEE"
+        ),
+        "INDICES" to listOf("SPX500", "NAS100", "DJ30", "FTSE100", "DAX40"),
+        "CRYPTO" to listOf("BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD", "XRP/USD")
     )
+    val allSymbols = symbolGroups.values.flatten().distinct()
+    val categories = listOf("ALL MARKETS") + symbolGroups.keys.toList()
+    var selectedAssetCategory by remember { mutableStateOf("ALL MARKETS") }
+    val symbols = if (selectedAssetCategory == "ALL MARKETS") allSymbols
+        else symbolGroups[selectedAssetCategory] ?: allSymbols
+    val strategies = StrategyRegistry.allStrategies.filter { it.isImplemented }
+    val activeStrategyName = strategies.firstOrNull { it.id == selectedStrategyId }?.name ?: selectedStrategyId
     val timeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
     var chartSymbolMenuExpanded by remember { mutableStateOf(false) }
     var chartTimeframeMenuExpanded by remember { mutableStateOf(false) }
+    var strategyMenuExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedAssetCategory) {
+        if (activeSymbol !in symbols) {
+            symbols.firstOrNull()?.let { viewModel.selectTicker(it) }
+        }
+    }
 
     LaunchedEffect(activeSymbol, selectedTimeframe, selectedStrategyId, selectedMtfTimeframes) {
         viewModel.runSignalScan(activeSymbol, selectedTimeframe, selectedMtfTimeframes)
@@ -404,6 +430,28 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         Text("Selected: $selectedTimeframe", fontSize = 10.sp, color = ElectricCyan,
                             fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("MARKET CATEGORY", fontSize = 9.sp, fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace, color = TextSecondary)
+                        Spacer(Modifier.weight(1f))
+                        Text("ALL INSTRUMENTS AVAILABLE BELOW", fontSize = 8.sp, color = TextMuted)
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        items(categories) { category ->
+                            FilterChip(
+                                selected = selectedAssetCategory == category,
+                                onClick = { selectedAssetCategory = category },
+                                label = { Text(category, fontSize = 9.sp, fontWeight = FontWeight.Bold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground,
+                                    containerColor = DarkSurfaceVariant, labelColor = TextSecondary
+                                ),
+                                modifier = Modifier.testTag(
+                                    "market_category_" + category.lowercase().replace(" ", "_")
+                                )
+                            )
+                        }
+                    }
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(symbols) { sym ->
                             FilterChip(
@@ -416,6 +464,56 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                                 ),
                                 modifier = Modifier.testTag("symbol_chip_$sym")
                             )
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("STRATEGY", fontSize = 9.sp, fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace, color = TextSecondary)
+                        Spacer(Modifier.weight(1f))
+                        Box {
+                            TextButton(
+                                onClick = { strategyMenuExpanded = true },
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("analyzer_strategy_selector")
+                            ) {
+                                Text(
+                                    activeStrategyName,
+                                    fontSize = 10.sp,
+                                    color = ElectricCyan,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = "Select strategy",
+                                    tint = ElectricCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = strategyMenuExpanded,
+                                onDismissRequest = { strategyMenuExpanded = false }
+                            ) {
+                                strategies.forEach { strategy ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                Text(strategy.name, fontWeight = FontWeight.Bold)
+                                                Text(
+                                                    strategy.rulesSummary,
+                                                    fontSize = 10.sp,
+                                                    color = TextSecondary,
+                                                    maxLines = 2
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            strategyMenuExpanded = false
+                                            viewModel.selectStrategy(strategy.id)
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -454,7 +552,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         } else {
                             Icon(Icons.Default.QueryStats, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("ANALYZE MARKET", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                            Text("RUN LIVE ANALYSIS", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                         }
                     }
                     OutlinedButton(
