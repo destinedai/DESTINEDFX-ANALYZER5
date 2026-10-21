@@ -243,26 +243,25 @@ fun TradingViewWebView(
     var isChartError by remember(currentKey) { mutableStateOf(false) }
     var errorMessage by remember(currentKey) { mutableStateOf("") }
     var retryTrigger by remember(currentKey) { mutableIntStateOf(0) }
-    var useDirectEmbed by remember(currentKey) { mutableStateOf(true) }
+    var useDirectEmbed by remember(currentKey) { mutableStateOf(false) }
 
-    // Load TradingView's hosted chart page first. This avoids depending on an external
-    // script running inside a loadDataWithBaseURL document, which is unreliable on some
-    // Android WebView versions. If it does not render promptly, recreate the WebView with
-    // TradingView's official Advanced Chart widget HTML as a fallback.
+    // Match the website: load TradingView's official Advanced Chart script first.
+    // If the script or its iframe fails to initialize, switch to TradingView's hosted
+    // widget page rather than leaving a permanent spinner or stopping at the first error.
     LaunchedEffect(currentKey, retryTrigger) {
         isLoading = true
         isChartError = false
         errorMessage = ""
-        useDirectEmbed = true
+        useDirectEmbed = false
         kotlinx.coroutines.delay(15_000L)
-        if (isLoading && !isChartError && useDirectEmbed) {
-            useDirectEmbed = false
+        if (isLoading && !isChartError && !useDirectEmbed) {
+            useDirectEmbed = true
         }
         kotlinx.coroutines.delay(35_000L)
         if (isLoading && !isChartError) {
             isChartError = true
             isLoading = false
-            errorMessage = "TradingView did not finish rendering through either loading path. Check internet access, disable any DNS/ad blocker for TradingView, update Android System WebView and Chrome, then retry."
+            errorMessage = "TradingView did not finish rendering through the official widget or hosted chart page. Check internet access, disable any DNS/ad blocker for TradingView, and update Android System WebView and Chrome, then retry."
         }
     }
 
@@ -281,7 +280,7 @@ fun TradingViewWebView(
                 Button(onClick = {
                     isChartError = false
                     isLoading = true
-                    useDirectEmbed = true
+                    useDirectEmbed = false
                     errorMessage = ""
                     retryTrigger++
                 }, colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
@@ -335,15 +334,24 @@ fun TradingViewWebView(
                                                     isChartError = false
                                                 }
                                                 state.startsWith("ERROR:") -> {
-                                                    isLoading = false
-                                                    isChartError = true
-                                                    errorMessage = state.removePrefix("ERROR:")
+                                                    val reason = state.removePrefix("ERROR:")
+                                                    if (!useDirectEmbed) {
+                                                        // A script/symbol error in the HTML widget is not
+                                                        // terminal: launch the alternate hosted chart path.
+                                                        useDirectEmbed = true
+                                                        isLoading = true
+                                                        errorMessage = "Official widget failed ($reason); trying hosted chart."
+                                                    } else {
+                                                        isLoading = false
+                                                        isChartError = true
+                                                        errorMessage = reason
+                                                    }
                                                 }
                                                 attempt < 30 -> view.postDelayed({ verifyChart(attempt + 1) }, 1000L)
-                                                useDirectEmbed -> {
-                                                    // Switch to the official widget HTML if the hosted
-                                                    // chart page cannot expose a visible chart surface.
-                                                    useDirectEmbed = false
+                                                !useDirectEmbed -> {
+                                                    // Switch to the hosted chart page when the official
+                                                    // widget HTML cannot expose a visible chart surface.
+                                                    useDirectEmbed = true
                                                     isLoading = true
                                                 }
                                                 else -> {
@@ -358,8 +366,8 @@ fun TradingViewWebView(
                                 }
                                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                                     handler?.cancel()
-                                    if (useDirectEmbed) {
-                                        useDirectEmbed = false
+                                    if (!useDirectEmbed) {
+                                        useDirectEmbed = true
                                         isLoading = true
                                         isChartError = false
                                         errorMessage = ""
@@ -371,8 +379,8 @@ fun TradingViewWebView(
                                 }
                                 override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                                     if (request?.isForMainFrame == true && view?.isAttachedToWindow == true) {
-                                        if (useDirectEmbed) {
-                                            useDirectEmbed = false
+                                        if (!useDirectEmbed) {
+                                            useDirectEmbed = true
                                             isLoading = true
                                             isChartError = false
                                             errorMessage = ""
@@ -863,6 +871,7 @@ internal object TradingViewMapper {
     fun buildWidgetHtml(symbol: String, timeframe: String): String? {
         val mappedSymbol = mapSymbol(symbol) ?: return null
         val mappedInterval = mapInterval(timeframe) ?: return null
+        // Keep widget options aligned with the website's known working configuration.
         val config = org.json.JSONObject().apply {
             put("autosize", true)
             put("symbol", mappedSymbol)
@@ -871,21 +880,13 @@ internal object TradingViewMapper {
             put("theme", "dark")
             put("style", "1")
             put("locale", "en")
-            put("enable_publishing", false)
-            put("allow_symbol_change", false)
-            put("calendar", true)
-            put("details", true)
-            put("hide_side_toolbar", false)
-            put("hide_top_toolbar", false)
-            put("hide_legend", false)
-            put("hide_volume", false)
-            put("hotlist", false)
-            put("save_image", false)
-            put("backgroundColor", "#0F0F0F")
-            put("gridColor", "rgba(242,242,242,0.2)")
-            put("watchlist", org.json.JSONArray())
             put("withdateranges", true)
-            put("compareSymbols", org.json.JSONArray())
+            put("hide_side_toolbar", false)
+            put("allow_symbol_change", false)
+            put("save_image", false)
+            put("details", true)
+            put("hotlist", false)
+            put("calendar", true)
             put("studies", org.json.JSONArray().put("STD;EMA").put("STD;RSI"))
             put("support_host", "https://www.tradingview.com")
         }.toString()
@@ -899,19 +900,20 @@ internal object TradingViewMapper {
               <meta name="referrer" content="strict-origin-when-cross-origin">
               <style>
                 html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0F0F0F; }
-                .tradingview-widget-container { position:relative; width:100%; height:100%; background:#0F0F0F; }
-                .tradingview-widget-container__widget { width:100%; height:calc(100% - 32px); }
-                .tradingview-widget-copyright { height:32px; line-height:32px; text-align:right; padding-right:9px; font:10px Arial,sans-serif; background:#0F0F0F; }
-                .tradingview-widget-copyright a { color:#8B98A9; text-decoration:none; }
+                #destinedfx-tv-chart { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0F0F0F; }
               </style>
               <script>
-                // Track the iframe's actual load event; the existence of an iframe is not proof
-                // that the selected TradingView market has rendered.
+                // TradingView's chart is cross-origin. Track iframe/script load events only;
+                // do not depend on DOM selectors inside its private chart iframe.
                 document.addEventListener('load', function(event) {
                   var target = event.target;
-                  if (target && target.tagName === 'IFRAME' &&
-                      target.closest && target.closest('.tradingview-widget-container')) {
+                  if (target && target.tagName === 'SCRIPT' &&
+                      String(target.src || '').indexOf('embed-widget-advanced-chart.js') >= 0) {
+                    document.documentElement.setAttribute('data-tv-script-loaded', '1');
+                  }
+                  if (target && target.tagName === 'IFRAME') {
                     target.setAttribute('data-destinedfx-tv-loaded-at', String(Date.now()));
+                    document.documentElement.setAttribute('data-tv-frame-loaded', '1');
                   }
                 }, true);
                 window.addEventListener('error', function(event) {
@@ -925,11 +927,7 @@ internal object TradingViewMapper {
               </script>
             </head>
             <body>
-              <div class="tradingview-widget-container">
-                <div class="tradingview-widget-container__widget"></div>
-                <div class="tradingview-widget-copyright">
-                  <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">Chart by TradingView</a>
-                </div>
+              <div id="destinedfx-tv-chart" style="height:100%;width:100%">
                 <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
                 ${config}
                 </script>
