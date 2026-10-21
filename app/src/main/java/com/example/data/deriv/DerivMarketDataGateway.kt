@@ -76,6 +76,7 @@ class DerivMarketDataGateway(
             return
         }
 
+        manuallyDisconnected = false
         lastConnectionError = null
         _connectionState.value = DerivConnectionState.CONNECTING
         val request = Request.Builder()
@@ -86,6 +87,7 @@ class DerivMarketDataGateway(
             webSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.i(TAG, "Deriv WebSocket connected.")
+                    reconnectAttempts.set(0)
                     _connectionState.value = DerivConnectionState.CONNECTED
                     startHeartbeat()
                     // Re-subscribe to any active symbols
@@ -104,6 +106,7 @@ class DerivMarketDataGateway(
                     Log.e(TAG, "Deriv WebSocket failure: " + (lastConnectionError ?: "unknown"))
                     _connectionState.value = DerivConnectionState.ERROR
                     cleanup()
+                    scheduleReconnect()
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -111,6 +114,7 @@ class DerivMarketDataGateway(
                     if (code != 1000 && reason.isNotBlank()) lastConnectionError = "WebSocket closed: " + code + " / " + reason
                     _connectionState.value = DerivConnectionState.DISCONNECTED
                     cleanup()
+                    if (code != 1000) scheduleReconnect()
                 }
             })
         } catch (e: Exception) {
@@ -120,6 +124,7 @@ class DerivMarketDataGateway(
     }
 
     fun disconnect() {
+        manuallyDisconnected = true
         webSocket?.close(1000, "Client disconnect")
         cleanup()
         _connectionState.value = DerivConnectionState.DISCONNECTED
@@ -128,10 +133,36 @@ class DerivMarketDataGateway(
     private fun cleanup() {
         webSocket = null
         activeSubscriptions.clear()
+        requestedSubscriptions.clear()
         pendingRequests.values.forEach {
             it.cancel()
         }
         pendingRequests.clear()
+    }
+
+    private fun scheduleReconnect() {
+        if (manuallyDisconnected) return
+        val attempt = reconnectAttempts.getAndIncrement().coerceAtMost(5)
+        val waitMs = (1_000L shl attempt).coerceAtMost(30_000L)
+        scope.launch {
+            delay(waitMs)
+            if (!manuallyDisconnected &&
+                _connectionState.value != DerivConnectionState.CONNECTED &&
+                _connectionState.value != DerivConnectionState.CONNECTING
+            ) {
+                Log.i(TAG, "Retrying Deriv market-data connection after " + waitMs + "ms")
+                connect()
+            }
+        }
+    }
+
+    private suspend fun ensureConnected(timeoutMs: Long): Boolean {
+        if (_connectionState.value == DerivConnectionState.CONNECTED) return true
+        connect()
+        return withTimeoutOrNull(timeoutMs) {
+            while (_connectionState.value == DerivConnectionState.CONNECTING) delay(100L)
+            _connectionState.value == DerivConnectionState.CONNECTED
+        } ?: false
     }
 
     private fun startHeartbeat() {
@@ -162,6 +193,7 @@ class DerivMarketDataGateway(
 
     fun unsubscribeTicks(symbol: String) {
         tickListeners.remove(symbol)
+        requestedSubscriptions.remove(symbol)
         val subId = activeSubscriptions.remove(symbol)
         if (subId != null && webSocket != null) {
             val forgetJson = JSONObject().apply {
@@ -173,13 +205,15 @@ class DerivMarketDataGateway(
     }
 
     private fun sendSubscribeTick(symbol: String) {
+        // A selected-symbol refresh must not create duplicate WebSocket tick subscriptions.
+        if (!requestedSubscriptions.add(symbol)) return
         val reqId = reqIdCounter.getAndIncrement()
         val json = JSONObject().apply {
             put("ticks", symbol)
             put("subscribe", 1)
             put("req_id", reqId)
         }
-        webSocket?.send(json.toString())
+        if (webSocket?.send(json.toString()) != true) requestedSubscriptions.remove(symbol)
     }
 
     suspend fun fetchCandles(symbol: String, granularitySeconds: Int, count: Int = 300): List<Candle> = withContext(Dispatchers.IO) {
