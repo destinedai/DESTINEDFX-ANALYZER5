@@ -221,9 +221,8 @@ fun TradingViewWebView(
     val mappedSymbol = TradingViewMapper.mapSymbol(symbol)
     val mappedInterval = TradingViewMapper.mapInterval(timeframe)
     val widgetUrl = TradingViewMapper.buildWidgetUrl(symbol, timeframe)
-    val widgetHtml = TradingViewMapper.buildWidgetHtml(symbol, timeframe)
 
-    if (mappedSymbol == null || mappedInterval == null || widgetUrl == null || widgetHtml == null) {
+    if (mappedSymbol == null || mappedInterval == null || widgetUrl == null) {
         Column(modifier = modifier.fillMaxSize().background(Color(0xFF171B27)).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
@@ -314,7 +313,7 @@ fun TradingViewWebView(
                                     fun verifyChart(attempt: Int) {
                                         if (isChartError || !isLoading) return
                                         view.evaluateJavascript(
-                                            "(function(){var e=document.documentElement.getAttribute('data-tv-widget-error');if(e)return 'ERROR:'+e;var c=document.querySelector('.tradingview-widget-container__widget');var f=c?c.querySelector('iframe'):null;if(f&&f.src&&/tradingview/i.test(f.src)){var r=f.getBoundingClientRect();if(r.width>100&&r.height>100)return 'READY';}return 'WAIT';})()"
+                                            "(function(){var b=document.body;var t=(b&&b.innerText||'').toLowerCase();if(t.includes('invalid symbol')||t.includes('symbol not found'))return 'ERROR:TradingView could not find this symbol';var c=document.querySelectorAll('canvas');for(var i=0;i<c.length;i++){var r=c[i].getBoundingClientRect();if(r.width>100&&r.height>100)return 'READY';}var f=document.querySelector('iframe');if(f){var fr=f.getBoundingClientRect();if(fr.width>100&&fr.height>100)return 'READY';}return 'WAIT';})()"
                                         ) { result ->
                                             val state = result?.removeSurrounding("\"") ?: "WAIT"
                                             when {
@@ -383,7 +382,7 @@ fun TradingViewWebView(
                             // outdated Chrome version. TradingView can then serve a compatible UI.
                             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                            loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
+                            loadUrl(widgetUrl)
                         }
                     } catch (error: Throwable) {
                         isChartError = true
@@ -398,7 +397,7 @@ fun TradingViewWebView(
                         isLoading = true
                         isChartError = false
                         errorMessage = ""
-                        view.loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
+                        view.loadUrl(widgetUrl)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -733,39 +732,47 @@ internal object TradingViewMapper {
             return null
         }
         return when (clean) {
-            "EUR/USD", "EURUSD" -> "FX:EURUSD"
-            "GBP/USD", "GBPUSD" -> "FX:GBPUSD"
-            "USD/JPY", "USDJPY" -> "FX:USDJPY"
-            "USD/CHF", "USDCHF" -> "FX:USDCHF"
-            "AUD/USD", "AUDUSD" -> "FX:AUDUSD"
-            "USD/CAD", "USDCAD" -> "FX:USDCAD"
-            "NZD/USD", "NZDUSD" -> "FX:NZDUSD"
-            "EUR/GBP", "EURGBP" -> "FX:EURGBP"
-            "EUR/JPY", "EURJPY" -> "FX:EURJPY"
-            "GBP/JPY", "GBPJPY" -> "FX:GBPJPY"
-            "AUD/JPY", "AUDJPY" -> "FX:AUDJPY"
-            "EUR/AUD", "EURAUD" -> "FX:EURAUD"
-            "EUR/CAD", "EURCAD" -> "FX:EURCAD"
-            "GBP/AUD", "GBPAUD" -> "FX:GBPAUD"
-            "GBP/CAD", "GBPCAD" -> "FX:GBPCAD"
+            "EUR/USD", "EURUSD" -> "OANDA:EURUSD"
+            "GBP/USD", "GBPUSD" -> "OANDA:GBPUSD"
+            "USD/JPY", "USDJPY" -> "OANDA:USDJPY"
+            "USD/CHF", "USDCHF" -> "OANDA:USDCHF"
+            "AUD/USD", "AUDUSD" -> "OANDA:AUDUSD"
+            "USD/CAD", "USDCAD" -> "OANDA:USDCAD"
+            "NZD/USD", "NZDUSD" -> "OANDA:NZDUSD"
+            "EUR/GBP", "EURGBP" -> "OANDA:EURGBP"
+            "EUR/JPY", "EURJPY" -> "OANDA:EURJPY"
+            "GBP/JPY", "GBPJPY" -> "OANDA:GBPJPY"
+            "AUD/JPY", "AUDJPY" -> "OANDA:AUDJPY"
+            "EUR/AUD", "EURAUD" -> "OANDA:EURAUD"
+            "EUR/CAD", "EURCAD" -> "OANDA:EURCAD"
+            "GBP/AUD", "GBPAUD" -> "OANDA:GBPAUD"
+            "GBP/CAD", "GBPCAD" -> "OANDA:GBPCAD"
             "XAU/USD", "XAUUSD", "GOLD" -> "OANDA:XAUUSD"
             "XAG/USD", "XAGUSD", "SILVER" -> "OANDA:XAGUSD"
-            "BTC/USD", "BTCUSD", "BTCUSDT" -> "BYBIT:BTCUSDT"
-            "ETH/USD", "ETHUSD", "ETHUSDT" -> "BYBIT:ETHUSDT"
-            "SOL/USD", "SOLUSD", "SOLUSDT" -> "BYBIT:SOLUSDT"
-            "XRP/USD", "XRPUSD", "XRPUSDT" -> "BYBIT:XRPUSDT"
-            "BNB/USD", "BNBUSD", "BNBUSDT" -> "BYBIT:BNBUSDT"
+            "XPT/USD", "XPTUSD" -> "OANDA:XPTUSD"
+            "XPD/USD", "XPDUSD" -> "OANDA:XPDUSD"
+            "BTC/USD", "BTCUSD", "BTCUSDT" -> "BINANCE:BTCUSDT"
+            "ETH/USD", "ETHUSD", "ETHUSDT" -> "BINANCE:ETHUSDT"
+            "SOL/USD", "SOLUSD", "SOLUSDT" -> "BINANCE:SOLUSDT"
+            "XRP/USD", "XRPUSD", "XRPUSDT" -> "BINANCE:XRPUSDT"
+            "BNB/USD", "BNBUSD", "BNBUSDT" -> "BINANCE:BNBUSDT"
             "USOIL", "WTI" -> "TVC:USOIL"
             "UKOIL", "BRENT" -> "TVC:UKOIL"
-            "SPX500", "US500", "SPX" -> "FOREXCOM:SPX500"
-            "NAS100", "US100", "NDX" -> "FOREXCOM:NAS100"
-            "DJ30", "US30", "DJI" -> "FOREXCOM:DJ30"
-            "GER30", "GER40", "DAX" -> "FOREXCOM:GER40"
+            "NATGAS", "NATURAL GAS" -> "NYMEX:NG1!"
+            "WHEAT" -> "CBOT:ZW1!"
+            "CORN" -> "CBOT:ZC1!"
+            "SOYBEANS", "SOY BEANS" -> "CBOT:ZS1!"
+            "COFFEE" -> "ICEUS:KC1!"
+            "FTSE100", "UK100" -> "OANDA:UK100GBP"
+            "SPX500", "US500", "SPX" -> "OANDA:SPX500USD"
+            "NAS100", "US100", "NDX" -> "OANDA:NAS100USD"
+            "DJ30", "US30", "DJI" -> "OANDA:US30USD"
+            "GER30", "GER40", "DAX", "DAX40" -> "OANDA:DE30EUR"
             else -> {
                 // If standard 6-character forex pair like "NZD/CAD"
                 val stripped = clean.replace("/", "")
                 if (stripped.length == 6 && stripped.all { it.isLetter() }) {
-                    "FX:$stripped"
+                    "OANDA:$stripped"
                 } else {
                     null // Fail-safe: unsupported symbol
                 }
@@ -795,7 +802,7 @@ internal object TradingViewMapper {
             "&symbol=${android.net.Uri.encode(mappedSymbol)}" +
             "&interval=$mappedInterval&hidesidetoolbar=0&symboledit=0&saveimage=0" +
             "&toolbarbg=171B27&theme=dark&style=1&timezone=Etc%2FUTC" +
-            "&withdateranges=1&locale=en&hideideas=1&calendar=0&hotlist=0&news=0"
+            "&withdateranges=1&locale=en&hideideas=1&calendar=1&hotlist=0&news=0"
     }
 
     /**
