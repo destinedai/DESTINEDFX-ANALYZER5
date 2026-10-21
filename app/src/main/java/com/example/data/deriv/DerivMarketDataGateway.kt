@@ -165,6 +165,90 @@ class DerivMarketDataGateway(
         } ?: false
     }
 
+    /**
+     * Discover broker-supported symbols using Deriv's public, unauthenticated active_symbols endpoint.
+     * The result is cached for five minutes; callers must use each returned broker code for quotes/candles.
+     */
+    suspend fun fetchActiveSymbols(forceRefresh: Boolean = false): List<DerivActiveSymbol> =
+        withContext(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            cachedActiveSymbols.takeIf {
+                !forceRefresh && it.isNotEmpty() && now - activeSymbolsFetchedAtMs < 5 * 60_000L
+            }?.let { return@withContext it }
+
+            activeSymbolsMutex.withLock {
+                val recheckNow = System.currentTimeMillis()
+                cachedActiveSymbols.takeIf {
+                    !forceRefresh && it.isNotEmpty() && recheckNow - activeSymbolsFetchedAtMs < 5 * 60_000L
+                }?.let { return@withLock it }
+
+                if (!ensureConnected(16_000L)) {
+                    Log.w(TAG, "active_symbols unavailable: WebSocket state=" + _connectionState.value.name)
+                    return@withLock emptyList()
+                }
+
+                val reqId = reqIdCounter.getAndIncrement()
+                val deferred = CompletableDeferred<JSONObject>()
+                pendingRequests[reqId] = deferred
+                try {
+                    val requestJson = JSONObject().apply {
+                        put("active_symbols", "brief")
+                        put("req_id", reqId)
+                    }
+                    if (webSocket?.send(requestJson.toString()) != true) {
+                        lastConnectionError = "WebSocket rejected the active_symbols request before it was sent"
+                        return@withLock emptyList()
+                    }
+
+                    val response = withTimeoutOrNull(12_000L) { deferred.await() }
+                    if (response == null) {
+                        lastConnectionError = "Timed out waiting for Deriv active_symbols response"
+                        return@withLock emptyList()
+                    }
+                    response.optJSONObject("error")?.let { apiError ->
+                        lastConnectionError = apiError.optString("message").ifBlank { apiError.toString() }
+                        Log.w(TAG, "active_symbols rejected: " + (lastConnectionError ?: "unknown"))
+                        return@withLock emptyList()
+                    }
+
+                    val array = response.optJSONArray("active_symbols") ?: return@withLock emptyList()
+                    val parsed = ArrayList<DerivActiveSymbol>(array.length())
+                    for (i in 0 until array.length()) {
+                        val item = array.optJSONObject(i) ?: continue
+                        val brokerSymbol = item.optString("underlying_symbol")
+                            .ifBlank { item.optString("symbol") }.trim()
+                        if (brokerSymbol.isBlank()) continue
+                        val displayName = item.optString("underlying_symbol_name")
+                            .ifBlank { item.optString("display_name") }
+                            .ifBlank { brokerSymbol }.trim()
+                        parsed += DerivActiveSymbol(
+                            symbol = brokerSymbol,
+                            displayName = displayName,
+                            market = item.optString("market"),
+                            symbolType = item.optString("underlying_symbol_type")
+                                .ifBlank { item.optString("symbol_type") }
+                        )
+                    }
+
+                    if (parsed.isNotEmpty()) {
+                        cachedActiveSymbols = parsed
+                        activeSymbolsFetchedAtMs = System.currentTimeMillis()
+                        Log.i(TAG, "Discovered " + parsed.size + " active Deriv symbols")
+                    }
+                    parsed
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    lastConnectionError = "active_symbols failed: " +
+                        (error.message ?: error.javaClass.simpleName)
+                    Log.w(TAG, lastConnectionError ?: "active_symbols failed")
+                    emptyList()
+                } finally {
+                    pendingRequests.remove(reqId)
+                }
+            }
+        }
+
     private fun startHeartbeat() {
         scope.launch {
             while (isActive && _connectionState.value == DerivConnectionState.CONNECTED) {
