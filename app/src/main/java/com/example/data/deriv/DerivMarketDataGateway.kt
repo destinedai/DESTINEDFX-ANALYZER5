@@ -422,9 +422,17 @@ class DerivMarketDataGateway(
                     val tickObj = json.optJSONObject("tick") ?: return
                     val symbol = tickObj.optString("symbol")
                     val quote = tickObj.optDouble("quote", 0.0)
-                    val bid = tickObj.optDouble("bid", quote)
-                    val ask = tickObj.optDouble("ask", quote)
-                    val epoch = tickObj.optLong("epoch", System.currentTimeMillis() / 1000)
+                    // Do not synthesize bid/ask from the last price. A quote without both sides
+                    // is useful for display, but cannot pass the bot's real-spread execution gate.
+                    val bid = if (tickObj.has("bid")) {
+                        tickObj.optDouble("bid", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
+                    } else null
+                    val ask = if (tickObj.has("ask")) {
+                        tickObj.optDouble("ask", Double.NaN).takeIf { it.isFinite() && it > 0.0 }
+                    } else null
+                    val epoch = tickObj.optLong("epoch", 0L)
+                    if (symbol.isBlank() || !quote.isFinite() || quote <= 0.0 || epoch <= 0L) return
+                    val validTwoSidedQuote = bid != null && ask != null && ask >= bid
                     val subId = json.optJSONObject("subscription")?.optString("id")
                     if (subId != null && symbol.isNotBlank()) {
                         activeSubscriptions[symbol] = subId
@@ -436,8 +444,8 @@ class DerivMarketDataGateway(
                     val marketQuote = MarketQuote(
                         symbol = symbol,
                         assetClass = cls,
-                        bid = bid,
-                        ask = ask,
+                        bid = if (validTwoSidedQuote) bid else null,
+                        ask = if (validTwoSidedQuote) ask else null,
                         last = quote,
                         timestampMs = timeMs,
                         receivedAtMs = System.currentTimeMillis(),
