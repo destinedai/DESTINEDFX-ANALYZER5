@@ -215,11 +215,11 @@ class DerivMarketDataGateway(
                     val parsed = ArrayList<DerivActiveSymbol>(array.length())
                     for (i in 0 until array.length()) {
                         val item = array.optJSONObject(i) ?: continue
-                        val brokerSymbol = item.optString("underlying_symbol")
-                            .ifBlank { item.optString("symbol") }.trim()
+                        val brokerSymbol = item.optString("symbol")
+                            .ifBlank { item.optString("underlying_symbol") }.trim()
                         if (brokerSymbol.isBlank()) continue
-                        val displayName = item.optString("underlying_symbol_name")
-                            .ifBlank { item.optString("display_name") }
+                        val displayName = item.optString("display_name")
+                            .ifBlank { item.optString("underlying_symbol_name") }
                             .ifBlank { brokerSymbol }.trim()
                         parsed += DerivActiveSymbol(
                             symbol = brokerSymbol,
