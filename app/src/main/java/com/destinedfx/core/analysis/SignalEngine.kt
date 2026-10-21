@@ -498,6 +498,15 @@ object SignalEngine {
                 }
             val fvg = recentFvgs.minByOrNull { abs(priceMid - (it.top + it.bottom) / 2.0) }
                 ?: return null to "ICT SILVER BULLET WAIT: no recent unfilled directional FVG for a CE 50% entry."
+            val killzone = Indicators.killzone(i.nowMs)
+            if (killzone.first !in setOf(
+                    Indicators.KillzoneType.LONDON_OPEN,
+                    Indicators.KillzoneType.NY_AM,
+                    Indicators.KillzoneType.NY_PM
+                )
+            ) {
+                return null to "ICT SILVER BULLET WAIT: outside London/NY killzones (07:00-09:00, 13:30-15:30, or 18:00-20:00 UTC)."
+            }
             val ce = (fvg.top + fvg.bottom) / 2.0
             val maxCeDistance = maxOf(0.25 * atr, 2.0 * spread)
             if (abs(priceMid - ce) > maxCeDistance) {
@@ -588,6 +597,22 @@ object SignalEngine {
                     if (ts.isEmpty()) "TP1" else "TP2",
                     rangeBoundary.price,
                     "Wyckoff opposite trading-range boundary"
+                )
+            }
+        }
+
+        if (i.strategyId == "trend-following") {
+            val continuationSwing = st.swings
+                .filter {
+                    if (long) it.type == SwingType.HIGH && it.price > entry + minDist
+                    else it.type == SwingType.LOW && it.price < entry - minDist
+                }
+                .minByOrNull { abs(it.price - entry) }
+            if (continuationSwing != null) {
+                addPrice(
+                    if (ts.isEmpty()) "TP1" else "TP2",
+                    continuationSwing.price,
+                    "Trend continuation next swing"
                 )
             }
         }
