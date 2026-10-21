@@ -1576,7 +1576,11 @@ open class DestinedFXViewModel(
             return
         }
         if (cleanAppId.isBlank() || !cleanAppId.all { it.isDigit() }) {
-            onResult(false, "Enter the numeric App ID from a newly registered Deriv API application. Legacy App IDs are not accepted by the current API.")
+            onResult(false, "Enter the numeric App ID from a newly registered Deriv API application.")
+            return
+        }
+        if (cleanAppId == "1089") {
+            onResult(false, "App ID 1089 is a legacy ID and cannot be used with the current Deriv Options REST/OTP API. Register a new PAT application in the Deriv developer dashboard.")
             return
         }
         viewModelScope.launch {
