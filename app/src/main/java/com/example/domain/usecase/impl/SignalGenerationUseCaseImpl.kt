@@ -79,7 +79,12 @@ class SignalGenerationUseCaseImpl(
 
             val tf = Timeframe.parse(timeframe) ?: return unavailable(symbol, timeframe, "Unsupported timeframe '$timeframe'", "INVALID")
             var ticker = market.tickerFlow.value[symbol]
-            if (ticker == null) ticker = market.refreshSymbol(symbol)
+            // Do not reuse an old ticker forever just because a stale entry remains in the flow.
+            // Refresh when absent or >10 seconds old; validation below still blocks stale data.
+            if (ticker == null || now - ticker.lastUpdateMillis > 10_000L) {
+                val refreshed = market.refreshSymbol(symbol)
+                if (refreshed != null) ticker = refreshed
+            }
             // A daily reference rate is not a market quote. Look for real timestamped OHLC instead.
             if (ticker?.kind == "DAILY_REFERENCE") ticker = null
 
