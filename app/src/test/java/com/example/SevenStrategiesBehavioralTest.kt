@@ -334,7 +334,7 @@ class SevenStrategiesBehavioralTest {
         val stopSwing = Swing(
             index = 90,
             timeMs = candles[90].timeMs,
-            price = 1.1250,
+            price = 1.1255,
             type = SwingType.LOW,
             strengthAtr = 1.0,
             confirmedAtIndex = 90
