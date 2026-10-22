@@ -20,6 +20,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -126,6 +127,14 @@ class MarketDataRepositoryImpl(
                 }
             }
         }
+    }
+
+    /**
+     * Cancels polling and streaming workers if dependency initialization fails after construction.
+     * MyApplication calls this before exposing a retry path to avoid orphaned network loops.
+     */
+    fun close() {
+        scope.cancel()
     }
 
     private fun getTtlForTimeframe(timeframe: String): Long {

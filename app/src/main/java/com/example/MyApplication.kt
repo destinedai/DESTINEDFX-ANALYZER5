@@ -192,13 +192,22 @@ class MyApplication : Application() {
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
+            // The repository starts polling workers from its constructor. Stop those workers if
+            // a later dependency fails, so a Retry cannot leave duplicate network loops alive.
+            try {
+                _marketDataRepository?.close()
+            } catch (cleanupError: Exception) {
+                android.util.Log.w("MyApplication", "Partial initialization cleanup failed", cleanupError)
+            }
+            _marketDataRepository = null
             android.util.Log.e("MyApplication", "Dependency initialization failed", e)
             initStatus.value = InitState.Failed(e)
         }
     }
 
     fun retryInitialization() {
-        if (initStatus.value is InitState.Ready) return
+        // A second tap while the previous retry is running must not construct another dependency graph.
+        if (initStatus.value !is InitState.Failed) return
         initStatus.value = InitState.Initializing
         initializeDependencies()
     }
