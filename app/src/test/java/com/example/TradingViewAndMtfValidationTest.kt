@@ -215,8 +215,10 @@ class TradingViewAndMtfValidationTest {
             DestinedFXScreen.primaryScreens.map { it.title }
         )
         assertTrue(DestinedFXScreen.moreScreens.map { it.title }.containsAll(
-            listOf("Chat", "Image Analyzer", "Bot", "Watchlist", "Risk", "Settings")
+            listOf("Chat", "Image Analyzer", "Bot", "Watchlist", "Risk", "Settings", "About & Disclosure", "Contact")
         ))
+        assertEquals(DestinedFXScreen.allScreens.toSet(), (DestinedFXScreen.primaryScreens + DestinedFXScreen.moreScreens).toSet())
+        assertEquals(DestinedFXScreen.allScreens.size, DestinedFXScreen.allScreens.distinct().size)
         assertTrue(DestinedFXScreen.allScreens.contains(DestinedFXScreen.Watchlist))
         assertFalse("Watchlist belongs under More, not the primary bottom bar",
             DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Watchlist))

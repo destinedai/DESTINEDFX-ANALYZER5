@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.strategy.StrategyRegistry
 import com.example.ui.chart.TradingChartContainer
+import com.example.ui.components.GoldGradientButton
 import com.example.ui.components.StatChip
 import com.example.ui.components.TerminalStatusPill
 import com.example.ui.theme.*
@@ -70,9 +71,9 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(Brush.verticalGradient(listOf(Color(0xFF3B3427), DarkSurfaceVariant, DarkSurface)))
-                    .border(1.dp, ElectricCyan.copy(alpha = 0.38f), RoundedCornerShape(22.dp))
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Brush.verticalGradient(listOf(HeroGoldShade, DarkSurfaceVariant, DarkSurface)))
+                    .border(1.dp, GoldPrimary.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -84,13 +85,14 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                     TerminalStatusPill("RULE-BASED ENGINE", ElectricCyan)
                     TerminalStatusPill(feedLabel, feedColor)
                 }
-                Text(
-                    text = "Trade with the\ninstitutions, not against them.",
-                    fontSize = 27.sp,
-                    lineHeight = 32.sp,
-                    fontWeight = FontWeight.Black,
-                    color = TextPrimary
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    Text("Trade with the", fontSize = 27.sp, lineHeight = 32.sp,
+                        fontWeight = FontWeight.Black, color = TextPrimary)
+                    Text("institutions,", fontSize = 27.sp, lineHeight = 32.sp,
+                        fontWeight = FontWeight.Black, color = GoldPrimary)
+                    Text("not against them.", fontSize = 27.sp, lineHeight = 32.sp,
+                        fontWeight = FontWeight.Black, color = TextPrimary)
+                }
                 Text(
                     text = "DestinedFX maps live market structure through deterministic SMC, ICT, Wyckoff and quantitative strategy rules—then surfaces the evidence, risk and trade plan.",
                     fontSize = 12.sp,
@@ -104,11 +106,9 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                     fontWeight = FontWeight.Black,
                     color = ElectricCyan
                 )
-                Button(
+                GoldGradientButton(
                     onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(11.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.QueryStats, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))

@@ -6,7 +6,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
  * Native destinations mirroring the website's primary navigation, while retaining app-only
- * Risk and Bot workspaces and consolidating web account/help routes into Settings.
+ * Risk and Bot workspaces, with account, disclosure and contact tools discoverable under More.
  */
 sealed class DestinedFXScreen(val title: String, val icon: ImageVector, val tag: String) {
     object Home : DestinedFXScreen("Home", Icons.Default.Home, "nav_tab_home")
@@ -20,15 +20,17 @@ sealed class DestinedFXScreen(val title: String, val icon: ImageVector, val tag:
     object More : DestinedFXScreen("More", Icons.Default.MoreHoriz, "nav_tab_more")
     object Risk : DestinedFXScreen("Risk", Icons.Default.Calculate, "nav_tab_risk")
     object Settings : DestinedFXScreen("Settings", Icons.Default.Settings, "nav_tab_settings")
+    object About : DestinedFXScreen("About & Disclosure", Icons.Default.Info, "nav_tab_about")
+    object Contact : DestinedFXScreen("Contact", Icons.Default.Email, "nav_tab_contact")
 
     companion object {
         val primaryScreens: List<DestinedFXScreen>
             get() = listOf(Home, Analyzer, Strategies, Calendar, More)
 
         val moreScreens: List<DestinedFXScreen>
-            get() = listOf(Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings)
+            get() = listOf(Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings, About, Contact)
 
         val allScreens: List<DestinedFXScreen>
-            get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings)
+            get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings, About, Contact)
     }
 }

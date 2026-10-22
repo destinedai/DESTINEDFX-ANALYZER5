@@ -17,7 +17,7 @@ import androidx.core.view.WindowCompat
 private val DestinedFxShapes = Shapes(
   extraSmall = RoundedCornerShape(8.dp),
   small = RoundedCornerShape(10.dp),
-  medium = RoundedCornerShape(14.dp),
+  medium = RoundedCornerShape(12.dp),
   large = RoundedCornerShape(18.dp),
   extraLarge = RoundedCornerShape(24.dp)
 )
@@ -26,14 +26,14 @@ private val DestinedFxShapes = Shapes(
 private val DestinedFxDarkColorScheme =
   darkColorScheme(
     primary = CyanPrimary,
-    secondary = BlueAccent,
+    secondary = DarkSurfaceVariant,
     tertiary = ProfitGreen,
     background = DarkBackground,
     surface = DarkSurface,
     surfaceVariant = DarkSurfaceVariant,
-    onPrimary = Color(0xFF171B27),
-    onSecondary = Color(0xFF070B14),
-    onTertiary = Color(0xFF070B14),
+    onPrimary = DarkBackground,
+    onSecondary = TextPrimary,
+    onTertiary = DarkBackground,
     onBackground = TextPrimary,
     onSurface = TextPrimary,
     onSurfaceVariant = TextSecondary,
@@ -63,8 +63,8 @@ fun DestinedFXTheme(
         val activity = view.context.findActivity()
         val window = activity?.window
         if (window != null) {
-          window.statusBarColor = Color(0xFF171B27).toArgb()
-          window.navigationBarColor = Color(0xFF171B27).toArgb()
+          window.statusBarColor = DarkBackground.toArgb()
+          window.navigationBarColor = DarkBackground.toArgb()
           WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
           WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = false
         }

@@ -325,6 +325,8 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     DestinedFXScreen.Chat -> ChatWorkstationTab(viewModel)
                     DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
                     DestinedFXScreen.Settings -> SettingsTab(viewModel)
+                    DestinedFXScreen.About -> AboutDisclosureTab(viewModel)
+                    DestinedFXScreen.Contact -> ContactWorkstationTab()
                 }
             }
         }
@@ -555,13 +557,10 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                             )
                         }
                     }
-                    Button(
+                    GoldGradientButton(
                         onClick = { viewModel.runSignalScan(activeSymbol, selectedTimeframe, selectedMtfTimeframes) },
                         enabled = !isScanning,
-                        modifier = Modifier.fillMaxWidth().height(46.dp).testTag("analyze_button"),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground,
-                            disabledContainerColor = ElectricCyan.copy(alpha = 0.45f))
+                        modifier = Modifier.fillMaxWidth().testTag("analyze_button")
                     ) {
                         if (isScanning) {
                             CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp, color = DarkBackground)
@@ -1889,6 +1888,8 @@ private fun MoreTab(viewModel: DestinedFXViewModel) {
                 DestinedFXScreen.Watchlist -> "Follow available market quotes and jump into analysis."
                 DestinedFXScreen.Risk -> "Review account sizing, stop-loss and exposure constraints."
                 DestinedFXScreen.Settings -> "Manage account, broker and notification preferences."
+                DestinedFXScreen.About -> "Learn how analysis works and review the full risk disclosure."
+                DestinedFXScreen.Contact -> "Contact the support address published on the website."
                 else -> "Open this DestinedFX workspace."
             }
             Card(

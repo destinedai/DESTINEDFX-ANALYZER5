@@ -4,17 +4,20 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -23,7 +26,7 @@ import com.example.ui.theme.*
 import java.util.Locale
 
 /**
- * Reusable Modern Trading Terminal Design Kit (livetrading.ai aesthetic).
+ * Reusable native Compose design kit aligned to the DestinedFX website identity.
  * Provides GlassCard, StatChip, SignalBadge, SectionHeader, PriceText, and PulsingDot.
  */
 
@@ -36,8 +39,8 @@ fun GlassCard(
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = GlassSurface),
         border = BorderStroke(
             1.dp,
             Brush.verticalGradient(
@@ -262,7 +265,7 @@ fun TerminalPageHeader(
             .clip(RoundedCornerShape(14.dp))
             .background(
                 Brush.verticalGradient(
-                    listOf(Color(0xFF4B402C), DarkSurfaceVariant, DarkSurface)
+                    listOf(HeroGoldShade, DarkSurfaceVariant, DarkSurface)
                 )
             ),
         shape = RoundedCornerShape(14.dp),
@@ -345,5 +348,33 @@ fun TerminalStatusPill(
                 maxLines = 1
             )
         }
+    }
+}
+
+/** Primary action treatment from the web brand, with native button semantics and disabled state. */
+@Composable
+fun GoldGradientButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit
+) {
+    val shape = RoundedCornerShape(12.dp)
+    val goldBrush = Brush.linearGradient(
+        if (enabled) listOf(GoldPrimary, GoldGlow)
+        else listOf(GoldPrimary.copy(alpha = 0.42f), GoldGlow.copy(alpha = 0.42f))
+    )
+    CompositionLocalProvider(LocalContentColor provides DarkBackground) {
+        Row(
+            modifier = modifier
+                .heightIn(min = 48.dp)
+                .clip(shape)
+                .background(goldBrush)
+                .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+            content = content
+        )
     }
 }
