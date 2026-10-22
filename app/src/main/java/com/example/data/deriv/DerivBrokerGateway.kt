@@ -32,6 +32,17 @@ data class DerivContractInfo(
     val expiryTime: Long?
 )
 
+/** Selects only an active Options account matching the user's explicit demo/real choice. */
+internal fun selectDerivOptionsAccount(accounts: org.json.JSONArray, requestedMode: String): JSONObject? {
+    val mode = requestedMode.trim().lowercase().takeIf { it == "real" || it == "demo" } ?: "demo"
+    for (index in 0 until accounts.length()) {
+        val account = accounts.optJSONObject(index) ?: continue
+        if (account.optString("status").equals("active", ignoreCase = true) &&
+            account.optString("account_type").equals(mode, ignoreCase = true)) return account
+    }
+    return null
+}
+
 /**
  * Real Broker Gateway for Deriv.
  * Performs real authorization, balance queries, order execution (proposals + contracts),
@@ -122,15 +133,9 @@ class DerivBrokerGateway(
 
             val requestedMode = secrets.getDerivAccountMode().lowercase()
                 .takeIf { it == "real" || it == "demo" } ?: "demo"
-            val activeAccounts = buildList {
-                for (i in 0 until accounts.length()) {
-                    val account = accounts.optJSONObject(i) ?: continue
-                    if (account.optString("status").equals("active", ignoreCase = true)) add(account)
-                }
-            }
-            val account = activeAccounts.firstOrNull {
-                it.optString("account_type").equals(requestedMode, ignoreCase = true)
-            }
+            val activeAccounts = (0 until accounts.length()).mapNotNull { accounts.optJSONObject(it) }
+                .filter { it.optString("status").equals("active", ignoreCase = true) }
+            val account = selectDerivOptionsAccount(accounts, requestedMode)
             if (account == null) {
                 val available = activeAccounts.map { it.optString("account_type").ifBlank { "unknown" } }.distinct()
                 throw IllegalStateException(

@@ -331,6 +331,8 @@ fun TradingViewWebView(
                     factory = { viewContext ->
                         var generation = 0
                         var monitorRunning = false
+                        var attachWaiter: View.OnAttachStateChangeListener? = null
+                        var chartWebViewClient: WebViewClient? = null
                         try {
                             WebView(viewContext).apply {
                                 tag = expectedTag
@@ -349,9 +351,11 @@ fun TradingViewWebView(
                                         return true
                                     }
                                 }
-                                webViewClient = object : WebViewClient() {
+                                chartWebViewClient = object : WebViewClient() {
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                         super.onPageStarted(view, url, favicon)
+                                        attachWaiter?.let { view?.removeOnAttachStateChangeListener(it) }
+                                        attachWaiter = null
                                         generation++
                                         monitorRunning = false
                                         android.util.Log.i(
@@ -366,7 +370,27 @@ fun TradingViewWebView(
                                             TRADING_VIEW_LOG_TAG,
                                             "page finished path=$attemptPath host=${chartUrlHost(url)}; checking embed evidence"
                                         )
-                                        if (view == null || !view.isAttachedToWindow || monitorRunning || !loadState.isLoading || loadState.path != attemptPath) return
+                                        if (view == null || monitorRunning || !loadState.isLoading || loadState.path != attemptPath) return
+                                        if (!view.isAttachedToWindow) {
+                                            if (attachWaiter == null) {
+                                                val completedUrl = url
+                                                val waiter = object : View.OnAttachStateChangeListener {
+                                                    override fun onViewAttachedToWindow(attachedView: View) {
+                                                        attachedView.removeOnAttachStateChangeListener(this)
+                                                        attachWaiter = null
+                                                        if (attachedView is WebView && loadState.isLoading && loadState.path == attemptPath) {
+                                                            chartWebViewClient?.onPageFinished(attachedView, completedUrl)
+                                                        }
+                                                    }
+
+                                                    override fun onViewDetachedFromWindow(detachedView: View) = Unit
+                                                }
+                                                attachWaiter = waiter
+                                                view.addOnAttachStateChangeListener(waiter)
+                                                android.util.Log.d(TRADING_VIEW_LOG_TAG, "page finished while detached; waiting for WebView attachment path=$attemptPath")
+                                            }
+                                            return
+                                        }
                                         monitorRunning = true
                                         val thisGeneration = generation
                                         fun inspect(attempt: Int) {
@@ -483,6 +507,7 @@ fun TradingViewWebView(
                                         return true
                                     }
                                 }
+                                webViewClient = chartWebViewClient
 
                                 @Suppress("SetJavaScriptEnabled")
                                 settings.apply {

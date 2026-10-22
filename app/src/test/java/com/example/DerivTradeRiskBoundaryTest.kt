@@ -4,6 +4,9 @@ import com.destinedfx.core.broker.DerivContractLimits
 import com.destinedfx.core.broker.DerivInstrumentResolver
 import com.example.domain.model.CanonicalTradePlan
 import com.example.domain.model.SignalDirection
+import com.example.data.deriv.selectDerivOptionsAccount
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -17,6 +20,18 @@ import org.junit.Test
  * 6. Instrument resolution boundary logic
  */
 class DerivTradeRiskBoundaryTest {
+
+    @Test
+    fun accountModeSelectionUsesMatchingActiveDemoOrRealAccount() {
+        val accounts = JSONArray()
+            .put(JSONObject().put("account_id", "V-DEMO").put("account_type", "demo").put("status", "active"))
+            .put(JSONObject().put("account_id", "V-REAL").put("account_type", "real").put("status", "active"))
+            .put(JSONObject().put("account_id", "V-OLD").put("account_type", "demo").put("status", "inactive"))
+
+        assertEquals("V-DEMO", selectDerivOptionsAccount(accounts, "demo")?.optString("account_id"))
+        assertEquals("V-REAL", selectDerivOptionsAccount(accounts, "real")?.optString("account_id"))
+        assertEquals("V-DEMO", selectDerivOptionsAccount(accounts, "unsupported")?.optString("account_id"))
+    }
 
     @Test
     fun testDerivContractLimitsPerAssetClass() {
