@@ -36,7 +36,7 @@ class MyApplication : Application() {
     private var _db: AppDatabase? = null
     val db: AppDatabase get() = _db ?: throw IllegalStateException("AppDatabase not initialized")
 
-    val storageAvailable = MutableStateFlow(true)
+    val storageAvailable = MutableStateFlow(false)
     
     private var _secretsManager: SecretsManager? = null
     val secretsManager: SecretsManager get() = _secretsManager ?: throw IllegalStateException("SecretsManager not initialized")
@@ -123,6 +123,7 @@ class MyApplication : Application() {
             _db = dbInstance
             val secrets = SecretsManager(this@MyApplication)
             _secretsManager = secrets
+            storageAvailable.value = secrets.isSecureStorageAvailable
             _riskRepository = RiskRepositoryImpl(this@MyApplication)
             
             val derivMarketDataGateway = com.example.data.deriv.DerivMarketDataGateway()

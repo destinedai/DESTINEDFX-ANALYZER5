@@ -123,9 +123,9 @@ class SecretsManager(private val ctx: Context) {
         if (saved.isNotBlank() && saved != "default" && !saved.contains("your-project")) return saved
         return try {
             val bc = com.example.BuildConfig.SUPABASE_URL
-            if (bc.isNotBlank() && bc != "default" && !bc.contains("your-project")) bc else "https://wdqweqzpoiegtvomvono.supabase.co"
+            if (bc.isNotBlank() && bc != "default" && !bc.contains("your-project")) bc else "https://destinedfx.supabase.co"
         } catch (_: Exception) {
-            "https://wdqweqzpoiegtvomvono.supabase.co"
+            "https://destinedfx.supabase.co"
         }
     }
 
