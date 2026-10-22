@@ -792,8 +792,9 @@ open class DestinedFXViewModel(
             else com.destinedfx.core.marketdata.MarketQuote.lastOnly(t.symbol, cls, t.price, t.lastUpdateMillis, t.lastUpdateMillis, t.source)
         }
 
-        if (quote == null || now - quote.timestampMs > 10_000L) {
-            return@withContext PreExecutionCheck(false, 0.0, 0.0, "Market quote is stale or unavailable. WAITING FOR LIVE DATA.")
+        val quoteAgeMs = quote?.let { now - it.timestampMs }
+        if (quote == null || quoteAgeMs == null || quoteAgeMs < 0L || quoteAgeMs > 10_000L) {
+            return@withContext PreExecutionCheck(false, 0.0, 0.0, "Market quote is stale, future-dated, or unavailable. WAITING FOR LIVE DATA.")
         }
 
         val spread = quote.spread
