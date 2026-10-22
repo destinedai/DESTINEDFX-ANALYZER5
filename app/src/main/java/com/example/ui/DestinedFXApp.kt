@@ -665,19 +665,21 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         onToggleChartType = {},
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
+                    // Keep status inside the bounded chart column so it cannot overflow the
+                    // fixed-height panel and compress/clip the WebView's available space.
+                    Text(
+                        text = marketDataStatus,
+                        fontSize = 9.sp,
+                        color = when {
+                            marketDataStatus.startsWith("READY") -> ProfitGreen
+                            marketDataStatus.startsWith("UNAVAILABLE") -> LossRed
+                            else -> WarningAmber
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 2,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
                 }
-                Text(
-                    text = marketDataStatus,
-                    fontSize = 9.sp,
-                    color = when {
-                        marketDataStatus.startsWith("READY") -> ProfitGreen
-                        marketDataStatus.startsWith("UNAVAILABLE") -> LossRed
-                        else -> WarningAmber
-                    },
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 2,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
-                )
             }
         }
         item {
