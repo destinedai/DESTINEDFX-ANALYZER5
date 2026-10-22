@@ -1060,6 +1060,7 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
 @Composable
 fun SettingsTab(viewModel: DestinedFXViewModel) {
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
+    val secureStorageAvailable by viewModel.secureStorageAvailable.collectAsStateWithLifecycle()
     var supabaseUrlInput by remember { mutableStateOf(viewModel.getSupabaseUrl()) }
     var supabaseKeyInput by remember { mutableStateOf(viewModel.getSupabaseAnonKey()) }
     var derivTokenInput by remember { mutableStateOf(viewModel.getDerivApiToken()) }
@@ -1146,6 +1147,48 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         visualTransformation = PasswordVisualTransformation()
                     )
                     Text("Never put a Supabase service_role key in this application.", fontSize = 9.sp, color = TextMuted)
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(
+                                if (viewModel.isPreview) DarkSurfaceVariant
+                                else if (secureStorageAvailable) ProfitGreen.copy(alpha = 0.09f)
+                                else LossRed.copy(alpha = 0.10f)
+                            )
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (viewModel.isPreview || secureStorageAvailable) Icons.Default.Lock else Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = if (viewModel.isPreview) TextSecondary else if (secureStorageAvailable) ProfitGreen else LossRed,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(
+                                text = when {
+                                    viewModel.isPreview -> "SECURE STORAGE: NOT CHECKED IN PREVIEW"
+                                    secureStorageAvailable -> "SECURE STORAGE: AVAILABLE"
+                                    else -> "SECURE STORAGE: UNAVAILABLE"
+                                },
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                color = if (viewModel.isPreview) TextSecondary else if (secureStorageAvailable) ProfitGreen else LossRed
+                            )
+                            Text(
+                                text = when {
+                                    viewModel.isPreview -> "Preview does not verify device credential storage."
+                                    secureStorageAvailable -> "Credentials use encrypted Android preferences."
+                                    else -> "Credentials are memory-only during this run and may be lost when the app closes. Avoid reconnecting accounts until secure storage is restored."
+                                },
+                                fontSize = 9.sp,
+                                color = TextSecondary,
+                                lineHeight = 14.sp
+                            )
+                        }
+                    }
                     HorizontalDivider(color = CardBorder)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Default.Link, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
@@ -1198,7 +1241,11 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                                     viewModel.app.secretsManager.saveMetaApiToken(metaApiTokenInput.trim())
                                     viewModel.app.secretsManager.saveMT5AccountNumber(metaApiAccountIdInput.trim())
                                 }
-                                savedMessage = "Credentials saved."
+                                savedMessage = when {
+                                    viewModel.isPreview -> "Preview only — settings were not saved."
+                                    secureStorageAvailable -> "Settings saved using encrypted local storage."
+                                    else -> "WARNING: encrypted storage is unavailable. Values are memory-only and may be lost when the app closes."
+                                }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground),
                             modifier = Modifier.weight(1f).testTag("save_credentials_button")

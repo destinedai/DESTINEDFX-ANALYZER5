@@ -20,6 +20,7 @@ This repository is the **native Android application** for DestinedFX Analyzer. I
 4. Do not overwrite `settings.gradle.kts`, `build.gradle.kts`, the version catalog, manifest, or source files wholesale merely to make a code assistant recognize the project.
 5. Keep the app native; use Compose for UI and an Android `WebView` only where an embedded TradingView visualization is required.
 6. Never commit credentials, access tokens, service-role keys, private keys, production account passwords, or real user data. `.env.example` contains placeholders only.
+7. The Settings UI must accurately report encrypted-storage availability. If Android falls back to memory-only preferences, never claim credentials will persist or were securely saved.
 
 ## Product requirements
 

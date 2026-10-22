@@ -101,6 +101,9 @@ open class DestinedFXViewModel(
         ?: error("MyApplication required for production operations")
     val initStatus: StateFlow<com.example.MyApplication.InitState> =
         if (isPreview) MutableStateFlow(com.example.MyApplication.InitState.Ready) else app.initStatus
+    /** True only when EncryptedSharedPreferences initialized successfully on this device. */
+    val secureStorageAvailable: StateFlow<Boolean> =
+        if (isPreview) MutableStateFlow(false) else app.storageAvailable
     private val db by lazy { app.db }
     private val repository by lazy { TradeRepository(db.tradeDao()) }
     private val analysisRepository by lazy { com.example.data.AnalysisRepository(db.analysisDao()) }
