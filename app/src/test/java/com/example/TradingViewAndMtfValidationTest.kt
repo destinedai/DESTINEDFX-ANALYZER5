@@ -13,6 +13,9 @@ import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.security.SecretsManager
 import com.example.ui.chart.TradingViewMapper
+import com.example.ui.chart.TradingViewLoadPath
+import com.example.ui.chart.TradingViewLoadState
+import com.example.ui.chart.TradingViewLoadStatus
 import com.example.ui.DestinedFXScreen
 import com.example.ui.mapTradeSignalToUiModel
 import com.example.ui.scanChartBitmap
@@ -74,6 +77,15 @@ class TradingViewAndMtfValidationTest {
         assertEquals("OANDA:NAS100USD", TradingViewMapper.mapSymbol("NAS100"))
         assertEquals("TVC:USOIL", TradingViewMapper.mapSymbol("USOIL"))
         assertEquals("OANDA:EURCHF", TradingViewMapper.mapSymbol("EUR/CHF"))
+        assertEquals("OANDA:GBPCHF", TradingViewMapper.mapSymbol("GBP/CHF"))
+        assertEquals("OANDA:CADJPY", TradingViewMapper.mapSymbol("CAD/JPY"))
+        assertEquals("OANDA:CHFJPY", TradingViewMapper.mapSymbol("CHF/JPY"))
+        assertEquals("OANDA:USDTRY", TradingViewMapper.mapSymbol("USD/TRY"))
+        assertEquals("OANDA:USDZAR", TradingViewMapper.mapSymbol("USD/ZAR"))
+        assertEquals("OANDA:USDMXN", TradingViewMapper.mapSymbol("USD/MXN"))
+        assertEquals("OANDA:USDSGD", TradingViewMapper.mapSymbol("USD/SGD"))
+        assertEquals("OANDA:EURTRY", TradingViewMapper.mapSymbol("EUR/TRY"))
+        assertEquals("OANDA:GBPNZD", TradingViewMapper.mapSymbol("GBP/NZD"))
         assertEquals("OANDA:XPTUSD", TradingViewMapper.mapSymbol("XPT/USD"))
         assertEquals("OANDA:XPDUSD", TradingViewMapper.mapSymbol("XPD/USD"))
         assertEquals("OANDA:UK100GBP", TradingViewMapper.mapSymbol("FTSE100"))
@@ -90,6 +102,7 @@ class TradingViewAndMtfValidationTest {
         assertNull("CRASH500 must not be mapped to TradingView", TradingViewMapper.mapSymbol("CRASH500"))
         assertNull("BOOM1000 must not be mapped to TradingView", TradingViewMapper.mapSymbol("BOOM1000"))
         assertNull("Unknown garbage symbol must return null", TradingViewMapper.mapSymbol("UNKNOWN_COIN_XYZ_123"))
+        assertNull("Unconfigured forex pairs must not be guessed as OANDA feeds", TradingViewMapper.mapSymbol("FOO/BAR"))
     }
 
     @Test
@@ -100,6 +113,8 @@ class TradingViewAndMtfValidationTest {
         assertTrue(html.contains("\"symbol\":\"OANDA:EURUSD\""))
         assertTrue(html.contains("\"interval\":\"15\""))
         assertTrue(html.contains("id=\"destinedfx-tv-chart\""))
+        assertTrue(html.contains("class=\"tradingview-widget-container__widget\""))
+        assertTrue(html.contains("width:100%; height:100%; min-height:0"))
         assertTrue(html.contains("\"allow_symbol_change\":false"))
         assertTrue(html.contains("\"details\":true"))
         assertTrue(html.contains("\"calendar\":true"))
@@ -113,6 +128,54 @@ class TradingViewAndMtfValidationTest {
         assertTrue(html.contains("#0F0F0F"))
         assertNull(TradingViewMapper.buildWidgetHtml("R_100", "M15"))
         assertNull(TradingViewMapper.buildWidgetHtml("EUR/USD", "M2"))
+    }
+
+    @Test
+    fun testTradingViewLoadState_FallsBackOnceAndThenFailsTerminally() {
+        val firstFailure = TradingViewLoadState().fail("widget script blocked")
+        assertEquals(TradingViewLoadPath.HOSTED_CHART, firstFailure.path)
+        assertEquals(TradingViewLoadStatus.LOADING, firstFailure.status)
+        assertTrue(firstFailure.message!!.contains("trying hosted chart"))
+
+        val finalFailure = firstFailure.fail("hosted chart HTTP failure")
+        assertEquals(TradingViewLoadPath.HOSTED_CHART, finalFailure.path)
+        assertEquals(TradingViewLoadStatus.FAILED, finalFailure.status)
+        assertTrue(finalFailure.message!!.contains("widget script blocked"))
+        assertTrue(finalFailure.message!!.contains("hosted chart HTTP failure"))
+        assertSame("Terminal state must not start another fallback", finalFailure, finalFailure.fail("again"))
+    }
+
+    @Test
+    fun testTradingViewLoadState_ConnectedStateDoesNotFallBackOrReenterLoading() {
+        val connected = TradingViewLoadState().connected("visible frame")
+        assertEquals(TradingViewLoadStatus.CONNECTED, connected.status)
+        assertSame(connected, connected.fail("late resource error"))
+        assertSame(connected, connected.connected("duplicate callback"))
+    }
+
+    @Test
+    fun testTradingViewLoadState_RetryStartsCleanOfficialAttempt() {
+        val terminal = TradingViewLoadState().fail("primary").fail("fallback")
+        val retry = terminal.retry()
+        assertEquals(TradingViewLoadPath.OFFICIAL_WIDGET, retry.path)
+        assertEquals(TradingViewLoadStatus.LOADING, retry.status)
+        assertNull(retry.message)
+    }
+
+    @Test
+    fun testTradingViewMappings_CoverEveryAnalyzerSelectableInstrument() {
+        val selectableSymbols = listOf(
+            "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",
+            "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "EUR/CAD", "EUR/CHF",
+            "GBP/CHF", "GBP/AUD", "GBP/CAD", "CAD/JPY", "CHF/JPY", "USD/TRY", "USD/ZAR",
+            "USD/MXN", "USD/SGD", "EUR/TRY", "GBP/NZD", "XAU/USD", "XAG/USD", "XPT/USD",
+            "XPD/USD", "USOIL", "UKOIL", "NATGAS", "WHEAT", "CORN", "SOYBEANS", "COFFEE",
+            "SPX500", "NAS100", "DJ30", "FTSE100", "DAX40", "BTC/USD", "ETH/USD", "BNB/USD",
+            "SOL/USD", "XRP/USD"
+        )
+        selectableSymbols.forEach { symbol ->
+            assertNotNull("Analyzer selection $symbol must have an explicit TradingView mapping", TradingViewMapper.mapSymbol(symbol))
+        }
     }
 
     @Test
@@ -168,6 +231,22 @@ class TradingViewAndMtfValidationTest {
         assertNull(TradingViewMapper.mapInterval("M2"))
         assertNull(TradingViewMapper.mapInterval("H2"))
         assertNull(TradingViewMapper.mapInterval("INVALID"))
+    }
+
+    @Test
+    fun testAdvancedChartConfiguration_TracksCurrentSymbolAndEverySupportedTimeframe() {
+        val expectedIntervals = mapOf(
+            "M1" to "1", "M5" to "5", "M15" to "15", "M30" to "30",
+            "H1" to "60", "H4" to "240", "D1" to "D", "W1" to "W"
+        )
+        expectedIntervals.forEach { (timeframe, interval) ->
+            val html = TradingViewMapper.buildWidgetHtml("XAU/USD", timeframe)
+            assertNotNull("Chart HTML must be built for $timeframe", html)
+            assertTrue("Selected symbol must remain XAU/USD", html!!.contains("\"symbol\":\"OANDA:XAUUSD\""))
+            assertTrue("$timeframe must map to $interval", html.contains("\"interval\":\"$interval\""))
+        }
+        assertNull("Unsupported markets must not create a widget", TradingViewMapper.buildWidgetHtml("FOO/BAR", "M15"))
+        assertNull("Unsupported intervals must not create a widget", TradingViewMapper.buildWidgetHtml("EUR/USD", "H2"))
     }
 
     @Test
