@@ -98,7 +98,7 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                     color = TextSecondary
                 )
                 Text(
-                    text = "NO GEMINI • NO AI PROVIDER KEY • NO FABRICATED MARKET PRICES",
+                    text = "DETERMINISTIC ANALYSIS • NO PROVIDER KEY • NO FABRICATED MARKET PRICES",
                     fontSize = 9.sp,
                     lineHeight = 14.sp,
                     fontWeight = FontWeight.Black,

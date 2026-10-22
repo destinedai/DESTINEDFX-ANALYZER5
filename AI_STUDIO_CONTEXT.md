@@ -23,8 +23,8 @@ This repository is the **native Android application** for DestinedFX Analyzer. I
 
 ## Product requirements
 
-- Preserve deterministic, testable analysis; do not add Gemini or another generative-AI provider to the production analysis path.
-- Do not reintroduce TwelveData or Alpha Vantage.
+- Preserve deterministic, testable analysis; do not add generative-AI providers to the production analysis path.
+- Do not introduce additional third-party quote vendors or key-dependent market-data integrations without an explicit product requirement.
 - Never display demo/sample/mock quotes, candles, calendar events, bot connection states, order results, or trade signals as live or real.
 - Keep data source and freshness visible. Stale, missing, unsupported, or inconsistent data must produce a clear unavailable/WAIT state, not a fabricated signal.
 - The TradingView widget is a chart visualization. Do not scrape its cross-origin iframe or claim Kotlin can read its internal candles directly. Trading signals need an actual supported market-data feed with verifiable timestamps and instrument mapping; clearly disclose when the feed cannot be acquired.
