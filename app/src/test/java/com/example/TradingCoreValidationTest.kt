@@ -31,6 +31,19 @@ class TradingCoreValidationTest {
     // --- 1. RISK ENGINE TESTS ---
 
     @Test
+    fun testRiskPercentValidationRejectsRatherThanClamping() {
+        assertTrue(RiskEngine.isValidRiskPercent(1.0))
+        assertTrue(RiskEngine.isValidRiskPercent(0.35))
+        assertFalse(RiskEngine.isValidRiskPercent(1.0001))
+        assertFalse(RiskEngine.isValidRiskPercent(0.0))
+        assertFalse(RiskEngine.isValidRiskPercent(-0.1))
+        assertFalse(RiskEngine.isValidRiskPercent(Double.NaN))
+        assertFalse(RiskEngine.isValidRiskPercent(Double.POSITIVE_INFINITY))
+        assertFalse(RiskEngine.isValidRiskPercent(Double.NEGATIVE_INFINITY))
+    }
+
+
+    @Test
     fun testRiskBudgetEnforcement_TenDollars_OnePercent() {
         val account = AccountState(balance = 10.0, equity = 10.0, freeMargin = 10.0, leverage = 100, currency = "USD")
         val result = RiskEngine.positionSize(

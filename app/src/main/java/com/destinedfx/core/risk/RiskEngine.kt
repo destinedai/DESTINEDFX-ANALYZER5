@@ -28,6 +28,10 @@ object RiskEngine {
         else maxOf(MINIMUM_REWARD_TO_RISK, configuredMinimum)
 
     /** Risk is taken on min(balance, equity): a drawn-down account must not size off an inflated balance. */
+    /** Reject invalid risk values; callers must not silently coerce them into the allowed range. */
+    fun isValidRiskPercent(riskPercent: Double): Boolean =
+        riskPercent.isFinite() && riskPercent > 0.0 && riskPercent <= 1.0
+
     fun riskBase(a: AccountState) = minOf(a.balance, a.equity)
 
     fun positionSize(
@@ -35,7 +39,7 @@ object RiskEngine {
         commissionPerLotRoundTurn: Double = 0.0, estimatedSlippagePerLot: Double = 0.0
     ): SizingResult {
         if (!entry.isFinite() || !stopLoss.isFinite() || entry <= 0.0 || stopLoss <= 0.0) return SizingResult.Rejected("Invalid entry/SL price")
-        if (!(riskPercent > 0.0 && riskPercent <= 1.0)) return SizingResult.Rejected("Invalid risk percent: strictly capped at maximum 1.0% risk per trade")
+        if (!isValidRiskPercent(riskPercent)) return SizingResult.Rejected("Invalid risk percent: must be finite, greater than 0, and no higher than the 1.0% per-trade cap")
         if (!commissionPerLotRoundTurn.isFinite() || commissionPerLotRoundTurn < 0.0 ||
             !estimatedSlippagePerLot.isFinite() || estimatedSlippagePerLot < 0.0) {
             return SizingResult.Rejected("Commission and estimated slippage must be finite, non-negative amounts")

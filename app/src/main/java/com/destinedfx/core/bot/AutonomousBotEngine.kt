@@ -126,8 +126,20 @@ class AutonomousBotEngine(
             return@withContext Result.failure(Exception(err))
         }
 
-        // Gate 4: Risk limit strictly <= 1%
-        val clampedRisk = riskPercent.coerceIn(0.1, 1.0)
+        // Gate 4: Invalid risk inputs are rejected; do not silently clamp an unsafe request.
+        if (!com.destinedfx.core.risk.RiskEngine.isValidRiskPercent(riskPercent)) {
+            // A failed risk reconfiguration must not leave a previous bot job trading unnoticed.
+            botJob?.cancelAndJoin()
+            botJob = null
+            val err = "RISK_LIMIT: risk percent must be finite, greater than 0 and no higher than 1.0%; rejected value: $riskPercent"
+            _status.value = _status.value.copy(
+                state = BotLifecycleState.ERROR,
+                isRunning = false,
+                lastError = err,
+                lastAction = "Activation rejected: invalid risk setting"
+            )
+            return@withContext Result.failure(IllegalArgumentException(err))
+        }
 
         // Cancel previous job if running
         botJob?.cancelAndJoin()
@@ -140,7 +152,7 @@ class AutonomousBotEngine(
             selectedSymbol = symbol,
             selectedStrategy = strategyId,
             timeframe = timeframe,
-            riskPercent = clampedRisk,
+            riskPercent = riskPercent,
             lastAction = "Connecting to ${broker.displayName}...",
             lastError = null,
             isRunning = true
@@ -190,7 +202,7 @@ class AutonomousBotEngine(
 
         // Launch autonomous evaluation loop
         botJob = engineScope.launch {
-            runAutonomousLoop(this, symbol, strategyId, timeframe, clampedRisk)
+            runAutonomousLoop(this, symbol, strategyId, timeframe, riskPercent)
         }
 
         Result.success(true)

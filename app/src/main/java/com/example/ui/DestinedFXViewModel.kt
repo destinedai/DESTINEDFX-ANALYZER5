@@ -277,8 +277,11 @@ open class DestinedFXViewModel(
         selectedMtfTimeframes.value = without
     }
 
-    fun setRiskPercent(value: Double) {
-        riskPercent.value = value.coerceIn(0.1, 1.0)
+    /** Returns false for invalid risk rather than silently altering the requested value. */
+    fun setRiskPercent(value: Double): Boolean {
+        if (!com.destinedfx.core.risk.RiskEngine.isValidRiskPercent(value)) return false
+        riskPercent.value = value
+        return true
     }
 
     // Keep legacy symbol history plus an exact symbol/timeframe series for chart correctness.
