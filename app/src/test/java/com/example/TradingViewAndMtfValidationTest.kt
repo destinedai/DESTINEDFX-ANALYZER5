@@ -160,11 +160,13 @@ class TradingViewAndMtfValidationTest {
     }
 
     @Test
-    fun testTradingViewLoadState_ConnectedStateDoesNotFallBackOrReenterLoading() {
-        val connected = TradingViewLoadState().connected("visible frame")
-        assertEquals(TradingViewLoadStatus.CONNECTED, connected.status)
-        assertSame(connected, connected.fail("late resource error"))
-        assertSame(connected, connected.connected("duplicate callback"))
+    fun testTradingViewLoadState_EmbedDisplayIsExplicitlyUnverifiedAndDoesNotFallback() {
+        val displayed = TradingViewLoadState().displayedUnverified("iframe load event only")
+        assertEquals(TradingViewLoadStatus.DISPLAYED_UNVERIFIED, displayed.status)
+        assertFalse(displayed.isLoading)
+        assertFalse(displayed.isTerminal)
+        assertSame(displayed, displayed.fail("late resource error"))
+        assertSame(displayed, displayed.displayedUnverified("duplicate callback"))
     }
 
     @Test

@@ -381,14 +381,14 @@ fun TradingViewWebView(
                                                   var d=document.documentElement;
                                                   var e=d.getAttribute('data-tv-widget-error');
                                                   if(e)return 'ERROR:'+e;
-                                                  var frames=[].slice.call(document.querySelectorAll('#destinedfx-tv-chart iframe, iframe'));
+                                                  var frames=[].slice.call(document.querySelectorAll('#destinedfx-tv-chart iframe'));
                                                   for(var i=0;i<frames.length;i++){
                                                     var f=frames[i], src=String(f.src||'');
                                                     if(!/tradingview\.com/i.test(src))continue;
                                                     var r=f.getBoundingClientRect(), s=window.getComputedStyle(f);
                                                     var loadedAt=parseInt(f.getAttribute('data-destinedfx-tv-loaded-at')||'0',10);
                                                     var visible=r.width>100&&r.height>100&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity||1)>0;
-                                                    if(visible&&loadedAt>0&&Date.now()-loadedAt>=1500)return 'CONNECTED';
+                                                    if(visible&&loadedAt>0)return 'UNVERIFIED';
                                                   }
                                                   return 'WAIT';
                                                 })()
@@ -398,11 +398,7 @@ fun TradingViewWebView(
                                                 (function(){
                                                   var b=document.body, t=((b&&b.innerText)||'').toLowerCase();
                                                   if(t.includes('invalid symbol')||t.includes('symbol not found'))return 'ERROR:TradingView could not find this symbol';
-                                                  var nodes=[].slice.call(document.querySelectorAll('canvas,svg,iframe'));
-                                                  for(var i=0;i<nodes.length;i++){
-                                                    var n=nodes[i],r=n.getBoundingClientRect(),s=window.getComputedStyle(n);
-                                                    if(r.width>100&&r.height>100&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity||1)>0)return 'CONNECTED';
-                                                  }
+                                                  if(document.readyState==='complete'&&(location.hostname==='tradingview.com'||location.hostname.endsWith('.tradingview.com'))&&location.pathname.indexOf('/widgetembed')===0)return 'UNVERIFIED';
                                                   return 'WAIT';
                                                 })()
                                                 """.trimIndent()
@@ -411,12 +407,9 @@ fun TradingViewWebView(
                                                 if (!view.isAttachedToWindow || thisGeneration != generation || !loadState.isLoading || loadState.path != attemptPath) return@evaluateJavascript
                                                 val signal = result?.removeSurrounding("\"") ?: "WAIT"
                                                 when {
-                                                    signal == "CONNECTED" -> {
-                                                        android.util.Log.i(
-                                                            TRADING_VIEW_LOG_TAG,
-                                                            "visible embed connected path=$pathName; cross-origin chart content is not inspected"
-                                                        )
-                                                        loadState = loadState.connected("TradingView embed connected; chart data/rendering remains controlled by TradingView.")
+                                                    signal == "UNVERIFIED" -> {
+                                                        android.util.Log.i(TRADING_VIEW_LOG_TAG, "TradingView embed loaded path=$pathName; chart rendering is not verifiable cross-origin")
+                                                        loadState = loadState.displayedUnverified("TradingView embed is displayed; candle rendering is controlled by TradingView and cannot be verified by the app.")
                                                     }
                                                     signal.startsWith("ERROR:") -> {
                                                         android.util.Log.e(TRADING_VIEW_LOG_TAG, "embed reported ${redactChartDiagnostic(signal.removePrefix("ERROR:"))}")
@@ -560,6 +553,14 @@ fun TradingViewWebView(
                         )
                     }
                 }
+            }
+            if (loadState.status == TradingViewLoadStatus.DISPLAYED_UNVERIFIED) {
+                Text(
+                    "TRADINGVIEW EMBED • RENDERING UNVERIFIED",
+                    modifier = Modifier.align(Alignment.TopCenter).padding(6.dp)
+                        .background(Color(0xD90B0E14), RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 4.dp),
+                    color = OrangeAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace
+                )
             }
         }
     }

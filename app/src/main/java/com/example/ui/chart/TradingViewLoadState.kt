@@ -8,7 +8,7 @@ internal enum class TradingViewLoadPath {
 
 internal enum class TradingViewLoadStatus {
     LOADING,
-    CONNECTED,
+    DISPLAYED_UNVERIFIED,
     FAILED
 }
 
@@ -21,8 +21,9 @@ internal data class TradingViewLoadState(
     val isLoading: Boolean get() = status == TradingViewLoadStatus.LOADING
     val isTerminal: Boolean get() = status == TradingViewLoadStatus.FAILED
 
-    fun connected(evidence: String): TradingViewLoadState =
-        if (isLoading) copy(status = TradingViewLoadStatus.CONNECTED, message = evidence) else this
+    /** Stop obscuring the embed, while explicitly not claiming that cross-origin candles rendered. */
+    fun displayedUnverified(evidence: String): TradingViewLoadState =
+        if (isLoading) copy(status = TradingViewLoadStatus.DISPLAYED_UNVERIFIED, message = evidence) else this
 
     fun fail(reason: String): TradingViewLoadState {
         if (!isLoading) return this
