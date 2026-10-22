@@ -9,6 +9,7 @@ import com.destinedfx.core.marketdata.*
 import com.example.data.market.MarketDataRepositoryImpl
 import com.example.data.market.buildDerivCanonicalSymbolMap
 import com.example.data.market.shouldReuseCandleCache
+import com.example.data.market.isTimestampFresh
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.security.SecretsManager
@@ -273,6 +274,18 @@ class TradingViewAndMtfValidationTest {
         // Crypto is already served by the public Binance stream, so Deriv aliases must not
         // override the canonical crypto tickers.
         assertFalse(mapping.keys.any { it.startsWith("cry") })
+    }
+
+    @Test
+    fun isTimestampFresh_RejectsFutureStaleAndInvalidTimestamps() {
+        assertTrue(isTimestampFresh(timestampMs = 9_950L, nowMs = 10_000L, maxAgeMillis = 100L))
+        assertFalse("At the max-age boundary the tick is stale",
+            isTimestampFresh(timestampMs = 9_900L, nowMs = 10_000L, maxAgeMillis = 100L))
+        assertFalse("A future-dated quote must not count as fresh",
+            isTimestampFresh(timestampMs = 10_001L, nowMs = 10_000L, maxAgeMillis = 100L))
+        assertFalse(isTimestampFresh(timestampMs = 1L, nowMs = 10_000L, maxAgeMillis = 100L))
+        assertFalse(isTimestampFresh(timestampMs = 0L, nowMs = 10_000L, maxAgeMillis = 100L))
+        assertFalse(isTimestampFresh(timestampMs = 9_950L, nowMs = 10_000L, maxAgeMillis = 0L))
     }
 
     // --- 3. MULTI-TIMEFRAME ANALYSIS TESTS ---

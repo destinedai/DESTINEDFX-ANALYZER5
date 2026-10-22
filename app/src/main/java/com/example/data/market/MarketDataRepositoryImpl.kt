@@ -50,6 +50,13 @@ internal fun shouldReuseCandleCache(cachedCount: Int, requestedCount: Int, minim
     return cachedCount >= minOf(requestedCount, minimumUsefulCandles)
 }
 
+/** Reject stale, zero, or future-dated feed timestamps instead of counting a negative age as fresh. */
+internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean {
+    if (timestampMs <= 0L || nowMs <= 0L || maxAgeMillis <= 0L) return false
+    val ageMs = nowMs - timestampMs
+    return ageMs >= 0L && ageMs < maxAgeMillis
+}
+
 class MarketDataRepositoryImpl(
     private val secrets: SecretsManager,
     private val derivMarketDataGateway: com.example.data.deriv.DerivMarketDataGateway? = null,
@@ -643,7 +650,7 @@ class MarketDataRepositoryImpl(
 
     override fun isFresh(symbol: String, maxAgeMillis: Long): Boolean {
         val ticker = _tickers.value[symbol] ?: return false
-        return (clock() - ticker.lastUpdateMillis) < maxAgeMillis
+        return isTimestampFresh(ticker.lastUpdateMillis, clock(), maxAgeMillis)
     }
 
     fun getDataSource(symbol: String, timeframe: String): String {
