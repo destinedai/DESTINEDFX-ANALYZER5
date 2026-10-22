@@ -1166,7 +1166,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                     OutlinedTextField(
                         value = derivAppIdInput,
                         onValueChange = { derivAppIdInput = it },
-                        label = { Text("Deriv App ID (default 1089)") },
+                        label = { Text("Registered Deriv API App ID") },
                         modifier = Modifier.fillMaxWidth().testTag("deriv_app_id_input"),
                         singleLine = true
                     )
@@ -1194,7 +1194,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                                     viewModel.app.secretsManager.saveSupabaseUrl(supabaseUrlInput.trim())
                                     viewModel.app.secretsManager.saveSupabaseAnonKey(supabaseKeyInput.trim())
                                     viewModel.app.secretsManager.saveDerivApiToken(derivTokenInput.trim())
-                                    viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim().ifBlank { "1089" })
+                                    viewModel.app.secretsManager.saveDerivAppId(derivAppIdInput.trim())
                                     viewModel.app.secretsManager.saveMetaApiToken(metaApiTokenInput.trim())
                                     viewModel.app.secretsManager.saveMT5AccountNumber(metaApiAccountIdInput.trim())
                                 }

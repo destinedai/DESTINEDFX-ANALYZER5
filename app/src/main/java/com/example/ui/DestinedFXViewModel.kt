@@ -327,7 +327,7 @@ open class DestinedFXViewModel(
     fun isDataFresh(symbol: String): Boolean =
         if (isPreview) true else app.marketDataRepository.isFresh(symbol)
 
-    val brokerConnected = MutableStateFlow(if (isPreview) false else app.mt5GatewayRepository.isConnected())
+    val brokerConnected = MutableStateFlow(if (isPreview) false else app.brokerManager.activeBroker.value.isConnected())
     val brokerQuote = MutableStateFlow<com.destinedfx.core.marketdata.MarketQuote?>(null)
 
     val crashLogManager by lazy { com.destinedfx.core.security.CrashLogManager(application.filesDir) }
@@ -1084,12 +1084,14 @@ open class DestinedFXViewModel(
             while (true) {
                 try {
                     val activeBroker = app.brokerManager.activeBroker.value
-                    val isConn = (activeBroker.connectionStatus.value == com.example.data.broker.BrokerConnectionStatus.CONNECTED) || app.mt5GatewayRepository.isConnected()
+                    // Connection and quote state must belong to the selected gateway only.
+                    // Falling back to MT5 while Deriv is selected can mislabel another account's
+                    // connection or use a quote from the wrong broker for an execution decision.
+                    val isConn = activeBroker.isConnected()
                     brokerConnected.value = isConn
                     if (isConn) {
                         val sym = selectedTicker.value
-                        val bq = activeBroker.getBrokerQuote(sym).getOrNull() ?: app.mt5GatewayRepository.getBrokerQuote(sym).getOrNull()
-                        brokerQuote.value = bq
+                        brokerQuote.value = activeBroker.getBrokerQuote(sym).getOrNull()
                         val bal = activeBroker.accountMetrics.value?.balance ?: 0.0
                         accountCapital.value = if (bal > 0.0) bal else configuredEquity.value
                     } else {

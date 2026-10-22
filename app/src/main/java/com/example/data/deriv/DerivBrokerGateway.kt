@@ -91,10 +91,12 @@ class DerivBrokerGateway(
             return@withContext Result.failure(Exception("Enter a current Deriv Personal Access Token with Trade scope."))
         }
 
-        val appId = secrets.getDerivAppId().trim().ifBlank { "1089" }
-        if (!appId.all { it.isDigit() }) {
+        val appId = secrets.getDerivAppId().trim()
+        if (appId.isBlank() || !appId.all { it.isDigit() } || appId == "1089") {
             _connectionState.value = DerivConnectionState.ERROR
-            return@withContext Result.failure(Exception("Invalid Deriv App ID. Enter the numeric App ID registered for your application."))
+            return@withContext Result.failure(
+                Exception("Enter a numeric Deriv API App ID registered to your application. The legacy App ID 1089 is not accepted by this connector.")
+            )
         }
 
         lastConnectionError = null
