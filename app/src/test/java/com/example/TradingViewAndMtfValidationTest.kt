@@ -16,6 +16,7 @@ import com.example.ui.chart.TradingViewMapper
 import com.example.ui.chart.TradingViewLoadPath
 import com.example.ui.chart.TradingViewLoadState
 import com.example.ui.chart.TradingViewLoadStatus
+import com.example.ui.chart.isTradingViewChartDocumentUrl
 import com.example.ui.DestinedFXScreen
 import com.example.ui.mapTradeSignalToUiModel
 import com.example.ui.scanChartBitmap
@@ -36,6 +37,18 @@ class TradingViewAndMtfValidationTest {
     private fun getSecretsManager(): SecretsManager {
         val context = ApplicationProvider.getApplicationContext<Context>()
         return SecretsManager(context)
+    }
+
+    @Test
+    fun testTradingViewChartDocumentFailureDetection_IsScopedToEmbedHostAndPath() {
+        assertTrue(isTradingViewChartDocumentUrl("https://www.tradingview.com/widgetembed/?symbol=OANDA%3AEURUSD"))
+        assertTrue(isTradingViewChartDocumentUrl("https://s.tradingview.com/widgetembed/?symbol=OANDA%3AXAUUSD"))
+        assertTrue(isTradingViewChartDocumentUrl("https://tradingview.com/widgetembed/"))
+        assertFalse(isTradingViewChartDocumentUrl("https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"))
+        assertFalse(isTradingViewChartDocumentUrl("https://www.tradingview.com/chart/"))
+        assertFalse(isTradingViewChartDocumentUrl("https://nottradingview.com/widgetembed/"))
+        assertFalse(isTradingViewChartDocumentUrl("https://tradingview.com.evil.example/widgetembed/"))
+        assertFalse(isTradingViewChartDocumentUrl(null))
     }
 
     // --- 1. TRADINGVIEW MAPPING TESTS ---
