@@ -27,7 +27,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -58,14 +57,8 @@ class MainActivity : FragmentActivity() {
         setContent {
             val app = (LocalContext.current.applicationContext as MyApplication)
             val initStatus by app.initStatus.collectAsStateWithLifecycle()
-            var timedOutToReady by remember { mutableStateOf(false) }
-
-            LaunchedEffect(Unit) {
-                delay(1200L)
-                timedOutToReady = true
-            }
-
-            val isReady = initStatus is MyApplication.InitState.Ready || (timedOutToReady && initStatus !is MyApplication.InitState.Failed)
+            // Never create dependency-backed ViewModels until initialization explicitly succeeds.
+            val isReady = initStatus is MyApplication.InitState.Ready
 
             if (isReady) {
                 val mainVm: DestinedFXViewModel = viewModel(factory = AppContainer.Factory)
