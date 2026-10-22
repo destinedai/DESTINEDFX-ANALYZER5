@@ -185,15 +185,15 @@ class MyApplication : Application() {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     derivMarketDataGateway.connect()
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("MyApplication", "Deriv gateway connect failed: ${e.message}")
+                    android.util.Log.e("MyApplication", "Deriv gateway connect failed: ${e.message}", e)
                 }
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            android.util.Log.e("MyApplication", "Initialization warning: ${e.message}", e)
-            initStatus.value = InitState.Ready
+            android.util.Log.e("MyApplication", "Dependency initialization failed", e)
+            initStatus.value = InitState.Failed(e)
         }
     }
 
