@@ -58,6 +58,21 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
+ * Returns true only for the cross-origin TradingView chart document itself.
+ * Resource failures for this iframe are actionable for chart fallback; failures for unrelated
+ * images, fonts, or external resources must not change the chart loading state.
+ */
+internal fun isTradingViewChartDocumentUrl(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val parsed = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+    val host = parsed.host?.lowercase(Locale.ROOT) ?: return false
+    val path = parsed.path.orEmpty().lowercase(Locale.ROOT)
+    val trustedTradingViewHost = host == "tradingview.com" || host.endsWith(".tradingview.com")
+    val chartDocumentPath = path == "/widgetembed" || path.startsWith("/widgetembed/")
+    return trustedTradingViewHost && chartDocumentPath
+}
+
+/**
  * Unified Trading Chart Container supporting:
  * 1. Live TradingView Chart (with non-blank direct widget embed and WebView lifecycle protection)
  * 2. High-FPS Algorithmic Canvas Chart mapping structures as the market flows (BOS, CHoCH, OB, FVG, TP/SL targets)
@@ -434,8 +449,13 @@ fun TradingViewWebView(
                                             TRADING_VIEW_LOG_TAG,
                                             "resource error path=$attemptPath mainFrame=${request?.isForMainFrame} host=$host code=${error?.errorCode} description=${redactChartDiagnostic(description.orEmpty()).take(240)}"
                                         )
-                                        if (request?.isForMainFrame == true && view?.isAttachedToWindow == true && loadState.isLoading && loadState.path == attemptPath) {
-                                            loadState = loadState.fail(description?.takeIf { it.isNotBlank() } ?: "TradingView's main page could not be reached.")
+                                        val isChartDocument = isTradingViewChartDocumentUrl(request?.url?.toString())
+                                        if ((request?.isForMainFrame == true || isChartDocument) &&
+                                            view?.isAttachedToWindow == true && loadState.isLoading && loadState.path == attemptPath) {
+                                            val reason = description?.takeIf { it.isNotBlank() }
+                                                ?: if (isChartDocument) "TradingView's embedded chart document could not be reached."
+                                                else "TradingView's main page could not be reached."
+                                            loadState = loadState.fail(reason)
                                         }
                                     }
 
@@ -449,8 +469,12 @@ fun TradingViewWebView(
                                             TRADING_VIEW_LOG_TAG,
                                             "HTTP response path=$attemptPath mainFrame=${request?.isForMainFrame} host=${chartUrlHost(request?.url?.toString())} status=$code"
                                         )
-                                        if (request?.isForMainFrame == true && code >= 400 && view?.isAttachedToWindow == true && loadState.isLoading && loadState.path == attemptPath) {
-                                            loadState = loadState.fail("TradingView returned HTTP $code for its chart page.")
+                                        val isChartDocument = isTradingViewChartDocumentUrl(request?.url?.toString())
+                                        if ((request?.isForMainFrame == true || isChartDocument) && code >= 400 &&
+                                            view?.isAttachedToWindow == true && loadState.isLoading && loadState.path == attemptPath) {
+                                            val page = if (isChartDocument && request?.isForMainFrame != true)
+                                                "embedded chart document" else "chart page"
+                                            loadState = loadState.fail("TradingView returned HTTP $code for its $page.")
                                         }
                                     }
 
