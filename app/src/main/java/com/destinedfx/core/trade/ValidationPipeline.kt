@@ -73,7 +73,10 @@ object TradeValidationPipeline {
             "${rep.state} ${rep.confluenceScore}/100", "State ${rep.state}, score ${rep.confluenceScore} (need >= ${x.cfg.minConfluence})")
         check("SL", plan != null && plan.stopLoss > 0 && (spec == null || kotlin.math.abs(plan.entry - plan.stopLoss) >= spec.minStopDistance), "SL structural, %.1f ATR".format(plan?.slAtr ?: 0.0), "No valid stop loss")
         check("TP", plan != null && plan.targets.isNotEmpty(), "Targets: ${plan?.targets?.joinToString { it.label }}", "No structural target")
-        check("RR", plan != null && plan.primary.rr >= x.cfg.minRR, "RR 1:%.2f".format(plan?.primary?.rr ?: 0.0), "RR below ${x.cfg.minRR}")
+        val requiredRR = RiskEngine.requiredMinimumRewardToRisk(x.cfg.minRR)
+        check("RR", plan != null && requiredRR != null && plan.primary.rr.isFinite() && plan.primary.rr >= requiredRR,
+            "RR 1:%.2f".format(plan?.primary?.rr ?: 0.0),
+            if (requiredRR == null) "Configured minimum reward-to-risk is invalid" else "RR below required minimum $requiredRR (2.0R safety floor)")
 
         var sized: SizingResult.Sized? = null
         if (plan != null && spec != null && x.account != null) when (val s = RiskEngine.positionSize(x.account, x.cfg.riskPercent, plan.entry, plan.stopLoss, spec, x.cfg.commissionPerLot)) {

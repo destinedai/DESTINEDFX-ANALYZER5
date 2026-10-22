@@ -20,6 +20,13 @@ sealed interface SizingResult {
 data class AccountState(val balance: Double, val equity: Double, val freeMargin: Double?, val leverage: Int?, val currency: String)
 
 object RiskEngine {
+    const val MINIMUM_REWARD_TO_RISK = 2.0
+
+    /** A caller may tighten the RR threshold, but may never relax the product safety floor. */
+    fun requiredMinimumRewardToRisk(configuredMinimum: Double): Double? =
+        if (!configuredMinimum.isFinite() || configuredMinimum <= 0.0) null
+        else maxOf(MINIMUM_REWARD_TO_RISK, configuredMinimum)
+
     /** Risk is taken on min(balance, equity): a drawn-down account must not size off an inflated balance. */
     fun riskBase(a: AccountState) = minOf(a.balance, a.equity)
 
@@ -29,6 +36,10 @@ object RiskEngine {
     ): SizingResult {
         if (!entry.isFinite() || !stopLoss.isFinite() || entry <= 0.0 || stopLoss <= 0.0) return SizingResult.Rejected("Invalid entry/SL price")
         if (!(riskPercent > 0.0 && riskPercent <= 1.0)) return SizingResult.Rejected("Invalid risk percent: strictly capped at maximum 1.0% risk per trade")
+        if (!commissionPerLotRoundTurn.isFinite() || commissionPerLotRoundTurn < 0.0 ||
+            !estimatedSlippagePerLot.isFinite() || estimatedSlippagePerLot < 0.0) {
+            return SizingResult.Rejected("Commission and estimated slippage must be finite, non-negative amounts")
+        }
         val base = riskBase(account)
         if (!(base > 0.0 && base.isFinite())) return SizingResult.Rejected("Account balance/equity unavailable or non-positive")
         spec.validationErrors().takeIf { it.isNotEmpty() }?.let { return SizingResult.Rejected("Broker spec invalid: ${it.joinToString()}") }
@@ -76,8 +87,9 @@ object RiskEngine {
     }
 
     fun rewardToRisk(entry: Double, sl: Double, tp: Double, isLong: Boolean): Double? {
+        if (!entry.isFinite() || !sl.isFinite() || !tp.isFinite()) return null
         val risk = if (isLong) entry - sl else sl - entry
         val reward = if (isLong) tp - entry else entry - tp
-        return if (risk > 0 && reward > 0) reward / risk else null
+        return if (risk > 0 && reward > 0) (reward / risk).takeIf { it.isFinite() } else null
     }
 }

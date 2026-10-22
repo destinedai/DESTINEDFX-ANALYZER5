@@ -32,12 +32,14 @@ object PostBrokerChecks {
         
         // 2. Reward-to-Risk Check
         val rr = RiskEngine.rewardToRisk(plan.entry, plan.stopLoss, plan.primary.price, plan.isLong) ?: 0.0
-        if (rr < minRR) {
+        val requiredRR = RiskEngine.requiredMinimumRewardToRisk(minRR)
+        if (requiredRR == null || rr < requiredRR) {
             results.add(
                 CheckResult(
                     name = "BROKER RR",
                     status = CheckStatus.FAIL,
-                    detail = "Reward-to-risk ($rr) less than minimum required ($minRR)"
+                    detail = if (requiredRR == null) "Configured minimum reward-to-risk is invalid" else
+                        "Reward-to-risk ($rr) less than minimum required ($requiredRR; 2.0R safety floor)"
                 )
             )
         }

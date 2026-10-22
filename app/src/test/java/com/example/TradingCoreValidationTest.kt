@@ -124,6 +124,42 @@ class TradingCoreValidationTest {
     }
 
     @Test
+    fun testRiskEngineRejectsNegativeOrNonFiniteTradingCosts() {
+        val account = AccountState(balance = 1000.0, equity = 1000.0, freeMargin = 1000.0, leverage = 100, currency = "USD")
+        val negativeCommission = RiskEngine.positionSize(account, 1.0, 1.0850, 1.0840, eurUsdSpec, commissionPerLotRoundTurn = -1.0)
+        val negativeSlippage = RiskEngine.positionSize(account, 1.0, 1.0850, 1.0840, eurUsdSpec, estimatedSlippagePerLot = -0.1)
+        val infiniteCommission = RiskEngine.positionSize(account, 1.0, 1.0850, 1.0840, eurUsdSpec, commissionPerLotRoundTurn = Double.POSITIVE_INFINITY)
+        assertTrue(negativeCommission is SizingResult.Rejected)
+        assertTrue(negativeSlippage is SizingResult.Rejected)
+        assertTrue(infiniteCommission is SizingResult.Rejected)
+    }
+
+    @Test
+    fun testRewardToRiskFloorCannotBeConfiguredBelowTwoR() {
+        assertEquals(2.0, RiskEngine.requiredMinimumRewardToRisk(1.0)!!, 0.0)
+        assertEquals(3.0, RiskEngine.requiredMinimumRewardToRisk(3.0)!!, 0.0)
+        assertNull(RiskEngine.requiredMinimumRewardToRisk(Double.NaN))
+        assertNull(RiskEngine.requiredMinimumRewardToRisk(0.0))
+        assertNull(RiskEngine.rewardToRisk(1.0, 0.0, Double.POSITIVE_INFINITY, isLong = true))
+    }
+
+    @Test
+    fun testPostBrokerCheckEnforcesTwoRDespiteLowerConfiguredThreshold() {
+        val target = Target("TP1", 1.0865, 1.5, "test")
+        val plan = TradePlan(true, 1.0850, 1.0840, 1.0, listOf(target), target, "test")
+        val failures = PostBrokerChecks.evaluate(
+            plan = plan,
+            spec = eurUsdSpec,
+            minRR = 1.0,
+            quote = null,
+            brokerQuote = null,
+            atr = null,
+            nowMs = System.currentTimeMillis()
+        )
+        assertTrue(failures.any { it.name == "BROKER RR" && it.status == CheckStatus.FAIL })
+    }
+
+    @Test
     fun testRiskEngineFloorsLotsDownward() {
         val account = AccountState(balance = 1000.0, equity = 1000.0, freeMargin = 1000.0, leverage = 100, currency = "USD")
         // Target budget = $10.00
