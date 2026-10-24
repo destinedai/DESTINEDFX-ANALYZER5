@@ -795,7 +795,7 @@ fun AlgorithmicCanvasChart(
 
             for (i in 1 until gridCount) {
                 val gridY = h * (i.toFloat() / gridCount)
-                val gridPrice = chartScale.fractionToPrice((h - gridY) / h) ?: continue
+                val gridPrice = chartScale.fractionToPrice(((h - gridY) / h).toDouble()) ?: continue
                 drawLine(
                     color = ChartGrid.copy(alpha = 0.5f),
                     start = Offset(0f, gridY),
