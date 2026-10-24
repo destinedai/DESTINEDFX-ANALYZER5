@@ -256,20 +256,20 @@ fun TradingViewWebView(
     val widgetUrl = TradingViewMapper.buildWidgetUrl(symbol, timeframe)
     val widgetHtml = TradingViewMapper.buildWidgetHtml(symbol, timeframe)
     if (mappedSymbol == null || mappedInterval == null || widgetUrl == null || widgetHtml == null) {
-        if (candles.isNotEmpty()) {
+        if (fallbackCandles.isNotEmpty()) {
             Column(modifier = modifier.fillMaxSize().background(Color(0xFF171B27))) {
                 Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text("NATIVE CANDLE FALLBACK • NOT TRADINGVIEW", color = WarningAmber,
                         fontSize = 9.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                    Text("$symbol • $timeframe • ${candleSource.ifBlank { "validated OHLC history" }}",
+                    Text("$symbol • $timeframe • ${fallbackSource.ifBlank { "validated OHLC history" }}",
                         color = TextSecondary, fontSize = 9.sp, maxLines = 2)
                 }
                 AlgorithmicCanvasChart(
-                    activeSymbol = activeSymbol,
-                    currentSpotPrice = currentSpotPrice,
-                    activeStrategy = activeStrategy,
-                    drawConfluences = dynamicAnalysis,
-                    candles = candles,
+                    activeSymbol = symbol,
+                    currentSpotPrice = fallbackSpot,
+                    activeStrategy = fallbackStrategy,
+                    drawConfluences = fallbackAnalysis,
+                    candles = fallbackCandles,
                     modifier = Modifier.fillMaxWidth().weight(1f)
                 )
             }
