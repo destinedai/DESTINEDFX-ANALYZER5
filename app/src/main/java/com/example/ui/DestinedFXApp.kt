@@ -658,8 +658,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         currentSpotPrice = ticker?.price ?: 0.0,
                         activeStrategy = selectedStrategyId,
                         dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
-                        candles = viewModel.candlestickHistoryByTimeframe[activeSymbol + "-" + selectedTimeframe]
-                            ?: viewModel.candlestickHistory[activeSymbol] ?: emptyList(),
+                        candles = viewModel.candlesForChart(activeSymbol, selectedTimeframe),
+                        candleSource = viewModel.marketDataSource(activeSymbol, selectedTimeframe),
                         isRealTradingViewEnabled = true,
                         onToggleChartType = {},
                         modifier = Modifier.fillMaxWidth().weight(1f)
@@ -697,6 +697,9 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                     value = analysis?.confidencePct?.takeIf { it > 0 }?.let { "$it%" } ?: "—",
                     modifier = Modifier.weight(1f), color = ElectricCyan)
             }
+        }
+        item {
+            QuoteFreshnessIndicator(ticker, connecting = marketDataStatus.startsWith("WAIT"))
         }
         item {
             val result = analysis
@@ -1804,6 +1807,7 @@ private fun WatchlistTab(viewModel: DestinedFXViewModel) {
                     shape = RoundedCornerShape(14.dp)
                 ) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        QuoteFreshnessIndicator(null, connecting = true)
                         Text("Waiting for market quotes", color = TextPrimary, fontWeight = FontWeight.Bold)
                         Text("No live ticker is available yet. The list populates when the public feed provides valid prices.",
                             color = TextSecondary, fontSize = 11.sp)
@@ -1817,8 +1821,9 @@ private fun WatchlistTab(viewModel: DestinedFXViewModel) {
             items(rows, key = { it.symbol }) { ticker ->
                 val change = ticker.changePercent
                 val movementColor = if ((change ?: 0.0) >= 0.0) ProfitGreen else LossRed
-                val ageMs = (System.currentTimeMillis() - ticker.lastUpdateMillis).coerceAtLeast(0L)
-                val isFresh = ageMs <= 15_000L
+                val isFresh = com.example.data.market.classifyQuoteFreshness(
+                    ticker, System.currentTimeMillis()
+                ) == com.example.data.market.QuoteFreshness.LIVE
                 Card(
                     modifier = Modifier.fillMaxWidth().clickable {
                         viewModel.selectTicker(ticker.symbol)
@@ -1843,10 +1848,7 @@ private fun WatchlistTab(viewModel: DestinedFXViewModel) {
                         }
                         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(ticker.symbol, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(
-                                (ticker.source.ifBlank { "Market feed" }) + " • " + if (isFresh) "LIVE" else "STALE",
-                                color = if (isFresh) ProfitGreen else WarningAmber, fontSize = 9.sp
-                            )
+                            QuoteFreshnessIndicator(ticker, compact = true)
                         }
                         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(

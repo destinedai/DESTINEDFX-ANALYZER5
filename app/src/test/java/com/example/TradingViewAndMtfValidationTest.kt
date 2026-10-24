@@ -18,6 +18,7 @@ import com.example.ui.chart.TradingViewLoadPath
 import com.example.ui.chart.TradingViewLoadState
 import com.example.ui.chart.TradingViewLoadStatus
 import com.example.ui.chart.isTradingViewChartDocumentUrl
+import com.example.ui.chart.isSupportedTradingViewHost
 import com.example.ui.DestinedFXScreen
 import com.example.ui.mapTradeSignalToUiModel
 import com.example.ui.scanChartBitmap
@@ -45,6 +46,10 @@ class TradingViewAndMtfValidationTest {
         assertTrue(isTradingViewChartDocumentUrl("https://www.tradingview.com/widgetembed/?symbol=OANDA%3AEURUSD"))
         assertTrue(isTradingViewChartDocumentUrl("https://s.tradingview.com/widgetembed/?symbol=OANDA%3AXAUUSD"))
         assertTrue(isTradingViewChartDocumentUrl("https://tradingview.com/widgetembed/"))
+        assertTrue(isTradingViewChartDocumentUrl("https://www.tradingview-widget.com/embed-widget/advanced-chart/"))
+        assertTrue(isSupportedTradingViewHost("s.tradingview.com"))
+        assertTrue(isSupportedTradingViewHost("www.tradingview-widget.com"))
+        assertFalse(isSupportedTradingViewHost("tradingview.com.evil.example"))
         assertFalse(isTradingViewChartDocumentUrl("https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"))
         assertFalse(isTradingViewChartDocumentUrl("https://www.tradingview.com/chart/"))
         assertFalse(isTradingViewChartDocumentUrl("https://nottradingview.com/widgetembed/"))
@@ -139,6 +144,8 @@ class TradingViewAndMtfValidationTest {
         assertTrue(html.contains("data-destinedfx-tv-loaded-at"))
         assertTrue(html.contains("data-tv-frame-loaded-at"))
         assertTrue(html.contains("data-tv-script-loaded"))
+        assertTrue(html.contains("tvScript.onerror"))
+        assertTrue(html.contains("isTradingViewChartUrl"))
         assertTrue(html.contains("#0F0F0F"))
         assertNull(TradingViewMapper.buildWidgetHtml("R_100", "M15"))
         assertNull(TradingViewMapper.buildWidgetHtml("EUR/USD", "M2"))
@@ -167,6 +174,9 @@ class TradingViewAndMtfValidationTest {
         assertFalse(displayed.isTerminal)
         assertSame(displayed, displayed.fail("late resource error"))
         assertSame(displayed, displayed.displayedUnverified("duplicate callback"))
+        val retried = displayed.retry()
+        assertEquals(TradingViewLoadPath.OFFICIAL_WIDGET, retried.path)
+        assertEquals(TradingViewLoadStatus.LOADING, retried.status)
     }
 
     @Test

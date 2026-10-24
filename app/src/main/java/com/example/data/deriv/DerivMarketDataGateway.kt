@@ -7,6 +7,7 @@ import com.destinedfx.core.marketdata.MarketQuote
 import com.destinedfx.core.marketdata.VolumeType
 import com.example.domain.model.Candle
 import com.example.domain.model.Tick
+import com.example.data.market.sanitizeOhlcCandles
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -392,13 +393,13 @@ class DerivMarketDataGateway(
                     )
                 }
             }
-            result.sortBy { it.timestamp }
-            if (result.isEmpty()) {
+            val sanitized = sanitizeOhlcCandles(result, System.currentTimeMillis())
+            if (sanitized.isEmpty()) {
                 lastCandleErrors[symbol] = "Deriv returned no valid OHLC rows for granularity " + granularitySeconds
             } else {
                 lastCandleErrors.remove(symbol)
             }
-            result
+            sanitized
         } catch (e: CancellationException) {
             if (currentCoroutineContext().isActive) {
                 // A child response can be cancelled because the socket failed while the app's

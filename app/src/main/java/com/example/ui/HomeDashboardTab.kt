@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.strategy.StrategyRegistry
 import com.example.ui.chart.TradingChartContainer
 import com.example.ui.components.GoldGradientButton
+import com.example.ui.components.QuoteFreshnessIndicator
 import com.example.ui.components.StatChip
 import com.example.ui.components.TerminalStatusPill
 import com.example.ui.theme.*
@@ -43,11 +44,11 @@ import com.example.ui.theme.*
 fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
+    val activeTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     val selectedMtfTimeframes by viewModel.selectedMtfTimeframes.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val activeTicker = tickers[activeSymbol]
-    val goldTicker = tickers["XAU/USD"]
     val implementedCount = StrategyRegistry.allStrategies.count { it.isImplemented }
     val feedReady = marketDataStatus.startsWith("READY", ignoreCase = true)
     val feedUnavailable = marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true)
@@ -141,11 +142,10 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text("LIVE MARKET WORKSPACE", color = ElectricCyan, fontSize = 9.sp,
                         fontWeight = FontWeight.Black, letterSpacing = 1.sp)
-                    Text("XAU/USD · Gold · H1", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                    Text("$activeSymbol · $activeTimeframe", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                QuoteFreshnessIndicator(activeTicker, connecting = marketDataStatus.startsWith("WAIT"), compact = true)
                 }
                 TextButton(onClick = {
-                    viewModel.selectTicker("XAU/USD")
-                    viewModel.selectTimeframe("H1")
                     viewModel.selectScreen(DestinedFXScreen.Analyzer)
                 }) {
                     Text("Analyze pair →", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
@@ -158,13 +158,13 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                 border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.36f))
             ) {
                 TradingChartContainer(
-                    activeSymbol = "XAU/USD",
-                    selectedTimeframe = "H1",
-                    currentSpotPrice = goldTicker?.price?.takeIf { it > 0.0 } ?: 0.0,
+                    activeSymbol = activeSymbol,
+                    selectedTimeframe = activeTimeframe,
+                    currentSpotPrice = activeTicker?.price?.takeIf { it > 0.0 } ?: 0.0,
                     activeStrategy = selectedStrategyId,
-                    dynamicAnalysis = DynamicAnalysisInfo(symbol = "XAU/USD"),
-                    candles = viewModel.candlestickHistoryByTimeframe["XAU/USD-H1"]
-                        ?: viewModel.candlestickHistory["XAU/USD"] ?: emptyList(),
+                    dynamicAnalysis = DynamicAnalysisInfo(symbol = activeSymbol),
+                    candles = viewModel.candlesForChart(activeSymbol, activeTimeframe),
+                    candleSource = viewModel.marketDataSource(activeSymbol, activeTimeframe),
                     isRealTradingViewEnabled = true,
                     onToggleChartType = {},
                     modifier = Modifier.fillMaxSize()
@@ -201,11 +201,7 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                                 Text(quote.symbol, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Black)
                                 Text(formatPrice(quote.price, quote.symbol), color = ElectricCyan,
                                     fontSize = 13.sp, fontWeight = FontWeight.Black)
-                                Text(
-                                    if (quote.isLive) "LIVE · ${quote.source}" else "NOT LIVE · ${quote.source}",
-                                    color = if (quote.isLive) ProfitGreen else TextMuted,
-                                    fontSize = 8.sp, maxLines = 2, lineHeight = 11.sp
-                                )
+                                QuoteFreshnessIndicator(quote, compact = true)
                             }
                         }
                     }

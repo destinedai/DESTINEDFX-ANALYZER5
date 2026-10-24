@@ -67,9 +67,16 @@ internal fun isTradingViewChartDocumentUrl(url: String?): Boolean {
     val parsed = runCatching { Uri.parse(url) }.getOrNull() ?: return false
     val host = parsed.host?.lowercase(Locale.ROOT) ?: return false
     val path = parsed.path.orEmpty().lowercase(Locale.ROOT)
-    val trustedTradingViewHost = host == "tradingview.com" || host.endsWith(".tradingview.com")
-    val chartDocumentPath = path == "/widgetembed" || path.startsWith("/widgetembed/")
+    val trustedTradingViewHost = isSupportedTradingViewHost(host)
+    val chartDocumentPath = path == "/widgetembed" || path.startsWith("/widgetembed/") ||
+        path.startsWith("/embed-widget/advanced-chart") || path.startsWith("/widget/advanced-chart")
     return trustedTradingViewHost && chartDocumentPath
+}
+
+internal fun isSupportedTradingViewHost(host: String?): Boolean {
+    val normalized = host?.trim()?.lowercase(Locale.ROOT)?.trimEnd('.') ?: return false
+    return normalized == "tradingview.com" || normalized.endsWith(".tradingview.com") ||
+        normalized == "tradingview-widget.com" || normalized.endsWith(".tradingview-widget.com")
 }
 
 /**
@@ -86,6 +93,7 @@ fun TradingChartContainer(
     activeStrategy: String,
     dynamicAnalysis: DynamicAnalysisInfo,
     candles: List<Candle>,
+    candleSource: String = "",
     isRealTradingViewEnabled: Boolean,
     onToggleChartType: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -112,6 +120,11 @@ fun TradingChartContainer(
             TradingViewWebView(
                 symbol = activeSymbol,
                 timeframe = selectedTimeframe,
+                fallbackCandles = candles,
+                fallbackSource = candleSource,
+                fallbackSpot = currentSpotPrice,
+                fallbackStrategy = activeStrategy,
+                fallbackAnalysis = dynamicAnalysis,
                 onSwitchToCanvas = { onToggleChartType(false) },
                 modifier = Modifier.fillMaxSize()
             )
@@ -225,6 +238,11 @@ fun LiveStructureHud(
 fun TradingViewWebView(
     symbol: String,
     timeframe: String,
+    fallbackCandles: List<Candle> = emptyList(),
+    fallbackSource: String = "",
+    fallbackSpot: Double = 0.0,
+    fallbackStrategy: String = "",
+    fallbackAnalysis: DynamicAnalysisInfo = DynamicAnalysisInfo(symbol = symbol),
     onSwitchToCanvas: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -238,24 +256,43 @@ fun TradingViewWebView(
     val widgetUrl = TradingViewMapper.buildWidgetUrl(symbol, timeframe)
     val widgetHtml = TradingViewMapper.buildWidgetHtml(symbol, timeframe)
     if (mappedSymbol == null || mappedInterval == null || widgetUrl == null || widgetHtml == null) {
-        Column(
-            modifier = modifier.fillMaxSize().background(Color(0xFF171B27)).padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
-            Spacer(Modifier.height(8.dp))
-            Text(
-                if (mappedSymbol == null) "Symbol Not Supported by TradingView" else "Unsupported Timeframe",
-                color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                if (mappedSymbol == null) "TradingView has no configured symbol mapping for '$symbol'."
-                else "Timeframe '$timeframe' cannot be mapped to the TradingView widget.",
-                fontSize = 11.sp, color = TextSecondary,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
+        if (candles.isNotEmpty()) {
+            Column(modifier = modifier.fillMaxSize().background(Color(0xFF171B27))) {
+                Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("NATIVE CANDLE FALLBACK • NOT TRADINGVIEW", color = WarningAmber,
+                        fontSize = 9.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                    Text("$symbol • $timeframe • ${candleSource.ifBlank { "validated OHLC history" }}",
+                        color = TextSecondary, fontSize = 9.sp, maxLines = 2)
+                }
+                AlgorithmicCanvasChart(
+                    activeSymbol = activeSymbol,
+                    currentSpotPrice = currentSpotPrice,
+                    activeStrategy = activeStrategy,
+                    drawConfluences = dynamicAnalysis,
+                    candles = candles,
+                    modifier = Modifier.fillMaxWidth().weight(1f)
+                )
+            }
+        } else {
+            Column(
+                modifier = modifier.fillMaxSize().background(Color(0xFF171B27)).padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(32.dp))
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    if (mappedSymbol == null) "Symbol Not Supported by TradingView" else "Unsupported Timeframe",
+                    color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (mappedSymbol == null) "TradingView has no configured symbol mapping for '$symbol'."
+                    else "Timeframe '$timeframe' cannot be mapped to the TradingView widget.",
+                    fontSize = 11.sp, color = TextSecondary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
         }
         return
     }
@@ -264,6 +301,7 @@ fun TradingViewWebView(
     val context = LocalContext.current
     var retryTrigger by remember(currentKey) { mutableIntStateOf(0) }
     var loadState by remember(currentKey) { mutableStateOf(TradingViewLoadState()) }
+    var showNativeFallback by remember(currentKey) { mutableStateOf(false) }
 
     // Each path gets one bounded attempt. A timeout or a real main-frame/SSL error advances
     // the reducer; the hosted path can never loop back or restart itself.
@@ -285,17 +323,31 @@ fun TradingViewWebView(
             Column(
                 modifier = Modifier.fillMaxSize().padding(18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                verticalArrangement = if (fallbackCandles.isNotEmpty()) Arrangement.Top else Arrangement.Center
             ) {
                 Icon(Icons.Default.Warning, contentDescription = null, tint = OrangeAccent, modifier = Modifier.size(34.dp))
-                Spacer(Modifier.height(10.dp))
-                Text("TradingView unavailable", color = TextPrimary, fontWeight = FontWeight.Black, fontSize = 14.sp)
                 Spacer(Modifier.height(6.dp))
+                Text("TradingView unavailable", color = TextPrimary, fontWeight = FontWeight.Black, fontSize = 14.sp)
                 Text(
                     loadState.message ?: "The chart could not be displayed for $symbol.",
                     fontSize = 11.sp, color = TextSecondary,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
+                if (fallbackCandles.isNotEmpty()) {
+                    Text(
+                        "NATIVE CANDLES • ${fallbackSource.ifBlank { "validated market history" }} • $symbol $timeframe",
+                        modifier = Modifier.padding(top = 6.dp), color = WarningAmber, fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
+                    )
+                    AlgorithmicCanvasChart(
+                        activeSymbol = symbol,
+                        currentSpotPrice = fallbackSpot,
+                        activeStrategy = fallbackStrategy,
+                        drawConfluences = fallbackAnalysis,
+                        candles = fallbackCandles,
+                        modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 4.dp)
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
                 Button(
                     onClick = {
@@ -333,6 +385,7 @@ fun TradingViewWebView(
                         var monitorRunning = false
                         var attachWaiter: View.OnAttachStateChangeListener? = null
                         var chartWebViewClient: WebViewClient? = null
+                        var pageFinishedUrl: String? = null
                         try {
                             WebView(viewContext).apply {
                                 tag = expectedTag
@@ -356,6 +409,7 @@ fun TradingViewWebView(
                                         super.onPageStarted(view, url, favicon)
                                         attachWaiter?.let { view?.removeOnAttachStateChangeListener(it) }
                                         attachWaiter = null
+                                        pageFinishedUrl = null
                                         generation++
                                         monitorRunning = false
                                         android.util.Log.i(
@@ -366,6 +420,7 @@ fun TradingViewWebView(
 
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
+                                        pageFinishedUrl = url ?: view?.url
                                         android.util.Log.i(
                                             TRADING_VIEW_LOG_TAG,
                                             "page finished path=$attemptPath host=${chartUrlHost(url)}; checking embed evidence"
@@ -394,21 +449,33 @@ fun TradingViewWebView(
                                         monitorRunning = true
                                         val thisGeneration = generation
                                         fun inspect(attempt: Int) {
-                                            if (!view.isAttachedToWindow || thisGeneration != generation || !loadState.isLoading || loadState.path != attemptPath) {
+                                            if (!view.isAttachedToWindow || thisGeneration != generation ||
+                                                !loadState.isLoading || loadState.path != attemptPath) {
                                                 monitorRunning = false
+                                                return
+                                            }
+                                            if (view.width < 100 || view.height < 100) {
+                                                if (attempt < 28) view.postDelayed({ inspect(attempt + 1) }, 1_000L)
+                                                else {
+                                                    monitorRunning = false
+                                                    loadState = loadState.fail("Chart view did not receive a measurable viewport.")
+                                                }
                                                 return
                                             }
                                             val pathName = attemptPath.name
                                             val javascript = if (attemptPath == TradingViewLoadPath.OFFICIAL_WIDGET) {
                                                 """
                                                 (function(){
+                                                  if(window.innerWidth<100||window.innerHeight<100)return 'WAIT';
                                                   var d=document.documentElement;
                                                   var e=d.getAttribute('data-tv-widget-error');
                                                   if(e)return 'ERROR:'+e;
                                                   var frames=[].slice.call(document.querySelectorAll('#destinedfx-tv-chart iframe'));
                                                   for(var i=0;i<frames.length;i++){
                                                     var f=frames[i], src=String(f.src||'');
-                                                    if(!/tradingview\.com/i.test(src))continue;
+                                                    var u;try{u=new URL(src)}catch(_){continue;}
+                                                    if(!/(^|\.)tradingview\.com$|(^|\.)tradingview-widget\.com$/i.test(u.hostname))continue;
+                                                    if(!(/^\/widgetembed\/?$|^\/embed-widget\/advanced-chart\/?$|^\/widget\/advanced-chart\/?$/i.test(u.pathname)))continue;
                                                     var r=f.getBoundingClientRect(), s=window.getComputedStyle(f);
                                                     var loadedAt=parseInt(f.getAttribute('data-destinedfx-tv-loaded-at')||'0',10);
                                                     var visible=r.width>100&&r.height>100&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity||1)>0;
@@ -420,9 +487,13 @@ fun TradingViewWebView(
                                             } else {
                                                 """
                                                 (function(){
+                                                  if(window.innerWidth<100||window.innerHeight<100)return 'WAIT';
                                                   var b=document.body, t=((b&&b.innerText)||'').toLowerCase();
                                                   if(t.includes('invalid symbol')||t.includes('symbol not found'))return 'ERROR:TradingView could not find this symbol';
-                                                  if(document.readyState==='complete'&&(location.hostname==='tradingview.com'||location.hostname.endsWith('.tradingview.com'))&&location.pathname.indexOf('/widgetembed')===0)return 'UNVERIFIED';
+                                                  var h=location.hostname.toLowerCase(),p=location.pathname.toLowerCase();
+                                                  var hostOk=/(^|\.)tradingview\.com$|(^|\.)tradingview-widget\.com$/.test(h);
+                                                  var pathOk=/^\/widgetembed\/?$|^\/embed-widget\/advanced-chart\/?$|^\/widget\/advanced-chart\/?$/.test(p);
+                                                  if(document.readyState==='complete'&&hostOk&&pathOk)return 'UNVERIFIED';
                                                   return 'WAIT';
                                                 })()
                                                 """.trimIndent()
@@ -508,6 +579,22 @@ fun TradingViewWebView(
                                     }
                                 }
                                 webViewClient = chartWebViewClient
+                                val chartLifecycleListener = object : View.OnAttachStateChangeListener {
+                                    override fun onViewAttachedToWindow(view: View) {
+                                        val completedUrl = pageFinishedUrl
+                                        if (view is WebView && completedUrl != null && loadState.isLoading && loadState.path == attemptPath) {
+                                            chartWebViewClient?.onPageFinished(view, completedUrl)
+                                        }
+                                    }
+
+                                    override fun onViewDetachedFromWindow(view: View) {
+                                        generation++
+                                        monitorRunning = false
+                                        attachWaiter?.let { view.removeOnAttachStateChangeListener(it) }
+                                        attachWaiter = null
+                                    }
+                                }
+                                addOnAttachStateChangeListener(chartLifecycleListener)
 
                                 @Suppress("SetJavaScriptEnabled")
                                 settings.apply {
@@ -547,6 +634,8 @@ fun TradingViewWebView(
                     update = { view ->
                         if (view is WebView && view.tag != expectedTag) {
                             view.tag = expectedTag
+                            view.onResume()
+                            view.resumeTimers()
                             android.util.Log.i(TRADING_VIEW_LOG_TAG, "reloading selected chart key=$currentKey path=$attemptPath")
                             if (attemptPath == TradingViewLoadPath.HOSTED_CHART) view.loadUrl(widgetUrl)
                             else view.loadDataWithBaseURL("https://www.tradingview.com/", widgetHtml, "text/html", "UTF-8", null)
@@ -554,6 +643,8 @@ fun TradingViewWebView(
                     },
                     onRelease = { view ->
                         if (view is WebView) {
+                            view.onPause()
+                            view.pauseTimers()
                             view.stopLoading()
                             view.webChromeClient = null
                             view.webViewClient = WebViewClient()
@@ -580,12 +671,46 @@ fun TradingViewWebView(
                 }
             }
             if (loadState.status == TradingViewLoadStatus.DISPLAYED_UNVERIFIED) {
-                Text(
-                    "TRADINGVIEW EMBED • RENDERING UNVERIFIED",
+                Row(
                     modifier = Modifier.align(Alignment.TopCenter).padding(6.dp)
-                        .background(Color(0xD90B0E14), RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 4.dp),
-                    color = OrangeAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace
-                )
+                        .background(Color(0xE60B0E14), RoundedCornerShape(5.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("TRADINGVIEW FRAME • CANDLES UNVERIFIED", color = OrangeAccent,
+                        fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    if (fallbackCandles.isNotEmpty()) {
+                        TextButton(onClick = { showNativeFallback = true }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                            Text("NATIVE", color = ElectricCyan, fontSize = 8.sp, fontWeight = FontWeight.Black)
+                        }
+                    }
+                    TextButton(
+                        onClick = { loadState = loadState.retry(); retryTrigger++ },
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                    ) { Text("RETRY", color = TextPrimary, fontSize = 8.sp, fontWeight = FontWeight.Black) }
+                }
+            }
+            if (showNativeFallback && fallbackCandles.isNotEmpty()) {
+                Column(modifier = Modifier.fillMaxSize().background(Color(0xFF171B27))) {
+                    Column(Modifier.fillMaxWidth().padding(9.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("NATIVE CANDLES • NOT TRADINGVIEW", color = WarningAmber, fontSize = 9.sp,
+                            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        Text("$symbol • $timeframe • ${fallbackSource.ifBlank { "validated OHLC history" }}",
+                            color = TextSecondary, fontSize = 9.sp, maxLines = 2)
+                        TextButton(
+                            onClick = { showNativeFallback = false; loadState = loadState.retry(); retryTrigger++ },
+                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)
+                        ) { Text("RETRY TRADINGVIEW", color = ElectricCyan, fontSize = 8.sp) }
+                    }
+                    AlgorithmicCanvasChart(
+                        activeSymbol = symbol,
+                        currentSpotPrice = fallbackSpot,
+                        activeStrategy = fallbackStrategy,
+                        drawConfluences = fallbackAnalysis,
+                        candles = fallbackCandles,
+                        modifier = Modifier.fillMaxWidth().weight(1f)
+                    )
+                }
             }
         }
     }
@@ -1033,8 +1158,18 @@ internal object TradingViewMapper {
                 .tradingview-widget-container__widget iframe { display:block; width:100%; height:100%; border:0; }
               </style>
               <script>
-                // TradingView's chart is cross-origin. Track iframe/script load events only;
-                // do not depend on DOM selectors inside its private chart iframe.
+                // TradingView's chart is cross-origin. Track document/script/frame events only;
+                // never inspect private iframe DOM or mistake iframe load for rendered candles.
+                function isTradingViewHost(host) {
+                  return /(^|\.)tradingview\.com$|(^|\.)tradingview-widget\.com$/i.test(String(host || ''));
+                }
+                function isTradingViewChartUrl(raw) {
+                  try {
+                    var u = new URL(raw, document.baseURI);
+                    return isTradingViewHost(u.hostname) &&
+                      (/^\/widgetembed\/?$|^\/embed-widget\/advanced-chart\/?$|^\/widget\/advanced-chart\/?$/i.test(u.pathname));
+                  } catch (_) { return false; }
+                }
                 document.addEventListener('load', function(event) {
                   var target = event.target;
                   if (target && target.tagName === 'SCRIPT' &&
@@ -1042,7 +1177,7 @@ internal object TradingViewMapper {
                     document.documentElement.setAttribute('data-tv-script-loaded', '1');
                   }
                   if (target && target.tagName === 'IFRAME' && target.closest &&
-                      target.closest('#destinedfx-tv-chart') && /tradingview\.com/i.test(String(target.src || ''))) {
+                      target.closest('#destinedfx-tv-chart') && isTradingViewChartUrl(target.src)) {
                     var loadedAt = String(Date.now());
                     target.setAttribute('data-destinedfx-tv-loaded-at', loadedAt);
                     document.documentElement.setAttribute('data-tv-frame-loaded', '1');
@@ -1055,19 +1190,38 @@ internal object TradingViewMapper {
                       String(target.src || '').indexOf('embed-widget-advanced-chart.js') >= 0) {
                     document.documentElement.setAttribute('data-tv-widget-error',
                       'TradingView advanced chart script could not load.');
-                  } else if (event && event.message) {
-                    document.documentElement.setAttribute('data-tv-widget-error',
-                      'TradingView embed JavaScript error: ' + String(event.message).slice(0, 160));
                   }
                 }, true);
+                function initializeTradingViewWidget() {
+                  var root = document.getElementById('destinedfx-tv-chart');
+                  if (!root) {
+                    document.documentElement.setAttribute('data-tv-widget-error', 'Chart container was not found.');
+                    return;
+                  }
+                  var tvScript = document.createElement('script');
+                  tvScript.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+                  tvScript.async = true;
+                  tvScript.type = 'text/javascript';
+                  tvScript.innerHTML = JSON.stringify($config);
+                  tvScript.onload = function() {
+                    document.documentElement.setAttribute('data-tv-script-loaded', '1');
+                  };
+                  tvScript.onerror = function() {
+                    document.documentElement.setAttribute('data-tv-widget-error',
+                      'TradingView advanced chart script could not load.');
+                  };
+                  root.appendChild(tvScript);
+                }
+                if (document.readyState === 'loading') {
+                  document.addEventListener('DOMContentLoaded', initializeTradingViewWidget, { once: true });
+                } else {
+                  initializeTradingViewWidget();
+                }
               </script>
             </head>
             <body>
               <div id="destinedfx-tv-chart" class="tradingview-widget-container" style="height:100%;width:100%">
                 <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
-                <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-                ${config}
-                </script>
               </div>
             </body>
             </html>

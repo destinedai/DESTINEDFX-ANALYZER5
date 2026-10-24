@@ -301,6 +301,14 @@ open class DestinedFXViewModel(
     fun getDataSourceForSymbol(symbol: String): String =
         if (isPreview) "Deriv WebSocket" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
 
+    fun marketDataSource(symbol: String, timeframe: String): String =
+        if (isPreview) "Preview has no market candles" else app.marketDataRepository.getDataSource(
+            symbol, if (timeframe == "60") "H1" else timeframe
+        )
+
+    fun candlesForChart(symbol: String, timeframe: String): List<Candle> =
+        candlestickHistoryByTimeframe[symbol + "-" + (if (timeframe == "60") "H1" else timeframe)].orEmpty()
+
     fun refreshMarketData(symbol: String = selectedTicker.value, timeframe: String = selectedTimeframe.value) {
         if (isPreview) return
         viewModelScope.launch {
@@ -1116,17 +1124,19 @@ open class DestinedFXViewModel(
 
         // 1. Sync tickers to feed
         viewModelScope.launch {
-            try {
-                app.marketDataRepository.tickerFlow.collect { map ->
-                    if (map.isNotEmpty()) {
+            while (true) {
+                try {
+                    app.marketDataRepository.tickerFlow.collect { map ->
                         tickers.value = map
                         _feedItems.value = map.values.toList()
                     }
+                    delay(1_000L)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("DestinedFXViewModel", "Ticker collector retry: ${e.javaClass.simpleName}")
+                    delay(2_000L)
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e("DestinedFXViewModel", "init collector failed: ${e.javaClass.simpleName}")
             }
         }
 
@@ -1138,17 +1148,24 @@ open class DestinedFXViewModel(
                     selectedTimeframe, 
                     app.marketDataRepository.selectedApiSource
                 ) { symbol, tf, _ -> symbol to tf }.collect { (symbol, tf) ->
-                    val tfKey = if (tf == "60") "H1" else tf
-                    val candles = app.marketDataRepository.getCandles(symbol, tfKey, 150)
-                    if (candles.isNotEmpty()) {
-                        candlestickHistory[symbol] = candles
-                        candlestickHistoryByTimeframe[symbol + "-" + tfKey] = candles
-                        marketDataStatus.value = "READY • " + candles.size + " candles • " +
-                            app.marketDataRepository.getDataSource(symbol, tfKey)
-                    } else {
-                        val reason = app.marketDataRepository.getCandleError(symbol, tfKey)
-                            ?: "Waiting for valid candles from the public feed."
-                        marketDataStatus.value = "WAIT • " + reason
+                    try {
+                        val tfKey = if (tf == "60") "H1" else tf
+                        val candles = app.marketDataRepository.getCandles(symbol, tfKey, 150)
+                        if (candles.isNotEmpty()) {
+                            candlestickHistory[symbol] = candles
+                            candlestickHistoryByTimeframe[symbol + "-" + tfKey] = candles
+                            marketDataStatus.value = "READY • " + candles.size + " candles • " +
+                                app.marketDataRepository.getDataSource(symbol, tfKey)
+                        } else {
+                            val reason = app.marketDataRepository.getCandleError(symbol, tfKey)
+                                ?: "Waiting for valid candles from the public feed."
+                            marketDataStatus.value = "WAIT • " + reason
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        marketDataStatus.value = "WAIT • Candle refresh will retry: ${e.javaClass.simpleName}"
+                        Log.w("DestinedFXViewModel", "Selected candle fetch failed symbol=$symbol: ${e.javaClass.simpleName}")
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1160,9 +1177,11 @@ open class DestinedFXViewModel(
         
         // 3. Periodic refresh of active symbol's candles every 30 seconds
         viewModelScope.launch {
-            try {
-                while (true) {
-                    delay(30_000L)
+            com.example.data.market.resilientPollingLoop(
+                intervalMs = 30_000L,
+                maxBackoffMs = 300_000L,
+                onError = { error -> Log.w("DestinedFXViewModel", "Candle poll retry: ${error.javaClass.simpleName}") }
+            ) {
                     val sym = selectedTicker.value
                     val tf = selectedTimeframe.value
                     val tfKey = if (tf == "60") "H1" else tf
@@ -1171,26 +1190,18 @@ open class DestinedFXViewModel(
                         candlestickHistory[sym] = candles
                         candlestickHistoryByTimeframe[sym + "-" + tfKey] = candles
                     }
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e("DestinedFXViewModel", "init collector failed: ${e.javaClass.simpleName}")
             }
         }
 
         // 4. Dedicated high-priority price poller for the active symbol (Moves with the market)
         viewModelScope.launch {
-            try {
-                while (true) {
+            com.example.data.market.resilientPollingLoop(
+                intervalMs = 8_000L,
+                maxBackoffMs = 120_000L,
+                onError = { error -> Log.w("DestinedFXViewModel", "Selected quote refresh retry: ${error.javaClass.simpleName}") }
+            ) {
                     val sym = selectedTicker.value
                     app.marketDataRepository.refreshSymbol(sym)
-                    delay(8_000L) // Refresh active price every 8 seconds
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e("DestinedFXViewModel", "init collector failed: ${e.javaClass.simpleName}")
             }
         }
 
@@ -1198,8 +1209,14 @@ open class DestinedFXViewModel(
         viewModelScope.launch {
             try {
                 app.marketDataRepository.selectedApiSource.collect {
-                    val sym = selectedTicker.value
-                    app.marketDataRepository.refreshSymbol(sym)
+                    try {
+                        val sym = selectedTicker.value
+                        app.marketDataRepository.refreshSymbol(sym)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w("DestinedFXViewModel", "Source-change refresh failed: ${e.javaClass.simpleName}")
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -1212,7 +1229,13 @@ open class DestinedFXViewModel(
         viewModelScope.launch {
             try {
                 com.example.data.market.SymbolRegistry.getBackgroundSymbols().forEach { sym ->
-                    app.marketDataRepository.refreshSymbol(sym)
+                    try {
+                        app.marketDataRepository.refreshSymbol(sym)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w("DestinedFXViewModel", "Initial quote failed symbol=$sym: ${e.javaClass.simpleName}")
+                    }
                 }
                 prefetchWatchlistSpecs()
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1226,6 +1249,14 @@ open class DestinedFXViewModel(
         viewModelScope.launch {
             try {
                 selectedTicker.collect { sym ->
+                    try {
+                        app.marketDataRepository.refreshSymbol(sym)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        marketDataStatus.value = "WAIT • Quote refresh retry for $sym"
+                        Log.w("DestinedFXViewModel", "Immediate quote refresh failed symbol=$sym: ${e.javaClass.simpleName}")
+                    }
                     if (SpecRegistry.get(sym) == null) {
                         loadSpecForSymbol(sym)
                     } else {

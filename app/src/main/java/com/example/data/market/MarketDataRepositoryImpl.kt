@@ -14,15 +14,10 @@ import com.example.security.SecretsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
@@ -52,11 +47,9 @@ internal fun shouldReuseCandleCache(cachedCount: Int, requestedCount: Int, minim
 }
 
 /** Reject stale, zero, or future-dated feed timestamps instead of counting a negative age as fresh. */
-internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean {
-    if (timestampMs <= 0L || nowMs <= 0L || maxAgeMillis <= 0L) return false
-    val ageMs = nowMs - timestampMs
-    return ageMs >= 0L && ageMs < maxAgeMillis
-}
+internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean =
+    timestampMs > 0L && nowMs > 0L && maxAgeMillis > 0L &&
+        (nowMs - timestampMs).let { it >= 0L && it < maxAgeMillis }
 
 class MarketDataRepositoryImpl(
     private val secrets: SecretsManager,
@@ -79,8 +72,6 @@ class MarketDataRepositoryImpl(
         accountIdProvider = { secrets.getOandaAccountId() },
         isPracticeModeProvider = { !secrets.getOandaAccountId().trim().startsWith("001-") }
     )
-
-    private val pollingSemaphore = Semaphore(4)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.e(TAG, "Uncaught in repository scope: ${e.javaClass.simpleName}") })
     private data class CachedCandles(val candles: List<Candle>, val timestamp: Long)
@@ -111,15 +102,15 @@ class MarketDataRepositoryImpl(
         startLivePolling()
         startLiveStreams()
         
-        // P2: Mark stale streams as POLLED_LAST
+        // Expired streams remain visibly stale; they are never relabelled as fresh polled quotes.
         scope.launch {
             while (true) {
                 delay(1000L)
                 val now = clock()
                 _tickers.update { current ->
                     current.mapValues { (sym, ticker) ->
-                        if (ticker.kind == "STREAM" && (now - ticker.lastUpdateMillis) > 5000L) {
-                            ticker.copy(kind = "POLLED_LAST", lastUpdateMillis = ticker.lastUpdateMillis)
+                        if (ticker.kind == "STREAM" && !isTimestampFresh(ticker.lastUpdateMillis, now, 5_000L)) {
+                            ticker.copy(kind = "STALE", isLive = false)
                         } else {
                             ticker
                         }
@@ -287,6 +278,10 @@ class MarketDataRepositoryImpl(
     )
 
     private fun shouldUpdateTicker(symbol: String, newTicker: MarketTicker): Boolean {
+        if (classifyQuoteFreshness(newTicker, clock()) != QuoteFreshness.LIVE) {
+            Log.d(TAG, "Rejecting non-fresh quote for $symbol source=${newTicker.source} kind=${newTicker.kind}")
+            return false
+        }
         val existing = _tickers.value[symbol]?.let { toQuoteView(it) }
         val incoming = toQuoteView(newTicker)
         val active = activeSource[symbol]
@@ -458,19 +453,17 @@ class MarketDataRepositoryImpl(
 
     private suspend fun pollAllSymbolsParallel() {
         val symbols = SymbolRegistry.getBackgroundSymbols()
-        coroutineScope {
-            symbols.map { sym ->
-                async {
-                    pollingSemaphore.withPermit {
-                        val ticker = fetchBackgroundQuoteForSymbol(sym)
-                        if (ticker != null && shouldUpdateTicker(sym, ticker)) {
-                            _tickers.update { current ->
-                                current + (sym to ticker)
-                            }
-                        }
-                    }
-                }
-            }.awaitAll()
+        processPollingItemsIndependently(
+            items = symbols,
+            parallelism = 4,
+            onError = { sym, error ->
+                Log.w(TAG, "Quote poll failed symbol=$sym error=${error.javaClass.simpleName}")
+            }
+        ) { sym ->
+            val ticker = fetchBackgroundQuoteForSymbol(sym)
+            if (ticker != null && shouldUpdateTicker(sym, ticker)) {
+                _tickers.update { current -> current + (sym to ticker) }
+            }
         }
     }
 
@@ -487,18 +480,11 @@ class MarketDataRepositoryImpl(
 
     private fun startLivePolling() {
         scope.launch {
-            try {
-                // Background polling loop - reduced frequency to save user's data
-                while (true) {
-                    // Only poll everything every 45 seconds to keep dashboard alive without wasting data
-                    pollAllSymbolsParallel()
-                    delay(45_000L)
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Live polling loop failed: ${e.javaClass.simpleName}")
-            }
+            resilientPollingLoop(
+                intervalMs = 45_000L,
+                onError = { error -> Log.w(TAG, "Live polling pass failed: ${error.javaClass.simpleName}") },
+                poll = { pollAllSymbolsParallel() }
+            )
         }
     }
 
@@ -600,6 +586,7 @@ class MarketDataRepositoryImpl(
 
         }
 
+        candles = sanitizeOhlcCandles(candles, now)
         if (candles.isNotEmpty()) {
             val finalSource = if (isDelayed) "$sourceUsed | DELAYED - analysis only" else sourceUsed
             
@@ -659,7 +646,10 @@ class MarketDataRepositoryImpl(
 
     override fun isFresh(symbol: String, maxAgeMillis: Long): Boolean {
         val ticker = _tickers.value[symbol] ?: return false
-        return isTimestampFresh(ticker.lastUpdateMillis, clock(), maxAgeMillis)
+        return classifyQuoteFreshness(
+            ticker, clock(), streamMaxAgeMs = minOf(maxAgeMillis, 5_000L),
+            polledMaxAgeMs = minOf(maxAgeMillis, 15_000L)
+        ) == QuoteFreshness.LIVE
     }
 
     fun getDataSource(symbol: String, timeframe: String): String {
