@@ -100,23 +100,28 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     var showExportDialog by remember { mutableStateOf(false) }
     val dynamicAnalysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
+    val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val currentTicker = tickers[activeSymbol]
     val hasFreshQuote = currentTicker?.price?.let { it.isFinite() && it > 0.0 } == true &&
         viewModel.isDataFresh(activeSymbol)
     val headerPrice = currentTicker?.price?.takeIf { it.isFinite() && it > 0.0 && hasFreshQuote }
     val priceChange = currentTicker?.changePercent
+    val candlesAvailable = marketDataStatus.startsWith("READY", ignoreCase = true)
     val feedStatusColor = when {
-        hasFreshQuote && marketDataStatus.startsWith("READY", ignoreCase = true) -> ProfitGreen
+        hasFreshQuote -> ProfitGreen
         marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> LossRed
         else -> WarningAmber
     }
     val feedStatusLabel = when {
-        hasFreshQuote && marketDataStatus.startsWith("READY", ignoreCase = true) -> "Live market data"
-        marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "Feed unavailable"
-        hasFreshQuote -> "Live quote • candles pending"
-        marketDataStatus.startsWith("READY", ignoreCase = true) -> "Candles ready • quote missing"
-        else -> "Checking live quote"
+        hasFreshQuote && candlesAvailable -> "Live quote • candle history available"
+        hasFreshQuote && marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "Live quote • candle history unavailable"
+        hasFreshQuote -> "Live quote • candle history pending"
+        candlesAvailable -> quoteDiagnostics[activeSymbol]?.let { "Candle history available • $it" }
+            ?: "Candle history available • no fresh quote"
+        quoteDiagnostics[activeSymbol] != null -> quoteDiagnostics.getValue(activeSymbol)
+        marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "No fresh quote • candle history unavailable"
+        else -> "Checking quote • candle history pending"
     }
 
     Scaffold(
@@ -360,6 +365,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
     val selectedTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
+    val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val analysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val isScanning by viewModel.isSignalScanning.collectAsStateWithLifecycle()
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
@@ -655,7 +661,10 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                     TradingChartContainer(
                         activeSymbol = activeSymbol,
                         selectedTimeframe = selectedTimeframe,
-                        currentSpotPrice = ticker?.price ?: 0.0,
+                        currentSpotPrice = ticker?.takeIf {
+                            com.example.data.market.classifyQuoteFreshness(it, System.currentTimeMillis()) ==
+                                com.example.data.market.QuoteFreshness.LIVE
+                        }?.price,
                         activeStrategy = selectedStrategyId,
                         dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
                         candles = viewModel.candlesForChart(activeSymbol, selectedTimeframe),
@@ -699,7 +708,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
             }
         }
         item {
-            QuoteFreshnessIndicator(ticker, connecting = marketDataStatus.startsWith("WAIT"))
+            QuoteFreshnessIndicator(ticker, connecting = marketDataStatus.startsWith("WAIT"),
+                diagnostic = quoteDiagnostics[activeSymbol])
         }
         item {
             val result = analysis

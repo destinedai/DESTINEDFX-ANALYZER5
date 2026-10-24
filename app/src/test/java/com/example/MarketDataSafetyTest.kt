@@ -2,6 +2,7 @@ package com.example
 
 import com.example.data.market.QuoteFreshness
 import com.example.data.market.classifyQuoteFreshness
+import com.example.data.market.candleSourceKey
 import com.example.data.market.processPollingItemsIndependently
 import com.example.data.market.resilientPollingLoop
 import com.example.data.market.sanitizeOhlcCandles
@@ -20,6 +21,13 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 class MarketDataSafetyTest {
+    @Test
+    fun candleSourceKeysDoNotAliasTimeframes() {
+        assertEquals("EUR/USD-M15", candleSourceKey("EUR/USD", "m15"))
+        assertEquals("EUR/USD-H1", candleSourceKey("EUR/USD", "H1"))
+        assertFalse(candleSourceKey("EUR/USD", "M15") == candleSourceKey("EUR/USD", "H1"))
+    }
+
     @Test
     fun quoteFreshnessUsesTimestampAndFeedKindNotStickyLiveBoolean() {
         val streamThatWasDemotedButHasStickyBoolean = MarketTicker(

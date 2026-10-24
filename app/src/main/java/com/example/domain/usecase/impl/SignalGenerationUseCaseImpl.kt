@@ -94,7 +94,8 @@ class SignalGenerationUseCaseImpl(
                 val referenceCandle = market.getCandles(symbol, timeframe, 2)
                     .lastOrNull { it.close.isFinite() && it.close > 0.0 && it.timestamp > 0L }
                 if (referenceCandle != null) {
-                    val source = market.candleSources[symbol] ?: "Historical candles"
+                    val source = market.candleSources[com.example.data.market.candleSourceKey(symbol, timeframe)]
+                        ?: "Historical candles"
                     // This timestamp is historical by construction. It can support analysis only.
                     quote = MarketQuote.lastOnly(
                         symbol = symbol,

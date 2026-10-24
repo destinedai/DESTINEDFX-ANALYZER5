@@ -17,6 +17,7 @@ import kotlinx.coroutines.delay
 fun QuoteFreshnessIndicator(
     ticker: MarketTicker?,
     connecting: Boolean = false,
+    diagnostic: String? = null,
     modifier: Modifier = Modifier,
     compact: Boolean = false
 ) {
@@ -49,10 +50,12 @@ fun QuoteFreshnessIndicator(
         QuoteFreshness.UNAVAILABLE -> "UNAVAILABLE"
     }
     val source = ticker?.source?.takeIf { it.isNotBlank() }
-    val text = if (compact) {
+    val baseText = if (compact) {
         listOfNotNull(status, source, age).joinToString(" • ")
     } else {
         listOfNotNull(status, source, age, ticker?.kind).joinToString(" • ")
     }
+    val text = if (freshness == QuoteFreshness.LIVE) baseText
+        else listOfNotNull(baseText, diagnostic?.takeIf { it.isNotBlank() }).joinToString(" • ")
     Text(text = text, modifier = modifier, color = color, fontSize = 9.sp, maxLines = 2)
 }

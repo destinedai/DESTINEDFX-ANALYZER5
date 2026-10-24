@@ -12,6 +12,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.*
@@ -20,6 +21,20 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+
+internal data class DerivTickProviderError(val marketClosed: Boolean, val diagnostic: String)
+
+internal fun classifyDerivTickProviderError(code: String, message: String): DerivTickProviderError {
+    val normalizedCode = code.lowercase().filter(Char::isLetter)
+    val closed = normalizedCode.contains("marketclosed") || normalizedCode.contains("marketisclosed") ||
+        normalizedCode.contains("sessionclosed") || normalizedCode.contains("sessionisclosed") ||
+        message.contains("market is closed", ignoreCase = true) ||
+        message.contains("market closed", ignoreCase = true)
+    val safeMessage = Regex("(?i)(token|authorization|api[_-]?key)\\s*[:=]\\s*[^\\s,;]+")
+        .replace(message) { "${it.groupValues[1]}=[redacted]" }.take(180)
+    return DerivTickProviderError(closed, if (closed) "MARKET CLOSED • $code: $safeMessage"
+        else "SUBSCRIPTION REJECTED • $code: $safeMessage")
+}
 
 /**
  * Canonical active instrument returned by Deriv's public active_symbols endpoint.
@@ -56,11 +71,15 @@ class DerivMarketDataGateway(
 
     private val _latestQuotes = MutableStateFlow<Map<String, MarketQuote>>(emptyMap())
     val latestQuotes: StateFlow<Map<String, MarketQuote>> = _latestQuotes.asStateFlow()
+    private val _tickDiagnostics = MutableStateFlow<Map<String, String>>(emptyMap())
+    val tickDiagnostics: StateFlow<Map<String, String>> = _tickDiagnostics.asStateFlow()
 
     private var webSocket: WebSocket? = null
     private val reqIdCounter = AtomicInteger(1)
     private val activeSubscriptions = ConcurrentHashMap<String, String>() // symbol -> subscriptionId
     private val requestedSubscriptions = ConcurrentHashMap.newKeySet<String>()
+    private val tickSubscriptionRequests = ConcurrentHashMap<Int, String>()
+    private val tickSubscriptionRetryAttempts = ConcurrentHashMap<String, Int>()
     private val tickListeners = ConcurrentHashMap<String, (Tick) -> Unit>()
     private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
     private val lastCandleErrors = ConcurrentHashMap<String, String>()
@@ -113,6 +132,9 @@ class DerivMarketDataGateway(
                         lastConnectionError = "Deriv public market-data WebSocket failed: $detail"
                         Log.e(TAG, lastConnectionError ?: "Deriv WebSocket failure")
                         _connectionState.value = DerivConnectionState.ERROR
+                        _tickDiagnostics.update { current ->
+                            current + tickListeners.keys.associateWith { "CONNECTION ERROR • ${detail.take(180)}" }
+                        }
                         cleanup()
                         scheduleReconnect()
                     }
@@ -127,6 +149,9 @@ class DerivMarketDataGateway(
                                 (reason.takeIf { it.isNotBlank() }?.let { ", $it" } ?: "") + ")."
                         }
                         _connectionState.value = DerivConnectionState.DISCONNECTED
+                        if (code != 1000) _tickDiagnostics.update { current ->
+                            current + tickListeners.keys.associateWith { "DISCONNECTED • Deriv socket closed ($code)" }
+                        }
                         cleanup()
                         if (code != 1000) scheduleReconnect()
                     }
@@ -153,6 +178,7 @@ class DerivMarketDataGateway(
             it.cancel()
         }
         pendingRequests.clear()
+        tickSubscriptionRequests.clear()
     }
 
     private fun scheduleReconnect() {
@@ -285,6 +311,7 @@ class DerivMarketDataGateway(
 
     fun subscribeTicks(symbol: String, onTick: (Tick) -> Unit) {
         tickListeners[symbol] = onTick
+        _tickDiagnostics.update { current -> current + (symbol to "CONNECTING • Deriv public tick subscription") }
         if (_connectionState.value == DerivConnectionState.CONNECTED) {
             sendSubscribeTick(symbol)
         } else {
@@ -309,12 +336,47 @@ class DerivMarketDataGateway(
         // A selected-symbol refresh must not create duplicate WebSocket tick subscriptions.
         if (!requestedSubscriptions.add(symbol)) return
         val reqId = reqIdCounter.getAndIncrement()
+        tickSubscriptionRequests[reqId] = symbol
+        _tickDiagnostics.update { current -> current + (symbol to "SUBSCRIBING • Deriv public ticks") }
         val json = JSONObject().apply {
             put("ticks", symbol)
             put("subscribe", 1)
             put("req_id", reqId)
         }
-        if (webSocket?.send(json.toString()) != true) requestedSubscriptions.remove(symbol)
+        if (webSocket?.send(json.toString()) != true) {
+            requestedSubscriptions.remove(symbol)
+            tickSubscriptionRequests.remove(reqId)
+            _tickDiagnostics.update { current -> current + (symbol to "CONNECTION ERROR • Deriv rejected the tick request send") }
+        } else {
+            scope.launch {
+                delay(8_000L)
+                if (requestedSubscriptions.contains(symbol) && _latestQuotes.value[symbol] == null &&
+                    _tickDiagnostics.value[symbol]?.startsWith("SUBSCRIBING") == true) {
+                    _tickDiagnostics.update { current ->
+                        current + (symbol to "NO FRESH TICK • subscription sent; no provider response received yet")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun retryTickSubscription(symbol: String) {
+        if (manuallyDisconnected || !tickListeners.containsKey(symbol)) return
+        val attempt = tickSubscriptionRetryAttempts.merge(symbol, 1) { old, one -> old + one } ?: 1
+        if (attempt > 3) {
+            _tickDiagnostics.update { current ->
+                current + (symbol to "SUBSCRIPTION FAILED • retry limit reached; no fresh tick received")
+            }
+            return
+        }
+        val delayMs = (1_000L shl (attempt - 1)).coerceAtMost(8_000L)
+        scope.launch {
+            delay(delayMs)
+            if (!manuallyDisconnected && tickListeners.containsKey(symbol)) {
+                if (_connectionState.value != DerivConnectionState.CONNECTED) connect()
+                else sendSubscribeTick(symbol)
+            }
+        }
     }
 
     suspend fun fetchCandles(symbol: String, granularitySeconds: Int, count: Int = 300): List<Candle> = withContext(Dispatchers.IO) {
@@ -473,6 +535,9 @@ class DerivMarketDataGateway(
                     val updatedMap = _latestQuotes.value.toMutableMap()
                     updatedMap[symbol] = marketQuote
                     _latestQuotes.value = updatedMap
+                    tickSubscriptionRequests.entries.removeIf { it.value == symbol }
+                    tickSubscriptionRetryAttempts.remove(symbol)
+                    _tickDiagnostics.update { current -> current + (symbol to "TICK RECEIVED • Deriv public feed") }
 
                     tickListeners[symbol]?.invoke(tick)
                 }
@@ -481,6 +546,15 @@ class DerivMarketDataGateway(
                     val code = errorObj?.optString("code") ?: "UNKNOWN"
                     val msg = errorObj?.optString("message") ?: "Unknown Deriv error"
                     Log.e(TAG, "Deriv API Error: $code - $msg")
+                    val symbol = tickSubscriptionRequests.remove(reqId)
+                    if (symbol != null) {
+                        requestedSubscriptions.remove(symbol)
+                        val providerError = classifyDerivTickProviderError(code, msg)
+                        _tickDiagnostics.update { current ->
+                            current + (symbol to providerError.diagnostic)
+                        }
+                        if (!providerError.marketClosed) retryTickSubscription(symbol)
+                    }
                 }
             }
         } catch (e: Exception) {

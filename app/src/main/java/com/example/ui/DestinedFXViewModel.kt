@@ -186,6 +186,8 @@ open class DestinedFXViewModel(
 
     // Active Market Tickers
     val tickers = MutableStateFlow<Map<String, MarketTicker>>(emptyMap())
+    val quoteDiagnostics: StateFlow<Map<String, String>>
+        get() = if (isPreview) MutableStateFlow(emptyMap()) else app.marketDataRepository.quoteDiagnostics
     val _feedItems = MutableStateFlow<List<MarketTicker>>(emptyList())
     val feedItems: StateFlow<List<MarketTicker>> = _feedItems
 
@@ -404,7 +406,12 @@ open class DestinedFXViewModel(
                     hasRealSpread = t.hasRealSpread
                 )
             }
-            val candleSources = app.marketDataRepository.candleSources
+            val timeframeKey = if (selectedTimeframe.value == "60") "H1" else selectedTimeframe.value
+            val candleSources = watchlist.mapNotNull { symbol ->
+                app.marketDataRepository.candleSources[
+                    com.example.data.market.candleSourceKey(symbol, timeframeKey)
+                ]?.let { symbol to it }
+            }.toMap()
             val resolvedMap = watchlist.associateWith { sym ->
                 try {
                     app.mt5GatewayRepository.resolveSymbol(sym)

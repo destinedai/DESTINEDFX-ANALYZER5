@@ -46,6 +46,8 @@ internal fun shouldReuseCandleCache(cachedCount: Int, requestedCount: Int, minim
     return cachedCount >= minOf(requestedCount, minimumUsefulCandles)
 }
 
+internal fun candleSourceKey(symbol: String, timeframe: String): String = "$symbol-${timeframe.trim().uppercase()}"
+
 /** Reject stale, zero, or future-dated feed timestamps instead of counting a negative age as fresh. */
 internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean =
     timestampMs > 0L && nowMs > 0L && maxAgeMillis > 0L &&
@@ -84,6 +86,8 @@ class MarketDataRepositoryImpl(
 
     private val _tickers = MutableStateFlow<Map<String, MarketTicker>>(emptyMap())
     override val tickerFlow: StateFlow<Map<String, MarketTicker>> = _tickers.asStateFlow()
+    private val _quoteDiagnostics = MutableStateFlow<Map<String, String>>(emptyMap())
+    override val quoteDiagnostics: StateFlow<Map<String, String>> = _quoteDiagnostics.asStateFlow()
 
     override val selectedApiSource = MutableStateFlow("DERIV")
 
@@ -414,6 +418,18 @@ class MarketDataRepositoryImpl(
             }
 
             scope.launch {
+                derivGw.tickDiagnostics.collect { diagnostics ->
+                    val mapped = diagnostics.mapNotNull { (derivSymbol, message) ->
+                        val canonical = canonicalByDerivSymbol[derivSymbol]
+                            ?: dynamicCanonicalByDerivSymbol[derivSymbol]
+                            ?: return@mapNotNull null
+                        canonical to message
+                    }.toMap()
+                    _quoteDiagnostics.update { current -> current + mapped }
+                }
+            }
+
+            scope.launch {
                 derivGw.latestQuotes.collect { quotes ->
                     val updated = quotes.mapNotNull { (derivSymbol, q) ->
                         val canonicalSymbol = canonicalByDerivSymbol[derivSymbol]
@@ -444,6 +460,7 @@ class MarketDataRepositoryImpl(
                     updated.forEach { (canonicalSymbol, ticker) ->
                         if (shouldUpdateTicker(canonicalSymbol, ticker)) {
                             _tickers.update { current -> current + (canonicalSymbol to ticker) }
+                            _quoteDiagnostics.update { current -> current - canonicalSymbol }
                         }
                     }
                 }
@@ -473,6 +490,11 @@ class MarketDataRepositoryImpl(
         if (ticker != null && shouldUpdateTicker(symbol, ticker)) {
             _tickers.update { current ->
                 current + (symbol to ticker)
+            }
+            _quoteDiagnostics.update { current -> current - symbol }
+        } else if (ticker == null && _quoteDiagnostics.value[symbol].isNullOrBlank()) {
+            _quoteDiagnostics.update { current ->
+                current + (symbol to "NO FRESH QUOTE • no supported provider returned a current valid price")
             }
         }
         return ticker
@@ -523,7 +545,7 @@ class MarketDataRepositoryImpl(
     }
 
     override suspend fun getCandles(symbol: String, timeframe: String, count: Int): List<Candle> = withContext(Dispatchers.IO) {
-        val key = "$symbol-$timeframe"
+        val key = candleSourceKey(symbol, timeframe)
         val now = clock()
         val cached = candleCache[key]
         val ttl = getTtlForTimeframe(timeframe)
@@ -613,7 +635,7 @@ class MarketDataRepositoryImpl(
             } else candles
 
             dataSourceMap[key] = finalSource
-            _candleSources[symbol] = finalSource
+            _candleSources[key] = finalSource
             candleCache[key] = CachedCandles(processedCandles, now)
             _candleFetchErrors.update { it - key }
             return@withContext processedCandles.takeLast(count)
@@ -630,17 +652,18 @@ class MarketDataRepositoryImpl(
                     ". Check network access and the upstream feed response."
             }
             _candleFetchErrors.update { it + (key to errorMsg) }
-            _candleSources.remove(symbol)
+            dataSourceMap.remove(key)
+            _candleSources.remove(key)
             return@withContext emptyList()
         }
     }
 
-    override suspend fun getLatestTick(symbol: String): Tick = withContext(Dispatchers.IO) {
+    override suspend fun getLatestTick(symbol: String): Tick? = withContext(Dispatchers.IO) {
         val ticker = _tickers.value[symbol]
-        if (ticker != null) {
+        if (ticker != null && ticker.price.isFinite() && ticker.price > 0.0 && ticker.lastUpdateMillis > 0L) {
             Tick(ticker.lastUpdateMillis, ticker.price, ticker.spread)
         } else {
-            Tick(clock(), 0.0, 0.0)
+            null
         }
     }
 
@@ -653,7 +676,7 @@ class MarketDataRepositoryImpl(
     }
 
     fun getDataSource(symbol: String, timeframe: String): String {
-        return dataSourceMap["$symbol-$timeframe"]
+        return dataSourceMap[candleSourceKey(symbol, timeframe)]
             ?: "UNAVAILABLE • No validated OHLC source is cached for $symbol $timeframe"
     }
 }

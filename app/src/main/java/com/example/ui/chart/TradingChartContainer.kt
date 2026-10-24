@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.CircleShape
@@ -89,7 +90,7 @@ internal fun isSupportedTradingViewHost(host: String?): Boolean {
 fun TradingChartContainer(
     activeSymbol: String,
     selectedTimeframe: String,
-    currentSpotPrice: Double,
+    currentSpotPrice: Double?,
     activeStrategy: String,
     dynamicAnalysis: DynamicAnalysisInfo,
     candles: List<Candle>,
@@ -151,7 +152,7 @@ fun TradingChartContainer(
 fun LiveStructureHud(
     analysis: DynamicAnalysisInfo,
     symbol: String,
-    currentSpotPrice: Double,
+    currentSpotPrice: Double?,
     modifier: Modifier = Modifier
 ) {
     val isBuy = analysis.direction == "BUY"
@@ -220,7 +221,7 @@ fun LiveStructureHud(
 
         // Live Spot Price
         Text(
-            text = "SPOT: ${formatPrice(currentSpotPrice, symbol)}",
+            text = "SPOT: ${currentSpotPrice?.takeIf(::isValidSpotPrice)?.let { formatPrice(it, symbol) } ?: "—"}",
             color = CyanPrimary,
             fontSize = 9.sp,
             fontWeight = FontWeight.Black,
@@ -240,7 +241,7 @@ fun TradingViewWebView(
     timeframe: String,
     fallbackCandles: List<Candle> = emptyList(),
     fallbackSource: String = "",
-    fallbackSpot: Double = 0.0,
+    fallbackSpot: Double? = null,
     fallbackStrategy: String = "",
     fallbackAnalysis: DynamicAnalysisInfo = DynamicAnalysisInfo(symbol = symbol),
     onSwitchToCanvas: (() -> Unit)? = null,
@@ -741,32 +742,27 @@ fun TradingViewPreviewPlaceholder(
 
 
 /**
- * High-performance Compose Canvas chart that maps out structures as the market flows!
- * Maps:
- * - Dynamic Bullish & Bearish Order Blocks (OB)
- * - Fair Value Gaps (FVG) with 50% Consequent Encroachment (CE)
- * - Break of Structure (BOS) and Change of Character (CHoCH)
- * - Liquidity Sweeps (BSL/SSL)
- * - EMA 9 & EMA 21 flowing ribbons
- * - Trade Coordinates (Entry, SL, TP1, TP2, TP3)
- * - Live spot price pulsing beacon
+ * Native fallback rendered from validated OHLC history. It may overlay symbol-matched order blocks
+ * and actionable engine trade-plan levels; it does not synthesize BOS/FVG/EMA structure signals.
  */
 @Composable
 fun AlgorithmicCanvasChart(
     activeSymbol: String,
-    currentSpotPrice: Double,
+    currentSpotPrice: Double?,
     activeStrategy: String,
     drawConfluences: DynamicAnalysisInfo,
     candles: List<Candle>,
     modifier: Modifier = Modifier
 ) {
-    if (candles.isEmpty()) {
+    val chartCandles = remember(candles) { validatedChartCandles(candles) }
+    val chartScale = remember(chartCandles, activeSymbol) { buildNativeChartScale(chartCandles, activeSymbol) }
+    if (chartCandles.isEmpty() || chartScale == null) {
         Box(
             modifier = modifier.background(Color(0xFF171B27)),
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = "No live candles available",
+                text = "No valid OHLC candles available",
                 color = TextMuted,
                 fontSize = 14.sp,
                 fontFamily = FontFamily.Monospace
@@ -780,20 +776,13 @@ fun AlgorithmicCanvasChart(
             val w = size.width
             val h = size.height
 
-            // Calculate scaled min/max bounds so all structures and candles fit
-            val candleMin = candles.minOf { it.low }
-            val candleMax = candles.maxOf { it.high }
-
-            val rawMin = min(candleMin, min(drawConfluences.entry, min(drawConfluences.stopLoss, drawConfluences.tp1)))
-            val rawMax = max(candleMax, max(drawConfluences.entry, max(drawConfluences.stopLoss, drawConfluences.tp3)))
-
-            val padding = (rawMax - rawMin) * 0.08
-            val minPrice = rawMin - padding
-            val maxPrice = rawMax + padding
-            val priceRange = if (maxPrice > minPrice) maxPrice - minPrice else 1.0
+            val minPrice = chartScale.minPrice
+            val maxPrice = chartScale.maxPrice
+            val priceRange = chartScale.range
 
             fun priceToY(price: Double): Float {
-                return (h - ((price - minPrice) / priceRange * h)).toFloat()
+                val fraction = chartScale.priceToFraction(price) ?: return Float.NaN
+                return (h - fraction * h).toFloat()
             }
 
             // 1. Draw Grid lines and Price Axis
@@ -806,7 +795,7 @@ fun AlgorithmicCanvasChart(
 
             for (i in 1 until gridCount) {
                 val gridY = h * (i.toFloat() / gridCount)
-                val gridPrice = minPrice + ((h - gridY) / h) * priceRange
+                val gridPrice = chartScale.fractionToPrice((h - gridY) / h) ?: continue
                 drawLine(
                     color = ChartGrid.copy(alpha = 0.5f),
                     start = Offset(0f, gridY),
@@ -823,87 +812,32 @@ fun AlgorithmicCanvasChart(
                 )
             }
 
-            // 2. Map Market Structures: Order Blocks (OB)
-            val isBuy = drawConfluences.direction == "BUY"
-            val obHeightPips = abs(drawConfluences.entry - drawConfluences.stopLoss) * 0.35
-
-            if (isBuy) {
-                // Bullish Order Block at Discount
-                val obTopPrice = drawConfluences.entry - (obHeightPips * 0.2)
-                val obBottomPrice = drawConfluences.entry - obHeightPips
-                val obY1 = priceToY(obTopPrice)
-                val obY2 = priceToY(obBottomPrice)
-
-                drawRect(
-                    color = ProfitGreen.copy(alpha = 0.12f),
-                    topLeft = Offset(w * 0.25f, min(obY1, obY2)),
-                    size = Size(w * 0.75f, abs(obY2 - obY1))
-                )
-                drawLine(
-                    color = ProfitGreen.copy(alpha = 0.6f),
-                    start = Offset(w * 0.25f, min(obY1, obY2)),
-                    end = Offset(w, min(obY1, obY2)),
-                    strokeWidth = 1.5f,
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
-                )
-                nativePaint.color = android.graphics.Color.parseColor("#00FF99")
-                drawContext.canvas.nativeCanvas.drawText("BULLISH OB [UNMITIGATED]", w * 0.26f, min(obY1, obY2) - 6f, nativePaint)
-            } else {
-                // Bearish Order Block at Premium
-                val obTopPrice = drawConfluences.entry + obHeightPips
-                val obBottomPrice = drawConfluences.entry + (obHeightPips * 0.2)
-                val obY1 = priceToY(obTopPrice)
-                val obY2 = priceToY(obBottomPrice)
-
-                drawRect(
-                    color = LossRed.copy(alpha = 0.12f),
-                    topLeft = Offset(w * 0.25f, min(obY1, obY2)),
-                    size = Size(w * 0.75f, abs(obY2 - obY1))
-                )
-                drawLine(
-                    color = LossRed.copy(alpha = 0.6f),
-                    start = Offset(w * 0.25f, max(obY1, obY2)),
-                    end = Offset(w, max(obY1, obY2)),
-                    strokeWidth = 1.5f,
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
-                )
-                nativePaint.color = android.graphics.Color.parseColor("#FF4560")
-                drawContext.canvas.nativeCanvas.drawText("BEARISH OB [UNMITIGATED]", w * 0.26f, max(obY1, obY2) + 20f, nativePaint)
-            }
-
-            // 3. Map Fair Value Gap (FVG) with 50% Consequent Encroachment
-            val fvgMidPrice = if (isBuy) drawConfluences.entry + (obHeightPips * 0.5) else drawConfluences.entry - (obHeightPips * 0.5)
-            val fvgY = priceToY(fvgMidPrice)
-            drawLine(
-                color = ElectricCyan.copy(alpha = 0.5f),
-                start = Offset(w * 0.4f, fvgY),
-                end = Offset(w * 0.85f, fvgY),
-                strokeWidth = 1.5f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
-            )
-            nativePaint.color = android.graphics.Color.parseColor("#00E5FF")
-            drawContext.canvas.nativeCanvas.drawText("FVG CE 50%", w * 0.42f, fvgY - 6f, nativePaint)
-
-            // 4. Map Break of Structure (BOS)
-            val bosPrice = if (isBuy) candleMax else candleMin
-            val bosY = priceToY(bosPrice)
-            drawLine(
-                color = if (isBuy) ProfitGreen.copy(alpha = 0.7f) else LossRed.copy(alpha = 0.7f),
-                start = Offset(w * 0.15f, bosY),
-                end = Offset(w * 0.75f, bosY),
-                strokeWidth = 1.5f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
-            )
-            nativePaint.color = if (isBuy) android.graphics.Color.parseColor("#00FF99") else android.graphics.Color.parseColor("#FF4560")
-            drawContext.canvas.nativeCanvas.drawText(if (isBuy) "BOS ↑ (STRUCTURAL BREAK)" else "BOS ↓ (STRUCTURAL BREAK)", w * 0.16f, bosY - 6f, nativePaint)
+            // Only actual, symbol-matched strategy outputs are eligible overlays. No synthetic
+            // BOS/FVG is inferred from the candle extremes or entry/stop distance.
+            drawConfluences.orderBlocks.asSequence()
+                .filter { drawConfluences.symbol.equals(activeSymbol, ignoreCase = true) }
+                .filter { it.type == "BUY" || it.type == "BULLISH" || it.type == "SELL" || it.type == "BEARISH" }
+                .mapNotNull { block ->
+                    val top = block.topPrice
+                    val bottom = block.bottomPrice
+                    if (top.isFinite() && bottom.isFinite() && bottom > 0.0 && top > bottom &&
+                        top >= minPrice && bottom <= maxPrice) Triple(block, priceToY(top), priceToY(bottom)) else null
+                }
+                .take(2)
+                .forEach { (block, yTop, yBottom) ->
+                    val color = if (block.type == "BUY" || block.type == "BULLISH") ProfitGreen else LossRed
+                    drawRect(color = color.copy(alpha = 0.10f),
+                        topLeft = Offset(w * 0.25f, min(yTop, yBottom)),
+                        size = Size(w * 0.65f, abs(yBottom - yTop)))
+                }
 
             // 5. Draw High-Fidelity Candlesticks
-            val totalCandles = candles.size
+            val totalCandles = chartCandles.size
             val chartAreaWidth = w - 75f
             val candleSpacing = chartAreaWidth / totalCandles
             val candleWidth = candleSpacing * 0.65f
 
-            candles.forEachIndexed { i, c ->
+            chartCandles.forEachIndexed { i, c ->
                 val cX = i * candleSpacing + candleSpacing / 2f
                 val yHigh = priceToY(c.high)
                 val yLow = priceToY(c.low)
@@ -931,59 +865,35 @@ fun AlgorithmicCanvasChart(
                 )
             }
 
-            // 6. Draw Algorithmic Execution Target Lines
-            val entryY = priceToY(drawConfluences.entry)
-            val slY = priceToY(drawConfluences.stopLoss)
-            val tp1Y = priceToY(drawConfluences.tp1)
-            val tp2Y = priceToY(drawConfluences.tp2)
-            val tp3Y = priceToY(drawConfluences.tp3)
-
-            // Entry Line (Blue)
-            drawLine(
-                color = ElectricCyan,
-                start = Offset(0f, entryY),
-                end = Offset(w - 70f, entryY),
-                strokeWidth = 2f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
+            // Trade levels are annotations only. They never affect the candle axis and are
+            // shown only for a symbol-matched actionable engine plan with valid coordinates.
+            val levels = validNativeChartTradeLevels(
+                direction = drawConfluences.direction,
+                analysisSymbol = drawConfluences.symbol,
+                chartSymbol = activeSymbol,
+                entry = drawConfluences.entry,
+                stop = drawConfluences.stopLoss,
+                target = drawConfluences.tp1
             )
-            nativePaint.color = android.graphics.Color.parseColor("#448AFF")
-            drawContext.canvas.nativeCanvas.drawText("ENTRY ${formatPrice(drawConfluences.entry, activeSymbol)}", 16f, entryY - 8f, nativePaint)
-
-            // Stop Loss Line (Red with buffer)
-            drawLine(
-                color = LossRed,
-                start = Offset(0f, slY),
-                end = Offset(w - 70f, slY),
-                strokeWidth = 2f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
-            )
-            nativePaint.color = android.graphics.Color.parseColor("#FF5252")
-            drawContext.canvas.nativeCanvas.drawText("SL ${formatPrice(drawConfluences.stopLoss, activeSymbol)} [INVALIDATION]", 16f, slY - 8f, nativePaint)
-
-            // TP1 Line (Green)
-            drawLine(
-                color = ProfitGreen,
-                start = Offset(0f, tp1Y),
-                end = Offset(w - 70f, tp1Y),
-                strokeWidth = 2f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
-            )
-            nativePaint.color = android.graphics.Color.parseColor("#00FF99")
-            drawContext.canvas.nativeCanvas.drawText("TP1 ${formatPrice(drawConfluences.tp1, activeSymbol)} (+${String.format(Locale.US, "%.1f", drawConfluences.tp1YieldPips)} pts | 1:1.5R)", 16f, tp1Y - 8f, nativePaint)
-
-            // TP2 Line (Cyan)
-            drawLine(
-                color = ElectricCyan,
-                start = Offset(0f, tp2Y),
-                end = Offset(w - 70f, tp2Y),
-                strokeWidth = 2f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
-            )
-            nativePaint.color = android.graphics.Color.parseColor("#00E5FF")
-            drawContext.canvas.nativeCanvas.drawText("TP2 ${formatPrice(drawConfluences.tp2, activeSymbol)} (1:2.5R)", 16f, tp2Y - 8f, nativePaint)
+            fun drawPlanLine(price: Double, color: Color, label: String) {
+                val y = priceToY(price)
+                if (!y.isFinite() || y !in 0f..h) return
+                drawLine(color = color, start = Offset(0f, y), end = Offset(w - 70f, y),
+                    strokeWidth = 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f))
+                nativePaint.color = color.toArgb()
+                drawContext.canvas.nativeCanvas.drawText("$label ${formatPrice(price, activeSymbol)}", 12f,
+                    (y - 5f).coerceAtLeast(nativePaint.textSize), nativePaint)
+            }
+            levels?.let { plan ->
+                drawPlanLine(plan.entry, ElectricCyan, "ENTRY")
+                drawPlanLine(plan.stop, LossRed, "SL")
+                plan.target?.let { drawPlanLine(it, ProfitGreen, "TP") }
+            }
 
             // 7. Live Spot Price Cursor & Pulsating Beacon
-            val spotY = priceToY(currentSpotPrice)
+            val validSpot = currentSpotPrice?.takeIf(::isValidSpotPrice)
+            val spotY = validSpot?.let(::priceToY)
+            if (validSpot != null && spotY != null && spotY.isFinite() && spotY in 0f..h) {
             drawLine(
                 color = ElectricCyan.copy(alpha = 0.8f),
                 start = Offset(0f, spotY),
@@ -992,7 +902,7 @@ fun AlgorithmicCanvasChart(
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
             )
 
-            val lastX = (candles.size - 1) * candleSpacing + candleSpacing / 2f
+            val lastX = (chartCandles.size - 1) * candleSpacing + candleSpacing / 2f
             drawCircle(
                 color = ElectricCyan,
                 radius = 5f,
@@ -1013,11 +923,12 @@ fun AlgorithmicCanvasChart(
             nativePaint.color = android.graphics.Color.BLACK
             nativePaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
             drawContext.canvas.nativeCanvas.drawText(
-                formatPrice(currentSpotPrice, activeSymbol),
+                formatPrice(validSpot, activeSymbol),
                 w - 65f,
                 spotY + 6f,
                 nativePaint
             )
+            }
         }
     }
 }

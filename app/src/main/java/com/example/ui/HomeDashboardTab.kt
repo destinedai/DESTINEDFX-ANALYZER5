@@ -43,6 +43,7 @@ import com.example.ui.theme.*
 @Composable
 fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
+    val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
     val activeTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
@@ -143,7 +144,8 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                     Text("LIVE MARKET WORKSPACE", color = ElectricCyan, fontSize = 9.sp,
                         fontWeight = FontWeight.Black, letterSpacing = 1.sp)
                     Text("$activeSymbol · $activeTimeframe", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Black)
-                QuoteFreshnessIndicator(activeTicker, connecting = marketDataStatus.startsWith("WAIT"), compact = true)
+                QuoteFreshnessIndicator(activeTicker, connecting = marketDataStatus.startsWith("WAIT"),
+                    diagnostic = quoteDiagnostics[activeSymbol], compact = true)
                 }
                 TextButton(onClick = {
                     viewModel.selectScreen(DestinedFXScreen.Analyzer)
@@ -160,7 +162,10 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                 TradingChartContainer(
                     activeSymbol = activeSymbol,
                     selectedTimeframe = activeTimeframe,
-                    currentSpotPrice = activeTicker?.price?.takeIf { it > 0.0 } ?: 0.0,
+                    currentSpotPrice = activeTicker?.takeIf {
+                        com.example.data.market.classifyQuoteFreshness(it, System.currentTimeMillis()) ==
+                            com.example.data.market.QuoteFreshness.LIVE
+                    }?.price,
                     activeStrategy = selectedStrategyId,
                     dynamicAnalysis = DynamicAnalysisInfo(symbol = activeSymbol),
                     candles = viewModel.candlesForChart(activeSymbol, activeTimeframe),
