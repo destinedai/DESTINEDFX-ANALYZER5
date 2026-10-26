@@ -18,10 +18,14 @@ object BrokerQuoteParser {
         val tsMs: Long? = when (timeObj) {
             is Number -> timeObj.toLong()
             is String -> {
-                try {
-                    Instant.parse(timeObj).toEpochMilli()
+                timeObj.toLongOrNull() ?: try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        java.time.Instant.parse(timeObj).toEpochMilli()
+                    } else {
+                        java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US).parse(timeObj)?.time
+                    }
                 } catch (e: Exception) {
-                    timeObj.toLongOrNull()
+                    null
                 }
             }
             else -> null
