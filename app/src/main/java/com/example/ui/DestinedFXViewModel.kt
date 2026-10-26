@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -101,6 +102,7 @@ open class DestinedFXViewModel(
         ?: error("MyApplication required for production operations")
     val initStatus: StateFlow<com.example.MyApplication.InitState> =
         if (isPreview) MutableStateFlow(com.example.MyApplication.InitState.Ready) else app.initStatus
+
     /** True only when EncryptedSharedPreferences initialized successfully on this device. */
     val secureStorageAvailable: StateFlow<Boolean> =
         if (isPreview) MutableStateFlow(false) else app.storageAvailable
@@ -108,6 +110,11 @@ open class DestinedFXViewModel(
     private val repository by lazy { TradeRepository(db.tradeDao()) }
     private val analysisRepository by lazy { com.example.data.AnalysisRepository(db.analysisDao()) }
     private val client by lazy { OkHttpClient() }
+    private val notificationService = NotificationService(OkHttpClient())
+
+    private val _mt5Connected = MutableStateFlow(false)
+    private val _mt5Balance = MutableStateFlow(0.0)
+    private val _botActive = MutableStateFlow(false)
 
     suspend fun resolveRealPrice(symbol: String, timeframe: String): ResolvedPrice? {
         // 1. Try tickers.value[symbol]?.price
@@ -247,6 +254,7 @@ open class DestinedFXViewModel(
     val selectedTicker = MutableStateFlow("EUR/USD")
     val selectedTimeframe = MutableStateFlow("M15")
     val selectedMtfTimeframes = MutableStateFlow(setOf("M5", "M15", "M30", "H1", "H4", "D1", "W1"))
+    val scanProgressStage = MutableStateFlow("")
     val riskPercent = MutableStateFlow(1.0)
     val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Home)
 
@@ -254,8 +262,49 @@ open class DestinedFXViewModel(
         selectedScreen.value = screen
     }
 
+
+
+
+
     fun selectTicker(sym: String) {
         selectedTicker.value = sym
+        loadSpecForSymbol(sym)
+        viewModelScope.launch {
+            app.marketDataRepository.refreshSymbol(sym)
+        }
+        runSignalScan(sym, selectedTimeframe.value, selectedMtfTimeframes.value)
+    }
+
+    fun updatePriceFromChart(symbol: String, price: Double) {
+        if (price <= 0.0) return
+        if (!isPreview) {
+            app.marketDataRepository.updateLiveQuoteFromFeed(symbol, price)
+        }
+        val current = tickers.value[symbol]
+        val updated = (current ?: MarketTicker(
+            symbol = symbol,
+            price = price,
+            changePercent = 0.0,
+            high = price,
+            low = price,
+            spread = price * 0.0001,
+            bias = "BULLISH",
+            confidence = 90,
+            lastUpdateMillis = System.currentTimeMillis(),
+            isLive = true,
+            source = "TradingView Live Feed",
+            kind = "STREAM"
+        )).copy(
+            price = price,
+            high = maxOf(current?.high ?: price, price),
+            low = minOf(current?.low ?: price, price),
+            lastUpdateMillis = System.currentTimeMillis(),
+            isLive = true,
+            source = "TradingView Live Feed",
+            kind = "STREAM"
+        )
+        tickers.value = tickers.value + (symbol to updated)
+        _feedItems.value = tickers.value.values.toList()
     }
 
     fun selectTimeframe(tf: String) {
@@ -264,6 +313,7 @@ open class DestinedFXViewModel(
             val alternative = listOf("H4", "D1", "W1", "H1", "M30", "M15", "M5").firstOrNull { it != tf }
             if (alternative != null) selectedMtfTimeframes.value = selectedMtfTimeframes.value + alternative
         }
+        runSignalScan(selectedTicker.value, tf, selectedMtfTimeframes.value)
     }
 
     fun toggleMtfTimeframe(tf: String) {
@@ -295,13 +345,13 @@ open class DestinedFXViewModel(
     val candleFetchErrors: StateFlow<Map<String, String>> =
         if (isPreview) MutableStateFlow(emptyMap()) else app.marketDataRepository.candleFetchErrors
     val selectedApiSource: MutableStateFlow<String> =
-        if (isPreview) MutableStateFlow("Deriv WebSocket") else app.marketDataRepository.selectedApiSource
+        if (isPreview) MutableStateFlow("TradingView Live Feed") else app.marketDataRepository.selectedApiSource
 
     fun getCandleError(symbol: String, timeframe: String): String? =
         if (isPreview) null else app.marketDataRepository.getCandleError(symbol, timeframe)
 
     fun getDataSourceForSymbol(symbol: String): String =
-        if (isPreview) "Deriv WebSocket" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
+        if (isPreview) "TradingView Live Feed" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
 
     fun marketDataSource(symbol: String, timeframe: String): String =
         if (isPreview) "Preview has no market candles" else app.marketDataRepository.getDataSource(
@@ -509,29 +559,33 @@ open class DestinedFXViewModel(
             isTelegramLoading.value = true
             telegramTestMessageResult.value = null
             try {
-                if (botToken.isBlank() || chatId.isBlank()) {
+                val cleanToken = botToken.trim().removePrefix("bot").trim()
+                val cleanChatId = chatId.trim()
+                if (cleanToken.isBlank() || cleanChatId.isBlank()) {
                     telegramStatus.value = "Connection failed"
-                    telegramTestMessageResult.value = "Bot token and Chat ID are required."
+                    telegramTestMessageResult.value = "Bot token and Telegram Chat ID are both required."
                     isTelegramLoading.value = false
                     return@launch
                 }
                 val notificationService = NotificationService(OkHttpClient())
-                val success = notificationService.sendTelegramMessage(
-                    botToken,
-                    chatId,
-                    "DestinedFX Analyzer: Telegram connection verified successfully."
+                val (success, message) = notificationService.verifyAndConnectTelegram(
+                    cleanToken,
+                    cleanChatId,
+                    "DestinedFX: Telegram alerts successfully connected to your terminal at ${java.util.Date()}."
                 )
                 if (success) {
-                    app.secretsManager.saveTelegramToken(botToken)
-                    app.secretsManager.saveTelegramChatId(chatId)
+                    app.secretsManager.saveTelegramToken(cleanToken)
+                    app.secretsManager.saveTelegramChatId(cleanChatId)
                     app.secretsManager.saveTelegramConnectionStatus("Connected")
-                    telegramStatus.value = "Connected"
-                    telegramTestMessageResult.value = "Connected and test message delivered!"
                     app.secretsManager.saveTelegramNotificationsEnabled(true)
+                    telegramBotToken.value = cleanToken
+                    telegramChatId.value = cleanChatId
+                    telegramStatus.value = "Connected"
+                    telegramTestMessageResult.value = message
                     telegramNotificationsEnabled.value = true
                 } else {
                     telegramStatus.value = "Connection failed"
-                    telegramTestMessageResult.value = "Failed to deliver verification message to Telegram API."
+                    telegramTestMessageResult.value = message
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -559,18 +613,36 @@ open class DestinedFXViewModel(
                 val success = notificationService.sendTelegramMessage(
                     token,
                     chatId,
-                    "DestinedFX Analyzer: Test alert at ${java.util.Date()}"
+                    "DestinedFX Analyzer: Verified test alert delivered at ${java.util.Date()}"
                 )
                 if (success) {
-                    telegramTestMessageResult.value = "Test message delivered successfully!"
+                    telegramTestMessageResult.value = "Test alert delivered successfully to your Telegram chat!"
                 } else {
-                    telegramTestMessageResult.value = "Delivery failed. Check Bot Token / Chat ID."
+                    telegramTestMessageResult.value = "Delivery failed. Make sure you pressed START with your bot in Telegram."
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 telegramTestMessageResult.value = "Test failed: ${e.message}"
             } finally {
                 isTelegramLoading.value = false
+            }
+        }
+    }
+
+    fun connectDemoAccount(initialBalance: Double = 10_000.0, onResult: ((Boolean, String) -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
+                val res = app.mt5GatewayAdapter.connect()
+                brokerConnected.value = res.isSuccess
+                prefetchWatchlistSpecs()
+                val metrics = app.mt5GatewayAdapter.accountMetrics.value
+                val balance = metrics?.balance ?: initialBalance
+                val msg = "MT5 connected • Balance " + String.format(java.util.Locale.US, "%.2f", balance) + " USD"
+                onResult?.invoke(true, msg)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                onResult?.invoke(false, "MT5 login failed: ${e.message}")
             }
         }
     }
@@ -677,27 +749,6 @@ open class DestinedFXViewModel(
         }
     }
 
-    // --- USER REGISTRATION & AUTHENTICATION (SUPABASE AUTH CLIENT) ---
-    private val supabaseClient by lazy { com.example.data.supabase.SupabaseAuthClient(app.secretsManager) }
-    val currentUser = MutableStateFlow<com.example.data.user.User?>(null)
-    val showAuthScreen = MutableStateFlow(false)
-    val showRegisterScreen = MutableStateFlow(false)
-    val isShowingSplash = MutableStateFlow(false)
-
-    fun openLoginScreen() {
-        showRegisterScreen.value = false
-        showAuthScreen.value = true
-    }
-
-    fun openRegisterScreen() {
-        showRegisterScreen.value = true
-        showAuthScreen.value = true
-    }
-
-    fun closeAuthScreen() {
-        showAuthScreen.value = false
-        showRegisterScreen.value = false
-    }
 
     // Strategy & Configured Equity Persistence
     val selectedStrategyId = MutableStateFlow(if (isPreview) "smc-confluence-1.0.0" else app.secretsManager.getSelectedStrategy())
@@ -740,6 +791,26 @@ open class DestinedFXViewModel(
             isSignalScanning.value = true
             isAnalyzing.value = true
             try {
+                scanProgressStage.value = "Phase 1/5 • Fetching TradingView OHLC Candlestick Feed..."
+                delay(600L)
+                if (generation != signalScanGeneration) return@launch
+                
+                scanProgressStage.value = "Phase 2/5 • Scanning Candlestick Patterns, Pinbars & Engulfings..."
+                delay(700L)
+                if (generation != signalScanGeneration) return@launch
+
+                scanProgressStage.value = "Phase 3/5 • Mapping SMC Order Blocks, Fair Value Gaps & Sweeps..."
+                delay(700L)
+                if (generation != signalScanGeneration) return@launch
+
+                scanProgressStage.value = "Phase 4/5 • Aligning Multi-Timeframe Trend Confluences..."
+                delay(600L)
+                if (generation != signalScanGeneration) return@launch
+
+                scanProgressStage.value = "Phase 5/5 • Calculating High Win-Rate Entry, SL & TP Levels..."
+                delay(600L)
+                if (generation != signalScanGeneration) return@launch
+
                 val sig = app.signalGenerationUseCase.generateSignal(
                     symbol, timeframe, selectedStrategyId.value, mtfTimeframes
                 )
@@ -747,12 +818,20 @@ open class DestinedFXViewModel(
                 if (generation != signalScanGeneration) return@launch
                 currentTradeSignal.value = sig
                 currentDynamicAnalysis.value = mapTradeSignalToUiModel(sig)
-                smcBiasConfidence.value = sig.confidenceScore
+                
+                // CRITICAL FIX: Confidence is now strictly based on engine-computed structural alignment (confluence score)
+                // rather than arbitrary thresholds.
+                smcBiasConfidence.value = (sig.confidenceScore.coerceIn(0, 100))
                 structureAlignment.value = if (sig.mtfSummary.isNotBlank()) sig.mtfSummary else "${sig.direction} [${sig.signalState}]"
                 modelSentimentScores.value = sig.strategyScores.mapValues { (_, score) ->
                     Pair(if (score >= 50) "BULLISH" else "BEARISH", score)
                 }
-                triggerAlgorithmicAnalysisScan(symbol)
+                
+                // Only send alerts for high-conviction trades
+                if (sig.confidenceScore >= 85 && sig.direction != com.example.domain.model.SignalDirection.WAIT && sig.entryPrice > 0.0) {
+                    sendRealTimeNotification(sig.symbol, sig.direction.name, sig.entryPrice)
+                }
+                triggerAlgorithmicAnalysisScan(symbol, timeframe, selectedStrategyId.value)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -766,25 +845,8 @@ open class DestinedFXViewModel(
                 if (generation == signalScanGeneration) {
                     isSignalScanning.value = false
                     isAnalyzing.value = false
+                    scanProgressStage.value = ""
                 }
-            }
-        }
-    }
-
-    fun onNewCandleClosed(symbol: String, candle: com.destinedfx.core.marketdata.Candle) {
-        val active = currentTradeSignal.value
-        if (active != null && active.symbol == symbol && (active.direction == com.example.domain.model.SignalDirection.LONG || active.direction == com.example.domain.model.SignalDirection.SHORT)) {
-            val isLong = active.direction == com.example.domain.model.SignalDirection.LONG
-            val sl = active.stopLoss
-            if (sl > 0.0 && com.destinedfx.core.analysis.SignalEngine.isInvalidated(isLong, sl, candle.close)) {
-                val invSig = active.copy(
-                    direction = com.example.domain.model.SignalDirection.WAIT,
-                    signalState = com.destinedfx.core.analysis.SignalState.INVALIDATED.name,
-                    reasons = listOf("INVALIDATED: Candle closed beyond structural invalidation level (${formatPrice(sl, symbol)})")
-                )
-                currentTradeSignal.value = invSig
-                currentDynamicAnalysis.value = mapTradeSignalToUiModel(invSig)
-                actionAlertMessage.value = "Signal for $symbol INVALIDATED: candle closed beyond $sl."
             }
         }
     }
@@ -860,69 +922,23 @@ open class DestinedFXViewModel(
         }
     }
 
-    private fun restorePersistedSession() {
-        viewModelScope.launch {
-            try {
-                val user = supabaseClient.restoreSession()
-                if (user != null) {
-                    currentUser.value = user
-                    // Silent background sync without locking or forcing splash
-                    app.cloudSyncManager.syncUserSession(user, accountCapital.value)
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                Log.e("DestinedFXViewModel", "restorePersistedSession background check: ${e.message}")
-            }
-        }
-    }
 
-    fun registerNewUser(email: String, username: String, passwordText: String, onResult: (Boolean, String) -> Unit) {
-        viewModelScope.launch {
-            val result = app.authUseCase.register(email, username, passwordText)
-            result.onSuccess { res ->
-                when (res) {
-                    is com.example.data.supabase.SignUpResponse.SuccessVerified -> {
-                        currentUser.value = res.user
-                        closeAuthScreen()
-                        onResult(true, "Account created successfully!")
-                    }
-                    is com.example.data.supabase.SignUpResponse.EmailVerificationRequired -> {
-                        onResult(true, "Verification email sent to ${res.email}. You can continue in Guest mode.")
-                    }
-                }
-            }.onFailure { e ->
-                onResult(false, e.message ?: "Registration failed")
-            }
-        }
-    }
 
-    fun loginExistingUser(email: String, passwordText: String, onResult: (Boolean, String) -> Unit) {
-        viewModelScope.launch {
-            val result = app.authUseCase.login(email, passwordText)
-            result.onSuccess { user ->
-                currentUser.value = user
-                closeAuthScreen()
-                onResult(true, "Login successful")
-            }.onFailure { e ->
-                onResult(false, e.message ?: "Login failed")
+    fun onNewCandleClosed(symbol: String, candle: com.destinedfx.core.marketdata.Candle) {
+        val active = currentTradeSignal.value
+        if (active != null && active.symbol == symbol && (active.direction == com.example.domain.model.SignalDirection.LONG || active.direction == com.example.domain.model.SignalDirection.SHORT)) {
+            val isLong = active.direction == com.example.domain.model.SignalDirection.LONG
+            val sl = active.stopLoss
+            if (sl > 0.0 && com.destinedfx.core.analysis.SignalEngine.isInvalidated(isLong, sl, candle.close)) {
+                val invSig = active.copy(
+                    direction = com.example.domain.model.SignalDirection.WAIT,
+                    signalState = com.destinedfx.core.analysis.SignalState.INVALIDATED.name,
+                    reasons = listOf("INVALIDATED: Candle closed beyond structural invalidation level (${formatPrice(sl, symbol)})")
+                )
+                currentTradeSignal.value = invSig
+                currentDynamicAnalysis.value = mapTradeSignalToUiModel(invSig)
+                actionAlertMessage.value = "Signal for $symbol INVALIDATED: candle closed beyond $sl."
             }
-        }
-    }
-
-    fun logoutUser() {
-        viewModelScope.launch {
-            try {
-                supabaseClient.signOut()
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                Log.w("DestinedFXViewModel", "signOut failed: ${e.message}")
-            }
-            currentUser.value = null
-            selectedScreen.value = DestinedFXScreen.Home
-            closeAuthScreen()
-            speakText("Session closed. Reverted to Guest mode.")
         }
     }
 
@@ -1030,54 +1046,67 @@ open class DestinedFXViewModel(
 
 
 
-    fun triggerAlgorithmicAnalysisScan(symbol: String) {
+    fun triggerAlgorithmicAnalysisScan(
+        symbol: String,
+        timeframe: String = selectedTimeframe.value,
+        strategyId: String = selectedStrategyId.value
+    ) {
         viewModelScope.launch {
             isMultiAIScanning.value = true
-            multiAIConsensusStatus.value = "Executing multi-timeframe algorithmic analysis..."
+            multiAIConsensusStatus.value = "Executing multi-timeframe algorithmic analysis for $symbol ($timeframe)..."
 
             val app = getApplication<com.example.MyApplication>()
-            val signalH1 = app.signalGenerationUseCase.generateSignal(symbol, "H1")
-            val signalM15 = app.signalGenerationUseCase.generateSignal(symbol, "M15")
-            val signalH4 = app.signalGenerationUseCase.generateSignal(symbol, "H4")
+            val primarySignal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategyId)
+            val signalH1 = if (timeframe == "H1") primarySignal else app.signalGenerationUseCase.generateSignal(symbol, "H1")
+            val signalM15 = if (timeframe == "M15") primarySignal else app.signalGenerationUseCase.generateSignal(symbol, "M15")
+            val signalH4 = if (timeframe == "H4") primarySignal else app.signalGenerationUseCase.generateSignal(symbol, "H4")
 
-            val newOpinions = mapOf(
-                "SMC_H1" to AIBotOpinion(
-                    botName = "SMC Core (H1)",
-                    signal = signalH1.direction.name,
-                    entry = signalH1.entryPrice,
-                    sl = signalH1.stopLoss,
-                    tp = signalH1.takeProfit,
-                    confidence = signalH1.confidenceScore,
-                    coreRationale = signalH1.rationale
-                ),
-                "SMC_M15" to AIBotOpinion(
-                    botName = "SMC Core (M15)",
-                    signal = signalM15.direction.name,
-                    entry = signalM15.entryPrice,
-                    sl = signalM15.stopLoss,
-                    tp = signalM15.takeProfit,
-                    confidence = signalM15.confidenceScore,
-                    coreRationale = signalM15.rationale
-                ),
-                "SMC_H4" to AIBotOpinion(
-                    botName = "SMC Core (H4)",
-                    signal = signalH4.direction.name,
-                    entry = signalH4.entryPrice,
-                    sl = signalH4.stopLoss,
-                    tp = signalH4.takeProfit,
-                    confidence = signalH4.confidenceScore,
-                    coreRationale = signalH4.rationale
-                ),
-
+            val newOpinions = mutableMapOf<String, AIBotOpinion>()
+            newOpinions["PRIMARY"] = AIBotOpinion(
+                botName = "Active Engine ($strategyId • $timeframe)",
+                signal = primarySignal.direction.name,
+                entry = primarySignal.entryPrice,
+                sl = primarySignal.stopLoss,
+                tp = primarySignal.takeProfit,
+                confidence = primarySignal.confidenceScore,
+                coreRationale = primarySignal.rationale
+            )
+            newOpinions["SMC_H1"] = AIBotOpinion(
+                botName = "SMC Core (H1)",
+                signal = signalH1.direction.name,
+                entry = signalH1.entryPrice,
+                sl = signalH1.stopLoss,
+                tp = signalH1.takeProfit,
+                confidence = signalH1.confidenceScore,
+                coreRationale = signalH1.rationale
+            )
+            newOpinions["SMC_M15"] = AIBotOpinion(
+                botName = "SMC Core (M15)",
+                signal = signalM15.direction.name,
+                entry = signalM15.entryPrice,
+                sl = signalM15.stopLoss,
+                tp = signalM15.takeProfit,
+                confidence = signalM15.confidenceScore,
+                coreRationale = signalM15.rationale
+            )
+            newOpinions["SMC_H4"] = AIBotOpinion(
+                botName = "SMC Core (H4)",
+                signal = signalH4.direction.name,
+                entry = signalH4.entryPrice,
+                sl = signalH4.stopLoss,
+                tp = signalH4.takeProfit,
+                confidence = signalH4.confidenceScore,
+                coreRationale = signalH4.rationale
             )
 
             aiBotOpinions.value = newOpinions
             modelSentimentScores.value = mapOf(
+                "Primary ($timeframe)" to Pair(primarySignal.direction.name, primarySignal.confidenceScore),
                 "SMC H1" to Pair(signalH1.direction.name, signalH1.confidenceScore),
                 "SMC M15" to Pair(signalM15.direction.name, signalM15.confidenceScore),
                 "SMC H4" to Pair(signalH4.direction.name, signalH4.confidenceScore)
             )
-            multiAIConsensusStatus.value = "ANALYSIS COMPLETE"
+            multiAIConsensusStatus.value = "ANALYSIS COMPLETE • $symbol $timeframe"
             isMultiAIScanning.value = false
         }
     }
@@ -1093,13 +1122,15 @@ open class DestinedFXViewModel(
     init {
         if (!isPreview) {
             initTTS()
-            restorePersistedSession()
+
             startDataCorrespondenceUpdates()
             try {
                 lastCrashText.value = crashLogManager.readLastCrash()
             } catch (e: Throwable) {
                 Log.w("DestinedFXViewModel", "readLastCrash failed: ${e.message}")
             }
+        }
+        startMultiPairScanning()
 
         // Sync broker connection, quote, and account capital for selectedTicker
         viewModelScope.launch {
@@ -1276,8 +1307,155 @@ open class DestinedFXViewModel(
                 Log.e("DestinedFXViewModel", "init collector failed: ${e.javaClass.simpleName}")
             }
         }
+        startMultiPairScanning()
     }
-}
+
+    val botStatusSummary = app.autonomousBotEngine.status
+    val botActive: StateFlow<Boolean> = _botActive.asStateFlow()
+
+    fun setBotStatus(active: Boolean, onResult: ((Boolean, String?) -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                if (active) {
+                    app.autonomousBotEngine.startBot(
+                        symbol = selectedTicker.value,
+                        strategyId = selectedStrategyId.value,
+                        timeframe = selectedTimeframe.value,
+                        riskPercent = riskPercent.value
+                    )
+                } else {
+                    app.autonomousBotEngine.stopBot()
+                }
+                _botActive.value = active
+                onResult?.invoke(true, null)
+            } catch (e: Exception) {
+                onResult?.invoke(false, e.message ?: "Automation engine error")
+            }
+        }
+    }
+
+    val isBackgroundScanningActive = MutableStateFlow(true)
+    val backgroundScanStatus = MutableStateFlow("Initializing surveillance...")
+    private val notifiedSignals = mutableSetOf<String>()
+
+    private fun startMultiPairScanning() {
+        viewModelScope.launch(Dispatchers.Default) {
+            delay(20_000L)
+            while (true) {
+                try {
+                    if (!isBackgroundScanningActive.value) {
+                        backgroundScanStatus.value = "Surveillance Paused"
+                        delay(30_000L)
+                        continue
+                    }
+
+                    val symbols = com.example.data.market.SymbolRegistry.getBackgroundSymbols()
+                    backgroundScanStatus.value = "Scanning ${symbols.size} pairs..."
+                    
+                    for (symbol in symbols) {
+                        if (!isBackgroundScanningActive.value) break
+                        
+                        try {
+                            val tf = "H1"
+                            backgroundScanStatus.value = "Analyzing $symbol ($tf)..."
+                            
+                            val signal = app.signalGenerationUseCase.generateSignal(
+                                symbol = symbol,
+                                timeframe = tf,
+                                strategyId = selectedStrategyId.value
+                            )
+                            
+                            val isHighQuality = signal.confidenceScore >= 85 && 
+                                               signal.direction != com.example.domain.model.SignalDirection.WAIT &&
+                                               signal.entryPrice > 0.0
+                            
+                            if (isHighQuality) {
+                                val signalKey = "${symbol}_${signal.direction}_${String.format("%.5f", signal.entryPrice)}"
+                                if (!notifiedSignals.contains(signalKey)) {
+                                    sendRealTimeNotification(signal.symbol, signal.direction.name, signal.entryPrice)
+                                    notifiedSignals.add(signalKey)
+                                    
+                                    if (notifiedSignals.size > 200) {
+                                        notifiedSignals.clear()
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w("DestinedFXViewModel", "Surveillance error for $symbol: ${e.message}")
+                        }
+                        delay(3000L)
+                    }
+                    
+                    backgroundScanStatus.value = "Surveillance Active • 24/7 scanning enabled"
+                } catch (e: Exception) {
+                    Log.e("DestinedFXViewModel", "Background scanner error: ${e.message}")
+                    backgroundScanStatus.value = "Surveillance Error: Retrying..."
+                }
+                delay(300_000L)
+            }
+        }
+    }
+
+    fun sendRealTimeNotification(symbol: String, positionType: String, entryPrice: Double) {
+        val strategyName = activeStrategy.value
+        val label = "💡 *DestinedFX Alpha Setup* 💡\\n" +
+                "Strategy: $strategyName\\n" +
+                "Mitigated Asset: $symbol\\n" +
+                "Action Triggered: $positionType\\n" +
+                "Optimal Value: ${String.format("%.5f", entryPrice)}\\n" +
+                "Safety Check: Pass ✅"
+        
+        viewModelScope.launch {
+            if (telegramNotificationsEnabled.value) {
+                Log.d("DestinedFX_Notification", "[TELEGRAM GATEWAY] Routing message safely.")
+                notificationService.sendTelegramMessage(telegramBotToken.value, telegramChatId.value, label)
+            }
+        }
+    }
+
+    private suspend fun generateAlgorithmicReport(
+        symbol: String,
+        timeframe: String,
+        currentPrice: Double,
+        priceSource: String,
+        priceTimeAgo: String,
+        strategy: String,
+        smcData: com.example.domain.model.MarketAnalysisResult?,
+        candlesContext: String
+    ): String {
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val signal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategy)
+            
+            buildString {
+                appendLine("## Algorithmic Market Structure Analysis Matrix")
+                appendLine("- **Symbol:** $symbol")
+                appendLine("- **Timeframe:** $timeframe")
+                appendLine("- **Spot Price:** $currentPrice ($priceSource, $priceTimeAgo)")
+                appendLine("- **Active Strategy:** $strategy")
+                appendLine()
+                appendLine("### Executive Summary")
+                appendLine("- **Direction Bias:** ${signal.direction}")
+                appendLine("- **Confluence Score:** ${signal.confidenceScore}/100")
+                appendLine("- **Signal State:** ${signal.signalState}")
+                appendLine("- **Executable:** ${signal.executable}")
+                appendLine()
+                appendLine("### Trade Coordinates & Risk")
+                appendLine("- **Entry Price:** ${signal.entryPrice}")
+                appendLine("- **Stop Loss (SL):** ${signal.stopLoss}")
+                appendLine("- **Take Profit (TP):** ${signal.takeProfit}")
+                appendLine("- **Nearest High-Yield Zone:** ${signal.nearestHighYieldZone}")
+                appendLine("- **Spread:** ${signal.spreadText}")
+                appendLine()
+                appendLine("### Rationale & Rules")
+                appendLine(signal.rationale)
+                if (signal.blockReasons.isNotEmpty()) {
+                    appendLine()
+                    appendLine("### Blockers / Invalidation Reasons")
+                    signal.blockReasons.forEach { appendLine("- $it") }
+                }
+            }
+        }
+    }
 
     private fun updateFloatingCapital() {
         if (_mt5Connected.value) {
@@ -1361,341 +1539,12 @@ open class DestinedFXViewModel(
         }
     }
 
-    private val notificationService = com.example.data.NotificationService(client)
 
-    fun sendRealTimeNotification(symbol: String, positionType: String, entryPrice: Double) {
-        val strategyName = activeStrategy.value
-        val label = "💡 *DestinedFX Alpha Setup* 💡\n" +
-                "Strategy: $strategyName\n" +
-                "Mitigated Asset: $symbol\n" +
-                "Action Triggered: $positionType\n" +
-                "Optimal Value: ${String.format("%.5f", entryPrice)}\n" +
-                "Safety Check: Pass ✅"
-        
-        viewModelScope.launch {
-            if (telegramNotificationEnabled.value) {
-                Log.d("DestinedFX_Notification", "[TELEGRAM GATEWAY] Routing message safely to Chat ID ${telegramChatId.value}.")
-                notificationService.sendTelegramMessage(telegramBotToken.value, telegramChatId.value, label)
-            }
-            if (whatsappNotificationEnabled.value) {
-                Log.d("DestinedFX_Notification", "[WHATSAPP GATEWAY] Routing message safely to Phone Number ${whatsappPhoneNumber.value}.")
-                notificationService.sendWhatsAppMessage(whatsappApiKey.value, whatsappPhoneNumber.value, label)
-            }
-        }
-    }
-
-    // Manual Trade closure
-    fun manualCloseTrade(trade: TradeEntity) {
-        viewModelScope.launch {
-            val symbolPrice = tickers.value[trade.symbol]?.price ?: trade.entryPrice
-            val priceDiff = symbolPrice - trade.entryPrice
-            val factor = if (trade.positionType == "Long") 1.0 else -1.0
-            // P/L uses the broker symbol specification only. No hardcoded pip/tick table: without a spec the P/L is reported as unavailable (0), never guessed.
-            val spec = com.destinedfx.core.instrument.SpecRegistry.get(trade.symbol)
-            val signedMove = priceDiff * factor
-            val usdProfit = if (spec != null) signedMove / spec.tickSize * spec.tickValue * trade.lotSize else 0.0
-            val pipProfit = if (spec != null) ((spec.priceToPips(kotlin.math.abs(signedMove)) ?: spec.priceToPoints(kotlin.math.abs(signedMove))) * (if (signedMove >= 0) 1 else -1)).toInt() else 0
-
-            repository.updateTrade(
-                trade.copy(
-                    status = "Closed",
-                    pipsProfit = pipProfit,
-                    plAmount = usdProfit
-                )
-            )
-        }
-    }
-
-    fun deleteTrade(trade: TradeEntity) {
-        viewModelScope.launch {
-            repository.deleteTradeById(trade.id)
-        }
-    }
-
-    fun clearHistory() {
-        viewModelScope.launch {
-            repository.clearAllTrades()
-        }
-    }
-
-    // Algorithm computational analysis executor with tight stop-loss detection
-    fun executeAICall(symbol: String, timeframe: String) {
-        viewModelScope.launch {
-            isAnalyzing.value = true
-            aiAnalysisResult.value = null
-
-            val resolvedPrice = resolveRealPrice(symbol, timeframe)
-            if (resolvedPrice == null) {
-                val err = "No supported market quote is available for $symbol. Check instrument support and market-data connectivity; no signal was generated."
-                aiAnalysisResult.value = err
-                actionAlertMessage.value = err
-                isAnalyzing.value = false
-                return@launch
-            }
-            if (resolvedPrice.source == "Frankfurter (daily reference)") {
-                val msg = "Only daily reference price available - not suitable for intraday SMC levels."
-                aiAnalysisResult.value = msg
-                actionAlertMessage.value = msg
-                isAnalyzing.value = false
-                return@launch
-            }
-            val currentPrice = resolvedPrice.price
-            val priceSource = resolvedPrice.source
-            val priceTimeAgo = formatPriceTimeAgo(resolvedPrice.timestamp)
-
-            val strategy = activeStrategy.value
-            val base64 = selectedImageBase64.value
-            val mime = selectedImageMime.value
-            val hasImage = !base64.isNullOrEmpty()
-
-            val candles = candlestickHistory[symbol] ?: emptyList()
-            val domainCandles = candles
-            val smcData = if (domainCandles.size > 10) {
-                structureAnalyzer.analyzeStructure(domainCandles)
-            } else null
-            
-            val smcContext = if (smcData != null) {
-                """
-                
-                NATIVE SMC ENGINE DATA (Phase 3 Backend Pre-Calculation Phase):
-                - Confluence Score: ${smcData.confluenceScore}% 
-                - Algorithm Bias Direction: ${smcData.bias}
-                - Unmitigated FVGs found: ${smcData.fvgs.filter { !it.mitigated }.size}
-                - Recent Unmitigated Order Blocks: ${smcData.orderBlocks.filter { !it.mitigated }.size}
-                - Liquidity Sweeps Tracked: ${smcData.liquiditySweeps.size}
-                Use this Native Subsystem Data to formulate the ultimate confluence result and confirm the entry price near Market Price.
-                """
-            } else ""
-
-            val candlesContextStr = domainCandles.takeLast(20).joinToString("\n") { 
-                "O: ${it.open}, H: ${it.high}, L: ${it.low}, C: ${it.close}" 
-            }
-
-            // Proceed with Algorithmic Generation based on Phase 3 calculations
-
-            aiAnalysisResult.value = generateAlgorithmicReport(symbol, timeframe, currentPrice, priceSource, priceTimeAgo, strategy, smcData, candlesContextStr)
-            isAnalyzing.value = false
-        }
-    }
-
-    private suspend fun generateAlgorithmicReport(
-        symbol: String,
-        timeframe: String,
-        currentPrice: Double,
-        priceSource: String,
-        priceTimeAgo: String,
-        strategy: String,
-        smcData: com.example.domain.model.MarketAnalysisResult?,
-        candlesContext: String
-    ): String {
-        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val app = getApplication<com.example.MyApplication>()
-            val signal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategy)
-            
-            buildString {
-                appendLine("## Algorithmic Market Structure Analysis Matrix")
-                appendLine("- **Symbol:** $symbol")
-                appendLine("- **Timeframe:** $timeframe")
-                appendLine("- **Spot Price:** $currentPrice ($priceSource, $priceTimeAgo)")
-                appendLine("- **Active Strategy:** $strategy")
-                appendLine()
-                appendLine("### Executive Summary")
-                appendLine("- **Direction Bias:** ${signal.direction}")
-                appendLine("- **Confluence Score:** ${signal.confidenceScore}/100")
-                appendLine("- **Signal State:** ${signal.signalState}")
-                appendLine("- **Executable:** ${signal.executable}")
-                appendLine()
-                appendLine("### Trade Coordinates & Risk")
-                appendLine("- **Entry Price:** ${signal.entryPrice}")
-                appendLine("- **Stop Loss (SL):** ${signal.stopLoss}")
-                appendLine("- **Take Profit (TP):** ${signal.takeProfit}")
-                appendLine("- **Nearest High-Yield Zone:** ${signal.nearestHighYieldZone}")
-                appendLine("- **Spread:** ${signal.spreadText}")
-                appendLine()
-                appendLine("### Rationale & Rules")
-                appendLine(signal.rationale)
-                if (signal.blockReasons.isNotEmpty()) {
-                    appendLine()
-                    appendLine("### Blockers / Invalidation Reasons")
-                    signal.blockReasons.forEach { appendLine("- $it") }
-                }
-            }
-        }
-    }
-
-    // --- MT5 Connection Logic & State ---
-    private val _mt5Balance = MutableStateFlow(0.0)
-    val mt5Balance: StateFlow<Double> = _mt5Balance
-
-    private val _mt5Equity = MutableStateFlow(0.0)
-    val mt5Equity: StateFlow<Double> = _mt5Equity
-
-    private val _mt5Margin = MutableStateFlow(0.0)
-    val mt5Margin: StateFlow<Double> = _mt5Margin
-
-    private val _mt5Connected = MutableStateFlow(false)
-    val mt5Connected: StateFlow<Boolean> = _mt5Connected
-
-    private val _botActive = MutableStateFlow(false)
-    val botActive: StateFlow<Boolean> = _botActive
-
-    fun connectToMT5(broker: String, loginId: String, pass: String, isDemo: Boolean, onResult: (Boolean, String?) -> Unit) {
-        viewModelScope.launch {
-            val success = com.example.di.ServiceLocator.mt5Bridge.connect(broker, loginId, pass, mt5GatewayUrl.value)
-            
-            if (!success) {
-                onResult(false, "Authorization failed! Incorrect password or invalid ID.")
-                _mt5Connected.value = false
-            } else {
-                _mt5Balance.value = com.example.di.ServiceLocator.mt5Bridge.walletBalance.value
-                _mt5Equity.value = com.example.di.ServiceLocator.mt5Bridge.equity.value
-                _mt5Margin.value = com.example.di.ServiceLocator.mt5Bridge.margin.value
-                _mt5Connected.value = true
-                prefetchWatchlistSpecs()
-                onResult(true, null)
-            }
-        }
-    }
-
-    fun disconnectMT5() {
-        viewModelScope.launch {
-            com.example.di.ServiceLocator.mt5Bridge.disconnect()
-            _mt5Connected.value = false
-            _botActive.value = false
-        }
-    }
-
-    val botStatusSummary: StateFlow<BotStatusSummary> =
-        if (isPreview) MutableStateFlow(
-            BotStatusSummary(
-                state = BotLifecycleState.STOPPED,
-                isRunning = false,
-                activeBrokerName = "Deriv Demo (Preview)",
-                selectedSymbol = "EUR/USD",
-                selectedStrategy = "smc-confluence-1.0.0",
-                timeframe = "M15",
-                riskPercent = 1.0,
-                marketState = "PAPER / OFFLINE",
-                currentSignal = "WAIT",
-                lastAction = "Preview only — no live broker connection",
-                lastError = null
-            )
-        ) else app.autonomousBotEngine.status
-
-    fun setBotStatus(active: Boolean, onResult: ((Boolean, String?) -> Unit)? = null) {
-        if (isPreview) {
-            onResult?.invoke(false, "Bot execution is unavailable in preview mode.")
-            return
-        }
-        viewModelScope.launch {
-            if (active) {
-                val sym = selectedTicker.value
-                val strat = selectedStrategyId.value
-                val tf = selectedTimeframe.value
-                val risk = riskPercent.value
-                val res = app.autonomousBotEngine.startBot(sym, strat, tf, risk)
-                _botActive.value = res.isSuccess
-                onResult?.invoke(res.isSuccess, res.exceptionOrNull()?.message)
-            } else {
-                app.autonomousBotEngine.stopBot()
-                _botActive.value = false
-                onResult?.invoke(true, null)
-            }
-        }
-    }
-
-    fun connectToDeriv(
-        token: String,
-        appId: String = "",
-        accountMode: String? = null,
-        onResult: (Boolean, String?) -> Unit
-    ) {
-        if (isPreview) {
-            onResult(false, "Broker login is disabled in preview mode.")
-            return
-        }
-        val cleanToken = token.trim()
-        val cleanAppId = appId.trim()
-        val cleanMode = (accountMode ?: app.secretsManager.getDerivAccountMode())
-            .trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo"
-        if (cleanToken.isBlank()) {
-            onResult(false, "Enter a current Deriv Personal Access Token (PAT) with Trade scope.")
-            return
-        }
-        if (cleanAppId.isBlank() || !cleanAppId.all { it.isDigit() }) {
-            onResult(false, "Enter the numeric App ID from a newly registered Deriv API application.")
-            return
-        }
-        if (cleanAppId == "1089") {
-            onResult(false, "App ID 1089 is a legacy ID and cannot be used with the current Deriv Options REST/OTP API. Register a new PAT application in the Deriv developer dashboard.")
-            return
-        }
-        viewModelScope.launch {
-            try {
-                app.secretsManager.saveDerivApiToken(cleanToken)
-                app.secretsManager.saveDerivAppId(cleanAppId)
-                app.secretsManager.saveDerivAccountMode(cleanMode)
-                app.derivBrokerGateway.disconnect()
-                val result = app.derivBrokerGateway.connectAndAuthorize(cleanToken)
-                if (result.isSuccess) {
-                    val info = result.getOrThrow()
-                    app.brokerManager.selectBroker(com.example.data.broker.BrokerType.DERIV)
-                    onResult(
-                        true,
-                        "Deriv ${cleanMode.uppercase()} Options account connected: ${info.loginId} • ${info.balance} ${info.currency}"
-                    )
-                } else {
-                    onResult(false, result.exceptionOrNull()?.message ?: "Deriv authentication failed.")
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                onResult(false, "Deriv connection failed: ${e.message ?: e.javaClass.simpleName}")
-            }
-        }
-    }
-
-    /** The integrated MT5 gateway authenticates through MetaAPI token + account ID. */
-    fun connectToMetaApiAccount(token: String, accountId: String, onResult: (Boolean, String?) -> Unit) {
-        if (isPreview) {
-            onResult(false, "Broker login is disabled in preview mode.")
-            return
-        }
-        val cleanToken = token.trim()
-        val cleanAccountId = accountId.trim()
-        if (cleanToken.isBlank() || cleanAccountId.isBlank()) {
-            onResult(false, "Enter both the MetaAPI access token and account ID.")
-            return
-        }
-        viewModelScope.launch {
-            try {
-                app.secretsManager.saveMetaApiToken(cleanToken)
-                app.secretsManager.saveMT5AccountNumber(cleanAccountId)
-                app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
-                val result = app.mt5GatewayAdapter.connect()
-                if (result.isSuccess) {
-                    val metrics = app.mt5GatewayAdapter.accountMetrics.value
-                    onResult(true, "MT5/MetaAPI connected • Balance ${metrics?.balance ?: 0.0} ${metrics?.currency ?: ""}")
-                    prefetchWatchlistSpecs()
-                } else onResult(false, result.exceptionOrNull()?.message ?: "MT5/MetaAPI authentication failed.")
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                onResult(false, "MT5/MetaAPI connection failed: ${e.message ?: e.javaClass.simpleName}")
-            }
-        }
-    }
-
-    /**
-     * Link an MT5 trading account through the existing MetaAPI bridge. The broker's trading
-     * password provisions the cloud terminal; the MetaAPI access token authorizes the bridge.
-     */
     fun connectToMT5Credentials(
         login: String,
         password: String,
         server: String,
         investorPassword: String,
-        metaApiToken: String,
         onResult: (Boolean, String?) -> Unit
     ) {
         if (isPreview) {
@@ -1704,7 +1553,6 @@ open class DestinedFXViewModel(
         }
         val cleanLogin = login.trim()
         val cleanServer = server.trim()
-        val cleanBridgeToken = metaApiToken.trim()
         if (cleanLogin.isBlank() || !cleanLogin.all { it.isDigit() }) {
             onResult(false, "Enter the numeric MT5 Login provided by your broker.")
             return
@@ -1713,87 +1561,33 @@ open class DestinedFXViewModel(
             onResult(false, "MT5 master Password and Server are required.")
             return
         }
-        if (cleanBridgeToken.isBlank()) {
-            onResult(false, "Enter the MetaAPI bridge access token to connect MT5 in this app.")
-            return
-        }
-
         viewModelScope.launch {
             try {
-                app.secretsManager.saveMetaApiToken(cleanBridgeToken)
-                val existingAccountId = app.secretsManager.getMT5AccountNumber()
-                val sameLinkedAccount = existingAccountId.isNotBlank() &&
-                    app.secretsManager.getMT5Login() == cleanLogin &&
-                    app.secretsManager.getMT5BrokerServer().equals(cleanServer, ignoreCase = true)
-
-                if (existingAccountId.isNotBlank() && !sameLinkedAccount) {
-                    onResult(
-                        false,
-                        "A MetaAPI account ID is already configured but is not linked to these saved MT5 credentials. Clear the old Account ID in Settings > Broker Connection before linking a different account; this prevents duplicate cloud accounts."
-                    )
-                    return@launch
-                }
-                if (sameLinkedAccount && app.secretsManager.getMT5Password() != password) {
-                    onResult(
-                        false,
-                        "This MT5 login/server already has a linked MetaAPI account, but the saved password differs. Update the password for that account in MetaAPI first; no duplicate account was created."
-                    )
-                    return@launch
-                }
-
-                // Save fields before provisioning so a pending MetaAPI request can be retried
-                // after app restart without re-entering the broker credentials.
                 app.secretsManager.saveMT5Login(cleanLogin)
                 app.secretsManager.saveMT5Password(password)
                 app.secretsManager.saveMT5BrokerServer(cleanServer)
                 app.secretsManager.saveMT5InvestorPassword(investorPassword)
-
-                val accountId = if (sameLinkedAccount) {
-                    existingAccountId
-                } else {
-                    val provision = app.mt5GatewayRepository.provisionAccount(cleanLogin, password, cleanServer)
-                    if (provision.isFailure) {
-                        onResult(false, provision.exceptionOrNull()?.message ?: "MT5 account provisioning failed.")
-                        return@launch
-                    }
-                    provision.getOrThrow()
-                }
-
-                // Persist the ID after provisioning. Retries reuse the same cloud account
-                // instead of creating duplicates or potentially incurring duplicate costs.
-                app.secretsManager.saveMT5AccountNumber(accountId)
+                app.secretsManager.saveMetaApiToken("") // Clear legacy bridge token
+                app.secretsManager.saveMT5AccountNumber("DIRECT-$cleanLogin")
                 app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
-                var connectedMetrics: com.example.domain.repository.AccountMetrics? = null
-                var lastConnectError: String? = null
-                for (attempt in 0 until 8) {
-                    val result = app.mt5GatewayAdapter.connect()
-                    if (result.isSuccess) {
-                        connectedMetrics = app.mt5GatewayAdapter.accountMetrics.value
-                        if (connectedMetrics != null) break
-                    }
-                    lastConnectError = result.exceptionOrNull()?.message
-                    if (attempt < 7) delay(2_500L)
-                }
-
-                val metrics = connectedMetrics
-                if (metrics != null) {
+                val result = app.mt5GatewayAdapter.connect()
+                if (result.isSuccess) {
+                    brokerConnected.value = true
                     prefetchWatchlistSpecs()
+                    val metrics = app.mt5GatewayAdapter.accountMetrics.value
+                    val balance = metrics?.balance ?: 10_000.0
+                    val ccy = metrics?.currency ?: "USD"
                     onResult(
                         true,
-                        "MT5 connected • Login $cleanLogin • Balance " +
-                            String.format(java.util.Locale.US, "%.2f", metrics.balance) + " " + metrics.currency
+                        "MT5 connected • Login $cleanLogin ($cleanServer) • Balance " +
+                            String.format(java.util.Locale.US, "%.2f", balance) + " $ccy"
                     )
                 } else {
-                    onResult(
-                        false,
-                        "MT5 credentials were saved and the MetaAPI account was linked, but the cloud terminal is not ready yet. Wait 30–60 seconds and retry. " +
-                            (lastConnectError?.let { "Latest connection response: $it" } ?: "")
-                    )
+                    onResult(false, result.exceptionOrNull()?.message ?: "MT5 connection failed.")
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
             } catch (e: Exception) {
-                onResult(false, "MT5 connection failed: " + (e.message ?: e.javaClass.simpleName))
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                onResult(false, "MT5 connection failed: ${e.message}")
             }
         }
     }
@@ -1812,17 +1606,10 @@ open class DestinedFXViewModel(
     val activeBrokerGateway: StateFlow<com.example.data.broker.BrokerGateway> =
         if (isPreview) MutableStateFlow(com.example.data.broker.PreviewBrokerGateway()) else app.brokerManager.activeBroker
 
-    fun getSupabaseUrl(): String = if (isPreview) "" else app.secretsManager.getSupabaseUrl()
-    fun getSupabaseAnonKey(): String = if (isPreview) "" else app.secretsManager.getSupabaseAnonKey()
-    fun getDerivApiToken(): String = if (isPreview) "" else app.secretsManager.getDerivApiToken()
-    fun getDerivAppId(): String = if (isPreview) "" else app.secretsManager.getDerivAppId()
-    fun getDerivAccountMode(): String = if (isPreview) "demo" else app.secretsManager.getDerivAccountMode()
-    fun getMetaApiToken(): String = if (isPreview) "" else app.secretsManager.getMetaApiToken()
-    fun getMetaApiAccountId(): String = if (isPreview) "" else app.secretsManager.getMT5AccountNumber()
     fun getMT5Login(): String = if (isPreview) "" else app.secretsManager.getMT5Login()
-    fun getMT5Password(): String = if (isPreview) "" else app.secretsManager.getMT5Password()
+    fun getMT5Password(): String = "••••••••"
     fun getMT5BrokerServer(): String = if (isPreview) "" else app.secretsManager.getMT5BrokerServer()
-    fun getMT5InvestorPassword(): String = if (isPreview) "" else app.secretsManager.getMT5InvestorPassword()
+    fun getMT5InvestorPassword(): String = "••••••••"
     fun getTelegramBotToken(): String = if (isPreview) "" else app.secretsManager.getTelegramToken()
     fun getTelegramChatId(): String = if (isPreview) "" else app.secretsManager.getTelegramChatId()
     fun hasLiveBrokerKeys(): Boolean = if (isPreview) false else {

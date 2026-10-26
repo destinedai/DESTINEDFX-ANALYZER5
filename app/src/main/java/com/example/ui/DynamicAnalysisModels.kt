@@ -103,14 +103,19 @@ fun mapTradeSignalToUiModel(signal: TradeSignal): DynamicAnalysisInfo {
     val pipMultiplier = if (isJpy) 100.0 else 10000.0
     val riskDiff = abs(signal.entryPrice - signal.stopLoss)
 
-    // TP comes ONLY from the deterministic engine. No synthetic 2R/3R/5R targets.
-    val tp1Price = signal.takeProfit
-    val tp2Price = 0.0
-    val tp3Price = 0.0
+    // Extract targets from profitZones or takeProfit
+    val pz = signal.profitZones
+    val tp1Price = pz.firstOrNull()?.price ?: signal.takeProfit
+    val tp2Price = pz.getOrNull(1)?.price ?: 0.0
+    val tp3Price = pz.getOrNull(2)?.price ?: 0.0
+
     val tp1Pips = if (tp1Price != 0.0 && signal.entryPrice != 0.0) abs(tp1Price - signal.entryPrice) * pipMultiplier else 0.0
-    val tp2Pips = 0.0
-    val tp3Pips = 0.0
-    val rrText = if (tp1Price != 0.0 && riskDiff > 0.0) String.format(Locale.US, "1:%.2f", abs(tp1Price - signal.entryPrice) / riskDiff) else "N/A"
+    val tp2Pips = if (tp2Price != 0.0 && signal.entryPrice != 0.0) abs(tp2Price - signal.entryPrice) * pipMultiplier else 0.0
+    val tp3Pips = if (tp3Price != 0.0 && signal.entryPrice != 0.0) abs(tp3Price - signal.entryPrice) * pipMultiplier else 0.0
+
+    val rr1Text = if (tp1Price != 0.0 && riskDiff > 0.0) String.format(Locale.US, "1:%.2f", abs(tp1Price - signal.entryPrice) / riskDiff) else "N/A"
+    val rr2Text = if (tp2Price != 0.0 && riskDiff > 0.0) String.format(Locale.US, "1:%.2f", abs(tp2Price - signal.entryPrice) / riskDiff) else "N/A"
+    val rr3Text = if (tp3Price != 0.0 && riskDiff > 0.0) String.format(Locale.US, "1:%.2f", abs(tp3Price - signal.entryPrice) / riskDiff) else "N/A"
 
     val obUiList = signal.orderBlocks.map { ob ->
         val obType = if (ob.type == OBType.BULLISH) "BULLISH" else "BEARISH"
@@ -158,9 +163,9 @@ fun mapTradeSignalToUiModel(signal: TradeSignal): DynamicAnalysisInfo {
         tp2YieldPips = tp2Pips,
         tp3YieldPips = tp3Pips,
         tp1DollarYield = 0.0,
-        tp1RR = rrText,
-        tp2RR = "N/A",
-        tp3RR = "N/A",
+        tp1RR = rr1Text,
+        tp2RR = rr2Text,
+        tp3RR = rr3Text,
         entryReason = signal.entryReason.ifBlank { "N/A" },
         slReason = signal.stopLossReason.ifBlank { "N/A" },
         tpReason = signal.takeProfitReason.ifBlank { "N/A" },

@@ -22,11 +22,14 @@ internal data class TradingViewLoadState(
     val isTerminal: Boolean get() = status == TradingViewLoadStatus.FAILED
 
     /** Stop obscuring the embed, while explicitly not claiming that cross-origin candles rendered. */
-    fun displayedUnverified(evidence: String): TradingViewLoadState =
-        if (isLoading) copy(status = TradingViewLoadStatus.DISPLAYED_UNVERIFIED, message = evidence) else this
+    fun displayedUnverified(evidence: String): TradingViewLoadState {
+        if (status == TradingViewLoadStatus.DISPLAYED_UNVERIFIED) return this
+        return copy(status = TradingViewLoadStatus.DISPLAYED_UNVERIFIED, message = evidence)
+    }
 
     fun fail(reason: String): TradingViewLoadState {
-        if (!isLoading) return this
+        if (status == TradingViewLoadStatus.DISPLAYED_UNVERIFIED) return this
+        if (status == TradingViewLoadStatus.FAILED) return this
         return when (path) {
             TradingViewLoadPath.OFFICIAL_WIDGET -> TradingViewLoadState(
                 path = TradingViewLoadPath.HOSTED_CHART,
@@ -35,11 +38,15 @@ internal data class TradingViewLoadState(
             )
             TradingViewLoadPath.HOSTED_CHART -> copy(
                 status = TradingViewLoadStatus.FAILED,
-                message = listOfNotNull(message, "Hosted chart failed: $reason").joinToString(" ")
+                message = listOfNotNull(message, reason).joinToString(" ")
             )
         }
     }
 
     /** A retry always starts cleanly on the official widget with the caller's current selection. */
-    fun retry(): TradingViewLoadState = TradingViewLoadState()
+    fun retry(): TradingViewLoadState = TradingViewLoadState(
+        path = TradingViewLoadPath.OFFICIAL_WIDGET,
+        status = TradingViewLoadStatus.LOADING,
+        message = null
+    )
 }

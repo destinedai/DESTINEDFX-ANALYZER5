@@ -337,6 +337,42 @@ object SignalEngine {
                     listOf(bbC, rsiC, candleC, regimeC, revC)
                 }
 
+                "liquidity-stop-hunts" -> {
+                    val sweep = bundle.sweeps.filter { (if (bull) it.impliedDir == Dir.BULL else it.impliedDir == Dir.BEAR) && last - it.index <= cfg.recentBars }.maxByOrNull { it.index }
+                    val sweepScore = when {
+                        sweep != null && sweep.confirmed -> 30.0
+                        sweep != null -> 20.0
+                        else -> 5.0
+                    }
+                    val sweepC = ScoreComponent("Liquidity Sweep Confirmation", sweepScore, 30.0, listOf(sweep?.let { "Swept ${it.level.side} @ ${it.level.price} (wick rejection confirmed)" } ?: "Awaiting liquidity sweep of swing highs/lows"), "30 confirmed sweep with wick rejection; 20 unconfirmed sweep; 5 no sweep")
+
+                    val eqLevels = bundle.levels.filter { (if (bull) it.price < price else it.price > price) }
+                    val eqScore = if (eqLevels.isNotEmpty()) 25.0 else 10.0
+                    val eqC = ScoreComponent("Equal Highs / Lows (EQH/EQL) Pool", eqScore, 25.0, listOf(if (eqLevels.isNotEmpty()) "${eqLevels.size} liquidity pool(s) identified (EQH/EQL/Trendline)" else "General swing liquidity"), "25 distinct EQH/EQL liquidity pool identified; 10 single swing level")
+
+                    val wickRejection = i.candles.takeLast(3).any { c ->
+                        val r = c.high - c.low
+                        if (r <= 0) false
+                        else if (bull) (c.open.coerceAtMost(c.close) - c.low) / r >= 0.4
+                        else (c.high - c.open.coerceAtLeast(c.close)) / r >= 0.4
+                    }
+                    val rejectionScore = if (wickRejection) 20.0 else 8.0
+                    val rejectionC = ScoreComponent("Wick Raid Rejection", rejectionScore, 20.0, listOf(if (wickRejection) "Strong pinbar/wick raid rejection bar" else "Standard price action"), "20 sharp wick rejection (>40% wick ratio); 8 neutral bar")
+
+                    val htfScore = when {
+                        mtf.state == (if (bull) MtfState.FULL_BULLISH else MtfState.FULL_BEARISH) -> 15.0
+                        mtf.state == (if (bull) MtfState.PARTIAL_BULLISH else MtfState.PARTIAL_BEARISH) -> 10.0
+                        else -> 5.0
+                    }
+                    val htfC = ScoreComponent("HTF Flow Alignment", htfScore, 15.0, listOf(mtf.summary), "15 HTF aligned with post-sweep reversal direction")
+
+                    val rrTarget = bundle.levels.firstOrNull { if (bull) it.price > price + 2.0 * atr else it.price < price - 2.0 * atr }
+                    val rrScore = if (rrTarget != null) 10.0 else 5.0
+                    val rrC = ScoreComponent("Tight Invalidation Runway", rrScore, 10.0, listOf(rrTarget?.let { "Targeting opposite pool @ ${it.price}" } ?: "Unobstructed runway for >= 2.5 R:R"), "10 target provides >= 2.5 R:R with tight SL")
+
+                    listOf(sweepC, eqC, rejectionC, htfC, rrC)
+                }
+
                 "trend-following" -> {
                     val e200 = Indicators.ema(closes, 200).last()
                     val emaStack = when {
@@ -378,6 +414,7 @@ object SignalEngine {
 
         val recognizedStrategies = setOf(
             "smc-confluence-1.0.0",
+            "liquidity-stop-hunts",
             "ict-silver-bullet",
             "wyckoff-schematics",
             "supply-and-demand",
@@ -515,8 +552,12 @@ object SignalEngine {
         }
         val aligned = obs.filter { it.dir == dir && it.state != ZoneState.MITIGATED && (if (long) it.low < entry else it.high > entry) }.maxByOrNull { it.createdIndex }
         val sw = st.swings.lastOrNull { it.type == (if (long) SwingType.LOW else SwingType.HIGH) && (if (long) it.price < entry else it.price > entry) }
-        val inv = when { aligned != null -> if (long) aligned.low else aligned.high; sw != null -> sw.price; else -> return null to "No structural invalidation level (no OB/swing) -> WAIT" }
-        val reason = if (aligned != null) "beyond ${aligned.dir} order block" else "beyond last swing ${if (long) "low" else "high"}"
+        val inv = when {
+            aligned != null -> if (long) aligned.low else aligned.high
+            sw != null -> sw.price
+            else -> if (long) entry - 1.8 * atr else entry + 1.8 * atr
+        }
+        val reason = if (aligned != null) "beyond ${aligned.dir} order block" else if (sw != null) "beyond last swing ${if (long) "low" else "high"}" else "institutional ATR swing boundary"
         val buffer = maxOf(cfg.slBufferAtr * atr, 2 * spread, (i.spec?.minStopDistance ?: 0.0))
         var sl = if (long) inv - buffer else inv + buffer
         if (i.spec != null && i.spec.tickSize > 0.0) {
@@ -565,6 +606,11 @@ object SignalEngine {
                 val extension = maxOf(2.5 * dist, 2.5 * atr)
                 val target = if (long) entry + extension else entry - extension
                 addPrice("TP1", target, "Volatility extension (max of 2.5R or 2.5 ATR)")
+            }
+
+            "liquidity-stop-hunts" -> {
+                val target = if (long) entry + maxOf(2.5 * dist, 2.5 * atr) else entry - maxOf(2.5 * dist, 2.5 * atr)
+                addPrice("TP1", target, "Post-Sweep Liquidity Reversal Target (2.5R)")
             }
 
             else -> Unit

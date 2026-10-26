@@ -109,7 +109,10 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                     color = ElectricCyan
                 )
                 GoldGradientButton(
-                    onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
+                    onClick = {
+                        viewModel.runSignalScan(activeSymbol, activeTimeframe, selectedMtfTimeframes)
+                        viewModel.selectScreen(DestinedFXScreen.Analyzer)
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.QueryStats, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -131,50 +134,91 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
         }
 
         item {
+            val quickPairs = listOf("EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "BTC/USD", "ETH/USD", "NAS100", "USOIL")
+            val quickTimeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1")
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(7.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("LIVE MARKET WORKSPACE", color = ElectricCyan, fontSize = 9.sp,
-                        fontWeight = FontWeight.Black, letterSpacing = 1.sp)
-                    Text("$activeSymbol · $activeTimeframe", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Black)
-                QuoteFreshnessIndicator(activeTicker, connecting = marketDataStatus.startsWith("WAIT"),
-                    diagnostic = quoteDiagnostics[activeSymbol], compact = true)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("LIVE MARKET WORKSPACE", color = ElectricCyan, fontSize = 9.sp,
+                            fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+                        Text("$activeSymbol · $activeTimeframe", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                        QuoteFreshnessIndicator(activeTicker, connecting = marketDataStatus.startsWith("WAIT"),
+                            diagnostic = quoteDiagnostics[activeSymbol], compact = true)
+                    }
+                    TextButton(onClick = {
+                        viewModel.runSignalScan(activeSymbol, activeTimeframe, selectedMtfTimeframes)
+                        viewModel.selectScreen(DestinedFXScreen.Analyzer)
+                    }) {
+                        Text("Analyze pair →", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
                 }
-                TextButton(onClick = {
-                    viewModel.selectScreen(DestinedFXScreen.Analyzer)
-                }) {
-                    Text("Analyze pair →", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+
+                // Quick pair and timeframe selection chips synchronized to every engine
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(quickPairs) { pair ->
+                        FilterChip(
+                            selected = activeSymbol == pair,
+                            onClick = {
+                                viewModel.selectTicker(pair)
+                            },
+                            label = { Text(pair, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = ElectricCyan,
+                                selectedLabelColor = DarkBackground,
+                                containerColor = DarkSurface,
+                                labelColor = TextSecondary
+                            )
+                        )
+                    }
                 }
-            }
-            Card(
-                modifier = Modifier.fillMaxWidth().height(430.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.36f))
-            ) {
-                TradingChartContainer(
-                    activeSymbol = activeSymbol,
-                    selectedTimeframe = activeTimeframe,
-                    currentSpotPrice = activeTicker?.takeIf {
-                        com.example.data.market.classifyQuoteFreshness(it, System.currentTimeMillis()) ==
-                            com.example.data.market.QuoteFreshness.LIVE
-                    }?.price,
-                    activeStrategy = selectedStrategyId,
-                    dynamicAnalysis = DynamicAnalysisInfo(symbol = activeSymbol),
-                    candles = viewModel.candlesForChart(activeSymbol, activeTimeframe),
-                    candleSource = viewModel.marketDataSource(activeSymbol, activeTimeframe),
-                    isRealTradingViewEnabled = true,
-                    onToggleChartType = {},
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    items(quickTimeframes) { tf ->
+                        FilterChip(
+                            selected = activeTimeframe == tf,
+                            onClick = {
+                                viewModel.selectTimeframe(tf)
+                            },
+                            label = { Text(tf, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = ElectricCyan,
+                                selectedLabelColor = DarkBackground,
+                                containerColor = DarkSurface,
+                                labelColor = TextSecondary
+                            )
+                        )
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().height(440.dp),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.36f))
+                ) {
+                    TradingChartContainer(
+                        activeSymbol = activeSymbol,
+                        selectedTimeframe = activeTimeframe,
+                        currentSpotPrice = activeTicker?.takeIf {
+                            com.example.data.market.classifyQuoteFreshness(it, System.currentTimeMillis()) ==
+                                com.example.data.market.QuoteFreshness.LIVE
+                        }?.price,
+                        activeStrategy = selectedStrategyId,
+                        dynamicAnalysis = DynamicAnalysisInfo(symbol = activeSymbol),
+                        candles = viewModel.candlesForChart(activeSymbol, activeTimeframe),
+                        candleSource = viewModel.marketDataSource(activeSymbol, activeTimeframe),
+                        isRealTradingViewEnabled = true,
+                        onToggleChartType = { },
+                        onPriceUpdate = { sym, price -> viewModel.updatePriceFromChart(sym, price) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
                 Text(
                     "Chart visualisation: TradingView · Trade analysis: native deterministic engine",
                     fontSize = 9.sp, color = TextMuted
@@ -199,7 +243,11 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                             Column(
                                 modifier = Modifier.width(124.dp).clip(RoundedCornerShape(12.dp))
                                     .background(DarkSurface).border(1.dp, CardBorder, RoundedCornerShape(12.dp))
-                                    .clickable { viewModel.selectTicker(quote.symbol); viewModel.selectScreen(DestinedFXScreen.Analyzer) }
+                                    .clickable {
+                                        viewModel.selectTicker(quote.symbol)
+                                        viewModel.runSignalScan(quote.symbol, activeTimeframe, selectedMtfTimeframes)
+                                        viewModel.selectScreen(DestinedFXScreen.Analyzer)
+                                    }
                                     .padding(11.dp),
                                 verticalArrangement = Arrangement.spacedBy(5.dp)
                             ) {

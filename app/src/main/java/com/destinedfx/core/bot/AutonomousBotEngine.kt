@@ -37,7 +37,7 @@ enum class BotLifecycleState {
 data class BotStatusSummary(
     val state: BotLifecycleState = BotLifecycleState.STOPPED,
     val isRunning: Boolean = false,
-    val activeBrokerName: String = "Deriv WebSocket",
+    val activeBrokerName: String = "MT5 Market Stream",
     val selectedSymbol: String = "EURUSD",
     val selectedStrategy: String = "smc-confluence-1.0.0",
     val timeframe: String = "H1",

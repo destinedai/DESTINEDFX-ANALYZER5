@@ -42,43 +42,6 @@ class RealtimeCloudSyncManager(
         capital: Double,
         metadata: Map<String, Any> = emptyMap()
     ): Boolean = withContext(Dispatchers.IO) {
-        val supabaseUrl = secretsManager.getSupabaseUrl().trim().trimEnd('/')
-        val supabaseKey = secretsManager.getSupabaseAnonKey().trim()
-        val accessToken = secretsManager.getSupabaseAccessToken().trim()
-
-        if (supabaseUrl.isNotBlank() && supabaseKey.isNotBlank() && !supabaseUrl.contains("your-project")) {
-            try {
-                val endpoint = "$supabaseUrl/rest/v1/profiles"
-                val isoDate = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.format(java.util.Date())
-                val payload = JSONObject().apply {
-                    put("id", user.uid)
-                    put("email", user.email)
-                    put("username", user.username)
-                    put("updated_at", isoDate)
-                }
-
-                val reqBuilder = Request.Builder()
-                    .url(endpoint)
-                    .header("apikey", supabaseKey)
-                    .header("Prefer", "resolution=merge-duplicates")
-                    .header("Content-Type", "application/json")
-                    .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
-
-                if (accessToken.isNotBlank()) {
-                    reqBuilder.header("Authorization", "Bearer $accessToken")
-                }
-
-                val resp = client.newCall(reqBuilder.build()).execute()
-                if (resp.isSuccessful) {
-                    Log.i(TAG, "Successfully synced user ${user.uid} to Supabase profiles")
-                    return@withContext true
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Supabase sync error: ${e.message}")
-            }
-        }
         false
     }
 }

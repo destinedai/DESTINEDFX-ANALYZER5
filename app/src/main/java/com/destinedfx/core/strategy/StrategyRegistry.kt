@@ -73,8 +73,18 @@ object StrategyRegistry {
         rulesSummary = "Triple EMA hierarchy (20/50/200), retracement into 20-50 EMA value zone, continuation rejection bar with RSI support, SL behind EMA 50, trailing trend target."
     )
 
+    val LIQUIDITY_STOP_HUNTS = StrategyDefinition(
+        id = "liquidity-stop-hunts",
+        name = "SMC Liquidity & Stop Hunts",
+        version = "1.0.0",
+        isImplemented = true,
+        description = "Identifies equal highs/lows (EQH/EQL) and trendline liquidity pools. Anticipates liquidity sweeps over breakout traps and triggers reversal entries with tight invalidation.",
+        rulesSummary = "Equal highs/lows detection, liquidity pool sweep anticipation, wick raid rejection bar trigger, tight SL behind sweep wick, minimum 1:2.5 R:R target."
+    )
+
     val allStrategies = listOf(
         SMC_CONFLUENCE,
+        LIQUIDITY_STOP_HUNTS,
         ICT_SILVER_BULLET,
         WYCKOFF_METHOD,
         SUPPLY_AND_DEMAND,

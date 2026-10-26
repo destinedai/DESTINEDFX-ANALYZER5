@@ -22,16 +22,6 @@ class SecretsManager(private val ctx: Context) {
         private const val MT5_INVESTOR_PW = "mt5_investor_password"
         private const val MT5_AC  = "mt5_account_number"
         private const val MT5_SV  = "mt5_broker_server"
-        private const val META    = "metaapi_token"
-        private const val METAAPI_REGION = "metaapi_region"
-        private const val META_PENDING_TX = "metaapi_pending_transaction_id"
-        private const val FMP_KEY = "fmp_api_key"
-        private const val SB_URL  = "supabase_url"
-        private const val SB_KEY  = "supabase_anon_key"
-        private const val SB_ACCESS_TOKEN = "supabase_access_token"
-        private const val SB_REFRESH_TOKEN = "supabase_refresh_token"
-        private const val SB_UID = "supabase_uid"
-        private const val SB_EMAIL_CONFIRMED_AT = "supabase_email_confirmed_at"
         private const val OANDA_KEY = "oanda_api_key"
         private const val OANDA_ACC = "oanda_account_id"
         private const val CONFIGURED_EQUITY = "configured_equity"
@@ -76,16 +66,6 @@ class SecretsManager(private val ctx: Context) {
     fun saveMT5InvestorPassword(v: String) = prefs.edit().putString(MT5_INVESTOR_PW, v).apply()
     fun saveMT5AccountNumber(v: String) = prefs.edit().putString(MT5_AC,  v).apply()
     fun saveMT5BrokerServer(v: String)  = prefs.edit().putString(MT5_SV,  v).apply()
-    fun saveMetaApiToken(v: String)     = prefs.edit().putString(META,    v).apply()
-    fun saveMetaApiRegion(v: String)    = prefs.edit().putString(METAAPI_REGION, v).apply()
-    fun saveMetaApiPendingTransactionId(v: String) = prefs.edit().putString(META_PENDING_TX, v).apply()
-    fun saveFmpKey(v: String)           = prefs.edit().putString(FMP_KEY, v).apply()
-    fun saveSupabaseUrl(v: String)      = prefs.edit().putString(SB_URL,  v).apply()
-    fun saveSupabaseAnonKey(v: String)  = prefs.edit().putString(SB_KEY,  v).apply()
-    fun saveSupabaseAccessToken(v: String) = prefs.edit().putString(SB_ACCESS_TOKEN, v).apply()
-    fun saveSupabaseRefreshToken(v: String) = prefs.edit().putString(SB_REFRESH_TOKEN, v).apply()
-    fun saveSupabaseUid(v: String)      = prefs.edit().putString(SB_UID, v).apply()
-    fun saveSupabaseEmailConfirmedAt(v: String) = prefs.edit().putString(SB_EMAIL_CONFIRMED_AT, v).apply()
     fun saveOandaApiKey(v: String)      = prefs.edit().putString(OANDA_KEY, v).apply()
     fun saveOandaAccountId(v: String)   = prefs.edit().putString(OANDA_ACC, v).apply()
     fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
@@ -95,6 +75,24 @@ class SecretsManager(private val ctx: Context) {
     fun saveDerivAccountMode(v: String) = prefs.edit().putString(DERIV_ACCOUNT_MODE, v.trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo").apply()
     fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
+    
+    fun getSupabaseUrl(): String = ""
+    fun getSupabaseAnonKey(): String = ""
+    fun getSupabaseAccessToken(): String = ""
+    fun getMetaApiRegion(): String = ""
+    fun getMetaApiToken(): String = ""
+    fun getMetaApiPendingTransactionId(): String = ""
+    fun saveSupabaseUrl(v: String) {}
+    fun saveSupabaseAnonKey(v: String) {}
+    fun saveSupabaseAccessToken(v: String) {}
+    fun saveMetaApiToken(v: String) {}
+    fun saveMetaApiRegion(v: String) {}
+    fun saveMetaApiPendingTransactionId(v: String) {}
+    fun saveSupabaseUid(v: String) {}
+    fun saveSupabaseRefreshToken(v: String) {}
+    fun saveSupabaseEmailConfirmedAt(v: String) {}
+    fun getSupabaseRefreshToken(): String = ""
+    fun getSupabaseEmailConfirmedAt(): String = ""
 
     fun getDerivApiToken(): String     = prefs.getString(DERIV_API_TOKEN, "") ?: ""
     // New Deriv REST/Options API rejects legacy App ID 1089; don't prefill a stale stored default.
@@ -114,41 +112,13 @@ class SecretsManager(private val ctx: Context) {
     fun getMT5InvestorPassword(): String = prefs.getString(MT5_INVESTOR_PW, "") ?: ""
     fun getMT5AccountNumber(): String  = prefs.getString(MT5_AC,  "") ?: ""
     fun getMT5BrokerServer(): String   = prefs.getString(MT5_SV,  "") ?: ""
-    fun getMetaApiToken(): String      = prefs.getString(META,    "") ?: ""
-    fun getMetaApiRegion(): String     = prefs.getString(METAAPI_REGION, "london")?.takeIf { it.isNotBlank() } ?: "london"
-    fun getMetaApiPendingTransactionId(): String = prefs.getString(META_PENDING_TX, "") ?: ""
-    fun getFmpKey(): String            = prefs.getString(FMP_KEY, "") ?: ""
-    fun getSupabaseUrl(): String {
-        val saved = prefs.getString(SB_URL, "") ?: ""
-        if (saved.isNotBlank() && saved != "default" && !saved.contains("your-project")) return saved
-        return try {
-            val bc = com.example.BuildConfig.SUPABASE_URL
-            if (bc.isNotBlank() && bc != "default" && !bc.contains("your-project")) bc else "https://destinedfx.supabase.co"
-        } catch (_: Exception) {
-            "https://destinedfx.supabase.co"
-        }
-    }
-
-    fun getSupabaseAnonKey(): String {
-        val saved = prefs.getString(SB_KEY, "") ?: ""
-        if (saved.isNotBlank() && saved != "default") return saved
-        return try {
-            val bc = com.example.BuildConfig.SUPABASE_ANON_KEY
-            if (bc.isNotBlank() && bc != "default") bc else ""
-        } catch (_: Exception) {
-            ""
-        }
-    }
-    fun getSupabaseAccessToken(): String = prefs.getString(SB_ACCESS_TOKEN, "") ?: ""
-    fun getSupabaseRefreshToken(): String = prefs.getString(SB_REFRESH_TOKEN, "") ?: ""
-    fun getSupabaseUid(): String       = prefs.getString(SB_UID, "") ?: ""
-    fun getSupabaseEmailConfirmedAt(): String? = prefs.getString(SB_EMAIL_CONFIRMED_AT, "")?.takeUnless { it.isBlank() || it == "null" }
     fun getOandaApiKey(): String       = prefs.getString(OANDA_KEY, "") ?: ""
     fun getOandaAccountId(): String    = prefs.getString(OANDA_ACC, "") ?: ""
     fun getConfiguredEquity(): Double  = prefs.getString(CONFIGURED_EQUITY, "0.0")?.toDoubleOrNull() ?: 0.0
     fun getSelectedStrategy(): String  = prefs.getString(SELECTED_STRATEGY, "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0"
 
-    fun hasCredentials() = getMetaApiToken().isNotBlank() || getMT5AccountNumber().isNotBlank()
+
+    fun hasCredentials() = getMT5AccountNumber().isNotBlank()
     fun clearAll()       = prefs.edit().clear().apply()
 
     fun getBrokerSymbolOverrides(): Map<String, String> {
