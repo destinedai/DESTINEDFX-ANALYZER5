@@ -131,15 +131,18 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
         }
     }
 
-    private fun validateBaseUrl(raw: String): String? = try {
-        val uri = URI(raw.trim()).normalize(); val host = uri.host?.lowercase()?.trimEnd('.') ?: return null
-        val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
-        val placeholder = host in setOf("example.com", "example.org", "example.net", "testserver", "bridge.example") || host.endsWith(".example") || host.startsWith("your-") || host.startsWith("placeholder") || host.contains("example")
-        if (uri.userInfo != null || uri.query != null || uri.fragment != null || uri.path.orEmpty().trimEnd('/').isNotEmpty()) return null
-        if (placeholder || uri.scheme != "https" && !(uri.scheme == "http" && loopback)) return null
-        if (uri.scheme == "https" && loopback || uri.port !in -1..65535) return null
-        "${uri.scheme}://$host" + if (uri.port >= 0) ":${uri.port}" else ""
-    } catch (_: Exception) { null }
+    private fun validateBaseUrl(raw: String): String? {
+        return try {
+            val uri = URI(raw.trim()).normalize()
+            val host = uri.host?.lowercase()?.trimEnd('.') ?: return null
+            val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
+            val placeholder = host in setOf("example.com", "example.org", "example.net", "testserver", "bridge.example") || host.endsWith(".example") || host.startsWith("your-") || host.startsWith("placeholder") || host.contains("example")
+            if (uri.userInfo != null || uri.query != null || uri.fragment != null || uri.path.orEmpty().trimEnd('/').isNotEmpty()) return null
+            if (placeholder || uri.scheme != "https" && !(uri.scheme == "http" && loopback)) return null
+            if (uri.scheme == "https" && loopback || uri.port !in -1..65535) return null
+            "${uri.scheme}://$host" + if (uri.port >= 0) ":${uri.port}" else ""
+        } catch (_: Exception) { null }
+    }
     private fun finite(obj: JSONObject, key: String): Double? = obj.optDouble(key).takeIf { it.isFinite() }
     private fun finiteInt(obj: JSONObject, key: String): Int? = obj.optInt(key).takeIf { it > 0 }
     private fun safeMessage(e: Exception) = (e as? BridgeHttpException)?.safeDescription ?: "No confirmed response; reconcile the same request before any recovery."
