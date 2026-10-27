@@ -17,6 +17,9 @@ val mt5ManagedServiceUrlFromFile = rootProject.file(".env").takeIf { it.isFile }
 val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromEnv.takeIf { it.isNotBlank() }
   ?: mt5ManagedServiceUrlFromFile.takeIf { it.isNotBlank() }
   ?: ""
+val mt5ManagedServiceUrlBuildValue = mt5ManagedServiceUrl.ifBlank { " " }
+  .replace("\\", "\\\\")
+  .replace("\"", "\\\"")
 
 android {
   namespace = "com.example"
@@ -30,7 +33,7 @@ android {
     versionName = "1.0.9"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrl\"")
+    buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
   }
 
   signingConfigs {
