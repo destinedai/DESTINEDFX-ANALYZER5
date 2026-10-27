@@ -122,6 +122,9 @@ def test_managed_tenant_auth_and_master_readiness_gate(monkeypatch):
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker'}).json()
     assert client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker','status':'AUTHENTICATING'}).status_code==200
     assert client.post('/v1/app/commands',headers=ah,json=command_req()).status_code==409
+    wrong_account={**ACCOUNT,'login':'999999','server':'Different-Server'}
+    mismatch=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'wrong-account','account':wrong_account})
+    assert mismatch.status_code==401
     assert client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':ACCOUNT}).status_code==200
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'again','account':ACCOUNT})
     assert terminal.status_code==401
@@ -168,9 +171,10 @@ def test_investor_can_be_ready_for_read_only_but_never_start(monkeypatch):
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-ro'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-ro','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed-ro','account':ACCOUNT}).json()
+    investor_account={**ACCOUNT,'login':'77','server':'ReadOnly'}
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed-ro','account':investor_account}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(trade_allowed=False)).status_code==200
+    assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(trade_allowed=False,account={**investor_account,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100})).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['managed_execution']['status']=='READY' and state['managed_execution']['access_type']=='INVESTOR'
     assert client.post('/v1/app/commands',headers=ah,json=command_req()).status_code==409

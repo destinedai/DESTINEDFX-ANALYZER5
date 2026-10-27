@@ -214,6 +214,13 @@ def claim(x:Claim):
         rows=c.execute('SELECT * FROM pairings WHERE consumed=0 AND expires>?',(t,)).fetchall()
         found=next((r for r in rows if hmac.compare_digest(r['code_hash'],digest(x.pairing_code))),None)
         if found is None: raise HTTPException(401,'Invalid or expired pairing code')
+        managed=c.execute('SELECT login_enc,server_enc FROM managed_accounts WHERE pairing_id=? AND revoked=0',(found['id'],)).fetchone()
+        if managed:
+            fernet,_=managed_config()
+            expected_login=fernet.decrypt(managed['login_enc'].encode()).decode()
+            expected_server=fernet.decrypt(managed['server_enc'].encode()).decode()
+            if x.account['login']!=expected_login or x.account['server'].casefold()!=expected_server.casefold():
+                raise HTTPException(401,'Authenticated terminal account does not match managed account')
         c.execute('UPDATE pairings SET consumed=1,terminal_hash=?,terminal_id=?,instance_id=?,account=? WHERE id=? AND consumed=0',(digest(terminal_token),terminal_id,x.terminal_instance_id,json.dumps(x.account,separators=(',',':')),found['id']))
         if c.total_changes<1: raise HTTPException(409,'Pairing code already consumed')
     return {'terminal_id':terminal_id,'terminal_token':terminal_token,'poll_seconds':2}
