@@ -31,25 +31,39 @@ class MT5BrokerGatewayAdapter(
 
     override suspend fun connect(): Result<Boolean> {
         _connectionStatus.value = BrokerConnectionStatus.CONNECTING
+        _connectionStatus.value = BrokerConnectionStatus.AUTHENTICATING
+        _accountMetrics.value = null
+        _openPositions.value = emptyList()
         val res = mt5Repo.getAccountMetrics()
         return if (res.isSuccess) {
-            _accountMetrics.value = res.getOrThrow()
-            _connectionStatus.value = BrokerConnectionStatus.CONNECTED
-            refreshPositions()
-            Result.success(true)
+            val snapshot = res.getOrThrow()
+            if (!snapshot.balance.isFinite() || !snapshot.equity.isFinite() || snapshot.currency.isBlank()) {
+                _connectionStatus.value = BrokerConnectionStatus.ERROR
+                Result.failure(Exception("MetaAPI returned an invalid account snapshot."))
+            } else {
+                _accountMetrics.value = snapshot
+                _connectionStatus.value = BrokerConnectionStatus.CONNECTED
+                refreshPositions()
+                Result.success(true)
+            }
         } else {
-            _connectionStatus.value = BrokerConnectionStatus.AUTH_FAILED
+            _accountMetrics.value = null
+            _connectionStatus.value = if (res.exceptionOrNull()?.message?.contains("CONFIGURATION_REQUIRED") == true) BrokerConnectionStatus.ERROR else BrokerConnectionStatus.AUTH_FAILED
             Result.failure(res.exceptionOrNull() ?: Exception("MT5 connect failed"))
         }
     }
 
     override suspend fun disconnect() {
+        mt5Repo.disconnectSession()
         _connectionStatus.value = BrokerConnectionStatus.DISCONNECTED
         _accountMetrics.value = null
         _openPositions.value = emptyList()
     }
 
     override suspend fun executeTrade(plan: CanonicalTradePlan): Result<String> {
+        if (_connectionStatus.value != BrokerConnectionStatus.CONNECTED || _accountMetrics.value == null) {
+            return Result.failure(Exception("MT5 execution blocked: verified authenticated account snapshot required."))
+        }
         val sig = TradeSignal(
             id = UUID.randomUUID().toString(),
             symbol = plan.symbol,

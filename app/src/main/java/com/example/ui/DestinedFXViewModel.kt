@@ -655,35 +655,10 @@ open class DestinedFXViewModel(
     }
 
     fun connectDemoAccount(initialBalance: Double? = null, onResult: ((Boolean, String) -> Unit)? = null) {
-        viewModelScope.launch {
-            try {
-                val targetBal = initialBalance?.takeIf { it > 0.0 }
-                    ?: app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 }
-                    ?: 3000.0
-                app.secretsManager.saveMT5AccountBalance(targetBal)
-                app.secretsManager.saveConfiguredEquity(targetBal)
-                app.secretsManager.saveMT5AccountType("Demo")
-                app.secretsManager.saveMT5SessionStatus("CONNECTED")
-                app.mt5GatewayAdapter.setAccountBalance(targetBal)
-                accountCapital.value = targetBal
-                configuredEquity.value = targetBal
-
-                app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
-                val res = app.mt5GatewayAdapter.connect()
-                brokerConnected.value = res.isSuccess
-                prefetchWatchlistSpecs()
-                val metrics = app.mt5GatewayAdapter.accountMetrics.value
-                val balance = metrics?.balance ?: targetBal
-                accountCapital.value = balance
-                val msg = "MT5 connected • Balance " + String.format(java.util.Locale.US, "%.2f", balance) + " USD"
-                onResult?.invoke(true, msg)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                onResult?.invoke(false, "MT5 login failed: ${e.message}")
-            }
-        }
+        brokerConnected.value = false
+        app.secretsManager.saveMT5SessionStatus("CONFIGURATION_REQUIRED")
+        onResult?.invoke(false, "CONFIGURATION_REQUIRED: a broker-authenticated demo account is required; local demo balances are not connected MT5 accounts.")
     }
-
     fun unlinkTelegram() {
         app.secretsManager.saveTelegramToken("")
         app.secretsManager.saveTelegramChatId("")
@@ -722,7 +697,7 @@ open class DestinedFXViewModel(
     val mtAccountNumber = MutableStateFlow("1028471")
     val mtBrokerPassword = MutableStateFlow("••••••••••••")
     val terminalMode = MutableStateFlow("MT5 Gateway")
-    val mt5GatewayUrl = MutableStateFlow("wss://your-secure-backend-gateway.com/live-mt5")
+    val mt5GatewayUrl = MutableStateFlow("")
 
     // Text To Speech Voice System
     private var tts: TextToSpeech? = null
@@ -1354,6 +1329,10 @@ open class DestinedFXViewModel(
         viewModelScope.launch {
             try {
                 if (active) {
+                    val gateway = app.brokerManager.activeBroker.value
+                    if (gateway.connectionStatus.value != com.example.data.broker.BrokerConnectionStatus.CONNECTED || gateway.accountMetrics.value == null) {
+                        throw IllegalStateException("Bot activation blocked: a verified authenticated account snapshot is required.")
+                    }
                     app.autonomousBotEngine.startBot(
                         symbol = selectedTicker.value,
                         strategyId = selectedStrategyId.value,
@@ -1599,6 +1578,7 @@ open class DestinedFXViewModel(
         password: String,
         server: String,
         investorPassword: String = "",
+        savePassword: Boolean = false,
         balance: Double? = null,
         accountType: String = "Demo",
         leverage: Int = 500,
@@ -1619,71 +1599,60 @@ open class DestinedFXViewModel(
             onResult(false, "MT5 master Password and Server are required.")
             return
         }
+        if (investorPassword.isNotBlank()) {
+            onResult(false, "Investor-password authentication is not supported by the configured MetaAPI flow; no read-only session was created.")
+            return
+        }
         viewModelScope.launch {
+            brokerConnected.value = false
             try {
-                val targetBalance = balance?.takeIf { it > 0.0 }
-                    ?: app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 }
-                    ?: 3000.0
-
-                app.secretsManager.saveMT5Login(cleanLogin)
-                app.secretsManager.saveMT5Password(password)
-                app.secretsManager.saveMT5BrokerServer(cleanServer)
-                app.secretsManager.saveMT5InvestorPassword(investorPassword)
-                app.secretsManager.saveMT5AccountType(accountType)
-                app.secretsManager.saveMT5Leverage(leverage)
-                app.secretsManager.saveMT5Currency(currency)
+                app.mt5GatewayAdapter.disconnect()
                 app.secretsManager.saveMT5SessionStatus("CONNECTING")
-                app.secretsManager.saveMT5AccountBalance(targetBalance)
-                app.secretsManager.saveConfiguredEquity(targetBalance)
-                app.secretsManager.saveMetaApiToken("") // Clear legacy bridge token
-                app.secretsManager.saveMT5AccountNumber("DIRECT-$cleanLogin")
-
-                app.mt5GatewayAdapter.setAccountBalance(targetBalance)
-                accountCapital.value = targetBalance
-                configuredEquity.value = targetBalance
-
+                app.secretsManager.saveMT5Login(cleanLogin)
+                app.secretsManager.saveMT5BrokerServer(cleanServer)
+                app.secretsManager.saveMT5PasswordIfAllowed(password, savePassword)
+                app.secretsManager.saveMT5InvestorPassword("")
+                app.secretsManager.saveMT5AccountNumber("")
+                app.secretsManager.saveMT5AccountBalance(0.0)
+                app.secretsManager.saveConfiguredEquity(0.0)
+                accountCapital.value = 0.0
+                configuredEquity.value = 0.0
                 app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
+                val provisioned = app.mt5GatewayRepository.provisionAccount(cleanLogin, password, cleanServer)
+                if (provisioned.isFailure) throw provisioned.exceptionOrNull() ?: Exception("MetaAPI account provisioning failed.")
+                app.secretsManager.saveMT5AccountNumber(provisioned.getOrThrow())
                 val result = app.mt5GatewayAdapter.connect()
                 if (result.isSuccess) {
                     brokerConnected.value = true
                     app.secretsManager.saveMT5SessionStatus("CONNECTED")
                     prefetchWatchlistSpecs()
-                    val metrics = app.mt5GatewayAdapter.accountMetrics.value
-                    val finalBalance = metrics?.balance ?: targetBalance
-                    accountCapital.value = finalBalance
-                    val ccy = metrics?.currency ?: currency
-                    onResult(
-                        true,
-                        "MT5 connected • Login $cleanLogin ($cleanServer) • $accountType • Balance " +
-                            String.format(java.util.Locale.US, "%.2f", finalBalance) + " $ccy"
-                    )
+                    val metrics = app.mt5GatewayAdapter.accountMetrics.value ?: throw Exception("MetaAPI did not return a verified account snapshot.")
+                    accountCapital.value = metrics.balance
+                    onResult(true, "MT5 authenticated by MetaAPI • Login $cleanLogin ($cleanServer) • Balance " +
+                        String.format(java.util.Locale.US, "%.2f", metrics.balance) + " ${metrics.currency}")
                 } else {
+                    brokerConnected.value = false
                     app.secretsManager.saveMT5SessionStatus("AUTH_FAILED")
                     onResult(false, result.exceptionOrNull()?.message ?: "MT5 connection failed.")
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                app.secretsManager.saveMT5SessionStatus("ERROR")
-                onResult(false, "MT5 connection failed: ${e.message}")
+                brokerConnected.value = false
+                app.secretsManager.saveMT5SessionStatus(if (e.message?.contains("CONFIGURATION_REQUIRED") == true) "CONFIGURATION_REQUIRED" else "AUTH_FAILED")
+                onResult(false, e.message ?: "MT5 authentication failed.")
             }
         }
     }
-
     fun reconnectMT5Session(onResult: (Boolean, String?) -> Unit) {
         val login = app.secretsManager.getMT5Login()
         val pass = app.secretsManager.getMT5Password()
         val server = app.secretsManager.getMT5BrokerServer()
         if (login.isBlank() || pass.isBlank() || server.isBlank()) {
-            onResult(false, "No saved MT5 account credentials found. Please log in.")
+            onResult(false, "Reconnect requires the account password again because password saving is disabled or no credentials are stored.")
             return
         }
-        val bal = app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 } ?: 3000.0
-        val type = app.secretsManager.getMT5AccountType()
-        val lev = app.secretsManager.getMT5Leverage()
-        val ccy = app.secretsManager.getMT5Currency()
-        connectToMT5Credentials(login, pass, server, "", bal, type, lev, ccy, onResult)
+        connectToMT5Credentials(login, pass, server, savePassword = true, onResult = onResult)
     }
-
     fun selectBroker(type: com.example.data.broker.BrokerType) {
         if (isPreview) return
         // The loop keeps a reference to its selected gateway; stop it before changing routes.

@@ -55,6 +55,34 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `MT5 missing MetaAPI configuration never creates a connected account`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<MyApplication>()
+    context.secretsManager.clearMT5Credentials()
+    context.secretsManager.saveMT5SessionStatus("DISCONNECTED")
+    val provision = context.mt5GatewayRepository.provisionAccount("123456", "not-a-real-password", "Example-MT5-Demo")
+    assertTrue(provision.isFailure)
+    assertTrue(provision.exceptionOrNull()?.message.orEmpty().contains("CONFIGURATION_REQUIRED"))
+    assertFalse(context.mt5GatewayRepository.isConnected())
+    assertTrue(context.secretsManager.getMT5AccountNumber().isBlank())
+    val metrics = context.mt5GatewayRepository.getAccountMetrics()
+    assertTrue(metrics.isFailure)
+    assertFalse(context.mt5GatewayRepository.isConnected())
+  }
+
+  @Test
+  fun `MT5 password storage follows explicit save preference`() {
+    val context = ApplicationProvider.getApplicationContext<MyApplication>()
+    context.secretsManager.saveMT5PasswordIfAllowed("temporary-password", false)
+    assertFalse(context.secretsManager.isMT5PasswordSaveEnabled())
+    assertTrue(context.secretsManager.getMT5Password().isBlank())
+    context.secretsManager.saveMT5PasswordIfAllowed("opted-in-password", true)
+    assertTrue(context.secretsManager.isMT5PasswordSaveEnabled())
+    assertEquals("opted-in-password", context.secretsManager.getMT5Password())
+    context.secretsManager.saveMT5PasswordIfAllowed("", false)
+    assertTrue(context.secretsManager.getMT5Password().isBlank())
+  }
+
+  @Test
   fun `verify Telegram settings state persistence and unlinking`() {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
     val vm = DestinedFXViewModel(context)

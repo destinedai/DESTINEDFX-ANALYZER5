@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -60,9 +61,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var brokerConnectionMessage by remember { mutableStateOf<String?>(null) }
     var mt5LoginInput by remember { mutableStateOf(viewModel.getMT5Login()) }
-    var mt5PasswordInput by remember { mutableStateOf(viewModel.getMT5Password()) }
+    var mt5PasswordInput by remember { mutableStateOf("") }
     var mt5ServerInput by remember { mutableStateOf(viewModel.getMT5BrokerServer()) }
-    var mt5InvestorPasswordInput by remember { mutableStateOf(viewModel.getMT5InvestorPassword()) }
+    var mt5InvestorPasswordInput by remember { mutableStateOf("") }
+    var showMt5Password by remember { mutableStateOf(false) }
+    var showMt5InvestorPassword by remember { mutableStateOf(false) }
     var isConnectingBroker by remember { mutableStateOf(false) }
     var showPostLoginPairSelectorModal by remember { mutableStateOf(false) }
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
@@ -670,7 +673,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             var selectedBrokerCompanyName by remember { mutableStateOf("FBS Markets Inc.") }
             var showBrokerSearchDialog by remember { mutableStateOf(false) }
             var brokerSearchQuery by remember { mutableStateOf("") }
-            var savePasswordChecked by remember { mutableStateOf(true) }
+            var savePasswordChecked by remember { mutableStateOf(viewModel.app.secretsManager.isMT5PasswordSaveEnabled()) }
             var showOpenDemoDialog by remember { mutableStateOf(false) }
             var showOpenRealDialog by remember { mutableStateOf(false) }
 
@@ -716,7 +719,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = "MT5 DIRECT",
+                                text = "METAAPI BACKEND",
                                 fontSize = 8.sp,
                                 color = Color(0xFF2196F3),
                                 fontWeight = FontWeight.Black,
@@ -769,15 +772,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
 
                     // Active MT5 Account Overview (Official MT5 Account Card)
-                    if ((brokerConnStatus == BrokerConnectionStatus.CONNECTED || (hasSavedLogin && !isSessionExpired)) && !isEditingCredentials) {
+                    if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null && !isEditingCredentials) {
                         val activeLogin = viewModel.getMT5Login()
                         val activeServer = viewModel.getMT5BrokerServer()
-                        val bal = accountMetrics?.balance ?: mt5BalanceInput.toDoubleOrNull() ?: 3000.0
-                        val eq = accountMetrics?.equity ?: bal
-                        val margin = accountMetrics?.margin ?: 0.0
-                        val freeMargin = accountMetrics?.freeMargin ?: (bal - margin).coerceAtLeast(0.0)
-                        val marginLevel = accountMetrics?.marginLevel ?: (if (margin > 0.0) (eq / margin) * 100.0 else 0.0)
-                        val ccy = accountMetrics?.currency ?: "USD"
+                        val verifiedMetrics = accountMetrics!!
+                        val bal = verifiedMetrics.balance
+                        val eq = verifiedMetrics.equity
+                        val margin = verifiedMetrics.margin
+                        val freeMargin = verifiedMetrics.freeMargin
+                        val marginLevel = verifiedMetrics.marginLevel
+                        val ccy = verifiedMetrics.currency
 
                         Card(
                             colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
@@ -813,10 +817,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
                                             Text(
-                                                text = selectedAccountMode.uppercase(),
+                                                text = "MODE NOT VERIFIED",
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = if (selectedAccountMode.equals("Real", true)) ProfitGreen else ElectricCyan
+                                                color = ElectricCyan
                                             )
                                         }
                                         Box(
@@ -826,7 +830,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
                                             Text(
-                                                text = "1:$selectedLeverage",
+                                                text = if (verifiedMetrics.leverage > 0) "1:${verifiedMetrics.leverage}" else "Leverage unavailable",
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = TextSecondary
@@ -865,7 +869,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     Column {
                                         Text("Free Margin:", fontSize = 9.sp, color = TextSecondary)
                                         Text(
-                                            text = "$${String.format(java.util.Locale.US, "%,.2f", freeMargin)}",
+                                            text = if (freeMargin.isFinite()) "$${String.format(java.util.Locale.US, "%,.2f", freeMargin)}" else "Unavailable",
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 11.sp,
                                             color = ElectricCyan,
@@ -875,7 +879,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Text("Margin Used:", fontSize = 9.sp, color = TextSecondary)
                                         Text(
-                                            text = "$${String.format(java.util.Locale.US, "%,.2f", margin)}",
+                                            text = if (margin.isFinite()) "$${String.format(java.util.Locale.US, "%,.2f", margin)}" else "Unavailable",
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 11.sp,
                                             color = TextPrimary,
@@ -885,10 +889,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text("Margin Level:", fontSize = 9.sp, color = TextSecondary)
                                         Text(
-                                            text = if (margin > 0.0) "${String.format(java.util.Locale.US, "%.1f", marginLevel)}%" else "—",
+                                            text = if (margin.isFinite() && marginLevel.isFinite() && margin > 0.0) "${String.format(java.util.Locale.US, "%.1f", marginLevel)}%" else "—",
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 11.sp,
-                                            color = if (marginLevel >= 100.0 || margin == 0.0) ProfitGreen else LossRed,
+                                            color = if (marginLevel.isFinite() && marginLevel >= 100.0) ProfitGreen else TextSecondary,
                                             fontFamily = FontFamily.Monospace
                                         )
                                     }
@@ -937,6 +941,22 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         ) {
                                             Text("Disconnect", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                         }
+                                        TextButton(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    activeBrokerGateway.disconnect()
+                                                    viewModel.app.secretsManager.clearMT5Credentials()
+                                                    mt5LoginInput = ""
+                                                    mt5PasswordInput = ""
+                                                    mt5InvestorPasswordInput = ""
+                                                    mt5ServerInput = ""
+                                                    isEditingCredentials = true
+                                                }
+                                            },
+                                            modifier = Modifier.testTag("bot_remove_mt5_account")
+                                        ) {
+                                            Text("Remove", fontSize = 10.sp, color = LossRed)
+                                        }
                                     }
                                 }
                             }
@@ -955,7 +975,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 Icon(Icons.Default.Business, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
                                 Column {
                                     Text(selectedBrokerCompanyName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                    Text("Search all global MT5 brokers & servers", fontSize = 9.sp, color = TextSecondary)
+                                    Text("Search listed suggestions or enter the exact server manually", fontSize = 9.sp, color = TextSecondary)
                                 }
                             }
                             Button(
@@ -1049,16 +1069,39 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_login")
                         )
 
-                        // Password Input
+                        // Masked master-password input with an explicit reveal control.
                         OutlinedTextField(
-                            value = mt5PasswordInput, onValueChange = { mt5PasswordInput = it },
+                            value = mt5PasswordInput,
+                            onValueChange = { mt5PasswordInput = it },
                             label = { Text("Password") },
                             placeholder = { Text("Enter trading password") },
-                            visualTransformation = PasswordVisualTransformation(),
+                            visualTransformation = if (showMt5Password) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_password")
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("bot_mt5_password"),
+                            trailingIcon = {
+                                IconButton(onClick = { showMt5Password = !showMt5Password }) {
+                                    Icon(if (showMt5Password) Icons.Default.VisibilityOff else Icons.Default.Visibility, contentDescription = if (showMt5Password) "Hide password" else "Show password")
+                                }
+                            }
                         )
-
+                        OutlinedTextField(
+                            value = mt5InvestorPasswordInput,
+                            onValueChange = { mt5InvestorPasswordInput = it },
+                            label = { Text("Investor password (optional)") },
+                            placeholder = { Text("Read-only access is unavailable in this integration") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            visualTransformation = if (showMt5InvestorPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("bot_mt5_investor_password"),
+                            trailingIcon = {
+                                IconButton(onClick = { showMt5InvestorPassword = !showMt5InvestorPassword }) {
+                                    Icon(if (showMt5InvestorPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility, contentDescription = if (showMt5InvestorPassword) "Hide investor password" else "Show investor password")
+                                }
+                            }
+                        )
+                        Text("Investor-password authentication is unsupported by the current integration; submitting one will be rejected.", fontSize = 9.sp, color = WarningAmber)
+                        Text("Account mode selected is a request only; the authenticated broker response is authoritative.", fontSize = 9.sp, color = TextSecondary)
                         // Server Selector with Dynamic Dropdown
                         var expandedServer by remember { mutableStateOf(false) }
                         val matchedBrokers = remember(mt5ServerInput, selectedBrokerCompanyName) {
@@ -1101,40 +1144,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
 
-                        // Exact Account Balance / Initial Deposit Input (Solves fake $100k/$10k issue)
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            OutlinedTextField(
-                                value = mt5BalanceInput,
-                                onValueChange = { mt5BalanceInput = it },
-                                label = { Text("Exact Account Balance / Deposit ($ USD)") },
-                                placeholder = { Text("e.g. 3000.00") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth().testTag("bot_mt5_balance_input")
-                            )
-                            Text(
-                                text = "Select or enter your exact account balance so calculations match reality:",
-                                fontSize = 9.sp,
-                                color = TextSecondary
-                            )
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                val presets = listOf(3000.0, 5000.0, 10000.0, 50000.0)
-                                items(presets) { preset ->
-                                    FilterChip(
-                                        selected = mt5BalanceInput.toDoubleOrNull() == preset,
-                                        onClick = { mt5BalanceInput = String.format(java.util.Locale.US, "%.2f", preset) },
-                                        label = {
-                                            Text(
-                                                text = if (preset == 3000.0) "$3,000 (Your Demo)" else "$${String.format(java.util.Locale.US, "%,.0f", preset)}",
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
+                        Text("Balance, equity, margin, currency and leverage appear only after a verified broker account snapshot.", fontSize = 9.sp, color = TextSecondary)
                         // Leverage Selector
                         Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedTextField(
@@ -1196,7 +1206,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     brokerConnectionMessage = "Please enter or select a broker server."
                                     return@Button
                                 }
-                                val parsedBal = mt5BalanceInput.toDoubleOrNull() ?: 3000.0
                                 isConnectingBroker = true
                                 brokerConnectionMessage = null
                                 viewModel.connectToMT5Credentials(
@@ -1204,7 +1213,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     password = mt5PasswordInput,
                                     server = mt5ServerInput,
                                     investorPassword = mt5InvestorPasswordInput,
-                                    balance = parsedBal,
+                                    savePassword = savePasswordChecked,
                                     accountType = selectedAccountMode,
                                     leverage = selectedLeverage,
                                     currency = "USD"
@@ -1233,11 +1242,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
 
-                    // Comprehensive Global Broker Search Dialog
+                    // Search listed broker/server suggestions Dialog
                     if (showBrokerSearchDialog) {
                         AlertDialog(
                             onDismissRequest = { showBrokerSearchDialog = false },
-                            title = { Text("Global Broker Search", fontWeight = FontWeight.Bold) },
+                            title = { Text("Search listed brokers", fontWeight = FontWeight.Bold) },
                             text = {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedTextField(
@@ -1255,7 +1264,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             Card(
                                                 onClick = {
                                                     selectedBrokerCompanyName = broker.name
-                                                    mt5ServerInput = broker.servers.firstOrNull() ?: "${broker.name}-Real"
+                                                    if (mt5ServerInput.isBlank()) {
+                                                        mt5ServerInput = broker.servers.firstOrNull().orEmpty()
+                                                    }
                                                     showBrokerSearchDialog = false
                                                 },
                                                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
@@ -1673,7 +1684,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             } else if (askPrice <= 0.0 || bidPrice <= 0.0) {
                                 instantExecutionStatus = "⚠️ Waiting for live streaming quotes on $activeSymbol..."
                             } else {
-                                val bal = accountMetrics?.balance ?: 3000.0
+                                val bal = accountMetrics?.balance ?: 0.0
                                 val eq = accountMetrics?.equity ?: bal
                                 val lev = accountMetrics?.leverage ?: 500
                                 val szRes = viewModel.sizeFor(activeSymbol, bal, riskPercent, askPrice, askPrice - 0.0030)
@@ -1865,7 +1876,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Select the pair you wish to run the bot on. The bot will automatically inspect your leverage, account balance ($${String.format(java.util.Locale.US, "%.2f", accountMetrics?.balance ?: viewModel.accountCapital.value)}), free margin ($${String.format(java.util.Locale.US, "%.2f", accountMetrics?.freeMargin ?: viewModel.accountCapital.value)}), and equity to calculate the optimal lot size and trade plan.",
+                        text = "Select a pair for bot analysis. Account figures shown here come only from the authenticated broker snapshot; execution still requires risk and market-data checks.",
                         fontSize = 11.sp,
                         color = TextPrimary,
                         lineHeight = 16.sp
@@ -1902,7 +1913,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 onClick = {
                                     viewModel.selectTicker(pair)
                                     showPostLoginPairSelectorModal = false
-                                    statusMessage = "Bot configured for $pair. Account balance, leverage & free margin verified!"
+                                    statusMessage = "Bot configured for $pair. Verified account metrics are used when available; live execution requires all safety checks."
                                 },
                                 colors = CardDefaults.cardColors(
                                     containerColor = if (pair == activeSymbol) ElectricCyan.copy(alpha = 0.15f) else DarkSurfaceVariant

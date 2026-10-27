@@ -18,6 +18,7 @@ class SecretsManager(private val ctx: Context) {
         private const val WA_KEY  = "whatsapp_api_key"
         private const val WA_PHN  = "whatsapp_phone"
         private const val MT5_PW  = "mt5_broker_password"
+        private const val MT5_SAVE_PASSWORD = "mt5_save_password"
         private const val MT5_LOGIN = "mt5_broker_login"
         private const val MT5_INVESTOR_PW = "mt5_investor_password"
         private const val MT5_AC  = "mt5_account_number"
@@ -68,6 +69,15 @@ class SecretsManager(private val ctx: Context) {
     fun saveWhatsAppApiKey(v: String)   = prefs.edit().putString(WA_KEY,  v).apply()
     fun saveWhatsAppPhone(v: String)    = prefs.edit().putString(WA_PHN,  v).apply()
     fun saveMT5Password(v: String)      = prefs.edit().putString(MT5_PW,  v).apply()
+    fun saveMT5PasswordIfAllowed(v: String, enabled: Boolean) {
+        prefs.edit().putBoolean(MT5_SAVE_PASSWORD, enabled).apply()
+        if (enabled) saveMT5Password(v) else prefs.edit().remove(MT5_PW).apply()
+    }
+    fun isMT5PasswordSaveEnabled(): Boolean = prefs.getBoolean(MT5_SAVE_PASSWORD, false)
+    fun clearMT5Credentials() {
+        prefs.edit().remove(MT5_PW).remove(MT5_INVESTOR_PW).remove(MT5_LOGIN).remove(MT5_AC)
+            .remove(MT5_SV).putString(MT5_SESSION_STATUS, "DISCONNECTED").apply()
+    }
     fun saveMT5Login(v: String)         = prefs.edit().putString(MT5_LOGIN, v).apply()
     fun saveMT5InvestorPassword(v: String) = prefs.edit().putString(MT5_INVESTOR_PW, v).apply()
     fun saveMT5AccountNumber(v: String) = prefs.edit().putString(MT5_AC,  v).apply()

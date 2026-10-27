@@ -32,17 +32,9 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
     private var connected = false
     private val directPositions = java.util.concurrent.CopyOnWriteArrayList<Position>()
-    private var directBalance = s.getMT5AccountBalance().takeIf { it > 0.0 }
-        ?: s.getConfiguredEquity().takeIf { it > 0.0 }
-        ?: 3000.0
 
-    fun setAccountBalance(balance: Double) {
-        if (balance > 0.0) {
-            directBalance = balance
-            s.saveMT5AccountBalance(balance)
-            s.saveConfiguredEquity(balance)
-        }
-    }
+    /** User-entered/demo estimates are not broker account data and are never persisted as metrics. */
+    fun setAccountBalance(balance: Double) { /* intentionally ignored: only broker snapshots are authoritative */ }
 
     fun updatePositionProfit(ticketId: String, currentMarketPrice: Double) {
         val found = directPositions.find { it.id == ticketId } ?: return
@@ -64,6 +56,12 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
             .addHeader("auth-token", s.getMetaApiToken())
     }
 
+    fun disconnectSession() {
+        connected = false
+        s.saveMT5SessionStatus("DISCONNECTED")
+    }
+    private fun hasVerifiedSession(): Boolean = connected && s.getMetaApiToken().isNotBlank() &&
+        s.getMT5AccountNumber().isNotBlank() && !s.getMT5AccountNumber().startsWith("DIRECT-")
     private var cachedBrokerSymbols: List<String> = emptyList()
 
     private fun retryDelayMillis(retryAfter: String?): Long {
@@ -81,8 +79,8 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
     }
 
     /**
-     * Provision or link an MT5 trading account. If a MetaAPI cloud token is provided, provisions
-     * the cloud terminal; otherwise connects directly using the broker's verified credentials.
+     * Provision an MT5 account through the configured MetaAPI integration. No direct MT5
+     * authentication protocol is implemented in this Android client.
      */
     suspend fun provisionAccount(login: String, password: String, server: String): Result<String> =
         withContext(Dispatchers.IO) {
@@ -97,13 +95,10 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                 return@withContext Result.failure(Exception("MT5 master Password and Server are required."))
             }
 
+            connected = false
+            s.saveMT5SessionStatus("CONFIGURATION_REQUIRED")
             if (bridgeToken.isBlank()) {
-                s.saveMT5Login(cleanLogin)
-                s.saveMT5Password(password)
-                s.saveMT5BrokerServer(cleanServer)
-                s.saveMT5AccountNumber("DIRECT-$cleanLogin")
-                connected = true
-                return@withContext Result.success("DIRECT-$cleanLogin")
+                return@withContext Result.failure(Exception("CONFIGURATION_REQUIRED: configure a MetaAPI token through a secure supported backend before connecting an MT5 account."))
             }
 
             // Keep the same transaction ID across HTTP 202 responses and user retries. MetaAPI
@@ -377,6 +372,7 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
     }
 
     override suspend fun executeTrade(signal: TradeSignal, lotSize: Double, requestId: String): Result<String> = withContext(Dispatchers.IO) {
+        if (!hasVerifiedSession()) return@withContext Result.failure(Exception("MT5 execution blocked: verified authenticated account snapshot required."))
         if (lotSize <= 0.0) return@withContext Result.failure(Exception("Invalid volume"))
         val token = s.getMetaApiToken()
         val account = s.getMT5AccountNumber()
@@ -403,32 +399,12 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                 Log.w(TAG, "MetaAPI trade execution failed: ${e.message}, executing via verified MT5 session")
             }
         }
-        val login = s.getMT5Login()
-        val server = s.getMT5BrokerServer()
-        val password = s.getMT5Password()
-        if (login.isBlank() || password.isBlank() || server.isBlank()) {
-            return@withContext Result.failure(Exception("MT5 credentials required (Login, Password, Server)."))
-        }
-        connected = true
-        val ticketId = "MT5-${login.takeLast(4)}-${System.currentTimeMillis() % 1_000_000}"
-        val newPos = Position(
-            id = ticketId,
-            signalId = signal.id,
-            symbol = signal.symbol,
-            direction = signal.direction,
-            entryPrice = signal.entryPrice,
-            stopLoss = signal.stopLoss,
-            takeProfit = signal.takeProfit,
-            lotSize = lotSize,
-            status = PositionStatus.OPEN,
-            currentProfit = 0.0,
-            openedAt = System.currentTimeMillis()
-        )
-        directPositions.add(newPos)
-        Result.success(ticketId)
+        connected = false
+        Result.failure(Exception("CONFIGURATION_REQUIRED: no verified MetaAPI account session is available; live execution is disabled."))
     }
 
     override suspend fun closeTrade(ticketId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        if (!hasVerifiedSession()) return@withContext Result.failure(Exception("MT5 close blocked: verified authenticated account snapshot required."))
         val token = s.getMetaApiToken()
         val account = s.getMT5AccountNumber()
         if (token.isNotBlank() && account.isNotBlank() && !account.startsWith("DIRECT-")) {
@@ -442,16 +418,11 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                 Log.w(TAG, "MetaAPI position close failed: ${e.message}")
             }
         }
-        val found = directPositions.find { it.id == ticketId }
-        if (found != null) {
-            directBalance += found.currentProfit
-            directPositions.remove(found)
-            return@withContext Result.success(true)
-        }
-        Result.success(true)
+        Result.failure(Exception("No verified MT5 account session is available."))
     }
 
     override suspend fun modifyTrade(ticketId: String, newSl: Double, newTp: Double): Result<Boolean> = withContext(Dispatchers.IO) {
+        if (!hasVerifiedSession()) return@withContext Result.failure(Exception("MT5 modification blocked: verified authenticated account snapshot required."))
         val token = s.getMetaApiToken()
         val account = s.getMT5AccountNumber()
         if (token.isNotBlank() && account.isNotBlank() && !account.startsWith("DIRECT-")) {
@@ -466,15 +437,7 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                 Log.w(TAG, "MetaAPI modifyTrade failed: ${e.message}")
             }
         }
-        val found = directPositions.find { it.id == ticketId }
-        if (found != null) {
-            val idx = directPositions.indexOf(found)
-            if (idx >= 0) {
-                directPositions[idx] = found.copy(stopLoss = newSl, takeProfit = newTp)
-            }
-            return@withContext Result.success(true)
-        }
-        Result.success(true)
+        Result.failure(Exception("No verified MT5 account session is available."))
     }
 
     override suspend fun getOpenPositions(): Result<List<Position>> = withContext(Dispatchers.IO) {
@@ -502,7 +465,7 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                 Log.w(TAG, "MetaAPI getOpenPositions failed: ${e.message}")
             }
         }
-        Result.success(directPositions.toList())
+        Result.failure(Exception("CONFIGURATION_REQUIRED: open positions are unavailable without a verified MetaAPI session."))
     }
 
     override suspend fun getAccountBalance(): Result<Double> = getAccountMetrics().map { it.balance }
@@ -513,60 +476,39 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
         if (token.isNotBlank() && account.isNotBlank() && !account.startsWith("DIRECT-")) {
             try {
                 val resp = client.newCall(req("/account-information").get().build()).execute()
+                val raw = resp.body?.string().orEmpty()
                 if (resp.isSuccessful) {
-                    val body = JSONObject(resp.body?.string() ?: "{}")
-                    val currency = body.optString("currency").takeIf { it.isNotBlank() } ?: "USD"
+                    val body = JSONObject(raw)
+                    if (!body.has("balance") || !body.has("equity") || !body.has("currency")) {
+                        connected = false
+                        return@withContext Result.failure(Exception("MetaAPI account snapshot is incomplete; account remains disconnected."))
+                    }
+                    val balance = body.optDouble("balance", Double.NaN)
+                    val equity = body.optDouble("equity", Double.NaN)
+                    val currency = body.optString("currency").trim()
+                    if (!balance.isFinite() || !equity.isFinite() || currency.isBlank()) {
+                        connected = false
+                        return@withContext Result.failure(Exception("MetaAPI account snapshot contains invalid metrics."))
+                    }
                     connected = true
-                    return@withContext Result.success(
-                        AccountMetrics(
-                            balance = body.optDouble("balance", 0.0),
-                            equity = body.optDouble("equity", 0.0),
-                            margin = body.optDouble("margin", 0.0),
-                            freeMargin = body.optDouble("freeMargin", 0.0),
-                            marginLevel = body.optDouble("marginLevel", 0.0),
-                            currency = currency,
-                            leverage = body.optInt("leverage", 500)
-                        )
-                    )
+                    s.saveMT5SessionStatus("CONNECTED")
+                    s.saveMT5LastLoginMs(System.currentTimeMillis())
+                    return@withContext Result.success(AccountMetrics(
+                        balance = balance, equity = equity,
+                        margin = body.optDouble("margin", Double.NaN),
+                        freeMargin = body.optDouble("freeMargin", Double.NaN),
+                        marginLevel = body.optDouble("marginLevel", Double.NaN),
+                        currency = currency, leverage = body.optInt("leverage", 0)
+                    ))
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "MetaAPI account-information call failed: ${e.message}")
             }
         }
-        val login = s.getMT5Login()
-        val server = s.getMT5BrokerServer()
-        val password = s.getMT5Password()
-        val sessionStatus = s.getMT5SessionStatus()
-        if (sessionStatus == "SESSION_EXPIRED") {
-            connected = false
-            return@withContext Result.failure(Exception("Session expired for MT5 account $login ($server). Tap Reconnect to refresh credentials."))
-        }
-        if (login.isNotBlank() && password.isNotBlank() && server.isNotBlank()) {
-            val savedBal = s.getMT5AccountBalance().takeIf { it > 0.0 } ?: s.getConfiguredEquity().takeIf { it > 0.0 } ?: directBalance
-            directBalance = savedBal
-            connected = true
-            s.saveMT5SessionStatus("CONNECTED")
-            s.saveMT5LastLoginMs(System.currentTimeMillis())
-            val unrealized = directPositions.sumOf { it.currentProfit }
-            val usedMargin = directPositions.sumOf { it.lotSize * 1000.0 }
-            val equity = directBalance + unrealized
-            val freeMargin = (equity - usedMargin).coerceAtLeast(0.0)
-            val marginLevel = if (usedMargin > 0.0) (equity / usedMargin) * 100.0 else 0.0
-            return@withContext Result.success(
-                AccountMetrics(
-                    balance = directBalance,
-                    equity = equity,
-                    margin = usedMargin,
-                    freeMargin = freeMargin,
-                    marginLevel = marginLevel,
-                    currency = s.getMT5Currency().ifBlank { "USD" },
-                    leverage = s.getMT5Leverage().takeIf { it > 0 } ?: 500
-                )
-            )
-        }
-        Result.failure(Exception("MT5 credentials required (Account Login, Password, Server)."))
+        connected = false
+        s.saveMT5SessionStatus(if (token.isBlank()) "CONFIGURATION_REQUIRED" else "AUTH_FAILED")
+        Result.failure(Exception(if (token.isBlank()) "CONFIGURATION_REQUIRED: MetaAPI token is not configured. No account metrics are available." else "MetaAPI could not provide a verified account-information snapshot."))
     }
-
     override suspend fun calculateRequiredMargin(symbol: String, lotSize: Double): Result<Double> = withContext(Dispatchers.IO) {
         val token = s.getMetaApiToken()
         val account = s.getMT5AccountNumber()
@@ -582,11 +524,7 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                 Log.w(TAG, "MetaAPI margin calculation failed: ${e.message}")
             }
         }
-        val spec = loadSymbolSpec(symbol).getOrNull()
-        val contractSize = spec?.contractSize ?: 100_000.0
-        val leverage = 100.0
-        val margin = (lotSize * contractSize) / leverage
-        Result.success(margin)
+        Result.failure(Exception("CONFIGURATION_REQUIRED: margin is unavailable without a verified broker session."))
     }
 
     private fun fetchConversionRate(from: String, to: String): Double? {
@@ -632,7 +570,7 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
         return null
     }
 
-    override fun isConnected() = connected
+    override fun isConnected() = hasVerifiedSession()
 
     override suspend fun getBrokerQuote(symbol: String): Result<com.destinedfx.core.marketdata.MarketQuote> = withContext(Dispatchers.IO) {
         val token = s.getMetaApiToken()
@@ -650,7 +588,7 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                 Log.w(TAG, "MetaAPI quote lookup failed: ${e.message}")
             }
         }
-        // Return failure/null so caller uses live market data feed quote (TradingView / Deriv)
+        // Quotes may come from separate market-data feeds, but this repository never simulates execution.
         Result.failure(Exception("Using primary market data quote for $symbol"))
     }
 }

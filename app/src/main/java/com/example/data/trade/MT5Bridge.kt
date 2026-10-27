@@ -34,9 +34,19 @@ class MT5Bridge {
         broker: String,
         loginId: String,
         pass: String,
-        gatewayUrl: String = "wss://your-secure-backend-gateway.com/live-mt5"
+        gatewayUrl: String = ""
     ): Boolean {
-        currentGatewayUrl = gatewayUrl
+        currentGatewayUrl = gatewayUrl.trim()
+        _isConnected.value = false
+        _walletBalance.value = 0.0
+        _equity.value = 0.0
+        _margin.value = 0.0
+        _freeMargin.value = 0.0
+        _marginLevel.value = 0.0
+        if (currentGatewayUrl.isBlank()) {
+            _isConnected.value = false
+            return false
+        }
         connectionDeferred = CompletableDeferred()
         gatewayClient?.disconnect()
         
@@ -89,7 +99,7 @@ class MT5Bridge {
     suspend fun executeTrade(symbol: String, lotSize: Double, type: String, stopLoss: Double, takeProfit: Double, requestId: String = "REQ-" + java.util.UUID.randomUUID()): Result<String> {
         if (!_isConnected.value) return Result.failure(Exception("Broker not connected"))
         
-        if (currentGatewayUrl == "wss://your-secure-backend-gateway.com/live-mt5" || currentGatewayUrl.isEmpty()) {
+        if (currentGatewayUrl.isEmpty()) {
             return Result.failure(Exception("Broker not connected"))
         }
         

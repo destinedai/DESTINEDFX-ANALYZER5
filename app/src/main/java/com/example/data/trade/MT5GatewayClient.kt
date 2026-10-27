@@ -30,7 +30,7 @@ class MT5GatewayClient(private val callback: MT5DataListener) {
         
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                callback.onConnected()
+                // A transport-level WebSocket open is not an authenticated trading session.
                 authenticateAccount(accountId, passwordText, server)
             }
 
@@ -66,7 +66,17 @@ class MT5GatewayClient(private val callback: MT5DataListener) {
             val data = JSONObject(payload)
             val type = data.optString("type")
 
-            if ("ACCOUNT_UPDATE" == type) {
+            if ("ACCOUNT_AUTHENTICATED" == type && data.optBoolean("authenticated", false)) {
+                val snapshot = data.optJSONObject("account") ?: return
+                if (!snapshot.has("balance") || !snapshot.has("equity") || !snapshot.has("currency")) return
+                val balance = snapshot.optDouble("balance", Double.NaN)
+                val equity = snapshot.optDouble("equity", Double.NaN)
+                if (!balance.isFinite() || !equity.isFinite()) return
+                callback.onBalanceUpdate(balance, equity, snapshot.optDouble("margin", Double.NaN), snapshot.optDouble("freeMargin", Double.NaN), snapshot.optDouble("marginLevel", Double.NaN))
+                callback.onConnected()
+            } else if ("ACCOUNT_AUTHENTICATED" == type || "AUTH_FAILED" == type) {
+                callback.onError(if ("AUTH_FAILED" == type) "MT5 account authentication rejected" else "MT5 authentication response was incomplete")
+            } else if ("ACCOUNT_UPDATE" == type) {
                 val balance = data.optDouble("balance", 0.0)
                 val equity = data.optDouble("equity", 0.0)
                 val margin = data.optDouble("margin", 0.0)
