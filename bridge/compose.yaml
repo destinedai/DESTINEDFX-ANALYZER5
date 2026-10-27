@@ -1,0 +1,16 @@
+services:
+  bridge:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ALLOW_LOOPBACK_HTTP: "false"
+      BRIDGE_DB_PATH: /data/bridge.sqlite3
+    volumes:
+      - bridge-data:/data
+    expose:
+      - "8000"
+    # Publish only to loopback behind a local TLS proxy if proxy runs on host:
+    # ports: ["127.0.0.1:8000:8000"]
+volumes:
+  bridge-data:

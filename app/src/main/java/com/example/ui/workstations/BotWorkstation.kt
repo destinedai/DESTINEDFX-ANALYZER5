@@ -42,9 +42,36 @@ import androidx.compose.ui.platform.LocalContext
 import com.example.security.AppSecurityGuard
 import com.destinedfx.core.news.HighImpactNewsSentry
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import com.example.data.trade.MT5RemoteBridgeClient
+import org.json.JSONArray
+import org.json.JSONObject
 
 @Composable
 fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
+    var bridgeMode by remember { mutableStateOf(viewModel.app.secretsManager.getMT5BridgeAppToken().isNotBlank()) }
+    val bridgeClient = remember { MT5RemoteBridgeClient(viewModel.app.secretsManager) }
+    var bridgeUrl by remember { mutableStateOf(bridgeClient.baseUrl()) }
+    var bridgeCode by remember { mutableStateOf("") }
+    var bridgeMessage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5BridgePendingCommandId().let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
+    var bridgeSnapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
+    var bridgeBusy by remember { mutableStateOf(false) }
+    val bridgeSecrets = viewModel.app.secretsManager
+    var bridgePendingId by remember { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId()) }
+    var bridgePendingAction by remember { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandAction()) }
+    var bridgeCommandPending by remember { mutableStateOf(bridgePendingId.isNotBlank() && bridgePendingAction.isNotBlank()) }
+    var bridgeExpectedState by remember { mutableStateOf(when (bridgePendingAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; "STOP", "EMERGENCY_STOP" -> "STOPPED"; else -> "" }) }
+    val bridgeToken = viewModel.app.secretsManager.getMT5BridgeAppToken()
+    val bridgeTerminalFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
+    val bridgeTerminalReady = bridgeSnapshot?.let { bridgeTerminalFresh && it.tradeAllowed && it.accountVerified && it.account.isNotBlank() } == true
+    val bridgeDisplayState = bridgeSnapshot?.state ?: if (bridgeToken.isBlank()) "SETUP REQUIRED" else "OFFLINE"
+    val bridgeStatusColor = when (bridgeDisplayState) {
+        "RUNNING" -> ProfitGreen
+        "READY" -> ElectricCyan
+        "PAUSED" -> OrangeAccent
+        "ERROR", "OFFLINE", "STALE" -> LossRed
+        else -> WarningAmber
+    }
     val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
     val botActive by viewModel.botActive.collectAsStateWithLifecycle()
     val activeBrokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
@@ -73,6 +100,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var instantSlPips by remember { mutableStateOf("20") }
     var instantTpPips by remember { mutableStateOf("50") }
     var instantExecutionStatus by remember { mutableStateOf<String?>(null) }
+    val terminalSymbol = viewModel.app.secretsManager.getBrokerSymbolOverrides()[activeSymbol]
+        ?.trim()?.takeIf { it.isNotEmpty() } ?: activeSymbol.replace("/", "").replace(" ", "")
     val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(activeBrokerType) {
@@ -81,6 +110,31 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         isConnectingBroker = false
     }
 
+    LaunchedEffect(bridgeMode, bridgeToken) {
+        if (bridgeMode && bridgeClient.baseUrl().isNotBlank() && bridgeToken.isNotBlank()) {
+            while (true) {
+                try {
+                    val fresh = bridgeClient.state()
+                    bridgeSnapshot = fresh
+                    val cmd = fresh.raw.optJSONObject("last_command")
+                    if (bridgeCommandPending && cmd != null && cmd.optString("request_id") == bridgePendingId &&
+                        cmd.optString("action") == bridgePendingAction && cmd.optString("status") == "ACKNOWLEDGED") {
+                        when (cmd.optString("outcome")) {
+                            "REJECTED" -> { val action = bridgePendingAction; bridgeSecrets.clearMT5BridgePendingCommand(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeMessage = "$action rejected by EA: ${cmd.optString("message", "No reason supplied")}" }
+                            "APPLIED" -> if (fresh.heartbeatFresh) {
+                                val action = bridgePendingAction
+                                val expected = bridgeExpectedState
+                                bridgeSecrets.clearMT5BridgePendingCommand(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""
+                                bridgeMessage = if (fresh.state == expected && cmd.optString("state") == expected) "$action applied; fresh EA heartbeat confirms ${fresh.state}." else "$action acknowledged as applied, but fresh EA heartbeat reports actual state ${fresh.state}; target state is not confirmed."
+                            }
+                        }
+                    }
+                }
+                catch (_: Exception) { bridgeSnapshot = null; bridgeMessage = if (bridgeCommandPending) "UNKNOWN request $bridgePendingId: bridge unreachable or authorization required. Do not resend; reconcile or revoke pairing." else "Bridge unreachable or authorization required" }
+                delay(2000)
+            }
+        }
+    }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -89,8 +143,49 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            val isConnected = brokerConnStatus == BrokerConnectionStatus.CONNECTED
-            val statusColor = when (botSummary.state) {
+            Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("REMOTE MT5 EA BRIDGE", modifier = Modifier.weight(1f), color = ElectricCyan, fontWeight = FontWeight.Bold)
+                        Switch(checked = bridgeMode, enabled = bridgeToken.isBlank() && !bridgeBusy, onCheckedChange = { bridgeMode = it })
+                    }
+                    Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${bridgeSnapshot?.let { if (!it.terminalOnline) "OFFLINE" else if (!it.heartbeatFresh) "STALE HEARTBEAT" else "ONLINE" } ?: "UNVERIFIED"} · EA: ${bridgeSnapshot?.state ?: "UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    Text("Verified account: ${bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified"} · Trade permission: ${if (bridgeSnapshot?.tradeAllowed == true) "YES" else "NO"}", color = TextSecondary, fontSize = 10.sp)
+                    OutlinedTextField(value = bridgeUrl, onValueChange = { bridgeUrl = it }, enabled = bridgeToken.isBlank(), label = { Text("Bridge base URL (HTTPS; loopback HTTP only)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(enabled = !bridgeBusy && bridgeToken.isBlank(), onClick = { bridgeMessage = if (bridgeClient.saveBaseUrl(bridgeUrl)) "Bridge URL saved" else "Invalid URL: HTTPS required except loopback; revoke pairing before changing host" }) { Text("Save URL") }
+                        Button(enabled = !bridgeBusy && viewModel.app.secretsManager.isSecureStorageAvailable && viewModel.app.secretsManager.getMT5BridgeAppToken().isBlank(), onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeCode = bridgeClient.pair().code; bridgeMode = true; bridgeMessage = "Enter code once in EA" } catch (e: Exception) { bridgeMessage = e.message ?: "Pairing failed" }; bridgeBusy = false } }) { Text("Pair") }
+                        Button(enabled = !bridgeBusy && viewModel.app.secretsManager.getMT5BridgeAppToken().isNotBlank(), onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeClient.revoke(); bridgeSecrets.clearMT5BridgePendingCommand(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeExpectedState = ""; bridgeSnapshot = null; bridgeMode = false; bridgeCode = ""; bridgeMessage = "Terminal pairing revoked" } catch (_: Exception) { bridgeMessage = "Revoke not confirmed" }; bridgeBusy = false } }) { Text("Revoke") }
+                    }
+                    if (bridgeCode.isNotBlank()) Text("ONE-TIME EA CODE: $bridgeCode", color = WarningAmber, fontWeight = FontWeight.Bold)
+                    if (bridgeMessage.isNotBlank()) Text(bridgeMessage, color = WarningAmber, fontSize = 10.sp)
+                    val bridgeFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
+                    val bridgeReady = bridgeSnapshot?.let { bridgeFresh && it.tradeAllowed && it.accountVerified && it.account.isNotBlank() } == true
+                    val supportedStrategy = selectedStrategyId == "ict-silver-bullet"
+                    val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
+                    Text("EA SUPPORTED SUBSET: ICT Silver Bullet only. Other selected strategies cannot be started by this EA.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    BridgeTelemetry(bridgeSnapshot)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("PAUSE", "RESUME", "STOP", "EMERGENCY_STOP").forEach { action ->
+                            val needsTradingReady = action == "PAUSE" || action == "RESUME"
+                            OutlinedButton(enabled = bridgeMode && (if (needsTradingReady) bridgeReady else bridgeFresh) && !bridgeBusy && !bridgeCommandPending, onClick = {
+                                coroutineScope.launch { sendBridgeCommand(bridgeClient, action, JSONObject(), bridgeSecrets, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it }) }
+                            }) { Text(action.replace('_', ' '), fontSize = 9.sp) }
+                        }
+                    }
+                    Text("POSITION SAFETY: STOP, PAUSE and EMERGENCY STOP block new entries only. They do not close existing positions or move broker SL/TP; manage open positions directly on the MT5 terminal.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    if (!viewModel.app.secretsManager.isSecureStorageAvailable) Text("Secure storage unavailable; pairing and app-token persistence are disabled.", color = LossRed, fontSize = 10.sp)
+                    if (bridgeMode && !bridgeReady) Text("SETUP REQUIRED — START needs a verified account, connected/trading-ready terminal and fresh heartbeat.", color = LossRed, fontSize = 10.sp)
+                    if (bridgeMode && !supportedStrategy) Text("START BLOCKED — select ict-silver-bullet; this EA does not support the other app strategies.", color = LossRed, fontSize = 10.sp)
+                    if (bridgeMode && !validBridgeRisk) Text("START BLOCKED — risk must be finite and greater than 0 and no more than 1%; no clamping is applied.", color = LossRed, fontSize = 10.sp)
+                    if (bridgeCommandPending && bridgeMessage.contains("No confirmed response")) Text("UNKNOWN request $bridgePendingId — do not resend. Refresh/reconcile this ID with bridge last_command or recover manually; no duplicate was sent.", color = LossRed, fontSize = 10.sp)
+                    Text(if (bridgeMode) "Bridge control operates on the remote terminal; the terminal must stay online independently." else "Bridge mode off; current broker mode unchanged.", color = TextSecondary, fontSize = 10.sp)
+                }
+            }
+        }
+        item {
+            val isConnected = if (bridgeMode) bridgeTerminalFresh else brokerConnStatus == BrokerConnectionStatus.CONNECTED
+            val statusColor = if (bridgeMode) bridgeStatusColor else when (botSummary.state) {
                 BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
                 BotLifecycleState.EXECUTING -> ElectricCyan
                 BotLifecycleState.CONNECTING_BROKER -> OrangeAccent
@@ -123,21 +218,22 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("BOT STATE", fontSize = 9.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
-                            Text(botSummary.state.name.replace('_', ' '), fontSize = 12.sp, color = statusColor,
+                            Text(if (bridgeMode) bridgeDisplayState else botSummary.state.name.replace('_', ' '), fontSize = 12.sp, color = statusColor,
                                 fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                         }
                         Column(modifier = Modifier.weight(1f)) {
                             Text("BROKER", fontSize = 9.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
-                            Text(activeBrokerType.name, fontSize = 12.sp, color = TextPrimary,
+                            Text(if (bridgeMode) "MT5 EA" else activeBrokerType.name, fontSize = 12.sp, color = TextPrimary,
                                 fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         }
                         Column(modifier = Modifier.weight(1f)) {
                             Text("RISK LIMIT", fontSize = 9.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
-                            Text("${riskPercent.coerceAtMost(1.0)}%", fontSize = 12.sp, color = WarningAmber,
+                            Text("${riskPercent}% (max 1%)", fontSize = 12.sp, color = WarningAmber,
                                 fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                         }
                     }
-                    Text(if (isConnected) "Execution gateway connected; verify all orders before use."
+                    Text(if (bridgeMode) "Remote terminal state comes from EA heartbeat; phone analysis does not execute trades."
+                        else if (isConnected) "Execution gateway connected; verify all orders before use."
                         else "Execution is disconnected. Analysis and chart display are separate from broker execution.",
                         fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
                 }
@@ -150,13 +246,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             ) {
                 StatChip(
                     label = "BOT STATE",
-                    value = botSummary.state.name.replace('_', ' '),
+                    value = if (bridgeMode) bridgeDisplayState else botSummary.state.name.replace('_', ' '),
                     modifier = Modifier.weight(1f),
-                    color = if (botSummary.isRunning || botActive) ProfitGreen else WarningAmber
+                    color = if (bridgeMode) bridgeStatusColor else if (botSummary.isRunning || botActive) ProfitGreen else WarningAmber
                 )
                 StatChip(
                     label = "RISK CAP",
-                    value = "${riskPercent.coerceAtMost(1.0)}%",
+                    value = "${riskPercent}% (max 1%)",
                     modifier = Modifier.weight(1f),
                     color = WarningAmber
                 )
@@ -165,8 +261,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
         // Master Bot Control Card
         item {
-            val isRunning = botSummary.isRunning || botActive
-            val statusColor = when (botSummary.state) {
+            val isRunning = if (bridgeMode) bridgeDisplayState == "RUNNING" else botSummary.isRunning || botActive
+            val bridgeFresh = bridgeTerminalFresh
+            val bridgeReady = bridgeTerminalReady
+            val supportedStrategy = selectedStrategyId == "ict-silver-bullet"
+            val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
+            val statusColor = if (bridgeMode) bridgeStatusColor else when (botSummary.state) {
                 BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
                 BotLifecycleState.EXECUTING -> CyanPrimary
                 BotLifecycleState.CONNECTING_BROKER -> OrangeAccent
@@ -197,7 +297,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     .background(statusColor)
                             )
                             Text(
-                                text = "BOT STATUS: ${botSummary.state.name}",
+                                text = "BOT STATUS: ${if (bridgeMode) bridgeDisplayState else botSummary.state.name}",
                                 fontWeight = FontWeight.Black,
                                 fontSize = 12.sp,
                                 fontFamily = FontFamily.Monospace,
@@ -207,13 +307,24 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         Switch(
                             checked = isRunning,
+                            enabled = !bridgeMode || (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeReady && supportedStrategy && validBridgeRisk)),
                             onCheckedChange = { active ->
-                                viewModel.setBotStatus(active) { success, err ->
-                                    statusMessage = if (success) {
-                                        if (active) "24/7 Surveillance Engine activated" else "Surveillance stopped"
-                                    } else {
-                                        err ?: "Failed to change engine state"
-                                    }
+                                if (bridgeMode) coroutineScope.launch {
+                                    bridgeBusy = true
+                                    val action = if (active) "START" else "STOP"
+                                    val config = JSONObject()
+                                        .put("strategy", selectedStrategyId)
+                                        .put("symbols", JSONArray().put(terminalSymbol))
+                                        .put("timeframes", JSONArray().put(selectedTimeframe))
+                                        .put("risk_percent", riskPercent)
+                                        .put("max_daily_loss_percent", 2.0)
+                                        .put("max_concurrent_positions", 2)
+                                    if (active && !supportedStrategy) { bridgeMessage = "Blocked: the EA supports ict-silver-bullet only."; bridgeBusy = false; return@launch }
+                                    if (active && (!MT5RemoteBridgeClient.isValidRiskPercent(riskPercent))) { bridgeMessage = "Blocked: risk must be finite and in (0, 1]%; no clamping applied."; bridgeBusy = false; return@launch }
+                                    if (active && !bridgeReady) { bridgeMessage = "Blocked: verified account, terminal readiness and fresh heartbeat required."; bridgeBusy = false; return@launch }
+                                    sendBridgeCommand(bridgeClient, action, config, bridgeSecrets, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it })
+                                } else viewModel.setBotStatus(active) { success, err ->
+                                    statusMessage = if (success) { if (active) "24/7 Surveillance Engine activated" else "Surveillance stopped" } else err ?: "Failed to change engine state"
                                 }
                             },
                             colors = SwitchDefaults.colors(
@@ -679,8 +790,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
             var selectedAccountMode by remember { mutableStateOf(viewModel.app.secretsManager.getMT5AccountType().ifBlank { "Demo" }) }
             val storedBal = remember {
-                val b = viewModel.app.secretsManager.getMT5AccountBalance()
-                if (b > 0.0) b else 3000.0
+                viewModel.app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 } ?: 0.0
             }
             var mt5BalanceInput by remember { mutableStateOf(String.format(java.util.Locale.US, "%.2f", storedBal)) }
             var selectedLeverage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5Leverage().takeIf { it > 0 } ?: 500) }
@@ -994,7 +1104,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         // Open Demo / Real Helper Row
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Card(
-                                onClick = { showOpenDemoDialog = true },
+                                onClick = { brokerConnectionMessage = "Demo accounts must be opened directly with a broker; this app cannot create one." },
                                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.weight(1f).testTag("open_demo_account_card")
@@ -1003,13 +1113,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     Icon(Icons.Default.School, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(18.dp))
                                     Column {
                                         Text("Open Demo Account", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                        Text("Free practice ($3,000)", fontSize = 8.5.sp, color = TextSecondary)
+                                        Text("Open via your broker", fontSize = 8.5.sp, color = TextSecondary)
                                     }
                                 }
                             }
 
                             Card(
-                                onClick = { showOpenRealDialog = true },
+                                onClick = { brokerConnectionMessage = "Real accounts must be opened directly with a broker." },
                                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.weight(1f).testTag("open_real_account_card")
@@ -1294,17 +1404,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         AlertDialog(
                             onDismissRequest = { showOpenDemoDialog = false },
                             title = { Text("Open Demo Account") },
-                            text = { Text("To open a free $3,000 demo trading account with $selectedBrokerCompanyName, tap Auto-fill Demo or enter your broker credentials.") },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    showOpenDemoDialog = false
-                                    selectedAccountMode = "Demo"
-                                    mt5LoginInput = "50" + (100000..999999).random()
-                                    mt5PasswordInput = "DemoPass123!"
-                                    mt5ServerInput = "$selectedBrokerCompanyName-Demo"
-                                    mt5BalanceInput = "3000.00"
-                                }) { Text("Auto-fill $3,000 Demo") }
-                            },
+                            text = { Text("Demo accounts must be created through your broker. This app cannot create or simulate an account.") },
+                            confirmButton = { TextButton(onClick = { showOpenDemoDialog = false }) { Text("OK") } },
                             dismissButton = {
                                 TextButton(onClick = { showOpenDemoDialog = false }) { Text("Cancel") }
                             }
@@ -1952,4 +2053,56 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             }
         )
     }
+}
+
+
+@Composable
+private fun BridgeTelemetry(snapshot: MT5RemoteBridgeClient.Snapshot?) {
+    val unavailable = "Unavailable"
+    Text("ACTUAL TERMINAL ACCOUNT · ${snapshot?.currency?.ifBlank { unavailable } ?: unavailable}", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+    Text("Balance: ${snapshot?.balance?.toString() ?: unavailable} ${snapshot?.currency.orEmpty()} · Equity: ${snapshot?.equity?.toString() ?: unavailable} ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
+    val positions = snapshot?.positions.orEmpty()
+    val floatingValues = positions.mapNotNull { p -> if (p.has("floating_profit") && !p.isNull("floating_profit")) p.optDouble("floating_profit").takeIf { it.isFinite() } else null }
+    val floatingTotal = when { snapshot == null -> unavailable; positions.isEmpty() -> "0.0"; floatingValues.size == positions.size -> floatingValues.sum().toString(); else -> unavailable }
+    Text("Floating P/L: $floatingTotal ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
+    Text("LIVE POSITIONS (${positions.size})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    if (positions.isEmpty()) Text(unavailable, color = TextSecondary, fontSize = 10.sp)
+    positions.forEach { p -> Text("${p.optString("symbol", unavailable)} ${p.optString("direction", unavailable)} · volume ${p.optString("volume", unavailable)} · SL ${p.optString("stop_loss", unavailable)} · TP ${p.optString("take_profit", unavailable)}", color = TextPrimary, fontSize = 10.sp) }
+    val deals = snapshot?.closedDeals.orEmpty()
+    val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+    val recent = deals.filter { deal ->
+        val raw = deal.optString("closed_at", "")
+        val millis = runCatching { java.time.Instant.parse(raw).toEpochMilli() }.getOrNull()
+        millis != null && millis >= cutoff
+    }
+    val net = recent.sumOf { it.optDouble("profit", 0.0) + it.optDouble("commission", 0.0) + it.optDouble("swap", 0.0) }
+    Text("REALIZED DEAL NET (last 7 days / available deals): ${if (deals.isEmpty()) unavailable else net.toString()} ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 10.sp)
+    Text("Last signal: ${snapshot?.lastSignal?.toString() ?: unavailable}", color = TextSecondary, fontSize = 10.sp)
+    snapshot?.raw?.optString("last_error")?.takeIf { it.isNotBlank() }?.let { Text("EA ERROR: $it", color = LossRed, fontSize = 10.sp) }
+}
+
+private suspend fun sendBridgeCommand(
+    client: MT5RemoteBridgeClient, action: String, config: JSONObject, secrets: com.example.security.SecretsManager,
+    busy: (Boolean) -> Unit, pending: (Boolean) -> Unit, requestId: (String) -> Unit,
+    pendingAction: (String) -> Unit, expected: (String) -> Unit, message: (String) -> Unit
+) {
+    if (secrets.getMT5BridgePendingCommandId().isNotBlank()) {
+        pending(true); requestId(secrets.getMT5BridgePendingCommandId()); pendingAction(secrets.getMT5BridgePendingCommandAction())
+        message("A bridge command is already unresolved. Reconcile its saved request ID or revoke pairing; no new command was sent.")
+        busy(false)
+        return
+    }
+    val id = java.util.UUID.randomUUID().toString()
+    if (!secrets.saveMT5BridgePendingCommand(id, action)) {
+        message("Secure pending-command storage failed; no command was sent.")
+        busy(false)
+        return
+    }
+    requestId(id); pendingAction(action)
+    expected(when (action) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; else -> "STOPPED" })
+    pending(true)
+    busy(true)
+    val result = client.command(id, action, config)
+    message(if (result.queued) "$action queued (request ${result.requestId}); awaiting matching acknowledgement and fresh heartbeat; not confirmed." else "UNKNOWN request ${result.requestId}: ${result.detail}. Do not resend; reconcile this ID or recover manually.")
+    busy(false)
 }

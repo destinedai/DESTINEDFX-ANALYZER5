@@ -255,7 +255,7 @@ open class DestinedFXViewModel(
     val selectedTimeframe = MutableStateFlow("M15")
     val selectedMtfTimeframes = MutableStateFlow(setOf("M5", "M15", "M30", "H1", "H4", "D1", "W1"))
     val scanProgressStage = MutableStateFlow("")
-    val riskPercent = MutableStateFlow(1.0)
+    val riskPercent = MutableStateFlow(0.25)
     val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Home)
 
     fun selectScreen(screen: DestinedFXScreen) {
