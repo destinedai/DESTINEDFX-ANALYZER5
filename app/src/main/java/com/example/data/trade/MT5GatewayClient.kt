@@ -24,31 +24,10 @@ class MT5GatewayClient(private val callback: MT5DataListener) {
 
     private val pending = com.destinedfx.core.execution.PendingRequests()
 
+    /** No supported direct MT5 WebSocket authentication protocol is configured in this app. */
     fun connectToLiveMT5(gatewayUrl: String, accountId: String, passwordText: String, server: String) {
-        val secureUrl = com.destinedfx.core.security.SecureTransport.requireSecure(gatewayUrl).getOrElse { callback.onError("BROKER DISCONNECTED: ${it.message}"); return }
-        val request = Request.Builder().url(secureUrl).build()
-        
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                // A transport-level WebSocket open is not an authenticated trading session.
-                authenticateAccount(accountId, passwordText, server)
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                parseIncomingLivePayload(text)
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                pending.failAll(com.destinedfx.core.execution.ExecStatus.DISCONNECTED, "connection lost")
-                callback.onError("BROKER DISCONNECTED: ${t.javaClass.simpleName}")
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                callback.onDisconnected()
-            }
-        })
+        callback.onError("CONFIGURATION_REQUIRED: direct MT5 WebSocket authentication is unsupported; configure the MetaAPI integration.")
     }
-
     private fun authenticateAccount(accountId: String, passwordText: String, server: String) {
         try {
             val authJson = JSONObject().apply {
@@ -66,17 +45,7 @@ class MT5GatewayClient(private val callback: MT5DataListener) {
             val data = JSONObject(payload)
             val type = data.optString("type")
 
-            if ("ACCOUNT_AUTHENTICATED" == type && data.optBoolean("authenticated", false)) {
-                val snapshot = data.optJSONObject("account") ?: return
-                if (!snapshot.has("balance") || !snapshot.has("equity") || !snapshot.has("currency")) return
-                val balance = snapshot.optDouble("balance", Double.NaN)
-                val equity = snapshot.optDouble("equity", Double.NaN)
-                if (!balance.isFinite() || !equity.isFinite()) return
-                callback.onBalanceUpdate(balance, equity, snapshot.optDouble("margin", Double.NaN), snapshot.optDouble("freeMargin", Double.NaN), snapshot.optDouble("marginLevel", Double.NaN))
-                callback.onConnected()
-            } else if ("ACCOUNT_AUTHENTICATED" == type || "AUTH_FAILED" == type) {
-                callback.onError(if ("AUTH_FAILED" == type) "MT5 account authentication rejected" else "MT5 authentication response was incomplete")
-            } else if ("ACCOUNT_UPDATE" == type) {
+            if ("ACCOUNT_UPDATE" == type) {
                 val balance = data.optDouble("balance", 0.0)
                 val equity = data.optDouble("equity", 0.0)
                 val margin = data.optDouble("margin", 0.0)
