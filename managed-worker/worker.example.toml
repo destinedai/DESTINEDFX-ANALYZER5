@@ -1,0 +1,11 @@
+# Copy to worker.toml on the dedicated Windows host. Do not commit local paths or secrets.
+control_plane_url = "https://bridge.example.invalid"
+data_root = "D:\\DestinedFX\\accounts"
+mt5_install = "C:\\Program Files\\Broker MT5"
+terminal_exe = "C:\\Program Files\\Broker MT5\\terminal64.exe"
+metaeditor_exe = "C:\\Program Files\\Broker MT5\\metaeditor64.exe"
+ea_source = "D:\\DestinedFX\\release\\DestinedFXTraderEA.mq5"
+# Optional trusted, precompiled file. When absent, MetaEditor must compile ea_source.
+compiled_ea = ""
+symbol = "EURUSD"
+poll_seconds = 5

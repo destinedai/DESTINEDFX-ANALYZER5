@@ -22,6 +22,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
     data class Pairing(val code: String, val expiresAt: String)
     data class CommandResult(val requestId: String, val queued: Boolean, val detail: String = "")
     data class Snapshot(
+        val managedState: String, val accessType: String,
         val connected: Boolean, val terminalOnline: Boolean, val heartbeatFresh: Boolean,
         val state: String, val account: String, val tradeAllowed: Boolean,
         val terminalConnected: Boolean, val accountVerified: Boolean,
@@ -37,7 +38,21 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
         secrets.saveMT5BridgeBaseUrl(url)
         return true
     }
-    fun baseUrl(): String = secrets.getMT5BridgeBaseUrl()
+    fun baseUrl(): String = com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.trim().trimEnd('/').ifBlank { secrets.getMT5BridgeBaseUrl() }
+
+    fun managedConfigured(): Boolean = com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.isNotBlank()
+
+    /** Creates/retains opaque app bearer and registers credentials over HTTPS; broker password is never logged or returned. */
+    suspend fun registerManagedAccount(login: String, password: String, server: String, accessType: String, consent: Boolean): Snapshot {
+        require(managedConfigured()) { "CONFIGURATION_REQUIRED" }
+        require(accessType == "MASTER" || accessType == "INVESTOR")
+        require(consent) { "Explicit consent is required before sending broker credentials." }
+        if (secrets.getMT5BridgeAppToken().isBlank()) pair() // pairing code is intentionally discarded
+        val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
+            .put("access_type", accessType).put("consent", consent)
+        request("POST", "/v1/app/managed-account", payload)
+        return state()
+    }
 
     suspend fun pair(): Pairing = request("POST", "/v1/pairings", JSONObject()).let { body ->
         val code = body.optString("pairing_code"); val token = body.optString("app_token")
@@ -57,7 +72,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
         val terminalConnected = obj.optBoolean("terminal_connected", false)
         val verified = account != null && account.has("login") && !account.isNull("login") && account.optString("login").isNotBlank()
         fun array(key: String) = buildList { obj.optJSONArray(key)?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let(::add) } }
-        return Snapshot(true, online, freshness,
+        val managed = obj.optJSONObject("managed_execution")
+        val managedState = managed?.let { it.optString("status", it.optString("state", "")) }.orEmpty().uppercase()
+        return Snapshot(managedState, managed?.optString("access_type", "").orEmpty().uppercase(), true, online, freshness,
             when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
             listOf(account?.optString("login").orEmpty(), account?.optString("server").orEmpty()).filter { it.isNotBlank() }.joinToString(" @ "),
             obj.optBoolean("trade_allowed", false), terminalConnected, verified,
@@ -82,15 +99,19 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
     }
 
     private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
-        val base = validateBaseUrl(secrets.getMT5BridgeBaseUrl()) ?: throw IllegalStateException("Enter a valid bridge URL; HTTPS is required except on loopback.")
+        val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException(if (!managedConfigured()) "CONFIGURATION_REQUIRED" else "Managed service URL is invalid; HTTPS is required.")
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
         secrets.getMT5BridgeAppToken().takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty().take(256 * 1024)
             if (!response.isSuccessful) {
-                val detail = runCatching { JSONObject(text).optString("error", "") }.getOrDefault("")
-                throw BridgeHttpException(response.code, detail.take(160).ifBlank { "Bridge request failed (${response.code})." })
+                val detail = runCatching {
+                    val value = JSONObject(text).opt("detail")
+                    if (value is JSONObject) value.optString("code", "") else value?.toString().orEmpty()
+                }.getOrDefault("")
+                val safe = detail.takeIf { it.matches(Regex("[A-Z0-9_]{1,64}")) } ?: "Bridge request failed (${response.code})."
+                throw BridgeHttpException(response.code, safe)
             }
             if (text.isBlank()) JSONObject() else try { JSONObject(text) } catch (_: Exception) { throw IllegalStateException("Bridge returned invalid JSON.") }
         }
@@ -109,6 +130,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
     class BridgeHttpException(val status: Int, val safeDescription: String) : Exception(safeDescription)
 
     companion object {
+        internal fun canStart(managedState: String, accessType: String, heartbeatFresh: Boolean, terminalConnected: Boolean, tradeAllowed: Boolean, accountVerified: Boolean): Boolean =
+            managedState.equals("READY", true) && accessType.equals("MASTER", true) && heartbeatFresh && terminalConnected && tradeAllowed && accountVerified
+
         internal fun isValidRiskPercent(value: Double): Boolean = value.isFinite() && value > 0.0 && value <= 1.0
 
         internal fun commandPayload(requestId: String, action: String, config: JSONObject = JSONObject()): JSONObject {

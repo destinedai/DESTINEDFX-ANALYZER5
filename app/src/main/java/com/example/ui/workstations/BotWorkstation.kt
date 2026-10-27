@@ -63,13 +63,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgeExpectedState by remember { mutableStateOf(when (bridgePendingAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; "STOP", "EMERGENCY_STOP" -> "STOPPED"; else -> "" }) }
     val bridgeToken = viewModel.app.secretsManager.getMT5BridgeAppToken()
     val bridgeTerminalFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
-    val bridgeTerminalReady = bridgeSnapshot?.let { bridgeTerminalFresh && it.tradeAllowed && it.accountVerified && it.account.isNotBlank() } == true
-    val bridgeDisplayState = bridgeSnapshot?.state ?: if (bridgeToken.isBlank()) "SETUP REQUIRED" else "OFFLINE"
+    val bridgeTerminalReady = bridgeSnapshot?.let { bridgeTerminalFresh && it.managedState == "READY" && it.accessType == "MASTER" && it.tradeAllowed && it.accountVerified && it.account.isNotBlank() } == true
+    val bridgeDisplayState = bridgeSnapshot?.let { if (it.managedState == "READY") it.state else it.managedState.ifBlank { it.state } } ?: if (!bridgeClient.managedConfigured()) "CONFIGURATION_REQUIRED" else if (bridgeToken.isBlank()) "SETUP REQUIRED" else "OFFLINE"
     val bridgeStatusColor = when (bridgeDisplayState) {
         "RUNNING" -> ProfitGreen
         "READY" -> ElectricCyan
         "PAUSED" -> OrangeAccent
-        "ERROR", "OFFLINE", "STALE" -> LossRed
+        "ERROR", "FAILED", "OFFLINE", "STALE" -> LossRed
         else -> WarningAmber
     }
     val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
@@ -90,9 +90,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var mt5LoginInput by remember { mutableStateOf(viewModel.getMT5Login()) }
     var mt5PasswordInput by remember { mutableStateOf("") }
     var mt5ServerInput by remember { mutableStateOf(viewModel.getMT5BrokerServer()) }
-    var mt5InvestorPasswordInput by remember { mutableStateOf("") }
+    var mt5AccessType by remember { mutableStateOf("MASTER") }
+    var managedCredentialConsent by remember { mutableStateOf(false) }
     var showMt5Password by remember { mutableStateOf(false) }
-    var showMt5InvestorPassword by remember { mutableStateOf(false) }
     var isConnectingBroker by remember { mutableStateOf(false) }
     var showPostLoginPairSelectorModal by remember { mutableStateOf(false) }
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
@@ -151,16 +151,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                     Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${bridgeSnapshot?.let { if (!it.terminalOnline) "OFFLINE" else if (!it.heartbeatFresh) "STALE HEARTBEAT" else "ONLINE" } ?: "UNVERIFIED"} · EA: ${bridgeSnapshot?.state ?: "UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
                     Text("Verified account: ${bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified"} · Trade permission: ${if (bridgeSnapshot?.tradeAllowed == true) "YES" else "NO"}", color = TextSecondary, fontSize = 10.sp)
-                    OutlinedTextField(value = bridgeUrl, onValueChange = { bridgeUrl = it }, enabled = bridgeToken.isBlank(), label = { Text("Bridge base URL (HTTPS; loopback HTTP only)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Text("Managed service: ${if (bridgeClient.managedConfigured()) "configured" else "CONFIGURATION_REQUIRED"}", color = TextSecondary, fontSize = 10.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(enabled = !bridgeBusy && bridgeToken.isBlank(), onClick = { bridgeMessage = if (bridgeClient.saveBaseUrl(bridgeUrl)) "Bridge URL saved" else "Invalid URL: HTTPS required except loopback; revoke pairing before changing host" }) { Text("Save URL") }
-                        Button(enabled = !bridgeBusy && viewModel.app.secretsManager.isSecureStorageAvailable && viewModel.app.secretsManager.getMT5BridgeAppToken().isBlank(), onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeCode = bridgeClient.pair().code; bridgeMode = true; bridgeMessage = "Enter code once in EA" } catch (e: Exception) { bridgeMessage = e.message ?: "Pairing failed" }; bridgeBusy = false } }) { Text("Pair") }
+
                         Button(enabled = !bridgeBusy && viewModel.app.secretsManager.getMT5BridgeAppToken().isNotBlank(), onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeClient.revoke(); bridgeSecrets.clearMT5BridgePendingCommand(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeExpectedState = ""; bridgeSnapshot = null; bridgeMode = false; bridgeCode = ""; bridgeMessage = "Terminal pairing revoked" } catch (_: Exception) { bridgeMessage = "Revoke not confirmed" }; bridgeBusy = false } }) { Text("Revoke") }
                     }
-                    if (bridgeCode.isNotBlank()) Text("ONE-TIME EA CODE: $bridgeCode", color = WarningAmber, fontWeight = FontWeight.Bold)
                     if (bridgeMessage.isNotBlank()) Text(bridgeMessage, color = WarningAmber, fontSize = 10.sp)
+                    val provisioningError = bridgeSnapshot?.raw?.optJSONObject("managed_execution")?.optString("error_message").orEmpty()
+                    if (provisioningError.isNotBlank()) Text("Provisioning error: $provisioningError", color = LossRed, fontSize = 10.sp)
                     val bridgeFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
-                    val bridgeReady = bridgeSnapshot?.let { bridgeFresh && it.tradeAllowed && it.accountVerified && it.account.isNotBlank() } == true
+                    val bridgeReady = bridgeSnapshot?.let { MT5RemoteBridgeClient.canStart(it.managedState, it.accessType, bridgeFresh, it.terminalConnected, it.tradeAllowed, it.accountVerified) && it.account.isNotBlank() } == true
                     val supportedStrategy = selectedStrategyId == "ict-silver-bullet"
                     val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
                     Text("EA SUPPORTED SUBSET: ICT Silver Bullet only. Other selected strategies cannot be started by this EA.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -168,7 +168,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("PAUSE", "RESUME", "STOP", "EMERGENCY_STOP").forEach { action ->
                             val needsTradingReady = action == "PAUSE" || action == "RESUME"
-                            OutlinedButton(enabled = bridgeMode && (if (needsTradingReady) bridgeReady else bridgeFresh) && !bridgeBusy && !bridgeCommandPending, onClick = {
+                            OutlinedButton(enabled = bridgeMode && (if (needsTradingReady) bridgeReady else bridgeSnapshot?.connected == true) && !bridgeBusy && !bridgeCommandPending, onClick = {
                                 coroutineScope.launch { sendBridgeCommand(bridgeClient, action, JSONObject(), bridgeSecrets, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it }) }
                             }) { Text(action.replace('_', ' '), fontSize = 9.sp) }
                         }
@@ -261,9 +261,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
         // Master Bot Control Card
         item {
-            val isRunning = if (bridgeMode) bridgeDisplayState == "RUNNING" else botSummary.isRunning || botActive
+            val isRunning = if (bridgeMode) bridgeDisplayState in setOf("RUNNING", "PAUSED") else botSummary.isRunning || botActive
             val bridgeFresh = bridgeTerminalFresh
             val bridgeReady = bridgeTerminalReady
+            val bridgeCanStart = bridgeReady && (bridgeSnapshot?.state == "READY" || bridgeSnapshot?.state == "STOPPED")
             val supportedStrategy = selectedStrategyId == "ict-silver-bullet"
             val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
             val statusColor = if (bridgeMode) bridgeStatusColor else when (botSummary.state) {
@@ -307,7 +308,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         Switch(
                             checked = isRunning,
-                            enabled = !bridgeMode || (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeReady && supportedStrategy && validBridgeRisk)),
+                            enabled = !bridgeMode || (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)),
                             onCheckedChange = { active ->
                                 if (bridgeMode) coroutineScope.launch {
                                     bridgeBusy = true
@@ -321,7 +322,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         .put("max_concurrent_positions", 2)
                                     if (active && !supportedStrategy) { bridgeMessage = "Blocked: the EA supports ict-silver-bullet only."; bridgeBusy = false; return@launch }
                                     if (active && (!MT5RemoteBridgeClient.isValidRiskPercent(riskPercent))) { bridgeMessage = "Blocked: risk must be finite and in (0, 1]%; no clamping applied."; bridgeBusy = false; return@launch }
-                                    if (active && !bridgeReady) { bridgeMessage = "Blocked: verified account, terminal readiness and fresh heartbeat required."; bridgeBusy = false; return@launch }
+                                    if (active && !bridgeCanStart) { bridgeMessage = "Blocked: verified account must be READY or STOPPED with a fresh, trade-authorized heartbeat."; bridgeBusy = false; return@launch }
                                     sendBridgeCommand(bridgeClient, action, config, bridgeSecrets, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it })
                                 } else viewModel.setBotStatus(active) { success, err ->
                                     statusMessage = if (success) { if (active) "24/7 Surveillance Engine activated" else "Surveillance stopped" } else err ?: "Failed to change engine state"
@@ -1058,7 +1059,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                     viewModel.app.secretsManager.clearMT5Credentials()
                                                     mt5LoginInput = ""
                                                     mt5PasswordInput = ""
-                                                    mt5InvestorPasswordInput = ""
                                                     mt5ServerInput = ""
                                                     isEditingCredentials = true
                                                 }
@@ -1179,12 +1179,20 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_login")
                         )
 
-                        // Masked master-password input with an explicit reveal control.
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("MASTER" to "MASTER · TRADING", "INVESTOR" to "INVESTOR · READ ONLY").forEach { (access, label) ->
+                                OutlinedButton(onClick = { mt5AccessType = access }, modifier = Modifier.weight(1f)) {
+                                    Text(label, fontSize = 9.sp, color = if (mt5AccessType == access) ElectricCyan else TextSecondary)
+                                }
+                            }
+                        }
+                        Text(if (mt5AccessType == "INVESTOR") "Investor access can view account data but cannot trade. START will remain blocked." else "Master access permits trading; START remains blocked until a live terminal is verified.", fontSize = 9.sp, color = WarningAmber)
+                        // The selected account access type uses one password field to prevent accidental credential-mode confusion.
                         OutlinedTextField(
                             value = mt5PasswordInput,
                             onValueChange = { mt5PasswordInput = it },
-                            label = { Text("Password") },
-                            placeholder = { Text("Enter trading password") },
+                            label = { Text(if (mt5AccessType == "INVESTOR") "Investor password" else "Master trading password") },
+                            placeholder = { Text(if (mt5AccessType == "INVESTOR") "Read-only investor password" else "Enter trading password") },
                             visualTransformation = if (showMt5Password) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true,
@@ -1195,23 +1203,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }
                             }
                         )
-                        OutlinedTextField(
-                            value = mt5InvestorPasswordInput,
-                            onValueChange = { mt5InvestorPasswordInput = it },
-                            label = { Text("Investor password (optional)") },
-                            placeholder = { Text("Read-only access is unavailable in this integration") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            visualTransformation = if (showMt5InvestorPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().testTag("bot_mt5_investor_password"),
-                            trailingIcon = {
-                                IconButton(onClick = { showMt5InvestorPassword = !showMt5InvestorPassword }) {
-                                    Icon(if (showMt5InvestorPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility, contentDescription = if (showMt5InvestorPassword) "Hide investor password" else "Show investor password")
-                                }
-                            }
-                        )
-                        Text("Investor-password authentication is unsupported by the current integration; submitting one will be rejected.", fontSize = 9.sp, color = WarningAmber)
-                        Text("Account mode selected is a request only; the authenticated broker response is authoritative.", fontSize = 9.sp, color = TextSecondary)
+                        Text("The account mode you select is checked against the authenticated MT5 terminal before trading is enabled.", fontSize = 9.sp, color = TextSecondary)
                         // Server Selector with Dynamic Dropdown
                         var expandedServer by remember { mutableStateOf(false) }
                         val matchedBrokers = remember(mt5ServerInput, selectedBrokerCompanyName) {
@@ -1287,7 +1279,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
 
-                        // Save password checkbox
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Checkbox(checked = managedCredentialConsent, onCheckedChange = { managedCredentialConsent = it })
+                            Text("I consent to send these broker credentials over HTTPS to DestinedFX managed execution for encrypted storage and MT5 terminal login.", fontSize = 10.sp, color = TextPrimary)
+                        }
+
+                        // Local password persistence remains opt-in and separate from hosted credential storage consent.
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1298,7 +1295,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 onCheckedChange = { savePasswordChecked = it },
                                 colors = CheckboxDefaults.colors(checkedColor = Color(0xFF2196F3))
                             )
-                            Text("Save password & keep session active", fontSize = 11.sp, color = TextPrimary)
+                            Text("Also save password on this device", fontSize = 11.sp, color = TextPrimary)
                         }
 
                         // Prominent MT5 Blue Login Button (#2196F3)
@@ -1316,23 +1313,34 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     brokerConnectionMessage = "Please enter or select a broker server."
                                     return@Button
                                 }
+                                if (!managedCredentialConsent) {
+                                    brokerConnectionMessage = "Consent is required before sending credentials to managed execution."
+                                    return@Button
+                                }
                                 isConnectingBroker = true
                                 brokerConnectionMessage = null
-                                viewModel.connectToMT5Credentials(
-                                    login = mt5LoginInput,
-                                    password = mt5PasswordInput,
-                                    server = mt5ServerInput,
-                                    investorPassword = mt5InvestorPasswordInput,
-                                    savePassword = savePasswordChecked,
-                                    accountType = selectedAccountMode,
-                                    leverage = selectedLeverage,
-                                    currency = "USD"
-                                ) { success, message ->
-                                    isConnectingBroker = false
-                                    brokerConnectionMessage = message ?: if (success) "Connected successfully to $selectedBrokerCompanyName." else "Login failed. Verify credentials."
-                                    if (success) {
-                                        isEditingCredentials = false
-                                        showPostLoginPairSelectorModal = true
+                                coroutineScope.launch {
+                                    val secret = mt5PasswordInput
+                                    try {
+                                        if (!bridgeClient.managedConfigured()) {
+                                            brokerConnectionMessage = "CONFIGURATION_REQUIRED"
+                                        } else {
+                                            val snapshot = bridgeClient.registerManagedAccount(mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent)
+                                            bridgeMode = true
+                                            bridgeSnapshot = snapshot
+                                            bridgeMessage = snapshot.managedState.ifBlank { "PROVISIONING" }
+                                            brokerConnectionMessage = "${snapshot.managedState.ifBlank { "PROVISIONING" }} — broker connection is not confirmed until a fresh authenticated EA heartbeat."
+                                            viewModel.app.secretsManager.saveMT5Login(mt5LoginInput.trim())
+                                            viewModel.app.secretsManager.saveMT5BrokerServer(mt5ServerInput)
+                                            viewModel.app.secretsManager.saveMT5PasswordIfAllowed(secret, savePasswordChecked)
+                                            isEditingCredentials = false
+                                        }
+                                    } catch (e: Exception) {
+                                        brokerConnectionMessage = e.message?.takeIf { it == "CONFIGURATION_REQUIRED" } ?: "Managed registration failed; check service availability and credentials."
+                                    } finally {
+                                        mt5PasswordInput = ""
+                                        managedCredentialConsent = false
+                                        isConnectingBroker = false
                                     }
                                 }
                             },
@@ -1347,7 +1355,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             if (isConnectingBroker) {
                                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
                             } else {
-                                Text("LOGIN TO MT5", fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = 1.sp)
+                                Text("CONNECT", fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = 1.sp)
                             }
                         }
                     }

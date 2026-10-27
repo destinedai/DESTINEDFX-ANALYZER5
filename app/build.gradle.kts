@@ -5,6 +5,19 @@ plugins {
   alias(libs.plugins.secrets)
 }
 
+val mt5ManagedServiceUrlFromEnv = System.getenv("MT5_MANAGED_SERVICE_URL").orEmpty().trim()
+val mt5ManagedServiceUrlFromFile = rootProject.file(".env").takeIf { it.isFile }
+  ?.readLines()
+  ?.firstOrNull { it.trim().startsWith("MT5_MANAGED_SERVICE_URL=") }
+  ?.substringAfter("=")
+  ?.trim()
+  ?.removeSurrounding("\"")
+  ?.removeSurrounding("'")
+  .orEmpty()
+val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromEnv.takeIf { it.isNotBlank() }
+  ?: mt5ManagedServiceUrlFromFile.takeIf { it.isNotBlank() }
+  ?: ""
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -17,6 +30,7 @@ android {
     versionName = "1.0.9"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrl\"")
   }
 
   signingConfigs {
