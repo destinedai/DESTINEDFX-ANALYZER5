@@ -82,7 +82,7 @@ def managed_env(monkeypatch):
         c.execute('DELETE FROM rate')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-2026-very-long')
-    monkeypatch.setenv('BRIDGE_BASE_URL', 'https://bridge.example')
+    monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.destinedfx.internal')
 
 def command_req(action='START'):
     return {'request_id':str(uuid.uuid4()),'action':action,'config':{}}
@@ -189,3 +189,18 @@ def test_worker_lease_owner_and_terminal_auth_timeout(monkeypatch):
     with app.tx(True) as c: c.execute('UPDATE worker_jobs SET status="AUTHENTICATING",lease_until=? WHERE id=?',(time.time()-181,job['job_id']))
     status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=owner',headers=wh).json()
     assert status['status']=='FAILED' and status['error_code']=='TERMINAL_AUTH_TIMEOUT'
+
+def test_heartbeat_requires_present_snapshots_and_preserves_confirmed_empty_arrays():
+    p=pair(); t=claimed(p); th={'Authorization':'Bearer '+t['terminal_token']}
+    missing=heartbeat_data(); del missing['open_positions']
+    assert client.post('/v1/terminal/heartbeat',json=missing,headers=th).status_code==422
+    assert client.post('/v1/terminal/heartbeat',json={**heartbeat_data(),'open_positions':None},headers=th).status_code==422
+    assert client.post('/v1/terminal/heartbeat',json={**heartbeat_data(),'open_positions':[{'bad':'row'}]},headers=th).status_code==422
+    assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(open_positions=[],closed_deals=[]),headers=th).status_code==200
+
+def test_placeholder_managed_origin_is_configuration_required(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setenv('BRIDGE_BASE_URL','https://your-bridge.example/')
+    p,ah=managed_pair()
+    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'secret','access_type':'MASTER','consent':True})
+    assert r.status_code==503 and r.json()['detail']['code']=='CONFIGURATION_REQUIRED'

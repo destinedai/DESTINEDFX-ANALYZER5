@@ -24,7 +24,7 @@ checks={
  'risk recheck before submission':'if(!RiskDayOK()){g_lastReason="Daily loss cap changed before order"' in src,
  'claim persistence failure stops token use':'if(!SaveToken(g_terminalToken)){g_terminalToken="";' in src,
  'open-position fee explicitly unavailable':'\\"commission\\":null' in src,
- 'signal dedupe persisted and loaded':'PersistSeen();' in src and 'FileOpen(SeenFile(),FILE_READ' in src,
+ 'signal dedupe persisted before submission':'if(!Remember(key))' in src and 'PersistSeen()' in src and 'FileOpen(SeenFile(),FILE_READ' in src and 'AtomicWrite' in src,
  'README discloses persistent dedupe':'persisted in an account-login-scoped' in Path('README.md').read_text(),
 }
 # Strip strings/comments with a single-pass lexer, then verify bracket nesting.

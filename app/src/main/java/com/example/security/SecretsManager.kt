@@ -43,6 +43,9 @@ class SecretsManager(private val ctx: Context) {
         private const val MT5_BRIDGE_TOKEN = "mt5_remote_bridge_app_token"
         private const val MT5_BRIDGE_PENDING_ID = "mt5_remote_bridge_pending_id"
         private const val MT5_BRIDGE_PENDING_ACTION = "mt5_remote_bridge_pending_action"
+        private const val MT5_BRIDGE_SAFETY_ORIGINAL_ID = "mt5_remote_bridge_safety_original_id"
+        private const val MT5_BRIDGE_SAFETY_ORIGINAL_ACTION = "mt5_remote_bridge_safety_original_action"
+        private const val MT5_BRIDGE_SAFETY_STOP_ID = "mt5_remote_bridge_safety_stop_id"
     }
 
     val isSecureStorageAvailable: Boolean
@@ -119,6 +122,16 @@ class SecretsManager(private val ctx: Context) {
     fun clearMT5BridgePendingCommand() {
         if (isSecureStorageAvailable) prefs.edit().remove(MT5_BRIDGE_PENDING_ID).remove(MT5_BRIDGE_PENDING_ACTION).commit()
     }
+    fun saveMT5BridgeSafetyStop(originalId: String, originalAction: String, stopId: String): Boolean {
+        if (!isSecureStorageAvailable || originalId.isBlank() || originalAction.isBlank() || stopId.isBlank()) return false
+        return prefs.edit().putString(MT5_BRIDGE_SAFETY_ORIGINAL_ID, originalId)
+            .putString(MT5_BRIDGE_SAFETY_ORIGINAL_ACTION, originalAction)
+            .putString(MT5_BRIDGE_SAFETY_STOP_ID, stopId).commit()
+    }
+    fun getMT5BridgeSafetyOriginalId(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_SAFETY_ORIGINAL_ID, "") ?: "" else ""
+    fun getMT5BridgeSafetyOriginalAction(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_SAFETY_ORIGINAL_ACTION, "") ?: "" else ""
+    fun getMT5BridgeSafetyStopId(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_SAFETY_STOP_ID, "") ?: "" else ""
+    fun clearMT5BridgeSafetyStop() { if (isSecureStorageAvailable) prefs.edit().remove(MT5_BRIDGE_SAFETY_ORIGINAL_ID).remove(MT5_BRIDGE_SAFETY_ORIGINAL_ACTION).remove(MT5_BRIDGE_SAFETY_STOP_ID).commit() }
     
     fun getSupabaseUrl(): String = ""
     fun getSupabaseAnonKey(): String = ""
@@ -158,7 +171,7 @@ class SecretsManager(private val ctx: Context) {
     fun getMT5BrokerServer(): String   = prefs.getString(MT5_SV,  "") ?: ""
     fun getMT5AccountBalance(): Double = prefs.getString(MT5_BALANCE, "0.0")?.toDoubleOrNull() ?: 0.0
     fun getMT5AccountType(): String    = prefs.getString(MT5_ACCOUNT_TYPE, "Demo") ?: "Demo"
-    fun getMT5Leverage(): Int          = prefs.getInt(MT5_LEVERAGE, 500)
+    fun getMT5Leverage(): Int          = prefs.getInt(MT5_LEVERAGE, 0)
     fun getMT5SessionStatus(): String  = prefs.getString(MT5_SESSION_STATUS, "DISCONNECTED") ?: "DISCONNECTED"
     fun getMT5Currency(): String       = prefs.getString(MT5_CURRENCY, "USD") ?: "USD"
     fun getMT5LastLoginMs(): Long      = prefs.getLong(MT5_LAST_LOGIN_MS, 0L)

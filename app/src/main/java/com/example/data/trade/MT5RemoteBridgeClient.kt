@@ -27,8 +27,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
         val state: String, val account: String, val tradeAllowed: Boolean,
         val terminalConnected: Boolean, val accountVerified: Boolean,
         val currency: String, val balance: Double?, val equity: Double?,
-        val positions: List<JSONObject>, val closedDeals: List<JSONObject>,
-        val lastSignal: JSONObject?, val raw: JSONObject
+        val margin: Double?, val freeMargin: Double?, val marginLevel: Double?, val leverage: Int?,
+        val positions: List<JSONObject>?, val closedDeals: List<JSONObject>?,
+        val snapshotsValid: Boolean, val lastSignal: JSONObject?, val raw: JSONObject
     )
 
     fun saveBaseUrl(input: String): Boolean {
@@ -40,7 +41,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
     }
     fun baseUrl(): String = com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.trim().trimEnd('/').ifBlank { secrets.getMT5BridgeBaseUrl() }
 
-    fun managedConfigured(): Boolean = com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.isNotBlank()
+    fun managedConfigured(): Boolean = validateBaseUrl(com.example.BuildConfig.MT5_MANAGED_SERVICE_URL) != null
 
     /** Creates/retains opaque app bearer and registers credentials over HTTPS; broker password is never logged or returned. */
     suspend fun registerManagedAccount(login: String, password: String, server: String, accessType: String, consent: Boolean): Snapshot {
@@ -71,7 +72,16 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
         val freshness = age >= 0 && age <= staleAfter && online
         val terminalConnected = obj.optBoolean("terminal_connected", false)
         val verified = account != null && account.has("login") && !account.isNull("login") && account.optString("login").isNotBlank()
-        fun array(key: String) = buildList { obj.optJSONArray(key)?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let(::add) } }
+        fun array(key: String): List<JSONObject>? {
+            val a = obj.optJSONArray(key) ?: return null
+            val out = mutableListOf<JSONObject>()
+            for (i in 0 until a.length()) {
+                val item = a.opt(i)
+                if (item !is JSONObject) return null
+                out += item
+            }
+            return out
+        }
         val managed = obj.optJSONObject("managed_execution")
         val managedState = managed?.let { it.optString("status", it.optString("state", "")) }.orEmpty().uppercase()
         return Snapshot(managedState, managed?.optString("access_type", "").orEmpty().uppercase(), true, online, freshness,
@@ -79,7 +89,10 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
             listOf(account?.optString("login").orEmpty(), account?.optString("server").orEmpty()).filter { it.isNotBlank() }.joinToString(" @ "),
             obj.optBoolean("trade_allowed", false), terminalConnected, verified,
             account?.optString("currency").orEmpty(), account?.let { finite(it, "balance") }, account?.let { finite(it, "equity") },
-            array("open_positions"), array("closed_deals"), obj.optJSONObject("last_signal"), obj)
+            account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
+            account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("closed_deals"),
+            obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("closed_deals") != null,
+            obj.optJSONObject("last_signal"), obj)
     }
 
     /** Each command gets one idempotency key; UNKNOWN retains it for reconciliation and is never retried here. */
@@ -96,6 +109,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
         request("DELETE", "/v1/app/pairing")
         secrets.clearMT5BridgeAppToken()
         secrets.clearMT5BridgePendingCommand()
+        secrets.clearMT5BridgeSafetyStop()
     }
 
     private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
@@ -118,14 +132,16 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
     }
 
     private fun validateBaseUrl(raw: String): String? = try {
-        val uri = URI(raw.trim()).normalize(); val host = uri.host?.lowercase() ?: return null
+        val uri = URI(raw.trim()).normalize(); val host = uri.host?.lowercase()?.trimEnd('.') ?: return null
         val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
+        val placeholder = host in setOf("example.com", "example.org", "example.net", "testserver", "bridge.example") || host.endsWith(".example") || host.startsWith("your-") || host.startsWith("placeholder") || host.contains("example")
         if (uri.userInfo != null || uri.query != null || uri.fragment != null || uri.path.orEmpty().trimEnd('/').isNotEmpty()) return null
-        if (uri.scheme != "https" && !(uri.scheme == "http" && loopback)) return null
-        if (uri.port !in -1..65535) return null
-        uri.toString().trimEnd('/')
+        if (placeholder || uri.scheme != "https" && !(uri.scheme == "http" && loopback)) return null
+        if (uri.scheme == "https" && loopback || uri.port !in -1..65535) return null
+        "${uri.scheme}://$host" + if (uri.port >= 0) ":${uri.port}" else ""
     } catch (_: Exception) { null }
     private fun finite(obj: JSONObject, key: String): Double? = obj.optDouble(key).takeIf { it.isFinite() }
+    private fun finiteInt(obj: JSONObject, key: String): Int? = obj.optInt(key).takeIf { it > 0 }
     private fun safeMessage(e: Exception) = (e as? BridgeHttpException)?.safeDescription ?: "No confirmed response; reconcile the same request before any recovery."
     class BridgeHttpException(val status: Int, val safeDescription: String) : Exception(safeDescription)
 

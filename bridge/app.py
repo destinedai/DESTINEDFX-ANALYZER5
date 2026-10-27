@@ -80,7 +80,7 @@ class Account(BaseModel):
     balance:float|None=None; equity:float|None=None; margin:float|None=None; free_margin:float|None=None; margin_level:float|None=None; leverage:int|None=None
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]=Field(default_factory=list); closed_deals:list[ClosedDeal]=Field(default_factory=list)
+    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; closed_deals:list[ClosedDeal]
 
 def auth(header, kind):
     if not header or not header.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
@@ -105,12 +105,25 @@ def check_json(v, depth=0):
         if len(v)>1000: raise HTTPException(422,'Too many list items')
         for x in v: check_json(x,depth+1)
 
+def validate_origin(raw, allow_loopback=False):
+    value=(raw or '').strip().rstrip('/')
+    parsed=urlparse(value)
+    host=(parsed.hostname or '').lower().rstrip('.')
+    loopback=host in ('localhost','127.0.0.1','::1')
+    placeholder=(host in {'example.com','example.org','example.net','testserver','bridge.example'} or host.endswith('.example') or host.startswith('your-') or host.startswith('placeholder') or 'example' in host)
+    if not host or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
+        return None
+    if parsed.scheme=='http':
+        if not (allow_loopback and loopback): return None
+    elif parsed.scheme!='https' or loopback or placeholder:
+        return None
+    return f'{parsed.scheme}://{host}' + (f':{parsed.port}' if parsed.port else '')
+
 def managed_config():
     key=os.getenv('CREDENTIALS_FERNET_KEY','')
     worker=os.getenv('WORKER_TOKEN','')
     bridge_url=os.getenv('BRIDGE_BASE_URL','').strip()
-    parsed=urlparse(bridge_url)
-    if not key or len(worker)<32 or len(worker)>512 or parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
+    if not key or len(worker)<32 or len(worker)>512 or not validate_origin(bridge_url, allow_loopback=ALLOW_LOOPBACK):
         raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
     try: return Fernet(key.encode()), worker
     except Exception: raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
@@ -242,7 +255,7 @@ def state(authorization:str|None=Header(default=None)):
         actual=fresh_heartbeat(p); worker_ready=bool(job and job['status']=='READY')
         app_status='READY' if actual and worker_ready else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
         managed={'status':app_status,'access_type':m['access_type'],'terminal_fresh':bool(actual),'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
-    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'configuration':beat['configuration'] if online else {},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else [],'closed_deals':beat['closed_deals'] if online else [],'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'configuration':beat['configuration'] if online else {},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
 @app.post('/v1/app/commands',status_code=202)

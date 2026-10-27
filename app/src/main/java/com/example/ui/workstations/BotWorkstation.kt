@@ -120,12 +120,24 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     if (bridgeCommandPending && cmd != null && cmd.optString("request_id") == bridgePendingId &&
                         cmd.optString("action") == bridgePendingAction && cmd.optString("status") == "ACKNOWLEDGED") {
                         when (cmd.optString("outcome")) {
-                            "REJECTED" -> { val action = bridgePendingAction; bridgeSecrets.clearMT5BridgePendingCommand(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeMessage = "$action rejected by EA: ${cmd.optString("message", "No reason supplied")}" }
+                            "REJECTED" -> {
+                                val action = bridgePendingAction
+                                val original = bridgeSecrets.getMT5BridgeSafetyOriginalId()
+                                val originalAction = bridgeSecrets.getMT5BridgeSafetyOriginalAction().takeIf { original.isNotBlank() }.orEmpty()
+                                bridgeSecrets.clearMT5BridgePendingCommand()
+                                if (original.isNotBlank()) { bridgePendingId = original; bridgePendingAction = originalAction; bridgeExpectedState = when (originalAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; else -> "STOPPED" }; bridgeCommandPending = true; bridgeMessage = "Safety STOP was rejected; original $originalAction request $original remains unresolved. Terminal state is unknown." }
+                                else { bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeMessage = "$action rejected by EA: ${cmd.optString("message", "No reason supplied")}" }
+                            }
                             "APPLIED" -> if (fresh.heartbeatFresh) {
                                 val action = bridgePendingAction
                                 val expected = bridgeExpectedState
-                                bridgeSecrets.clearMT5BridgePendingCommand(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""
-                                bridgeMessage = if (fresh.state == expected && cmd.optString("state") == expected) "$action applied; fresh EA heartbeat confirms ${fresh.state}." else "$action acknowledged as applied, but fresh EA heartbeat reports actual state ${fresh.state}; target state is not confirmed."
+                                val confirmed = fresh.state == expected && cmd.optString("state") == expected
+                                if (confirmed) {
+                                    bridgeSecrets.clearMT5BridgePendingCommand(); bridgeSecrets.clearMT5BridgeSafetyStop(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""
+                                    bridgeMessage = "$action applied; fresh EA heartbeat confirms ${fresh.state}."
+                                } else {
+                                    bridgeMessage = "$action acknowledged as applied, but fresh EA heartbeat reports actual state ${fresh.state}; target state is not confirmed. Safety reconciliation remains pending."
+                                }
                             }
                         }
                     }
@@ -168,7 +180,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("PAUSE", "RESUME", "STOP", "EMERGENCY_STOP").forEach { action ->
                             val needsTradingReady = action == "PAUSE" || action == "RESUME"
-                            OutlinedButton(enabled = bridgeMode && (if (needsTradingReady) bridgeReady else bridgeSnapshot?.connected == true) && !bridgeBusy && !bridgeCommandPending, onClick = {
+                            val safetyOverride = bridgeCommandPending && action == "STOP"
+                            OutlinedButton(enabled = bridgeMode && (if (needsTradingReady) bridgeReady else bridgeSnapshot?.connected == true) && !bridgeBusy && (!bridgeCommandPending || safetyOverride), onClick = {
                                 coroutineScope.launch { sendBridgeCommand(bridgeClient, action, JSONObject(), bridgeSecrets, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it }) }
                             }) { Text(action.replace('_', ' '), fontSize = 9.sp) }
                         }
@@ -520,7 +533,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             label = "LEVERAGE",
                             value = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null)
                                 "1:${accountMetrics!!.leverage}"
-                            else "1:500",
+                            else "Leverage unavailable",
                             modifier = Modifier.weight(1f),
                             color = CyanPrimary
                         )
@@ -794,7 +807,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                 viewModel.app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 } ?: 0.0
             }
             var mt5BalanceInput by remember { mutableStateOf(String.format(java.util.Locale.US, "%.2f", storedBal)) }
-            var selectedLeverage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5Leverage().takeIf { it > 0 } ?: 500) }
+            var selectedLeverage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5Leverage().takeIf { it > 0 } ?: 0) }
             var expandedLeverage by remember { mutableStateOf(false) }
             val currentSessionStatus = viewModel.app.secretsManager.getMT5SessionStatus()
             val hasSavedLogin = viewModel.getMT5Login().isNotBlank() && viewModel.getMT5BrokerServer().isNotBlank()
@@ -1795,7 +1808,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             } else {
                                 val bal = accountMetrics?.balance ?: 0.0
                                 val eq = accountMetrics?.equity ?: bal
-                                val lev = accountMetrics?.leverage ?: 500
+                                val lev = accountMetrics?.leverage ?: 0
                                 val szRes = viewModel.sizeFor(activeSymbol, bal, riskPercent, askPrice, askPrice - 0.0030)
                                 val autoLots = when (szRes) {
                                     is com.destinedfx.core.risk.SizingResult.Sized -> szRes.lots
@@ -2069,22 +2082,24 @@ private fun BridgeTelemetry(snapshot: MT5RemoteBridgeClient.Snapshot?) {
     val unavailable = "Unavailable"
     Text("ACTUAL TERMINAL ACCOUNT · ${snapshot?.currency?.ifBlank { unavailable } ?: unavailable}", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
     Text("Balance: ${snapshot?.balance?.toString() ?: unavailable} ${snapshot?.currency.orEmpty()} · Equity: ${snapshot?.equity?.toString() ?: unavailable} ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
-    val positions = snapshot?.positions.orEmpty()
-    val floatingValues = positions.mapNotNull { p -> if (p.has("floating_profit") && !p.isNull("floating_profit")) p.optDouble("floating_profit").takeIf { it.isFinite() } else null }
-    val floatingTotal = when { snapshot == null -> unavailable; positions.isEmpty() -> "0.0"; floatingValues.size == positions.size -> floatingValues.sum().toString(); else -> unavailable }
+    Text("Margin: ${snapshot?.margin?.toString() ?: unavailable} · Free margin: ${snapshot?.freeMargin?.toString() ?: unavailable} · Margin level: ${snapshot?.marginLevel?.toString() ?: unavailable} · Leverage: ${snapshot?.leverage?.let { "1:$it" } ?: unavailable}", color = TextPrimary, fontSize = 10.sp)
+    val positions = snapshot?.positions
+    val floatingValues = positions.orEmpty().mapNotNull { p -> if (p.has("floating_profit") && !p.isNull("floating_profit")) p.optDouble("floating_profit").takeIf { it.isFinite() } else null }
+    val floatingTotal = when { snapshot == null || !snapshot.snapshotsValid || positions == null -> unavailable; positions.isEmpty() -> "0.0"; floatingValues.size == positions.size -> floatingValues.sum().toString(); else -> unavailable }
     Text("Floating P/L: $floatingTotal ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
-    Text("LIVE POSITIONS (${positions.size})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-    if (positions.isEmpty()) Text(unavailable, color = TextSecondary, fontSize = 10.sp)
-    positions.forEach { p -> Text("${p.optString("symbol", unavailable)} ${p.optString("direction", unavailable)} · volume ${p.optString("volume", unavailable)} · SL ${p.optString("stop_loss", unavailable)} · TP ${p.optString("take_profit", unavailable)}", color = TextPrimary, fontSize = 10.sp) }
-    val deals = snapshot?.closedDeals.orEmpty()
+    Text("LIVE POSITIONS (${positions?.size ?: unavailable})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    if (positions == null || !snapshot!!.snapshotsValid || positions.isEmpty()) Text(if (positions?.isEmpty() == true && snapshot.snapshotsValid) "No open positions confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
+    positions.orEmpty().forEach { p -> Text("#${p.optString("ticket", unavailable)} / ${p.optString("position_id", unavailable)} · ${p.optString("symbol", unavailable)} ${p.optString("direction", unavailable)} · volume ${p.optString("volume", unavailable)} · entry ${p.optString("open_price", unavailable)} · current broker P/L ${p.optString("floating_profit", unavailable)} · SL ${p.optString("stop_loss", unavailable)} · TP ${p.optString("take_profit", unavailable)} · swap ${p.optString("swap", unavailable)}", color = TextPrimary, fontSize = 10.sp) }
+    val deals = snapshot?.closedDeals
     val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
-    val recent = deals.filter { deal ->
+    val recent = deals.orEmpty().filter { deal ->
         val raw = deal.optString("closed_at", "")
         val millis = runCatching { java.time.Instant.parse(raw).toEpochMilli() }.getOrNull()
         millis != null && millis >= cutoff
     }
-    val net = recent.sumOf { it.optDouble("profit", 0.0) + it.optDouble("commission", 0.0) + it.optDouble("swap", 0.0) }
-    Text("REALIZED DEAL NET (last 7 days / available deals): ${if (deals.isEmpty()) unavailable else net.toString()} ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 10.sp)
+    val netValues = recent.mapNotNull { deal -> listOf("profit", "commission", "swap").map { key -> deal.opt(key) }.takeIf { it.all { v -> v is Number && v.toDouble().isFinite() } }?.sumOf { (it as Number).toDouble() } }
+    Text("REALIZED DEAL NET (last 7 days / available deals): ${if (deals == null || !snapshot!!.snapshotsValid || netValues.size != recent.size) unavailable else netValues.sum().toString()} ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 10.sp)
+    deals.orEmpty().take(10).forEach { deal -> Text("Closed deal #${deal.optString("ticket", unavailable)} / position ${deal.optString("position_id", unavailable)} · ${deal.optString("symbol", unavailable)} · closed ${deal.optString("closed_at", unavailable)} · realized ${deal.optString("profit", unavailable)} · commission ${deal.optString("commission", unavailable)} · swap ${deal.optString("swap", unavailable)}", color = TextSecondary, fontSize = 10.sp) }
     Text("Last signal: ${snapshot?.lastSignal?.toString() ?: unavailable}", color = TextSecondary, fontSize = 10.sp)
     snapshot?.raw?.optString("last_error")?.takeIf { it.isNotBlank() }?.let { Text("EA ERROR: $it", color = LossRed, fontSize = 10.sp) }
 }
@@ -2094,13 +2109,19 @@ private suspend fun sendBridgeCommand(
     busy: (Boolean) -> Unit, pending: (Boolean) -> Unit, requestId: (String) -> Unit,
     pendingAction: (String) -> Unit, expected: (String) -> Unit, message: (String) -> Unit
 ) {
-    if (secrets.getMT5BridgePendingCommandId().isNotBlank()) {
-        pending(true); requestId(secrets.getMT5BridgePendingCommandId()); pendingAction(secrets.getMT5BridgePendingCommandAction())
-        message("A bridge command is already unresolved. Reconcile its saved request ID or revoke pairing; no new command was sent.")
+    val unresolvedId = secrets.getMT5BridgePendingCommandId()
+    if (unresolvedId.isNotBlank() && action != "STOP") {
+        pending(true); requestId(unresolvedId); pendingAction(secrets.getMT5BridgePendingCommandAction())
+        message("A bridge command is already unresolved. Reconcile its saved request ID or use STOP as the one safety override; no other command was sent.")
         busy(false)
         return
     }
     val id = java.util.UUID.randomUUID().toString()
+    if (unresolvedId.isNotBlank() && action == "STOP" && !secrets.saveMT5BridgeSafetyStop(unresolvedId, secrets.getMT5BridgePendingCommandAction(), id)) {
+        message("Secure safety-stop storage failed; no STOP command was sent.")
+        busy(false)
+        return
+    }
     if (!secrets.saveMT5BridgePendingCommand(id, action)) {
         message("Secure pending-command storage failed; no command was sent.")
         busy(false)

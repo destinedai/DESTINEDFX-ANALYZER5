@@ -23,7 +23,7 @@ class WorkerTests(unittest.TestCase):
         self.meta.write_text("#!/usr/bin/env python3\nimport pathlib,sys\np=pathlib.Path(sys.argv[1].split(':',1)[1])\np.with_suffix('.ex5').write_bytes(b'fake compiled')\n")
         self.meta.chmod(0o755)
         self.job = {"job_id": "job_123", "pairing_id": "pair_456", "pairing_code": "abcdefgh1234",
-                    "bridge_url": "https://bridge.example", "account": {"login": "123456", "server": "Demo-Server",
+                    "bridge_url": "https://bridge.destinedfx.internal", "account": {"login": "123456", "server": "Demo-Server",
                     "password": "secret-not-logged", "access_type": "INVESTOR"}}
         self.settings = {"data_root": str(self.root / "accounts"), "mt5_install": str(self.install),
                          "terminal_exe": str(self.term), "metaeditor_exe": str(self.meta), "ea_source": str(self.source)}
@@ -39,8 +39,8 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("ExpertParameters=DestinedFXTraderEA.set", text)
 
     def test_set_contains_pairing_and_bridge(self):
-        text = worker.make_set_file("https://bridge.example", "abcdefgh1234")
-        self.assertIn("InpBridgeBaseURL=https://bridge.example", text)
+        text = worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234")
+        self.assertIn("InpBridgeBaseURL=https://bridge.destinedfx.internal", text)
         self.assertIn("InpPairingCode=abcdefgh1234", text)
 
     def test_invalid_path_and_bridge_rejected(self):
@@ -48,6 +48,9 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(worker.ProvisionError):
             worker.validate_job(bad)
         bad = dict(self.job, bridge_url="http://insecure.example")
+        with self.assertRaises(worker.ProvisionError):
+            worker.validate_job(bad)
+        bad = dict(self.job, bridge_url="https://your-bridge.example")
         with self.assertRaises(worker.ProvisionError):
             worker.validate_job(bad)
 

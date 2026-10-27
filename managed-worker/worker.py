@@ -31,6 +31,18 @@ SAFE_SERVER = re.compile(r"^[A-Za-z0-9 ._:-]{1,128}$")
 SAFE_SYMBOL = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 VALID_ACCESS = {"MASTER", "INVESTOR"}
 
+def validate_origin(raw: str) -> str | None:
+    value = (raw or "").strip().rstrip("/")
+    parsed = urllib.parse.urlparse(value)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    placeholder = (host in {"example.com", "example.org", "example.net", "testserver", "bridge.example"}
+                   or host.endswith(".example") or host.startswith("your-")
+                   or host.startswith("placeholder") or "example" in host)
+    if (not host or parsed.scheme != "https" or parsed.username or parsed.password
+            or parsed.query or parsed.fragment or parsed.path not in ("", "/") or placeholder):
+        return None
+    return f"https://{host}" + (f":{parsed.port}" if parsed.port else "")
+
 
 class ProvisionError(Exception):
     def __init__(self, code: str):
@@ -57,8 +69,8 @@ def validate_job(job: Any) -> dict[str, Any]:
     if not isinstance(job.get("pairing_code"), str) or not SAFE_CODE.fullmatch(job["pairing_code"]):
         raise ProvisionError("INVALID_PAIRING_CODE")
     bridge = job.get("bridge_url")
-    parsed = urllib.parse.urlparse(bridge if isinstance(bridge, str) else "")
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+    normalized = validate_origin(bridge if isinstance(bridge, str) else "")
+    if normalized is None:
         raise ProvisionError("INVALID_BRIDGE_URL")
     account = job.get("account")
     if not isinstance(account, dict):
@@ -72,7 +84,9 @@ def validate_job(job: Any) -> dict[str, Any]:
         raise ProvisionError("INVALID_ACCOUNT")
     if access not in VALID_ACCESS:
         raise ProvisionError("INVALID_ACCESS_TYPE")
-    return job
+    result = dict(job)
+    result["bridge_url"] = normalized
+    return result
 
 
 def request_json(url: str, token: str, method: str, payload: dict | None = None, timeout: int = 20) -> dict:
@@ -303,9 +317,10 @@ def load_settings(path: Path) -> dict:
         required = ("control_plane_url", "data_root", "mt5_install", "terminal_exe", "metaeditor_exe", "ea_source")
         if any(not isinstance(cfg.get(k), str) or not cfg[k] for k in required):
             raise ValueError
-        parsed = urllib.parse.urlparse(cfg["control_plane_url"])
-        if parsed.scheme != "https" or not parsed.netloc:
+        normalized = validate_origin(cfg["control_plane_url"])
+        if normalized is None:
             raise ValueError
+        cfg["control_plane_url"] = normalized
         return cfg
     except (OSError, ValueError, tomllib.TOMLDecodeError, KeyError):
         raise ProvisionError("INVALID_WORKER_CONFIG") from None
