@@ -293,7 +293,7 @@ fun TradingViewWebView(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     setBackgroundColor(android.graphics.Color.parseColor("#171B27"))
-                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     overScrollMode = View.OVER_SCROLL_NEVER
                     isVerticalScrollBarEnabled = false
                     isHorizontalScrollBarEnabled = false
@@ -308,7 +308,7 @@ fun TradingViewWebView(
                     webViewClient = object : WebViewClient() {
                         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                             val host = error?.url?.let { runCatching { Uri.parse(it).host }.getOrNull() }
-                            if (isSupportedTradingViewHost(host)) {
+                            if (isSupportedTradingViewHost(host) || error?.url?.startsWith("https://s3.tradingview.com") == true) {
                                 handler?.proceed()
                             } else {
                                 handler?.cancel()
@@ -324,6 +324,7 @@ fun TradingViewWebView(
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = true
+                        databaseEnabled = true
                         loadsImagesAutomatically = true
                         useWideViewPort = true
                         loadWithOverviewMode = true
@@ -361,8 +362,10 @@ fun TradingViewWebView(
                     onResume()
                     resumeTimers()
                     tag = currentKey
-                    android.util.Log.i(TRADING_VIEW_LOG_TAG, "loading TradingView URL=$widgetUrl")
-                    post { loadUrl(widgetUrl) }
+                    android.util.Log.i(TRADING_VIEW_LOG_TAG, "loading TradingView HTML for $symbol ($timeframe)")
+                    post {
+                        loadDataWithBaseURL("https://s3.tradingview.com/", widgetHtml, "text/html", "UTF-8", "https://s3.tradingview.com/")
+                    }
                 }
             },
             update = { view ->
@@ -370,8 +373,10 @@ fun TradingViewWebView(
                     view.tag = currentKey
                     view.onResume()
                     view.resumeTimers()
-                    android.util.Log.i(TRADING_VIEW_LOG_TAG, "updating active chart URL=$widgetUrl")
-                    view.post { view.loadUrl(widgetUrl) }
+                    android.util.Log.i(TRADING_VIEW_LOG_TAG, "updating active chart HTML for $symbol ($timeframe)")
+                    view.post {
+                        view.loadDataWithBaseURL("https://s3.tradingview.com/", widgetHtml, "text/html", "UTF-8", "https://s3.tradingview.com/")
+                    }
                 }
             },
             onRelease = { view ->
@@ -629,7 +634,7 @@ internal class TradingViewPriceBridge(private val symbol: String, private val on
 internal object TradingViewMapper {
     fun mapSymbol(symbol: String): String? {
         val raw = symbol.trim().uppercase()
-        if (raw.startsWith("FOREXCOM:") || raw.startsWith("CAPITALCOM:") || raw.startsWith("TVC:") || raw.startsWith("BINANCE:") || raw.startsWith("NASDAQ:") || raw.startsWith("BITSTAMP:") || raw.startsWith("COINBASE:") || raw.startsWith("NYMEX:") || raw.startsWith("CBOT:") || raw.startsWith("ICEUS:")) {
+        if (raw.startsWith("OANDA:") || raw.startsWith("FOREXCOM:") || raw.startsWith("CAPITALCOM:") || raw.startsWith("TVC:") || raw.startsWith("BINANCE:") || raw.startsWith("NASDAQ:") || raw.startsWith("BITSTAMP:") || raw.startsWith("COINBASE:") || raw.startsWith("NYMEX:") || raw.startsWith("CBOT:") || raw.startsWith("ICEUS:")) {
             return raw
         }
         val clean = raw.replace(" ", "").replace("-", "")
@@ -640,45 +645,45 @@ internal object TradingViewMapper {
             return null
         }
         return when (clean) {
-            "EUR/USD", "EURUSD" -> "FOREXCOM:EURUSD"
-            "GBP/USD", "GBPUSD" -> "FOREXCOM:GBPUSD"
-            "USD/JPY", "USDJPY" -> "FOREXCOM:USDJPY"
-            "USD/CHF", "USDCHF" -> "FOREXCOM:USDCHF"
-            "AUD/USD", "AUDUSD" -> "FOREXCOM:AUDUSD"
-            "USD/CAD", "USDCAD" -> "FOREXCOM:USDCAD"
-            "NZD/USD", "NZDUSD" -> "FOREXCOM:NZDUSD"
-            "EUR/GBP", "EURGBP" -> "FOREXCOM:EURGBP"
-            "EUR/JPY", "EURJPY" -> "FOREXCOM:EURJPY"
-            "GBP/JPY", "GBPJPY" -> "FOREXCOM:GBPJPY"
-            "AUD/JPY", "AUDJPY" -> "FOREXCOM:AUDJPY"
-            "EUR/AUD", "EURAUD" -> "FOREXCOM:EURAUD"
-            "EUR/CAD", "EURCAD" -> "FOREXCOM:EURCAD"
-            "EUR/CHF", "EURCHF" -> "FOREXCOM:EURCHF"
-            "GBP/CHF", "GBPCHF" -> "FOREXCOM:GBPCHF"
-            "CAD/JPY", "CADJPY" -> "FOREXCOM:CADJPY"
-            "CHF/JPY", "CHFJPY" -> "FOREXCOM:CHFJPY"
-            "USD/TRY", "USDTRY" -> "FOREXCOM:USDTRY"
-            "USD/ZAR", "USDZAR" -> "FOREXCOM:USDZAR"
-            "USD/MXN", "USDMXN" -> "FOREXCOM:USDMXN"
-            "USD/SGD", "USDSGD" -> "FOREXCOM:USDSGD"
-            "EUR/TRY", "EURTRY" -> "FOREXCOM:EURTRY"
-            "GBP/NZD", "GBPNZD" -> "FOREXCOM:GBPNZD"
-            "GBP/AUD", "GBPAUD" -> "FOREXCOM:GBPAUD"
-            "GBP/CAD", "GBPCAD" -> "FOREXCOM:GBPCAD"
-            "AUD/CAD", "AUDCAD" -> "FOREXCOM:AUDCAD"
-            "AUD/CHF", "AUDCHF" -> "FOREXCOM:AUDCHF"
-            "AUD/NZD", "AUDNZD" -> "FOREXCOM:AUDNZD"
-            "CAD/CHF", "CADCHF" -> "FOREXCOM:CADCHF"
-            "EUR/NOK", "EURNOK" -> "FOREXCOM:EURNOK"
-            "EUR/NZD", "EURNZD" -> "FOREXCOM:EURNZD"
-            "EUR/SEK", "EURSEK" -> "FOREXCOM:EURSEK"
-            "NZD/CAD", "NZDCAD" -> "FOREXCOM:NZDCAD"
-            "NZD/CHF", "NZDCHF" -> "FOREXCOM:NZDCHF"
-            "NZD/JPY", "NZDJPY" -> "FOREXCOM:NZDJPY"
-            "XAU/USD", "XAUUSD", "GOLD" -> "TVC:GOLD"
-            "XAG/USD", "XAGUSD", "SILVER" -> "TVC:SILVER"
-            "XPT/USD", "XPTUSD" -> "FOREXCOM:XPTUSD"
-            "XPD/USD", "XPDUSD" -> "FOREXCOM:XPDUSD"
+            "EUR/USD", "EURUSD" -> "OANDA:EURUSD"
+            "GBP/USD", "GBPUSD" -> "OANDA:GBPUSD"
+            "USD/JPY", "USDJPY" -> "OANDA:USDJPY"
+            "USD/CHF", "USDCHF" -> "OANDA:USDCHF"
+            "AUD/USD", "AUDUSD" -> "OANDA:AUDUSD"
+            "USD/CAD", "USDCAD" -> "OANDA:USDCAD"
+            "NZD/USD", "NZDUSD" -> "OANDA:NZDUSD"
+            "EUR/GBP", "EURGBP" -> "OANDA:EURGBP"
+            "EUR/JPY", "EURJPY" -> "OANDA:EURJPY"
+            "GBP/JPY", "GBPJPY" -> "OANDA:GBPJPY"
+            "AUD/JPY", "AUDJPY" -> "OANDA:AUDJPY"
+            "EUR/AUD", "EURAUD" -> "OANDA:EURAUD"
+            "EUR/CAD", "EURCAD" -> "OANDA:EURCAD"
+            "EUR/CHF", "EURCHF" -> "OANDA:EURCHF"
+            "GBP/CHF", "GBPCHF" -> "OANDA:GBPCHF"
+            "CAD/JPY", "CADJPY" -> "OANDA:CADJPY"
+            "CHF/JPY", "CHFJPY" -> "OANDA:CHFJPY"
+            "USD/TRY", "USDTRY" -> "OANDA:USDTRY"
+            "USD/ZAR", "USDZAR" -> "OANDA:USDZAR"
+            "USD/MXN", "USDMXN" -> "OANDA:USDMXN"
+            "USD/SGD", "USDSGD" -> "OANDA:USDSGD"
+            "EUR/TRY", "EURTRY" -> "OANDA:EURTRY"
+            "GBP/NZD", "GBPNZD" -> "OANDA:GBPNZD"
+            "GBP/AUD", "GBPAUD" -> "OANDA:GBPAUD"
+            "GBP/CAD", "GBPCAD" -> "OANDA:GBPCAD"
+            "AUD/CAD", "AUDCAD" -> "OANDA:AUDCAD"
+            "AUD/CHF", "AUDCHF" -> "OANDA:AUDCHF"
+            "AUD/NZD", "AUDNZD" -> "OANDA:AUDNZD"
+            "CAD/CHF", "CADCHF" -> "OANDA:CADCHF"
+            "EUR/NOK", "EURNOK" -> "OANDA:EURNOK"
+            "EUR/NZD", "EURNZD" -> "OANDA:EURNZD"
+            "EUR/SEK", "EURSEK" -> "OANDA:EURSEK"
+            "NZD/CAD", "NZDCAD" -> "OANDA:NZDCAD"
+            "NZD/CHF", "NZDCHF" -> "OANDA:NZDCHF"
+            "NZD/JPY", "NZDJPY" -> "OANDA:NZDJPY"
+            "XAU/USD", "XAUUSD", "GOLD" -> "OANDA:XAUUSD"
+            "XAG/USD", "XAGUSD", "SILVER" -> "OANDA:XAGUSD"
+            "XPT/USD", "XPTUSD" -> "OANDA:XPTUSD"
+            "XPD/USD", "XPDUSD" -> "OANDA:XPDUSD"
             "BTC/USD", "BTCUSD", "BTCUSDT" -> "BINANCE:BTCUSDT"
             "ETH/USD", "ETHUSD", "ETHUSDT" -> "BINANCE:ETHUSDT"
             "SOL/USD", "SOLUSD", "SOLUSDT" -> "BINANCE:SOLUSDT"
@@ -691,17 +696,12 @@ internal object TradingViewMapper {
             "CORN" -> "CBOT:ZC1!"
             "SOYBEANS", "SOY BEANS" -> "CBOT:ZS1!"
             "COFFEE" -> "ICEUS:KC1!"
-            "FTSE100", "UK100" -> "CAPITALCOM:UK100"
-            "SPX500", "US500", "SPX" -> "CAPITALCOM:US500"
-            "NAS100", "US100", "NDX" -> "NASDAQ:NDX"
+            "FTSE100", "UK100" -> "OANDA:UK100GBP"
+            "SPX500", "US500", "SPX" -> "OANDA:SPX500USD"
+            "NAS100", "US100", "NDX" -> "OANDA:NAS100USD"
             "DJ30", "US30", "DJI" -> "CAPITALCOM:US30"
-            "GER30", "GER40", "DAX", "DAX40" -> "CAPITALCOM:DE40"
-            else -> if (clean.contains("/")) {
-                val simple = clean.replace("/", "")
-                "FOREXCOM:$simple"
-            } else if (clean.length in 6..7) {
-                "FOREXCOM:$clean"
-            } else null
+            "GER30", "GER40", "DAX", "DAX40" -> "OANDA:DE30EUR"
+            else -> null
         }
     }
 
@@ -731,7 +731,7 @@ internal object TradingViewMapper {
     }
 
     /**
-     * Full-size Advanced Chart widget document using official TradingView tv.js widget API.
+     * Full-size Advanced Chart widget document using official TradingView embed API.
      */
     fun buildWidgetHtml(symbol: String, timeframe: String): String? {
         val mappedSymbol = mapSymbol(symbol) ?: return null
@@ -752,7 +752,11 @@ internal object TradingViewMapper {
             put("details", true)
             put("hotlist", false)
             put("calendar", true)
-            put("container_id", "tradingview_widget")
+            put("studies", org.json.JSONArray().apply {
+                put("STD;EMA")
+                put("STD;RSI")
+            })
+            put("container_id", "destinedfx-tv-chart")
         }.toString()
 
         return """
@@ -762,11 +766,15 @@ internal object TradingViewMapper {
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
               <style>
-                html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#171B27; }
-                #tradingview_widget { width:100%; height:100%; background:#171B27; }
+                html, body { margin:0; padding:0; width:100%; height:100%; min-height:0; overflow:hidden; background:#0F0F0F; }
+                .tradingview-widget-container { width:100%; height:100%; min-height:0; background:#0F0F0F; }
+                .tradingview-widget-container__widget { width:100%; height:100%; min-height:0; }
+                #destinedfx-tv-chart { width:100%; height:100%; min-height:0; }
               </style>
-              <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
               <script>
+                function isTradingViewChartUrl(url) {
+                  return typeof url === 'string' && (url.indexOf('tradingview.com') !== -1 || url.indexOf('tradingview-widget.com') !== -1);
+                }
                 window.addEventListener('message', function(event) {
                   try {
                     var d = event.data;
@@ -780,16 +788,31 @@ internal object TradingViewMapper {
                   } catch(_) {}
                 });
                 window.addEventListener('load', function() {
-                  try {
-                    new TradingView.widget($config);
-                  } catch(e) {
-                    console.error('TradingView init error:', e);
-                  }
+                  document.body.setAttribute('data-tv-frame-loaded-at', Date.now());
                 });
               </script>
             </head>
             <body>
-              <div id="tradingview_widget"></div>
+              <div class="tradingview-widget-container">
+                <div id="destinedfx-tv-chart" class="tradingview-widget-container__widget"></div>
+                <script type="text/javascript" id="tvScript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+                $config
+                </script>
+                <script>
+                  var tvScript = document.getElementById('tvScript');
+                  if (tvScript) {
+                    tvScript.onload = function() {
+                      document.body.setAttribute('data-tv-script-loaded', 'true');
+                      document.body.setAttribute('data-destinedfx-tv-loaded-at', Date.now());
+                    };
+                    tvScript.onerror = function() {
+                      if (window.DestinedFXBridge && window.DestinedFXBridge.onChartFailed) {
+                        window.DestinedFXBridge.onChartFailed('script_error');
+                      }
+                    };
+                  }
+                </script>
+              </div>
             </body>
             </html>
         """.trimIndent()

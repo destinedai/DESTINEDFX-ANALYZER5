@@ -30,7 +30,7 @@ object RiskEngine {
     /** Risk is taken on min(balance, equity): a drawn-down account must not size off an inflated balance. */
     /** Reject invalid risk values; callers must not silently coerce them into the allowed range. */
     fun isValidRiskPercent(riskPercent: Double): Boolean =
-        riskPercent.isFinite() && riskPercent > 0.0 && riskPercent <= 5.0
+        riskPercent.isFinite() && riskPercent > 0.0 && riskPercent <= 1.0
 
     fun riskBase(a: AccountState) = minOf(a.balance, a.equity)
 

@@ -9,7 +9,8 @@ data class AccountMetrics(
     val margin: Double,
     val freeMargin: Double,
     val marginLevel: Double,
-    val currency: String
+    val currency: String,
+    val leverage: Int = 100
 )
 
 interface MT5Repository {

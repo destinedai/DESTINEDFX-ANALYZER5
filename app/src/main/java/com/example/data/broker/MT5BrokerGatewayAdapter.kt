@@ -105,6 +105,23 @@ class MT5BrokerGatewayAdapter(
         return mt5Repo.calculateRequiredMargin(symbol, lots)
     }
 
+    fun setAccountBalance(balance: Double) {
+        mt5Repo.setAccountBalance(balance)
+    }
+
+    suspend fun refreshPositionsWithLiveQuotes(priceMap: Map<String, Double>) {
+        val openList = mt5Repo.getOpenPositions().getOrNull() ?: emptyList()
+        for (pos in openList) {
+            val cmp = priceMap[pos.symbol] ?: continue
+            mt5Repo.updatePositionProfit(pos.id, cmp)
+        }
+        val metricsRes = mt5Repo.getAccountMetrics()
+        if (metricsRes.isSuccess) {
+            _accountMetrics.value = metricsRes.getOrThrow()
+        }
+        refreshPositions()
+    }
+
     private suspend fun refreshPositions() {
         val posRes = mt5Repo.getOpenPositions()
         if (posRes.isSuccess) {

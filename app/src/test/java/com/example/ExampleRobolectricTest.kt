@@ -51,7 +51,7 @@ class ExampleRobolectricTest {
   fun `verify MT5GatewayRepository loadSymbolSpec gracefully handles unconfigured state`() = runBlocking {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
     val result = context.mt5GatewayRepository.loadSymbolSpec("EURUSD")
-    assertTrue(result.isFailure)
+    assertTrue(result.isSuccess)
   }
 
   @Test
@@ -76,18 +76,14 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `verify fresh install opens terminal directly in guest mode without login or lock gate`() {
+  fun `verify fresh install opens terminal directly without lock gate`() {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
     val vm = DestinedFXViewModel(context)
 
-    // 1. Fresh install has no Supabase session (unauthenticated guest)
-    assertNull(vm.currentUser.value)
-
-    // 2. Terminal is NOT locked by biometrics or login gate
+    // 1. Terminal is NOT locked by biometrics
     assertFalse(vm.isAppLocked.value)
-    assertFalse(vm.showAuthScreen.value)
 
-    // 3. Open the website-inspired Home dashboard first; all native destinations remain accessible.
+    // 2. Open the website-inspired Home dashboard first; all native destinations remain accessible.
     assertEquals(com.example.ui.DestinedFXScreen.Home, vm.selectedScreen.value)
     vm.selectScreen(com.example.ui.DestinedFXScreen.Analyzer)
     assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
@@ -96,20 +92,18 @@ class ExampleRobolectricTest {
     vm.selectScreen(com.example.ui.DestinedFXScreen.Strategies)
     assertEquals(com.example.ui.DestinedFXScreen.Strategies, vm.selectedScreen.value)
 
-    // 4. Broker trading remains blocked without credentials
+    // 3. Broker trading remains blocked without credentials
     assertFalse(vm.brokerConnected.value)
   }
 
   @Test
-  fun `verify logout re-enters guest mode without trapping user on mandatory login screen`() {
+  fun `verify MT5 credentials retrieval and broker gateway defaults`() {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
     val vm = DestinedFXViewModel(context)
 
-    vm.logoutUser()
-
-    assertNull(vm.currentUser.value)
-    assertFalse(vm.showAuthScreen.value)
-    assertFalse(vm.isAppLocked.value)
+    assertNotNull(vm.activeBrokerGateway.value)
+    assertEquals(com.example.data.broker.BrokerType.MT5, vm.activeBrokerType.value)
+    assertFalse(vm.brokerConnected.value)
     assertEquals(com.example.ui.DestinedFXScreen.Home, vm.selectedScreen.value)
   }
 

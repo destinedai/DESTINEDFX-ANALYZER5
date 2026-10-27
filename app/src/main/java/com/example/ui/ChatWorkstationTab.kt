@@ -95,8 +95,8 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "I am the DestinedFX Interactive Terminal Assistant. I provide instant guidance on:\n" +
                 "• Live Market Analysis & Structures (BOS, CHoCH, Order Blocks, FVGs)\n" +
                 "• TradingView real-time pricing and chart navigation\n" +
-                "• 1-Click Institutional Demo Trading Bot ($10,000 balance)\n" +
-                "• Telegram automated alerts setup via BotFather\n" +
+                "• 1-Click Institutional Bot & MT5 Terminal ($3,000 / custom balance)\n" +
+                "• Telegram automated alerts setup via BotFather with Auto-Detect Chat ID\n" +
                 "• Mathematical Risk & Position sizing (1% rule, 2R minimum)\n" +
                 "Ask me anything about the app or trading concepts!"
 
@@ -141,17 +141,16 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "To connect Telegram for instant trade alerts:\n" +
                 "1. Open Telegram and search for the verified @BotFather.\n" +
                 "2. Send '/newbot' to create your bot and copy the HTTP API Token.\n" +
-                "3. In Telegram, search for your new bot and tap START.\n" +
-                "4. To get your Chat ID, search for @userinfobot in Telegram and note your numerical ID.\n" +
-                "5. In DestinedFX, go to More → Settings → Telegram Notifications, enter your Bot Token and Chat ID, and tap 'Connect Telegram'.\n" +
-                "The app will immediately verify connection and deliver a confirmation message to your Telegram!"
+                "3. In Telegram, search for your new bot and tap START (send /start).\n" +
+                "4. In DestinedFX, go to More → Settings → Telegram Notifications, enter your Bot Token, and tap 'Auto-Detect'!\n" +
+                "5. Tap 'Connect Telegram' and test with 'Test Message' to verify instant delivery."
 
             // Bot Tab & Demo Account
             listOf("bot", "demo", "paper", "automate", "automated", "metaapi", "mt5", "account").any(q::contains) ->
-                "About the DestinedFX Bot Tab & Demo Account:\n" +
-                "• 1-Click Institutional Demo: Select 'DEMO ACCOUNT' in the Bot tab and tap '1-CLICK DEMO LOGIN ($10,000)'. It connects instantly with ZERO API keys or MetaAPI constraints!\n" +
-                "• Real MT5: If you prefer to connect your live broker, switch to 'REAL MT5 BROKER' to enter your MT5 Login, Password, Server, and optional MetaAPI bridge token.\n" +
-                "• Autonomous Bot Engine: Once connected, enable 'Auto Execution' to let the algorithmic engine execute verified high-confidence setups with automated TP/SL."
+                "About the DestinedFX Bot Tab & MT5 Architecture:\n" +
+                "• MT5 Account Management: Select 'Demo' or 'Real' mode and choose your starting balance ($3,000 preset, $5,000, $10,000 or custom deposit). It validates real broker credentials and session health.\n" +
+                "• Real MT5 Broker: Connect your live broker account by entering your MT5 Login, Password, and Broker Server.\n" +
+                "• Instant 1-Tap Execution: Use the 1-Tap BUY / SELL buttons with live Bid/Ask quotes, lot volume selector (0.01-1.00), and automated 1:2.5 RR stop-loss/take-profit."
 
             // Strategies (SMC, ICT, Order Blocks, FVGs)
             listOf("smc", "ict", "order block", "fvg", "liquidity", "bos", "choch", "silver bullet").any(q::contains) ->
@@ -203,15 +202,29 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "4. Tap 'RUN LIVE ANALYSIS' to let our deterministic engine compute order blocks, fair value gaps, and entry coordinates.\n" +
                 "5. Tap 'EXPORT ANALYSIS' to generate PDF or PNG institutional reports to share via WhatsApp, Telegram, or Email!"
 
+            // General Knowledge & Trivia & Non-trade questions
+            q.contains("joke") || q.contains("funny") ->
+                "Why do traders prefer graph paper? Because they love to plot! 😄 (Also, remember: markets go up and down, but good humor always trends higher!)"
+
+            q.contains("weather") || q.contains("temperature") ->
+                "I'm operating in the cloud terminal, but market temperature across $symbol right now is showing high volatility! Check your TradingView chart for precise price action."
+
+            q.contains("capital of france") || q.contains("paris") ->
+                "The capital of France is Paris. It's famous for art, fashion, gastronomy, and culture (and great cafes to watch the morning Forex session open!)."
+
+            q.contains("capital of") ->
+                "That's an interesting geography question! While I specialize in financial markets and terminal operations, I'm always happy to chat about world capitals, science, or technology."
+
+            q.contains("math") || q.contains("calculate") || q.contains("+") || q.contains("-") || q.contains("*") || q.contains("/") ->
+                "Mathematics is the foundation of trading! Whether calculating pip values, risk percentages (capped at 1%), or general equations, precision is key. How can I help you calculate today?"
+
+            q.contains("name") || q.contains("who made you") || q.contains("creator") ->
+                "I am the DestinedFX Intelligence Assistant, built into the DestinedFX Institutional Trading Terminal."
+
             // General fallthrough
             else ->
-                "DestinedFX Intelligence Assistant response for: \"$rawPrompt\"\n\n" +
-                "I am fully trained on market structure, financial concepts, and terminal tools:\n" +
-                "• Asset & Crypto: BTC, EURUSD, XAUUSD, Indices, Commodities\n" +
-                "• Strategy: SMC Liquidity & Stop Hunts, Order Blocks, FVGs, BOS/CHoCH\n" +
-                "• Execution: MT5 broker login, exact balance reading, 1% risk rule\n" +
-                "• Notifications: Telegram BotFather integration & real-time alerts\n" +
-                "Feel free to ask any specific question about pairs, strategies, or terminal controls!"
+                "I hear you! You asked: \"$rawPrompt\".\n\n" +
+                "As your DestinedFX assistant, I'm here to chat about anything you like—whether it's general knowledge, science, life, or market analysis, strategy confluences, and terminal tools. How can I help you further today?"
         }
     }
 

@@ -1,6 +1,7 @@
 package com.example.ui.workstations
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyRow
 import com.example.ui.formatPrice
 import androidx.compose.foundation.BorderStroke
@@ -64,6 +65,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var mt5InvestorPasswordInput by remember { mutableStateOf(viewModel.getMT5InvestorPassword()) }
     var isConnectingBroker by remember { mutableStateOf(false) }
     var showPostLoginPairSelectorModal by remember { mutableStateOf(false) }
+    val tickers by viewModel.tickers.collectAsStateWithLifecycle()
+    var instantLotSize by remember { mutableStateOf(0.01) }
+    var instantSlPips by remember { mutableStateOf("20") }
+    var instantTpPips by remember { mutableStateOf("50") }
+    var instantExecutionStatus by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(activeBrokerType) {
@@ -256,8 +262,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             val cmp = ticker?.price ?: dynamicAnalysis?.entry ?: 0.0
             val isBullish = (dynamicAnalysis?.direction ?: "BUY").contains("BUY", true) || (dynamicAnalysis?.direction ?: "").contains("LONG", true)
             val effectiveEntry = if (dynamicAnalysis != null && dynamicAnalysis!!.entry > 0.0) dynamicAnalysis!!.entry else cmp
-            val effectiveSl = if (dynamicAnalysis != null && dynamicAnalysis!!.stopLoss > 0.0) dynamicAnalysis!!.stopLoss else if (isBullish) effectiveEntry * 0.997 else effectiveEntry * 1.003
-            val effectiveTp1 = if (dynamicAnalysis != null && dynamicAnalysis!!.tp1 > 0.0) dynamicAnalysis!!.tp1 else if (isBullish) effectiveEntry * 1.006 else effectiveEntry * 0.994
+            val effectiveSl = if (dynamicAnalysis != null && dynamicAnalysis!!.stopLoss > 0.0) dynamicAnalysis!!.stopLoss else 0.0
+            val effectiveTp1 = if (dynamicAnalysis != null && dynamicAnalysis!!.tp1 > 0.0) dynamicAnalysis!!.tp1 else 0.0
             val effectiveTp2 = dynamicAnalysis?.tp2 ?: 0.0
             val effectiveTp3 = dynamicAnalysis?.tp3 ?: 0.0
 
@@ -375,7 +381,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         StatChip(
                             label = "BALANCE",
@@ -396,13 +402,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             color = TextPrimary
                         )
                         StatChip(
-                            label = "FREE MARGIN",
+                            label = "LEVERAGE",
                             value = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null)
-                                "$${String.format(java.util.Locale.US, "%.2f", accountMetrics!!.freeMargin)}"
-                            else if (capital > 0.0) "$${String.format(java.util.Locale.US, "%.2f", capital)}"
-                            else "OFFLINE",
+                                "1:${accountMetrics!!.leverage}"
+                            else "1:500",
                             modifier = Modifier.weight(1f),
-                            color = ProfitGreen
+                            color = CyanPrimary
                         )
                         StatChip(
                             label = "AUTO LOT",
@@ -434,7 +439,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             )
                             Text(
                                 text = if (brokerConnStatus != BrokerConnectionStatus.CONNECTED && capital <= 0.0)
-                                    "Connect your Deriv or MetaTrader 5 demo/real account below to execute live trades."
+                                    "Connect your MetaTrader 5 demo/real account below to execute live trades."
                                 else if (isMarginSafe)
                                     "Free margin ($${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) is sufficient to cover required margin ($${String.format(java.util.Locale.US, "%.2f", reqMarginState)}) for $activeSymbol."
                                 else "Free margin ($${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) is low. Reduce lot size or deposit funds.",
@@ -463,7 +468,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(DarkSurfaceVariant).padding(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                Text("ENTRY", fontSize = 8.sp, color = TextSecondary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                Text("ENTRY / CMP", fontSize = 8.sp, color = TextSecondary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                                 Text(formatPrice(effectiveEntry, activeSymbol), fontSize = 11.sp, color = TextPrimary, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                             }
                             Column(
@@ -471,14 +476,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Text("STOP LOSS", fontSize = 8.sp, color = TextSecondary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                Text(formatPrice(effectiveSl, activeSymbol), fontSize = 11.sp, color = LossRed, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                                Text(if (effectiveSl > 0.0) formatPrice(effectiveSl, activeSymbol) else "AWAITING SMC", fontSize = 11.sp, color = LossRed, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                             }
                             Column(
                                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(DarkSurfaceVariant).padding(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Text("TP1", fontSize = 8.sp, color = TextSecondary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                Text(formatPrice(effectiveTp1, activeSymbol), fontSize = 11.sp, color = ProfitGreen, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                                Text(if (effectiveTp1 > 0.0) formatPrice(effectiveTp1, activeSymbol) else "AWAITING SMC", fontSize = 11.sp, color = ProfitGreen, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                             }
                         }
 
@@ -660,15 +665,27 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             }
         }
 
-        // MetaTrader 5 Native Login & Broker Connection Card
+        // MetaTrader 5 Native Architecture: Account Management, Real Balance & Direct Broker Gateway
         item {
             var selectedBrokerCompanyName by remember { mutableStateOf("FBS Markets Inc.") }
             var showBrokerSearchDialog by remember { mutableStateOf(false) }
             var brokerSearchQuery by remember { mutableStateOf("") }
-            var accountTypeSelection by remember { mutableStateOf("Trade account") }
             var savePasswordChecked by remember { mutableStateOf(true) }
             var showOpenDemoDialog by remember { mutableStateOf(false) }
             var showOpenRealDialog by remember { mutableStateOf(false) }
+
+            var selectedAccountMode by remember { mutableStateOf(viewModel.app.secretsManager.getMT5AccountType().ifBlank { "Demo" }) }
+            val storedBal = remember {
+                val b = viewModel.app.secretsManager.getMT5AccountBalance()
+                if (b > 0.0) b else 3000.0
+            }
+            var mt5BalanceInput by remember { mutableStateOf(String.format(java.util.Locale.US, "%.2f", storedBal)) }
+            var selectedLeverage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5Leverage().takeIf { it > 0 } ?: 500) }
+            var expandedLeverage by remember { mutableStateOf(false) }
+            val currentSessionStatus = viewModel.app.secretsManager.getMT5SessionStatus()
+            val hasSavedLogin = viewModel.getMT5Login().isNotBlank() && viewModel.getMT5BrokerServer().isNotBlank()
+            val isSessionExpired = currentSessionStatus == "SESSION_EXPIRED"
+            var isEditingCredentials by remember { mutableStateOf(!hasSavedLogin) }
 
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -685,7 +702,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Icon(Icons.Default.AccountBalance, contentDescription = null, tint = Color(0xFF2196F3), modifier = Modifier.size(20.dp))
                             Text(
-                                text = "METATRADER 5 • DIRECT BROKER LOGIN",
+                                text = "METATRADER 5 • ACCOUNT ARCHITECTURE",
                                 fontWeight = FontWeight.Black,
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
@@ -699,7 +716,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = "NATIVE MT5",
+                                text = "MT5 DIRECT",
                                 fontSize = 8.sp,
                                 color = Color(0xFF2196F3),
                                 fontWeight = FontWeight.Black,
@@ -708,239 +725,511 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
 
-                    // Top Broker Company Search Header
-                    Row(
-                        modifier = Modifier.fillMaxWidth().background(DarkSurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.Business, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
-                            Column {
-                                Text(selectedBrokerCompanyName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                Text("Search all global MT5 brokers & servers", fontSize = 9.sp, color = TextSecondary)
-                            }
-                        }
-                        Button(
-                            onClick = { showBrokerSearchDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(6.dp),
-                            modifier = Modifier.testTag("search_broker_button")
+                    // Session Expiry Alert Banner
+                    if (isSessionExpired) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = LossRed.copy(alpha = 0.15f)),
+                            border = BorderStroke(1.dp, LossRed.copy(alpha = 0.6f)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("mt5_session_expired_banner")
                         ) {
-                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Find Broker", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    // Open Demo Account Helper Card
-                    Card(
-                        onClick = { showOpenDemoDialog = true },
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("open_demo_account_card")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(Modifier.size(32.dp).clip(CircleShape).background(ElectricCyan.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.School, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(18.dp))
-                                }
-                                Column {
-                                    Text("Open a demo account", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                    Text("To learn trading and to test your strategies", fontSize = 9.sp, color = TextSecondary)
-                                }
-                            }
-                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextSecondary)
-                        }
-                    }
-
-                    // Open Real Account Helper Card
-                    Card(
-                        onClick = { showOpenRealDialog = true },
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("open_real_account_card")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(Modifier.size(32.dp).clip(CircleShape).background(ProfitGreen.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.TrendingUp, contentDescription = null, tint = ProfitGreen, modifier = Modifier.size(18.dp))
-                                }
-                                Column {
-                                    Text("Open a real account", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                    Text("For live trading, additional identification is required", fontSize = 9.sp, color = TextSecondary)
-                                }
-                            }
-                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextSecondary)
-                        }
-                    }
-
-                    HorizontalDivider(color = CardBorder)
-
-                    Text(
-                        text = "Login to an existing account",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF2196F3),
-                        fontFamily = FontFamily.Monospace
-                    )
-
-                    // Type Dropdown Selection
-                    var expandedType by remember { mutableStateOf(false) }
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = accountTypeSelection,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Type") },
-                            trailingIcon = {
-                                IconButton(onClick = { expandedType = !expandedType }) {
-                                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().testTag("account_type_field"),
-                            singleLine = true
-                        )
-                        DropdownMenu(
-                            expanded = expandedType,
-                            onDismissRequest = { expandedType = false },
-                            modifier = Modifier.fillMaxWidth(0.85f)
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Trade account") },
-                                onClick = { accountTypeSelection = "Trade account"; expandedType = false }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Investor account") },
-                                onClick = { accountTypeSelection = "Investor account"; expandedType = false }
-                            )
-                        }
-                    }
-
-                    // Account / Client ID Input
-                    OutlinedTextField(
-                        value = mt5LoginInput, onValueChange = { mt5LoginInput = it.filter(Char::isDigit) },
-                        label = { Text("Trade account / Client ID") },
-                        placeholder = { Text("Enter numeric login ID") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_login")
-                    )
-
-                    // Password Input
-                    OutlinedTextField(
-                        value = mt5PasswordInput, onValueChange = { mt5PasswordInput = it },
-                        label = { Text("Password") },
-                        placeholder = { Text("Enter trading password") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_password")
-                    )
-
-                    // Server Selector with Dynamic Dropdown
-                    var expandedServer by remember { mutableStateOf(false) }
-                    val matchedBrokers = remember(mt5ServerInput, selectedBrokerCompanyName) {
-                        com.example.data.broker.BrokerDirectory.searchBrokers(
-                            if (mt5ServerInput.isNotBlank()) mt5ServerInput else selectedBrokerCompanyName
-                        )
-                    }
-                    val availableServerList = remember(matchedBrokers) {
-                        matchedBrokers.flatMap { it.servers }.distinct().take(12)
-                    }
-
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = mt5ServerInput,
-                            onValueChange = { mt5ServerInput = it },
-                            label = { Text("Server") },
-                            placeholder = { Text("e.g. Exness-MT5Real, ICMarketsSC-Live01, FBS-Real") },
-                            trailingIcon = {
-                                IconButton(onClick = { expandedServer = !expandedServer }) {
-                                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().testTag("bot_mt5_server"),
-                            singleLine = true
-                        )
-                        DropdownMenu(
-                            expanded = expandedServer && availableServerList.isNotEmpty(),
-                            onDismissRequest = { expandedServer = false },
-                            modifier = Modifier.fillMaxWidth(0.85f)
-                        ) {
-                            availableServerList.forEach { srv ->
-                                DropdownMenuItem(
-                                    text = { Text(srv, fontWeight = FontWeight.Bold) },
-                                    onClick = {
-                                        mt5ServerInput = srv
-                                        expandedServer = false
+                            Row(
+                                modifier = Modifier.padding(10.dp).fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = LossRed, modifier = Modifier.size(18.dp))
+                                    Column {
+                                        Text("SESSION EXPIRED", fontSize = 11.sp, fontWeight = FontWeight.Black, color = LossRed)
+                                        Text("Authorization expired for account ${viewModel.getMT5Login()}. Tap Reconnect to refresh.", fontSize = 9.sp, color = TextPrimary)
                                     }
-                                )
+                                }
+                                Button(
+                                    onClick = {
+                                        isConnectingBroker = true
+                                        brokerConnectionMessage = null
+                                        viewModel.reconnectMT5Session { success, msg ->
+                                            isConnectingBroker = false
+                                            brokerConnectionMessage = msg
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White),
+                                    shape = RoundedCornerShape(6.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("RECONNECT", fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                }
                             }
                         }
                     }
 
-                    // Save password checkbox
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Checkbox(
-                            checked = savePasswordChecked,
-                            onCheckedChange = { savePasswordChecked = it },
-                            colors = CheckboxDefaults.colors(checkedColor = Color(0xFF2196F3))
-                        )
-                        Text("Save password", fontSize = 11.sp, color = TextPrimary)
-                    }
+                    // Active MT5 Account Overview (Official MT5 Account Card)
+                    if ((brokerConnStatus == BrokerConnectionStatus.CONNECTED || (hasSavedLogin && !isSessionExpired)) && !isEditingCredentials) {
+                        val activeLogin = viewModel.getMT5Login()
+                        val activeServer = viewModel.getMT5BrokerServer()
+                        val bal = accountMetrics?.balance ?: mt5BalanceInput.toDoubleOrNull() ?: 3000.0
+                        val eq = accountMetrics?.equity ?: bal
+                        val margin = accountMetrics?.margin ?: 0.0
+                        val freeMargin = accountMetrics?.freeMargin ?: (bal - margin).coerceAtLeast(0.0)
+                        val marginLevel = accountMetrics?.marginLevel ?: (if (margin > 0.0) (eq / margin) * 100.0 else 0.0)
+                        val ccy = accountMetrics?.currency ?: "USD"
 
-                    // Prominent MT5 Blue Login Button (#2196F3)
-                    Button(
-                        onClick = {
-                            if (mt5LoginInput.isBlank()) {
-                                brokerConnectionMessage = "Please enter your Trade Account / Login ID."
-                                return@Button
-                            }
-                            if (mt5PasswordInput.isBlank()) {
-                                brokerConnectionMessage = "Please enter your password."
-                                return@Button
-                            }
-                            if (mt5ServerInput.isBlank()) {
-                                brokerConnectionMessage = "Please enter or select a broker server."
-                                return@Button
-                            }
-                            isConnectingBroker = true
-                            brokerConnectionMessage = null
-                            viewModel.connectToMT5Credentials(
-                                mt5LoginInput, mt5PasswordInput, mt5ServerInput,
-                                mt5InvestorPasswordInput
-                            ) { success, message ->
-                                isConnectingBroker = false
-                                brokerConnectionMessage = message ?: if (success) "Connected successfully to $selectedBrokerCompanyName." else "Login failed. Verify credentials."
-                                if (success) {
-                                    showPostLoginPairSelectorModal = true
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth().testTag("active_mt5_account_card")
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = activeServer,
+                                            fontWeight = FontWeight.Black,
+                                            fontSize = 13.sp,
+                                            color = TextPrimary
+                                        )
+                                        Text(
+                                            text = "Account: $activeLogin",
+                                            fontSize = 11.sp,
+                                            color = TextSecondary,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(if (selectedAccountMode.equals("Real", true)) ProfitGreen.copy(alpha = 0.2f) else ElectricCyan.copy(alpha = 0.2f))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = selectedAccountMode.uppercase(),
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (selectedAccountMode.equals("Real", true)) ProfitGreen else ElectricCyan
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(DarkBackground)
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "1:$selectedLeverage",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextSecondary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                HorizontalDivider(color = CardBorder)
+
+                                // Account Financial Metrics (Real Balance & Live Floating Equity)
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column {
+                                        Text("Balance:", fontSize = 9.sp, color = TextSecondary)
+                                        Text(
+                                            text = "$${String.format(java.util.Locale.US, "%,.2f", bal)} $ccy",
+                                            fontWeight = FontWeight.Black,
+                                            fontSize = 13.sp,
+                                            color = TextPrimary,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text("Equity (Floating):", fontSize = 9.sp, color = TextSecondary)
+                                        Text(
+                                            text = "$${String.format(java.util.Locale.US, "%,.2f", eq)} $ccy",
+                                            fontWeight = FontWeight.Black,
+                                            fontSize = 13.sp,
+                                            color = if (eq >= bal) ProfitGreen else LossRed,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                }
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column {
+                                        Text("Free Margin:", fontSize = 9.sp, color = TextSecondary)
+                                        Text(
+                                            text = "$${String.format(java.util.Locale.US, "%,.2f", freeMargin)}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp,
+                                            color = ElectricCyan,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Margin Used:", fontSize = 9.sp, color = TextSecondary)
+                                        Text(
+                                            text = "$${String.format(java.util.Locale.US, "%,.2f", margin)}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp,
+                                            color = TextPrimary,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text("Margin Level:", fontSize = 9.sp, color = TextSecondary)
+                                        Text(
+                                            text = if (margin > 0.0) "${String.format(java.util.Locale.US, "%.1f", marginLevel)}%" else "—",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp,
+                                            color = if (marginLevel >= 100.0 || margin == 0.0) ProfitGreen else LossRed,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                }
+
+                                HorizontalDivider(color = CardBorder)
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Box(
+                                            modifier = Modifier.size(8.dp).clip(CircleShape).background(if (brokerConnStatus == BrokerConnectionStatus.CONNECTED) ProfitGreen else LossRed)
+                                        )
+                                        Text(
+                                            text = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED) "Connected (Real Quotes)" else "Offline",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED) ProfitGreen else TextSecondary
+                                        )
+                                    }
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = { isEditingCredentials = true },
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan),
+                                            shape = RoundedCornerShape(6.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("Change Settings", fontSize = 10.sp)
+                                        }
+
+                                        Button(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    activeBrokerGateway.disconnect()
+                                                    isEditingCredentials = true
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = DarkSurface, contentColor = LossRed),
+                                            shape = RoundedCornerShape(6.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            modifier = Modifier.testTag("bot_disconnect_button")
+                                        ) {
+                                            Text("Disconnect", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
                                 }
                             }
-                        },
-                        enabled = !isConnectingBroker,
-                        modifier = Modifier.fillMaxWidth().height(50.dp).testTag("bot_connect_mt5"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF2196F3),
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        if (isConnectingBroker) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
-                        } else {
-                            Text("LOGIN", fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = 1.sp)
+                        }
+                    }
+
+                    // Broker Login & Configuration Inputs (Only shown when editing or disconnected)
+                    if (isEditingCredentials || brokerConnStatus != BrokerConnectionStatus.CONNECTED) {
+                        // Top Broker Company Search Header
+                        Row(
+                            modifier = Modifier.fillMaxWidth().background(DarkSurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Default.Business, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
+                                Column {
+                                    Text(selectedBrokerCompanyName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                    Text("Search all global MT5 brokers & servers", fontSize = 9.sp, color = TextSecondary)
+                                }
+                            }
+                            Button(
+                                onClick = { showBrokerSearchDialog = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.testTag("search_broker_button")
+                            ) {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Find Broker", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Open Demo / Real Helper Row
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Card(
+                                onClick = { showOpenDemoDialog = true },
+                                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).testTag("open_demo_account_card")
+                            ) {
+                                Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Default.School, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(18.dp))
+                                    Column {
+                                        Text("Open Demo Account", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                        Text("Free practice ($3,000)", fontSize = 8.5.sp, color = TextSecondary)
+                                    }
+                                }
+                            }
+
+                            Card(
+                                onClick = { showOpenRealDialog = true },
+                                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).testTag("open_real_account_card")
+                            ) {
+                                Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Default.TrendingUp, contentDescription = null, tint = ProfitGreen, modifier = Modifier.size(18.dp))
+                                    Column {
+                                        Text("Open Real Account", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                        Text("Live trading verification", fontSize = 8.5.sp, color = TextSecondary)
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = CardBorder)
+
+                        Text(
+                            text = "LOGIN TO YOUR MT5 ACCOUNT",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF2196F3),
+                            fontFamily = FontFamily.Monospace
+                        )
+
+                        // Mode Selector: DEMO vs REAL
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { selectedAccountMode = "Demo" },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (selectedAccountMode.equals("Demo", true)) ElectricCyan else DarkSurfaceVariant,
+                                    contentColor = if (selectedAccountMode.equals("Demo", true)) DarkBackground else TextSecondary
+                                ),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.weight(1f).height(38.dp)
+                            ) {
+                                Text("DEMO ACCOUNT", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Button(
+                                onClick = { selectedAccountMode = "Real" },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (selectedAccountMode.equals("Real", true)) ProfitGreen else DarkSurfaceVariant,
+                                    contentColor = if (selectedAccountMode.equals("Real", true)) DarkBackground else TextSecondary
+                                ),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.weight(1f).height(38.dp)
+                            ) {
+                                Text("REAL ACCOUNT", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Account / Client ID Input
+                        OutlinedTextField(
+                            value = mt5LoginInput, onValueChange = { mt5LoginInput = it.filter(Char::isDigit) },
+                            label = { Text("Trade account / Client ID") },
+                            placeholder = { Text("e.g. 50123456") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_login")
+                        )
+
+                        // Password Input
+                        OutlinedTextField(
+                            value = mt5PasswordInput, onValueChange = { mt5PasswordInput = it },
+                            label = { Text("Password") },
+                            placeholder = { Text("Enter trading password") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("bot_mt5_password")
+                        )
+
+                        // Server Selector with Dynamic Dropdown
+                        var expandedServer by remember { mutableStateOf(false) }
+                        val matchedBrokers = remember(mt5ServerInput, selectedBrokerCompanyName) {
+                            com.example.data.broker.BrokerDirectory.searchBrokers(
+                                if (mt5ServerInput.isNotBlank()) mt5ServerInput else selectedBrokerCompanyName
+                            )
+                        }
+                        val availableServerList = remember(matchedBrokers) {
+                            matchedBrokers.flatMap { it.servers }.distinct().take(12)
+                        }
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = mt5ServerInput,
+                                onValueChange = { mt5ServerInput = it },
+                                label = { Text("Server") },
+                                placeholder = { Text("e.g. Exness-MT5Real, ICMarketsSC-Live01, FBS-Real") },
+                                trailingIcon = {
+                                    IconButton(onClick = { expandedServer = !expandedServer }) {
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().testTag("bot_mt5_server"),
+                                singleLine = true
+                            )
+                            DropdownMenu(
+                                expanded = expandedServer && availableServerList.isNotEmpty(),
+                                onDismissRequest = { expandedServer = false },
+                                modifier = Modifier.fillMaxWidth(0.85f)
+                            ) {
+                                availableServerList.forEach { srv ->
+                                    DropdownMenuItem(
+                                        text = { Text(srv, fontWeight = FontWeight.Bold) },
+                                        onClick = {
+                                            mt5ServerInput = srv
+                                            expandedServer = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Exact Account Balance / Initial Deposit Input (Solves fake $100k/$10k issue)
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OutlinedTextField(
+                                value = mt5BalanceInput,
+                                onValueChange = { mt5BalanceInput = it },
+                                label = { Text("Exact Account Balance / Deposit ($ USD)") },
+                                placeholder = { Text("e.g. 3000.00") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("bot_mt5_balance_input")
+                            )
+                            Text(
+                                text = "Select or enter your exact account balance so calculations match reality:",
+                                fontSize = 9.sp,
+                                color = TextSecondary
+                            )
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                val presets = listOf(3000.0, 5000.0, 10000.0, 50000.0)
+                                items(presets) { preset ->
+                                    FilterChip(
+                                        selected = mt5BalanceInput.toDoubleOrNull() == preset,
+                                        onClick = { mt5BalanceInput = String.format(java.util.Locale.US, "%.2f", preset) },
+                                        label = {
+                                            Text(
+                                                text = if (preset == 3000.0) "$3,000 (Your Demo)" else "$${String.format(java.util.Locale.US, "%,.0f", preset)}",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Leverage Selector
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = "1:$selectedLeverage",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Account Leverage") },
+                                trailingIcon = {
+                                    IconButton(onClick = { expandedLeverage = !expandedLeverage }) {
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().testTag("bot_mt5_leverage"),
+                                singleLine = true
+                            )
+                            DropdownMenu(
+                                expanded = expandedLeverage,
+                                onDismissRequest = { expandedLeverage = false },
+                                modifier = Modifier.fillMaxWidth(0.85f)
+                            ) {
+                                listOf(100, 200, 500, 1000).forEach { lev ->
+                                    DropdownMenuItem(
+                                        text = { Text("1:$lev", fontWeight = FontWeight.Bold) },
+                                        onClick = {
+                                            selectedLeverage = lev
+                                            expandedLeverage = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Save password checkbox
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Checkbox(
+                                checked = savePasswordChecked,
+                                onCheckedChange = { savePasswordChecked = it },
+                                colors = CheckboxDefaults.colors(checkedColor = Color(0xFF2196F3))
+                            )
+                            Text("Save password & keep session active", fontSize = 11.sp, color = TextPrimary)
+                        }
+
+                        // Prominent MT5 Blue Login Button (#2196F3)
+                        Button(
+                            onClick = {
+                                if (mt5LoginInput.isBlank()) {
+                                    brokerConnectionMessage = "Please enter your Trade Account / Login ID."
+                                    return@Button
+                                }
+                                if (mt5PasswordInput.isBlank()) {
+                                    brokerConnectionMessage = "Please enter your password."
+                                    return@Button
+                                }
+                                if (mt5ServerInput.isBlank()) {
+                                    brokerConnectionMessage = "Please enter or select a broker server."
+                                    return@Button
+                                }
+                                val parsedBal = mt5BalanceInput.toDoubleOrNull() ?: 3000.0
+                                isConnectingBroker = true
+                                brokerConnectionMessage = null
+                                viewModel.connectToMT5Credentials(
+                                    login = mt5LoginInput,
+                                    password = mt5PasswordInput,
+                                    server = mt5ServerInput,
+                                    investorPassword = mt5InvestorPasswordInput,
+                                    balance = parsedBal,
+                                    accountType = selectedAccountMode,
+                                    leverage = selectedLeverage,
+                                    currency = "USD"
+                                ) { success, message ->
+                                    isConnectingBroker = false
+                                    brokerConnectionMessage = message ?: if (success) "Connected successfully to $selectedBrokerCompanyName." else "Login failed. Verify credentials."
+                                    if (success) {
+                                        isEditingCredentials = false
+                                        showPostLoginPairSelectorModal = true
+                                    }
+                                }
+                            },
+                            enabled = !isConnectingBroker,
+                            modifier = Modifier.fillMaxWidth().height(50.dp).testTag("bot_connect_mt5"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2196F3),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            if (isConnectingBroker) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+                            } else {
+                                Text("LOGIN TO MT5", fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = 1.sp)
+                            }
                         }
                     }
 
@@ -994,14 +1283,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         AlertDialog(
                             onDismissRequest = { showOpenDemoDialog = false },
                             title = { Text("Open Demo Account") },
-                            text = { Text("To open a free $10,000 demo trading account with $selectedBrokerCompanyName, enter your details or use instant 1-click demo login above.") },
+                            text = { Text("To open a free $3,000 demo trading account with $selectedBrokerCompanyName, tap Auto-fill Demo or enter your broker credentials.") },
                             confirmButton = {
                                 TextButton(onClick = {
                                     showOpenDemoDialog = false
+                                    selectedAccountMode = "Demo"
                                     mt5LoginInput = "50" + (100000..999999).random()
                                     mt5PasswordInput = "DemoPass123!"
                                     mt5ServerInput = "$selectedBrokerCompanyName-Demo"
-                                }) { Text("Auto-fill Demo") }
+                                    mt5BalanceInput = "3000.00"
+                                }) { Text("Auto-fill $3,000 Demo") }
                             },
                             dismissButton = {
                                 TextButton(onClick = { showOpenDemoDialog = false }) { Text("Cancel") }
@@ -1013,9 +1304,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         AlertDialog(
                             onDismissRequest = { showOpenRealDialog = false },
                             title = { Text("Open Real Account") },
-                            text = { Text("Real trading accounts with $selectedBrokerCompanyName require verification and live deposits through your broker portal. Enter your verified account credentials once issued.") },
+                            text = { Text("Real trading accounts with $selectedBrokerCompanyName require verification and live deposits through your broker portal. Enter your verified account credentials and exact starting balance once issued.") },
                             confirmButton = {
-                                TextButton(onClick = { showOpenRealDialog = false }) { Text("OK") }
+                                TextButton(onClick = {
+                                    showOpenRealDialog = false
+                                    selectedAccountMode = "Real"
+                                }) { Text("OK") }
                             }
                         )
                     }
@@ -1026,52 +1320,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             color = if (message.contains("failed", true) || message.contains("error", true)) LossRed else ElectricCyan,
                             lineHeight = 15.sp, modifier = Modifier.testTag("bot_broker_connection_status")
                         )
-                    }
-
-                    HorizontalDivider(color = CardBorder)
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("Connection:", fontSize = 10.sp, color = TextSecondary)
-                            Text(
-                                text = brokerConnStatus.name,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                color = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED) ProfitGreen else OrangeAccent
-                            )
-                        }
-
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("Balance:", fontSize = 10.sp, color = TextSecondary)
-                            Text(
-                                text = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null) {
-                                    "${String.format(java.util.Locale.US, "%.2f", accountMetrics!!.balance)} ${accountMetrics!!.currency}"
-                                } else "—",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                color = TextPrimary
-                            )
-                        }
-
-                        if (brokerConnStatus == BrokerConnectionStatus.CONNECTED) {
-                            Button(
-                                onClick = {
-                                    coroutineScope.launch {
-                                        activeBrokerGateway.disconnect()
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant, contentColor = LossRed),
-                                shape = RoundedCornerShape(6.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier.testTag("bot_disconnect_button")
-                            ) {
-                                Text("Disconnect", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
                     }
                 }
             }
@@ -1122,6 +1370,374 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             }
         }
 
+        // MetaTrader 5 Instant 1-Tap Market Execution (One-Click Trading)
+        item {
+            val currentTicker = tickers[activeSymbol]
+            val currentPrice = currentTicker?.price ?: 0.0
+            val bidPrice = currentTicker?.bid ?: currentPrice
+            val askPrice = currentTicker?.ask ?: currentPrice
+            val spreadVal = if (currentTicker?.bid != null && currentTicker?.ask != null && currentTicker.hasRealSpread) {
+                (currentTicker.ask - currentTicker.bid)
+            } else currentTicker?.spread
+
+            val spec = com.destinedfx.core.instrument.SpecRegistry.get(activeSymbol)
+            val pipUnit = spec?.pipSize ?: if (activeSymbol.contains("JPY", true)) 0.01 else if (activeSymbol.contains("XAU", true)) 0.1 else 0.0001
+            val slPipsNum = (instantSlPips.toDoubleOrNull() ?: 20.0).coerceAtLeast(5.0)
+            val tpPipsNum = (instantTpPips.toDoubleOrNull() ?: 50.0).coerceAtLeast(10.0)
+            val rrRatio = if (slPipsNum > 0.0) tpPipsNum / slPipsNum else 2.5
+
+            val buySl = if (askPrice > 0.0) askPrice - (slPipsNum * pipUnit) else 0.0
+            val buyTp = if (askPrice > 0.0) askPrice + (tpPipsNum * pipUnit) else 0.0
+            val sellSl = if (bidPrice > 0.0) bidPrice + (slPipsNum * pipUnit) else 0.0
+            val sellTp = if (bidPrice > 0.0) bidPrice - (tpPipsNum * pipUnit) else 0.0
+
+            val isConnected = brokerConnStatus == BrokerConnectionStatus.CONNECTED
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().testTag("instant_execution_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(ElectricCyan.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Bolt, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(18.dp))
+                            }
+                            Column {
+                                Text(
+                                    text = "INSTANT MARKET EXECUTION",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = ElectricCyan
+                                )
+                                Text(
+                                    text = "MetaTrader 5 One-Click Deal Protocol",
+                                    fontSize = 9.sp,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+
+                        Box(
+                            Modifier.clip(RoundedCornerShape(6.dp))
+                                .background(if (isConnected) ProfitGreen.copy(alpha = 0.15f) else LossRed.copy(alpha = 0.15f))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = if (isConnected) "MT5 LIVE GATEWAY" else "OFFLINE",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                color = if (isConnected) ProfitGreen else LossRed
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = CardBorder)
+
+                    // Symbol & Real-Time Price Overview
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(activeSymbol, fontSize = 18.sp, fontWeight = FontWeight.Black, color = TextPrimary)
+                            Text("Active Order Symbol", fontSize = 10.sp, color = TextSecondary)
+                        }
+
+                        if (spreadVal != null && spreadVal > 0.0) {
+                            val spreadPips = spreadVal / pipUnit
+                            Box(
+                                Modifier.clip(RoundedCornerShape(6.dp)).background(DarkSurfaceVariant)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "Spread: ${String.format(java.util.Locale.US, "%.1f", spreadPips)} pips",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextSecondary,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+
+                    // Lot Size Selector & Stepper
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Order Volume (Lots):", fontSize = 11.sp, color = TextSecondary)
+                            Text(
+                                text = "${String.format(java.util.Locale.US, "%.2f", instantLotSize)} Lot",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                color = TextPrimary
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    instantLotSize = (instantLotSize - 0.01).coerceAtLeast(0.01)
+                                },
+                                modifier = Modifier.size(36.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text("-", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                            }
+
+                            val lotPresets = listOf(0.01, 0.02, 0.05, 0.10, 0.50, 1.00)
+                            LazyRow(
+                                modifier = Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(lotPresets) { lot ->
+                                    val isSelected = Math.abs(instantLotSize - lot) < 0.001
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (isSelected) ElectricCyan else DarkSurfaceVariant)
+                                            .border(1.dp, if (isSelected) ElectricCyan else CardBorder, RoundedCornerShape(6.dp))
+                                            .clickable { instantLotSize = lot }
+                                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = String.format(java.util.Locale.US, "%.2f", lot),
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
+                                            color = if (isSelected) DarkBackground else TextPrimary,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    instantLotSize = (instantLotSize + 0.01).coerceAtMost(10.0)
+                                },
+                                modifier = Modifier.size(36.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text("+", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                            }
+                        }
+                    }
+
+                    // SL / TP pip settings
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = instantSlPips,
+                            onValueChange = { instantSlPips = it },
+                            label = { Text("SL (Pips)") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        OutlinedTextField(
+                            value = instantTpPips,
+                            onValueChange = { instantTpPips = it },
+                            label = { Text("TP (Pips)") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                    }
+
+                    // RR calculation info
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Projected RR: 1:${String.format(java.util.Locale.US, "%.1f", rrRatio)}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (rrRatio >= 2.0) ProfitGreen else WarningAmber,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = if (rrRatio >= 2.0) "Passes SMC Filter (>= 1:2.0)" else "SMC Warning: RR < 1:2.0",
+                            fontSize = 10.sp,
+                            color = if (rrRatio >= 2.0) ProfitGreen else WarningAmber
+                        )
+                    }
+
+                    // 1-Tap Dual Action Buttons (SELL BID / BUY ASK)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // SELL BUTTON
+                        Button(
+                            onClick = {
+                                if (!isConnected) {
+                                    instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
+                                } else if (bidPrice <= 0.0) {
+                                    instantExecutionStatus = "⚠️ Waiting for live bid quote on $activeSymbol..."
+                                } else {
+                                    viewModel.executeTrade(
+                                        symbol = activeSymbol,
+                                        positionType = "SELL",
+                                        entryPrice = bidPrice,
+                                        stopLoss = sellSl,
+                                        takeProfit = sellTp,
+                                        rationale = "MT5 1-Tap Execution (${String.format(java.util.Locale.US, "%.2f", instantLotSize)} lots)",
+                                        lotSize = instantLotSize
+                                    )
+                                    instantExecutionStatus = "✅ Deal executed: SELL ${String.format(java.util.Locale.US, "%.2f", instantLotSize)} $activeSymbol @ ${formatPrice(bidPrice, activeSymbol)} | SL: ${formatPrice(sellSl, activeSymbol)} | TP: ${formatPrice(sellTp, activeSymbol)}"
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = LossRed),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f).height(62.dp).testTag("instant_sell_button")
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("SELL BY MARKET", fontWeight = FontWeight.Black, fontSize = 12.sp, color = Color.White)
+                                Text(
+                                    text = if (bidPrice > 0.0) formatPrice(bidPrice, activeSymbol) else "—",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = Color.White
+                                )
+                                Text("BID", fontSize = 8.sp, color = Color.White.copy(alpha = 0.7f))
+                            }
+                        }
+
+                        // BUY BUTTON
+                        Button(
+                            onClick = {
+                                if (!isConnected) {
+                                    instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
+                                } else if (askPrice <= 0.0) {
+                                    instantExecutionStatus = "⚠️ Waiting for live ask quote on $activeSymbol..."
+                                } else {
+                                    viewModel.executeTrade(
+                                        symbol = activeSymbol,
+                                        positionType = "BUY",
+                                        entryPrice = askPrice,
+                                        stopLoss = buySl,
+                                        takeProfit = buyTp,
+                                        rationale = "MT5 1-Tap Execution (${String.format(java.util.Locale.US, "%.2f", instantLotSize)} lots)",
+                                        lotSize = instantLotSize
+                                    )
+                                    instantExecutionStatus = "✅ Deal executed: BUY ${String.format(java.util.Locale.US, "%.2f", instantLotSize)} $activeSymbol @ ${formatPrice(askPrice, activeSymbol)} | SL: ${formatPrice(buySl, activeSymbol)} | TP: ${formatPrice(buyTp, activeSymbol)}"
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f).height(62.dp).testTag("instant_buy_button")
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("BUY BY MARKET", fontWeight = FontWeight.Black, fontSize = 12.sp, color = Color.White)
+                                Text(
+                                    text = if (askPrice > 0.0) formatPrice(askPrice, activeSymbol) else "—",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = Color.White
+                                )
+                                Text("ASK", fontSize = 8.sp, color = Color.White.copy(alpha = 0.7f))
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Full-Auto Smart Instant Execution Button (Zero Manual Inputs)
+                    Button(
+                        onClick = {
+                            if (!isConnected) {
+                                instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
+                            } else if (askPrice <= 0.0 || bidPrice <= 0.0) {
+                                instantExecutionStatus = "⚠️ Waiting for live streaming quotes on $activeSymbol..."
+                            } else {
+                                val bal = accountMetrics?.balance ?: 3000.0
+                                val eq = accountMetrics?.equity ?: bal
+                                val lev = accountMetrics?.leverage ?: 500
+                                val szRes = viewModel.sizeFor(activeSymbol, bal, riskPercent, askPrice, askPrice - 0.0030)
+                                val autoLots = when (szRes) {
+                                    is com.destinedfx.core.risk.SizingResult.Sized -> szRes.lots
+                                    else -> 0.02
+                                }
+                                val isBuy = askPrice >= bidPrice
+                                val execPrice = if (isBuy) askPrice else bidPrice
+                                val sl = if (isBuy) execPrice - 0.0030 else execPrice + 0.0030
+                                val tp = if (isBuy) execPrice + 0.0075 else execPrice - 0.0075
+                                val dirStr = if (isBuy) "BUY" else "SELL"
+
+                                viewModel.executeTrade(
+                                    symbol = activeSymbol,
+                                    positionType = dirStr,
+                                    entryPrice = execPrice,
+                                    stopLoss = sl,
+                                    takeProfit = tp,
+                                    rationale = "Full-Auto Smart Execution (Balance: $${String.format(java.util.Locale.US, "%.2f", bal)}, Equity: $${String.format(java.util.Locale.US, "%.2f", eq)}, Leverage: 1:$lev)",
+                                    lotSize = autoLots
+                                )
+                                instantExecutionStatus = "⚡ Full-Auto Executed: $dirStr ${String.format(java.util.Locale.US, "%.2f", autoLots)} lots $activeSymbol @ ${formatPrice(execPrice, activeSymbol)} (Bal: $${String.format(java.util.Locale.US, "%.2f", bal)}, Lev: 1:$lev)"
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(52.dp).testTag("full_auto_execute_button")
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = DarkBackground)
+                            Text(
+                                text = "⚡ SMART FULL-AUTO EXECUTE (AUTO BALANCE & LEVERAGE)",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 11.sp,
+                                color = DarkBackground,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+
+                    // Execution status / alert message
+                    instantExecutionStatus?.let { msg ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(DarkSurfaceVariant)
+                                .border(1.dp, if (msg.startsWith("✅")) ProfitGreen.copy(alpha = 0.5f) else WarningAmber.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = msg,
+                                fontSize = 10.sp,
+                                color = if (msg.startsWith("✅")) ProfitGreen else WarningAmber,
+                                lineHeight = 14.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Open Positions Section
         item {
             Text(
@@ -1150,29 +1766,58 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             }
         } else {
             items(openPositions) { pos ->
+                val ticker = viewModel.tickers.collectAsStateWithLifecycle().value[pos.symbol]
+                val cmp = ticker?.price ?: pos.entryPrice
+                val isLong = pos.direction == com.example.domain.model.SignalDirection.LONG
+                val mult = if (isLong) 1.0 else -1.0
+                val spec = com.destinedfx.core.instrument.SpecRegistry.get(pos.symbol)
+                val contractSize = spec?.contractSize ?: 100_000.0
+                val liveFloatingPnl = if (pos.entryPrice > 0.0 && cmp > 0.0) {
+                    (cmp - pos.entryPrice) * mult * contractSize * pos.lotSize
+                } else pos.currentProfit
+                val isProfitable = liveFloatingPnl >= 0.0
+
                 Card(
                     colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    border = BorderStroke(1.dp, TabBorder),
+                    border = BorderStroke(1.dp, if (isProfitable) ProfitGreen.copy(alpha = 0.5f) else LossRed.copy(alpha = 0.5f)),
                     shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("position_card_${pos.id}")
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp).fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "${if (isLong) "BUY" else "SELL"} ${pos.lotSize} ${pos.symbol}",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = if (isLong) ProfitGreen else LossRed
+                                )
+                                Text(
+                                    text = "${if (isProfitable) "+" else ""}${String.format(java.util.Locale.US, "%.2f", liveFloatingPnl)} USD",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 12.sp,
+                                    color = if (isProfitable) ProfitGreen else LossRed,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                             Text(
-                                text = "${pos.direction.name} ${pos.symbol}",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                color = if (pos.direction.name == "LONG") ProfitGreen else LossRed
-                            )
-                            Text(
-                                text = "Entry: ${pos.entryPrice} | Lot/Stake: ${pos.lotSize}",
+                                text = "Entry: ${formatPrice(pos.entryPrice, pos.symbol)} → CMP: ${formatPrice(cmp, pos.symbol)}",
                                 fontSize = 10.sp,
-                                color = TextSecondary
+                                color = TextPrimary,
+                                fontFamily = FontFamily.Monospace
                             )
+                            if (pos.stopLoss > 0.0 || pos.takeProfit > 0.0) {
+                                Text(
+                                    text = "SL: ${if (pos.stopLoss > 0.0) formatPrice(pos.stopLoss, pos.symbol) else "—"} | TP: ${if (pos.takeProfit > 0.0) formatPrice(pos.takeProfit, pos.symbol) else "—"}",
+                                    fontSize = 9.sp,
+                                    color = TextSecondary,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                         }
 
                         Button(

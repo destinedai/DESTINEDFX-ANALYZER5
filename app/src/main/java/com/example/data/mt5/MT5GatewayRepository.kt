@@ -32,7 +32,29 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
     private var connected = false
     private val directPositions = java.util.concurrent.CopyOnWriteArrayList<Position>()
-    private var directBalance = 10_000.0
+    private var directBalance = s.getMT5AccountBalance().takeIf { it > 0.0 }
+        ?: s.getConfiguredEquity().takeIf { it > 0.0 }
+        ?: 3000.0
+
+    fun setAccountBalance(balance: Double) {
+        if (balance > 0.0) {
+            directBalance = balance
+            s.saveMT5AccountBalance(balance)
+            s.saveConfiguredEquity(balance)
+        }
+    }
+
+    fun updatePositionProfit(ticketId: String, currentMarketPrice: Double) {
+        val found = directPositions.find { it.id == ticketId } ?: return
+        val idx = directPositions.indexOf(found)
+        if (idx >= 0 && currentMarketPrice > 0.0) {
+            val mult = if (found.direction == SignalDirection.LONG) 1.0 else -1.0
+            val spec = com.destinedfx.core.instrument.SpecRegistry.get(found.symbol)
+            val contractSize = spec?.contractSize ?: 100_000.0
+            val profit = (currentMarketPrice - found.entryPrice) * mult * contractSize * found.lotSize
+            directPositions[idx] = found.copy(currentProfit = profit)
+        }
+    }
 
     private fun req(path: String): Request.Builder {
         val requestedRegion = s.getMetaApiRegion()
@@ -285,9 +307,6 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
             val token = s.getMetaApiToken()
             val account = s.getMT5AccountNumber()
             val login = s.getMT5Login()
-            if (token.isBlank() && login.isBlank()) {
-                return@withContext Result.failure(Exception("MT5 account is not configured"))
-            }
             if (token.isNotBlank() && account.isNotBlank() && !account.startsWith("DIRECT-")) {
                 val sym = resolveSymbol(symbol)
                 if (sym != null) {
@@ -505,7 +524,8 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                             margin = body.optDouble("margin", 0.0),
                             freeMargin = body.optDouble("freeMargin", 0.0),
                             marginLevel = body.optDouble("marginLevel", 0.0),
-                            currency = currency
+                            currency = currency,
+                            leverage = body.optInt("leverage", 500)
                         )
                     )
                 }
@@ -516,13 +536,22 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
         val login = s.getMT5Login()
         val server = s.getMT5BrokerServer()
         val password = s.getMT5Password()
+        val sessionStatus = s.getMT5SessionStatus()
+        if (sessionStatus == "SESSION_EXPIRED") {
+            connected = false
+            return@withContext Result.failure(Exception("Session expired for MT5 account $login ($server). Tap Reconnect to refresh credentials."))
+        }
         if (login.isNotBlank() && password.isNotBlank() && server.isNotBlank()) {
+            val savedBal = s.getMT5AccountBalance().takeIf { it > 0.0 } ?: s.getConfiguredEquity().takeIf { it > 0.0 } ?: directBalance
+            directBalance = savedBal
             connected = true
+            s.saveMT5SessionStatus("CONNECTED")
+            s.saveMT5LastLoginMs(System.currentTimeMillis())
             val unrealized = directPositions.sumOf { it.currentProfit }
             val usedMargin = directPositions.sumOf { it.lotSize * 1000.0 }
             val equity = directBalance + unrealized
             val freeMargin = (equity - usedMargin).coerceAtLeast(0.0)
-            val marginLevel = if (usedMargin > 0.0) (equity / usedMargin) * 100.0 else 100.0
+            val marginLevel = if (usedMargin > 0.0) (equity / usedMargin) * 100.0 else 0.0
             return@withContext Result.success(
                 AccountMetrics(
                     balance = directBalance,
@@ -530,7 +559,8 @@ class MT5GatewayRepository(private val s: SecretsManager) : MT5Repository {
                     margin = usedMargin,
                     freeMargin = freeMargin,
                     marginLevel = marginLevel,
-                    currency = "USD"
+                    currency = s.getMT5Currency().ifBlank { "USD" },
+                    leverage = s.getMT5Leverage().takeIf { it > 0 } ?: 500
                 )
             )
         }

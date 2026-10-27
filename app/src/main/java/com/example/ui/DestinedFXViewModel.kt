@@ -597,6 +597,31 @@ open class DestinedFXViewModel(
         }
     }
 
+    fun autoDetectTelegramChatId(botToken: String, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            isTelegramLoading.value = true
+            telegramTestMessageResult.value = "Detecting active Telegram Chat ID..."
+            try {
+                val notificationService = NotificationService(OkHttpClient())
+                val (detectedId, message) = notificationService.autoDetectChatId(botToken)
+                telegramTestMessageResult.value = message
+                if (detectedId != null) {
+                    telegramChatId.value = detectedId
+                    app.secretsManager.saveTelegramChatId(detectedId)
+                    onResult(detectedId)
+                } else {
+                    onResult(null)
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                telegramTestMessageResult.value = "Detection failed: ${e.message}"
+                onResult(null)
+            } finally {
+                isTelegramLoading.value = false
+            }
+        }
+    }
+
     fun sendTelegramTestNotification() {
         viewModelScope.launch {
             isTelegramLoading.value = true
@@ -629,15 +654,27 @@ open class DestinedFXViewModel(
         }
     }
 
-    fun connectDemoAccount(initialBalance: Double = 10_000.0, onResult: ((Boolean, String) -> Unit)? = null) {
+    fun connectDemoAccount(initialBalance: Double? = null, onResult: ((Boolean, String) -> Unit)? = null) {
         viewModelScope.launch {
             try {
+                val targetBal = initialBalance?.takeIf { it > 0.0 }
+                    ?: app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 }
+                    ?: 3000.0
+                app.secretsManager.saveMT5AccountBalance(targetBal)
+                app.secretsManager.saveConfiguredEquity(targetBal)
+                app.secretsManager.saveMT5AccountType("Demo")
+                app.secretsManager.saveMT5SessionStatus("CONNECTED")
+                app.mt5GatewayAdapter.setAccountBalance(targetBal)
+                accountCapital.value = targetBal
+                configuredEquity.value = targetBal
+
                 app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
                 val res = app.mt5GatewayAdapter.connect()
                 brokerConnected.value = res.isSuccess
                 prefetchWatchlistSpecs()
                 val metrics = app.mt5GatewayAdapter.accountMetrics.value
-                val balance = metrics?.balance ?: initialBalance
+                val balance = metrics?.balance ?: targetBal
+                accountCapital.value = balance
                 val msg = "MT5 connected • Balance " + String.format(java.util.Locale.US, "%.2f", balance) + " USD"
                 onResult?.invoke(true, msg)
             } catch (e: Exception) {
@@ -1398,11 +1435,11 @@ open class DestinedFXViewModel(
 
     fun sendRealTimeNotification(symbol: String, positionType: String, entryPrice: Double) {
         val strategyName = activeStrategy.value
-        val label = "💡 *DestinedFX Alpha Setup* 💡\\n" +
-                "Strategy: $strategyName\\n" +
-                "Mitigated Asset: $symbol\\n" +
-                "Action Triggered: $positionType\\n" +
-                "Optimal Value: ${String.format("%.5f", entryPrice)}\\n" +
+        val label = "💡 *DestinedFX Alpha Setup* 💡\n" +
+                "Strategy: $strategyName\n" +
+                "Mitigated Asset: $symbol\n" +
+                "Action Triggered: $positionType\n" +
+                "Optimal Value: ${String.format("%.5f", entryPrice)}\n" +
                 "Safety Check: Pass ✅"
         
         viewModelScope.launch {
@@ -1491,12 +1528,15 @@ open class DestinedFXViewModel(
                 val direction = if (positionType.equals("Long", true) || positionType.equals("BUY", true)) 
                     com.example.domain.model.SignalDirection.LONG else com.example.domain.model.SignalDirection.SHORT
                 
+                val currentPrice = tickers.value[symbol]?.price ?: entryPrice
+                val actualEntry = if (entryPrice > 0.0) entryPrice else currentPrice
+
                 val signal = com.example.domain.model.TradeSignal(
                     id = UUID.randomUUID().toString(),
                     symbol = symbol,
                     timeframe = "60",
                     direction = direction,
-                    entryPrice = entryPrice,
+                    entryPrice = actualEntry,
                     stopLoss = stopLoss,
                     takeProfit = takeProfit,
                     confidenceScore = 90,
@@ -1511,6 +1551,20 @@ open class DestinedFXViewModel(
                 withContext(Dispatchers.Main) {
                     speakText("Order execution confirmed by broker.")
                     actionAlertMessage.value = "Trade Active: $symbol $positionType"
+                }
+
+                if (telegramNotificationsEnabled.value) {
+                    val dir = if (direction == com.example.domain.model.SignalDirection.LONG) "BUY 🟢" else "SELL 🔴"
+                    val alert = "🚀 *DestinedFX Instant Trade Executed* 🚀\n\n" +
+                            "• Instrument: *$symbol*\n" +
+                            "• Direction: *$dir*\n" +
+                            "• Entry: *${String.format(java.util.Locale.US, "%.5f", actualEntry)}*\n" +
+                            "• Stop Loss: *${if (stopLoss > 0.0) String.format(java.util.Locale.US, "%.5f", stopLoss) else "—"}*\n" +
+                            "• Take Profit: *${if (takeProfit > 0.0) String.format(java.util.Locale.US, "%.5f", takeProfit) else "—"}*\n" +
+                            "• Lot Size: *$lotSize*\n" +
+                            "• Broker: *MT5 Terminal (Instant Deal)*\n" +
+                            "• Status: *Active & Filled* ✅"
+                    notificationService.sendTelegramMessage(telegramBotToken.value, telegramChatId.value, alert)
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -1544,7 +1598,11 @@ open class DestinedFXViewModel(
         login: String,
         password: String,
         server: String,
-        investorPassword: String,
+        investorPassword: String = "",
+        balance: Double? = null,
+        accountType: String = "Demo",
+        leverage: Int = 500,
+        currency: String = "USD",
         onResult: (Boolean, String?) -> Unit
     ) {
         if (isPreview) {
@@ -1563,33 +1621,67 @@ open class DestinedFXViewModel(
         }
         viewModelScope.launch {
             try {
+                val targetBalance = balance?.takeIf { it > 0.0 }
+                    ?: app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 }
+                    ?: 3000.0
+
                 app.secretsManager.saveMT5Login(cleanLogin)
                 app.secretsManager.saveMT5Password(password)
                 app.secretsManager.saveMT5BrokerServer(cleanServer)
                 app.secretsManager.saveMT5InvestorPassword(investorPassword)
+                app.secretsManager.saveMT5AccountType(accountType)
+                app.secretsManager.saveMT5Leverage(leverage)
+                app.secretsManager.saveMT5Currency(currency)
+                app.secretsManager.saveMT5SessionStatus("CONNECTING")
+                app.secretsManager.saveMT5AccountBalance(targetBalance)
+                app.secretsManager.saveConfiguredEquity(targetBalance)
                 app.secretsManager.saveMetaApiToken("") // Clear legacy bridge token
                 app.secretsManager.saveMT5AccountNumber("DIRECT-$cleanLogin")
+
+                app.mt5GatewayAdapter.setAccountBalance(targetBalance)
+                accountCapital.value = targetBalance
+                configuredEquity.value = targetBalance
+
                 app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
                 val result = app.mt5GatewayAdapter.connect()
                 if (result.isSuccess) {
                     brokerConnected.value = true
+                    app.secretsManager.saveMT5SessionStatus("CONNECTED")
                     prefetchWatchlistSpecs()
                     val metrics = app.mt5GatewayAdapter.accountMetrics.value
-                    val balance = metrics?.balance ?: 10_000.0
-                    val ccy = metrics?.currency ?: "USD"
+                    val finalBalance = metrics?.balance ?: targetBalance
+                    accountCapital.value = finalBalance
+                    val ccy = metrics?.currency ?: currency
                     onResult(
                         true,
-                        "MT5 connected • Login $cleanLogin ($cleanServer) • Balance " +
-                            String.format(java.util.Locale.US, "%.2f", balance) + " $ccy"
+                        "MT5 connected • Login $cleanLogin ($cleanServer) • $accountType • Balance " +
+                            String.format(java.util.Locale.US, "%.2f", finalBalance) + " $ccy"
                     )
                 } else {
+                    app.secretsManager.saveMT5SessionStatus("AUTH_FAILED")
                     onResult(false, result.exceptionOrNull()?.message ?: "MT5 connection failed.")
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                app.secretsManager.saveMT5SessionStatus("ERROR")
                 onResult(false, "MT5 connection failed: ${e.message}")
             }
         }
+    }
+
+    fun reconnectMT5Session(onResult: (Boolean, String?) -> Unit) {
+        val login = app.secretsManager.getMT5Login()
+        val pass = app.secretsManager.getMT5Password()
+        val server = app.secretsManager.getMT5BrokerServer()
+        if (login.isBlank() || pass.isBlank() || server.isBlank()) {
+            onResult(false, "No saved MT5 account credentials found. Please log in.")
+            return
+        }
+        val bal = app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 } ?: 3000.0
+        val type = app.secretsManager.getMT5AccountType()
+        val lev = app.secretsManager.getMT5Leverage()
+        val ccy = app.secretsManager.getMT5Currency()
+        connectToMT5Credentials(login, pass, server, "", bal, type, lev, ccy, onResult)
     }
 
     fun selectBroker(type: com.example.data.broker.BrokerType) {
@@ -1614,9 +1706,7 @@ open class DestinedFXViewModel(
     fun getTelegramChatId(): String = if (isPreview) "" else app.secretsManager.getTelegramChatId()
     fun hasLiveBrokerKeys(): Boolean = if (isPreview) false else {
         try {
-            app.secretsManager.getDerivApiToken().isNotBlank() ||
-            app.secretsManager.getMetaApiToken().isNotBlank() ||
-            app.secretsManager.getOandaApiKey().isNotBlank()
+            app.secretsManager.getMT5Login().isNotBlank()
         } catch (_: Exception) {
             false
         }

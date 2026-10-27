@@ -107,9 +107,10 @@ class SevenStrategiesBehavioralTest {
 
     @Test
     fun testAllSevenStrategiesAreRegisteredAndRecognized() {
-        assertEquals(7, StrategyRegistry.allStrategies.size)
+        assertEquals(8, StrategyRegistry.allStrategies.size)
         val ids = StrategyRegistry.allStrategies.map { it.id }.toSet()
         assertTrue(ids.contains("smc-confluence-1.0.0"))
+        assertTrue(ids.contains("liquidity-stop-hunts"))
         assertTrue(ids.contains("ict-silver-bullet"))
         assertTrue(ids.contains("wyckoff-schematics"))
         assertTrue(ids.contains("supply-and-demand"))

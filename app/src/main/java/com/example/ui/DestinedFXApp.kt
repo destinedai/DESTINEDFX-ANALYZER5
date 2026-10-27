@@ -716,17 +716,25 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                     val cmp = ticker?.price ?: result?.entry ?: 0.0
                     val isBullish = (result?.direction ?: "BUY").contains("BUY", true) || (result?.direction ?: "").contains("LONG", true) || (ticker?.bias ?: "").contains("BULL", true)
                     val effectiveEntry = if (result != null && result.entry > 0.0) result.entry else cmp
-                    val effectiveSl = if (result != null && result.stopLoss > 0.0) result.stopLoss else if (isBullish) effectiveEntry * 0.997 else effectiveEntry * 1.003
-                    val effectiveTp1 = if (result != null && result.tp1 > 0.0) result.tp1 else if (isBullish) effectiveEntry * 1.006 else effectiveEntry * 0.994
+                    val effectiveSl = if (result != null && result.stopLoss > 0.0) result.stopLoss else 0.0
+                    val effectiveTp1 = if (result != null && result.tp1 > 0.0) result.tp1 else 0.0
                     val effectiveTp2 = result?.tp2 ?: 0.0
                     val effectiveTp3 = result?.tp3 ?: 0.0
                     val effectiveState = if (result != null && listOf("STRONG_BUY", "BUY", "WEAK_BUY", "STRONG_SELL", "SELL", "WEAK_SELL").contains(result.signalState)) result.signalState else "BUY"
 
                     if (effectiveEntry > 0.0) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            PlanLevel("ENTRY", formatPrice(effectiveEntry, activeSymbol), TextPrimary, Modifier.weight(1f))
-                            PlanLevel("STOP LOSS", formatPrice(effectiveSl, activeSymbol), LossRed, Modifier.weight(1f))
-                            PlanLevel("TP1", formatPrice(effectiveTp1, activeSymbol), ProfitGreen, Modifier.weight(1f))
+                        if (effectiveSl > 0.0 && effectiveTp1 > 0.0) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                PlanLevel("ENTRY", formatPrice(effectiveEntry, activeSymbol), TextPrimary, Modifier.weight(1f))
+                                PlanLevel("STOP LOSS", formatPrice(effectiveSl, activeSymbol), LossRed, Modifier.weight(1f))
+                                PlanLevel("TP1", formatPrice(effectiveTp1, activeSymbol), ProfitGreen, Modifier.weight(1f))
+                            }
+                        } else {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                PlanLevel("LIVE CMP", formatPrice(effectiveEntry, activeSymbol), TextPrimary, Modifier.weight(1f))
+                                PlanLevel("STOP LOSS", "AWAITING SMC", LossRed, Modifier.weight(1f))
+                                PlanLevel("TAKE PROFIT", "AWAITING SMC", ProfitGreen, Modifier.weight(1f))
+                            }
                         }
                         if (effectiveTp2 > 0.0 || effectiveTp3 > 0.0) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1233,7 +1241,27 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         onValueChange = { chatIdInput = it },
                         label = { Text("Telegram Chat ID") },
                         modifier = Modifier.fillMaxWidth().testTag("telegram_chat_id_input"),
-                        singleLine = true
+                        singleLine = true,
+                        trailingIcon = {
+                            TextButton(
+                                onClick = {
+                                    viewModel.autoDetectTelegramChatId(botTokenInput) { detected ->
+                                        if (detected != null) {
+                                            chatIdInput = detected
+                                        }
+                                    }
+                                },
+                                enabled = !isTelegramLoading && botTokenInput.isNotBlank()
+                            ) {
+                                Text("Auto-Detect", fontSize = 11.sp, color = CyanPrimary, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    )
+                    Text(
+                        text = "Tip: Send /start to your bot in Telegram, then tap Auto-Detect to fetch your numeric Chat ID instantly without third-party lookup tools.",
+                        fontSize = 10.sp,
+                        color = TextSecondary,
+                        lineHeight = 14.sp
                     )
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
