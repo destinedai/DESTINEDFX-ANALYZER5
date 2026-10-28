@@ -36,7 +36,9 @@ def db():
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED');
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);
-    CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));''')
+    CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
+    CREATE TABLE IF NOT EXISTS trade_ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, created REAL NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);''')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
     for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT')):
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
@@ -378,39 +380,87 @@ def claim(x:Claim):
         c.execute('UPDATE pairings SET consumed=1,terminal_hash=?,terminal_id=?,instance_id=?,account=? WHERE id=? AND consumed=0',(digest(terminal_token),terminal_id,x.terminal_instance_id,json.dumps(x.account,separators=(',',':')),found['id']))
         if c.total_changes<1: raise HTTPException(409,'Pairing code already consumed')
     return {'terminal_id':terminal_id,'terminal_token':terminal_token,'poll_seconds':2}
+def _stable_signal(signal):
+    if not isinstance(signal,dict): return None
+    fields=('state','strategy','execution_state','symbol','timeframe','direction','entry','actual_entry','submitted_at','opened_at','stop_loss','take_profit','risk_percent','requested_volume','executed_volume','order_retcode','order','deal','position','cost_model','news_status','news_detail','news_source','news_event','news_currency')
+    return {key:signal[key] for key in fields if key in signal}
+
+def _trade_event_signature(identity,status,payload):
+    kind=payload.get('kind') if isinstance(payload,dict) else None
+    signal=payload.get('signal') if isinstance(payload,dict) else None
+    if not signal and kind=='last_signal': signal=payload
+    stable={'kind':kind,'signal':_stable_signal(signal),'status':status}
+    if kind=='closed_position':
+        fields=('ticket','position_id','symbol','closed_at','volume','price','profit','commission','swap','fees')
+        stable['lifecycle']=payload.get('lifecycle')
+        stable['closed_volume']=payload.get('closed_volume')
+        stable['remaining_volume']=payload.get('remaining_volume')
+        stable['deals']=[{key:d[key] for key in fields if key in d} for d in payload.get('deals',[]) if isinstance(d,dict)]
+        wanted=identity.split(':',1)[1] if identity.startswith('position:') else ''
+        pos_fields=('ticket','position_id','symbol','direction','volume','open_price','stop_loss','take_profit','swap','floating_profit')
+        stable['position']=[{key:x[key] for key in pos_fields if key in x} for x in payload.get('positions',[]) if isinstance(x,dict) and str(x.get('position_id',''))==wanted]
+    return digest(json.dumps({'identity':identity,'snapshot':stable},sort_keys=True,separators=(',',':'),default=str))
+
+def _append_trade_ledger_event(c,pairing_id,identity):
+    row=c.execute('SELECT * FROM trade_ledger WHERE pairing_id=? AND identity=?',(pairing_id,identity)).fetchone()
+    if not row: return
+    payload=json.loads(row['payload'])
+    signature=_trade_event_signature(identity,row['status'],payload)
+    previous=c.execute('SELECT signature FROM trade_ledger_events WHERE pairing_id=? AND identity=? ORDER BY id DESC LIMIT 1',(pairing_id,identity)).fetchone()
+    if previous and previous['signature']==signature: return
+    c.execute('''INSERT INTO trade_ledger_events(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,signature,created)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+              (pairing_id,identity,row['account_mode'],row['position_id'],row['order_ticket'],row['deal_ticket'],row['symbol'],row['direction'],row['status'],row['payload'],signature,row['updated']))
+
 def ingest_trade_ledger(c, pairing_id, account_mode, payload, received):
     account=payload.get('account') or {}
     open_positions={str(x.get('position_id')):x for x in payload.get('open_positions',[]) if isinstance(x,dict) and x.get('position_id') is not None}
+    signal=payload.get('last_signal') or {}
+    signal_position=str(signal.get('position',''))
+    try: executed=float(signal.get('executed_volume',0) or 0)
+    except (TypeError,ValueError): executed=0.0
     for deal in payload.get('closed_deals',[]):
         position=str(deal.get('position_id',''))
         identity='position:'+position if position else 'deal:'+str(deal.get('ticket',''))
         if identity.endswith(':'): continue
         existing=c.execute('SELECT payload FROM trade_ledger WHERE pairing_id=? AND identity=?',(pairing_id,identity)).fetchone()
+        preserved_signal=None
         if existing:
-            old=json.loads(existing['payload']); deals=old.get('deals',[])
+            old=json.loads(existing['payload'])
+            deals=old.get('deals',[])
+            preserved_signal=old.get('signal')
+            if not preserved_signal and old.get('kind')=='last_signal': preserved_signal=old
             if not any(str(x.get('ticket'))==str(deal.get('ticket')) for x in deals): deals.append(deal)
-            document={'kind':'closed_position','account':account,'deals':deals,'positions':payload.get('open_positions',[])}
-        else: document={'kind':'closed_position','account':account,'deals':[deal],'positions':payload.get('open_positions',[])}
-        try: closed_volume=sum(float(x.get('volume',0)) for x in document['deals'])
+        else:
+            deals=[deal]
+            if position and signal_position==position and executed>0:
+                fill_doc={'kind':'confirmed_fill','account':account,'signal':signal,'positions':payload.get('open_positions',[])}
+                c.execute('''INSERT OR IGNORE INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+                          (pairing_id,identity,account_mode,position,str(signal.get('order','')) or None,str(signal.get('deal','')) or None,str(signal.get('symbol',deal.get('symbol',''))),str(signal.get('direction','')) or None,'OPEN',json.dumps(fill_doc,separators=(',',':')),received,received))
+                _append_trade_ledger_event(c,pairing_id,identity)
+                preserved_signal=signal
+        doc={'kind':'closed_position','account':account,'deals':deals,'positions':payload.get('open_positions',[]),'signal':preserved_signal or (signal if position and signal_position==position and executed>0 else None)}
+        try: closed_volume=sum(float(x.get('volume',0)) for x in deals)
         except (TypeError,ValueError): closed_volume=0.0
         remaining=open_positions.get(position,{}).get('volume',0.0) if position else 0.0
         try: remaining=float(remaining or 0.0)
         except (TypeError,ValueError): remaining=0.0
-        document['closed_volume']=closed_volume; document['remaining_volume']=remaining
-        lifecycle='OPEN' if remaining>1e-9 else 'CLOSED'
-        document['lifecycle']=lifecycle
-        c.execute("""INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pairing_id,identity) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,status=excluded.status,deal_ticket=excluded.deal_ticket""",
-                  (pairing_id,identity,account_mode,position,None,str(deal.get('ticket','')),str(deal.get('symbol','')),None,lifecycle,json.dumps(document,separators=(',',':')),received,received))
-    signal=payload.get('last_signal') or {}; order=str(signal.get('order',''))
-    try: executed=float(signal.get('executed_volume',0))
-    except (TypeError,ValueError): executed=0
-    existing_signal=c.execute('SELECT status FROM trade_ledger WHERE pairing_id=? AND identity=?',(pairing_id,'position:'+str(signal.get('position','')))).fetchone() if signal.get('position') else None
-    if order and executed>0 and not (existing_signal and existing_signal['status']=='CLOSED'):
-        identity='position:'+str(signal.get('position','')) if signal.get('position') else 'order:'+order
-        c.execute("""INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pairing_id,identity) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,status=excluded.status""",
-                  (pairing_id,identity,account_mode,str(signal.get('position','')),order,str(signal.get('deal','')),str(signal.get('symbol','')),str(signal.get('direction','')),'OPEN',json.dumps({'kind':'last_signal','account':account,'signal':signal,'positions':payload.get('open_positions',[])},separators=(',',':')),received,received))
+        doc['closed_volume']=closed_volume; doc['remaining_volume']=remaining
+        lifecycle='OPEN' if remaining>1e-9 else 'CLOSED'; doc['lifecycle']=lifecycle
+        c.execute('''INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pairing_id,identity) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,status=excluded.status,deal_ticket=excluded.deal_ticket''',
+                  (pairing_id,identity,account_mode,position,None,str(deal.get('ticket','')),str(deal.get('symbol','')),None,lifecycle,json.dumps(doc,separators=(',',':')),received,received))
+        _append_trade_ledger_event(c,pairing_id,identity)
+    if signal and signal.get('position') and executed>0:
+        position=str(signal.get('position')); identity='position:'+position
+        exists=c.execute('SELECT status FROM trade_ledger WHERE pairing_id=? AND identity=?',(pairing_id,identity)).fetchone()
+        if not exists or exists['status']!='CLOSED':
+            document={'kind':'last_signal','account':account,'signal':signal,'positions':payload.get('open_positions',[])}
+            c.execute('''INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pairing_id,identity) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,status=excluded.status,order_ticket=excluded.order_ticket,deal_ticket=excluded.deal_ticket''',
+                      (pairing_id,identity,account_mode,position,str(signal.get('order','')) or None,str(signal.get('deal','')) or None,str(signal.get('symbol','')),str(signal.get('direction','')) or None,'OPEN',json.dumps(document,separators=(',',':')),received,received))
+            _append_trade_ledger_event(c,pairing_id,identity)
 
 @app.get('/v1/app/state')
 def state(authorization:str|None=Header(default=None)):
@@ -451,9 +501,13 @@ def terminal_news_verdict(symbol:str=Query(min_length=1,max_length=64),authoriza
 @app.get('/v1/app/trades')
 def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=0,ge=0),updated_after:float=Query(default=0,ge=0),authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); watermark=time.time()
-    with tx() as c:
-        rows=c.execute('SELECT rowid,* FROM trade_ledger WHERE pairing_id=? AND (rowid>? OR updated>=?) AND updated<=? ORDER BY rowid LIMIT ?', (p['id'],cursor,updated_after,watermark,limit)).fetchall()
-    return {'cursor':max([cursor]+[r['rowid'] for r in rows]),'watermark':watermark,'trades':[{'id':r['rowid'],'identity':r['identity'],'account_mode':r['account_mode'],'position_id':r['position_id'],'order_ticket':r['order_ticket'],'deal_ticket':r['deal_ticket'],'symbol':r['symbol'],'direction':r['direction'],'status':r['status'],'payload':json.loads(r['payload']),'updated_at':iso(datetime.fromtimestamp(r['updated'],timezone.utc))} for r in rows]}
+    with tx(True) as c:
+        # Backfill current ledger rows after upgrading from the pre-event-feed schema.
+        missing=c.execute('SELECT l.identity FROM trade_ledger l LEFT JOIN trade_ledger_events e ON e.pairing_id=l.pairing_id AND e.identity=l.identity WHERE l.pairing_id=? AND e.id IS NULL',(p['id'],)).fetchall()
+        for item in missing: _append_trade_ledger_event(c,p['id'],item['identity'])
+        rows=c.execute('SELECT * FROM trade_ledger_events WHERE pairing_id=? AND id>? ORDER BY id LIMIT ?', (p['id'],cursor,limit)).fetchall()
+    next_cursor=max([cursor]+[r['id'] for r in rows])
+    return {'cursor':next_cursor,'watermark':watermark,'trades':[{'id':r['id'],'identity':r['identity'],'account_mode':r['account_mode'],'position_id':r['position_id'],'order_ticket':r['order_ticket'],'deal_ticket':r['deal_ticket'],'symbol':r['symbol'],'direction':r['direction'],'status':r['status'],'payload':json.loads(r['payload']),'updated_at':iso(datetime.fromtimestamp(r['created'],timezone.utc))} for r in rows]}
 
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):

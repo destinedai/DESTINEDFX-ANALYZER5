@@ -457,3 +457,40 @@ def test_news_verdict_fail_closed_and_symbol_relevance():
     ok,detail=app.validate_news_verdict(unrelated,'EURUSD')
     assert ok is True and 'no relevant' in detail
     assert app.validate_news_verdict(clear,'UNKNOWN_SYMBOL')[0] is False
+
+
+
+def test_trade_event_cursor_captures_updates_to_existing_ledger_rows(monkeypatch):
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    first=heartbeat_data(last_signal={'state':'ORDER_ACCEPTED','execution_state':'PARTIALLY_FILLED','order':'901','position':'777','symbol':'EURUSD','direction':'BUY','requested_volume':0.02,'executed_volume':0.01,'actual_entry':1.101,'opened_at':'2026-10-28 10:00:00 (broker server time)'})
+    with app.tx(True) as c:
+        app.ingest_trade_ledger(c,p['pairing_id'],'DEMO',first,time.time())
+        app.ingest_trade_ledger(c,p['pairing_id'],'DEMO',first,time.time())
+    page1=client.get('/v1/app/trades?limit=200',headers=headers).json()
+    assert len(page1['trades'])==1
+    cursor=page1['cursor']
+    changed=heartbeat_data(last_signal={**first['last_signal'],'state':'ORDER_ACCEPTED','execution_state':'POSITION_RECONCILED_SLTP_VERIFIED','executed_volume':0.02})
+    with app.tx(True) as c:
+        app.ingest_trade_ledger(c,p['pairing_id'],'DEMO',changed,time.time()+1)
+    page2=client.get(f"/v1/app/trades?cursor={cursor}&limit=200",headers=headers).json()
+    assert len(page2['trades'])==1
+    assert page2['cursor']>cursor
+    assert page2['trades'][0]['payload']['signal']['execution_state']=='POSITION_RECONCILED_SLTP_VERIFIED'
+
+
+def test_trade_event_cursor_pages_more_than_200_rows_without_skipping():
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    t=time.time()
+    with app.tx(True) as c:
+        for i in range(205):
+            identity=f'position:{10000+i}'
+            payload={'kind':'last_signal','account':ACCOUNT,'signal':{'state':'ORDER_ACCEPTED','execution_state':'POSITION_RECONCILED_SLTP_VERIFIED','order':str(20000+i),'position':str(10000+i),'symbol':'EURUSD','direction':'BUY','requested_volume':0.01,'executed_volume':0.01}}
+            c.execute('''INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+                      (p['pairing_id'],identity,'DEMO',str(10000+i),str(20000+i),None,'EURUSD','BUY','OPEN',app.json.dumps(payload),t,t))
+    page1=client.get('/v1/app/trades?limit=200',headers=headers).json()
+    page2=client.get(f"/v1/app/trades?cursor={page1['cursor']}&limit=200",headers=headers).json()
+    assert len(page1['trades'])==200
+    assert len(page2['trades'])==5
+    ids=[x['id'] for x in page1['trades']+page2['trades']]
+    assert len(set(ids))==205

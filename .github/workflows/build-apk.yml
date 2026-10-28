@@ -19,8 +19,8 @@ jobs:
         run: python -m pytest -q bridge
       - name: Run managed-worker tests
         run: python -m unittest discover -s managed-worker -p 'test_*.py' -v
-      - name: Run MT5 EA source-contract checks
-        run: python -m pytest -q mt5-ea/test_ea_source.py
+      - name: Run MT5 EA source-contract and safety-math regressions
+        run: python -m pytest -q mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py
 
   build:
     runs-on: ubuntu-24.04
@@ -54,6 +54,12 @@ jobs:
       - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
 
+      - name: Mark APK as UI-only if managed bridge URL is unset
+        if: env.MT5_MANAGED_SERVICE_URL == ''
+        run: |
+          echo "::warning title=Managed MT5 service not configured::MT5_MANAGED_SERVICE_URL is unset; this APK contains the configuration-required placeholder and cannot connect to managed DEMO execution."
+          echo "WARNING: MT5_MANAGED_SERVICE_URL is unset. This APK is a UI/build artifact only; managed DEMO execution is not configured." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Validate configured managed-service URL (if supplied)
         if: env.MT5_MANAGED_SERVICE_URL != ''
         run: |
@@ -85,6 +91,25 @@ jobs:
               raise SystemExit("MT5_MANAGED_SERVICE_URL must be a real public HTTPS origin without a path, credentials, query, or fragment.")
           print("Managed-service URL format accepted; no connection or deployment is implied.")
           PY
+
+
+      - name: Check managed bridge readiness when configured
+        if: env.MT5_MANAGED_SERVICE_URL != ''
+        run: |
+          set -euo pipefail
+          url="${MT5_MANAGED_SERVICE_URL%/}"
+          body="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "$url/health/ready")"
+          python - "$body" <<'PY'
+          import json, sys
+          try:
+              body = json.loads(sys.argv[1])
+          except Exception as exc:
+              raise SystemExit(f"Managed bridge readiness endpoint returned invalid JSON: {exc}")
+          if body.get("status") != "ready" or body.get("managed_execution") != "configured":
+              raise SystemExit("Managed bridge is reachable but not ready for managed-execution requests.")
+          print("Managed bridge /health/ready responded. This does not prove worker, news provider, or broker-terminal readiness.")
+          PY
+          echo "Managed bridge readiness endpoint responded successfully. This is only a deployment health check; provider, worker, MT5 compile, and DEMO fill acceptance remain separate." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run unit tests
         run: |

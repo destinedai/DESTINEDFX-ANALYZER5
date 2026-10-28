@@ -119,8 +119,25 @@ def test_ea_source_contract_and_balanced_delimiters():
 
 def test_followup_safety_contracts():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
-    assert "requiredGrossReward=2.0*(MathAbs(loss)+commissionLot)" in source
-    assert "reward/(MathAbs(checked)+commissionLot*vol)<2.0" in source
+    assert "requiredGrossReward=2.0*MathAbs(loss)+3.0*costPerLot" in source
+    assert "netReward+0.01<2.0*netRisk" in source
+    assert "costPerLot=commissionLot+slippageAllowancePerLot" in source
+    assert "InpSlippageAllowancePoints=20" in source
+    assert "DEAL_FEE" in source and "DEAL_SWAP" in source
+    assert "totalCharges/totalEntered" in source and "samples>=3" in source
     assert "DEAL_MAGIC" in source and "ManagedClosedPosition" in source
-    assert "hasEntry&&hasExit&&exited+0.0000001>=entered" in source
+    assert "MathAbs(exited-entered)<=MathMax" in source
     assert "effectiveMaxAge=MathMin" in source and "InpNewsFreshnessSeconds" in source
+
+
+
+def test_trade_report_fields_come_from_ea_owned_broker_history():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert r'\"actual_entry\":%.10f' in source
+    assert r'\"submitted_at\":\"%s\"' in source
+    assert r'\"opened_at\":\"%s\"' in source
+    assert r'\"entry_price\":%.10f' in source
+    assert r'\"volume\":%.4f,\"price\":%.10f' in source
+    assert "HistoryDealGetInteger(d,DEAL_MAGIC)!=(ulong)InpMagic" in source
+    assert 'PositionGetInteger(POSITION_MAGIC)!=(ulong)InpMagic' in source
+    assert 'OrderGetInteger(ORDER_MAGIC)!=(long)InpMagic' in source
