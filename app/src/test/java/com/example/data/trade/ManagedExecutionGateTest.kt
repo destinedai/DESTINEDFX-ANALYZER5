@@ -5,15 +5,65 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ManagedExecutionGateTest {
-    @Test fun startRequiresReadyFreshAuthenticatedMasterWithTradePermission() {
-        assertTrue(MT5RemoteBridgeClient.canStart("READY", "MASTER", true, true, true, true))
-        assertFalse(MT5RemoteBridgeClient.canStart("PROVISIONING", "MASTER", true, true, true, true))
-        assertFalse(MT5RemoteBridgeClient.canStart("READY", "MASTER", false, true, true, true))
-        assertFalse(MT5RemoteBridgeClient.canStart("READY", "MASTER", true, false, true, true))
-        assertFalse(MT5RemoteBridgeClient.canStart("READY", "MASTER", true, true, false, true))
+    private fun allowed(
+        profile: String = "LIVE",
+        state: String = "READY",
+        access: String = "MASTER",
+        mode: String = profile,
+        expectedLogin: String = "123456",
+        actualLogin: String = expectedLogin,
+        expectedServer: String = "Broker-Exact",
+        actualServer: String = expectedServer,
+        fresh: Boolean = true,
+        terminalConnected: Boolean = true,
+        tradeAllowed: Boolean = true,
+        accountVerified: Boolean = true,
+        liveAuthorized: Boolean = true
+    ) = MT5RemoteBridgeClient.canStart(
+        profile, state, access, mode, expectedLogin, actualLogin, expectedServer, actualServer,
+        fresh, terminalConnected, tradeAllowed, accountVerified, liveAuthorized
+    )
+
+    @Test fun liveMasterWithVerifiedLiveIdentityFreshHeartbeatAndCurrentAuthorizationPasses() {
+        assertTrue(allowed())
     }
 
-    @Test fun investorIsAlwaysReadOnly() {
-        assertFalse(MT5RemoteBridgeClient.canStart("READY", "INVESTOR", true, true, true, true))
+    @Test fun liveInvestorIsRejected() {
+        assertFalse(allowed(access = "INVESTOR"))
+    }
+
+    @Test fun liveMasterWithoutServerVerifiedIdentityIsRejected() {
+        assertFalse(allowed(accountVerified = false))
+        assertFalse(allowed(expectedLogin = "", actualLogin = "123456"))
+        assertFalse(allowed(expectedServer = "", actualServer = "Broker-Exact"))
+    }
+
+    @Test fun liveRejectsDemoOrUnverifiedAccountMode() {
+        assertFalse(allowed(mode = "DEMO"))
+        assertFalse(allowed(mode = "UNVERIFIED"))
+    }
+
+    @Test fun liveRejectsStaleHeartbeatOrDisconnectedTerminal() {
+        assertFalse(allowed(fresh = false))
+        assertFalse(allowed(terminalConnected = false))
+    }
+
+    @Test fun liveRejectsMismatchedLoginOrExactBrokerServer() {
+        assertFalse(allowed(actualLogin = "999999"))
+        assertFalse(allowed(actualServer = "Broker-Other"))
+    }
+
+    @Test fun liveWithoutExplicitCurrentAuthorizationIsRejected() {
+        assertFalse(allowed(liveAuthorized = false))
+    }
+
+    @Test fun nonReadyOrNoTradePermissionIsRejected() {
+        assertFalse(allowed(state = "PROVISIONING"))
+        assertFalse(allowed(tradeAllowed = false))
+    }
+
+    @Test fun demoHasItsOwnModeAndDoesNotNeedOrInheritLiveAuthorization() {
+        assertTrue(allowed(profile = "DEMO", mode = "DEMO", liveAuthorized = false))
+        assertFalse(allowed(profile = "DEMO", mode = "LIVE", liveAuthorized = true))
     }
 }

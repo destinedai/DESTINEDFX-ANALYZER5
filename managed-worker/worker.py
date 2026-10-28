@@ -75,7 +75,7 @@ def validate_job(job: Any) -> dict[str, Any]:
     account = job.get("account")
     if not isinstance(account, dict):
         raise ProvisionError("INVALID_ACCOUNT")
-    login, server, password, access = (account.get(k) for k in ("login", "server", "password", "access_type"))
+    login, server, password, access, mode = (account.get(k) for k in ("login", "server", "password", "access_type", "account_mode"))
     if not isinstance(login, str) or not LOGIN.fullmatch(login):
         raise ProvisionError("INVALID_ACCOUNT")
     if not isinstance(server, str) or not SAFE_SERVER.fullmatch(server):
@@ -84,6 +84,8 @@ def validate_job(job: Any) -> dict[str, Any]:
         raise ProvisionError("INVALID_ACCOUNT")
     if access not in VALID_ACCESS:
         raise ProvisionError("INVALID_ACCESS_TYPE")
+    if mode not in {"DEMO", "LIVE"}:
+        raise ProvisionError("INVALID_ACCOUNT_MODE")
     result = dict(job)
     result["bridge_url"] = normalized
     return result
@@ -178,9 +180,11 @@ def write_private(path: Path, text: str) -> None:
         raise
 
 
-def make_set_file(bridge_url: str, pairing_code: str) -> str:
+def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
     # MT5 .set values follow EA input order; all entries use standard text form.
     return (f"InpBridgeBaseURL={bridge_url}\nInpPairingCode={pairing_code}\n"
+            f"InpExpectedLogin={account['login']}\nInpExpectedServer={account['server']}\n"
+            f"InpExpectedAccountMode={account['account_mode']}\n"
             "InpSymbols=EURUSD\nInpTimeframes=M5\nInpRiskPercent=0.25\n"
             "InpMaxDailyLossPercent=2.0\nInpMaxConcurrentPositions=2\n"
             "InpPollSeconds=5\nInpScanSeconds=10\nInpHeartbeatSeconds=5\n"
@@ -251,7 +255,7 @@ def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
         compile_ea(metaeditor, staged_source, compiled, account_dir)
     presets = terminal_home / "MQL5" / "Presets"
     presets.mkdir(parents=True, exist_ok=True)
-    write_private(presets / "DestinedFXTraderEA.set", make_set_file(job["bridge_url"], job["pairing_code"]))
+    write_private(presets / "DestinedFXTraderEA.set", make_set_file(job["bridge_url"], job["pairing_code"], job["account"]))
     # Credentials exist only in this short-lived INI until process creation.
     ini = account_dir / f"startup-{uuid.uuid4().hex}.ini"
     write_private(ini, ini_text(job, job["account"]["access_type"], settings.get("symbol", "EURUSD")))

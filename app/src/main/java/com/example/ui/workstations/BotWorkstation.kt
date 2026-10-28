@@ -49,20 +49,37 @@ import org.json.JSONObject
 
 @Composable
 fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
-    var bridgeMode by remember { mutableStateOf(viewModel.app.secretsManager.getMT5BridgeAppToken().isNotBlank()) }
-    val bridgeClient = remember { MT5RemoteBridgeClient(viewModel.app.secretsManager) }
-    var bridgeCode by remember { mutableStateOf("") }
-    var bridgeMessage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5BridgePendingCommandId().let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
-    var bridgeSnapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
-    var bridgeBusy by remember { mutableStateOf(false) }
     val bridgeSecrets = viewModel.app.secretsManager
-    var bridgePendingId by remember { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId()) }
-    var bridgePendingAction by remember { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandAction()) }
-    var bridgeCommandPending by remember { mutableStateOf(bridgePendingId.isNotBlank() && bridgePendingAction.isNotBlank()) }
-    var bridgeExpectedState by remember { mutableStateOf(when (bridgePendingAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; "STOP", "EMERGENCY_STOP" -> "STOPPED"; else -> "" }) }
-    val bridgeToken = viewModel.app.secretsManager.getMT5BridgeAppToken()
+    var selectedAccountMode by remember { mutableStateOf(bridgeSecrets.getManagedMT5SelectedProfile()) }
+    val bridgeClient = remember(bridgeSecrets, selectedAccountMode) { MT5RemoteBridgeClient(bridgeSecrets, selectedAccountMode) }
+    var bridgeMode by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode).isNotBlank()) }
+    var bridgeCode by remember { mutableStateOf("") }
+    var bridgeMessage by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode).let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
+    var bridgeSnapshot by remember(selectedAccountMode) { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
+    var bridgeBusy by remember { mutableStateOf(false) }
+    var bridgePendingId by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode)) }
+    var bridgePendingAction by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandAction(selectedAccountMode)) }
+    var bridgeCommandPending by remember(selectedAccountMode) { mutableStateOf(bridgePendingId.isNotBlank() && bridgePendingAction.isNotBlank()) }
+    var bridgeExpectedState by remember(selectedAccountMode) { mutableStateOf(when (bridgePendingAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; "STOP", "EMERGENCY_STOP" -> "STOPPED"; else -> "" }) }
+    var showLiveAuthorizationDialog by remember { mutableStateOf(false) }
+    val bridgeToken = bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode)
     val bridgeTerminalFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
-    val bridgeTerminalReady = bridgeSnapshot?.let { bridgeTerminalFresh && it.managedState == "READY" && it.accessType == "MASTER" && it.tradeAllowed && it.accountVerified && it.account.isNotBlank() } == true
+    val bridgeTerminalReady = bridgeSnapshot?.let { snapshot ->
+        MT5RemoteBridgeClient.canStart(selectedAccountMode, snapshot.managedState, snapshot.accessType, snapshot.actualAccountMode,
+            bridgeSecrets.getManagedMT5Login(selectedAccountMode), snapshot.actualLogin,
+            bridgeSecrets.getManagedMT5Server(selectedAccountMode), snapshot.actualServer,
+            snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, snapshot.liveAuthorized)
+    } == true
+    val bridgeProfileReady = bridgeSnapshot?.let { snapshot ->
+        MT5RemoteBridgeClient.canStart(selectedAccountMode, snapshot.managedState, snapshot.accessType, snapshot.actualAccountMode,
+            bridgeSecrets.getManagedMT5Login(selectedAccountMode), snapshot.actualLogin,
+            bridgeSecrets.getManagedMT5Server(selectedAccountMode), snapshot.actualServer,
+            snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, true)
+    } == true
+    fun selectBridgeProfile(profile: String) {
+        selectedAccountMode = profile
+        bridgeSecrets.saveManagedMT5SelectedProfile(profile)
+    }
     val bridgeDisplayState = bridgeSnapshot?.let { if (it.managedState == "READY") it.state else it.managedState.ifBlank { it.state } } ?: if (!bridgeClient.managedConfigured()) "CONFIGURATION_REQUIRED" else if (bridgeToken.isBlank()) "SETUP REQUIRED" else "OFFLINE"
     val bridgeStatusColor = when (bridgeDisplayState) {
         "RUNNING" -> ProfitGreen
@@ -86,11 +103,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var brokerConnectionMessage by remember { mutableStateOf<String?>(null) }
-    var mt5LoginInput by remember { mutableStateOf(viewModel.getMT5Login()) }
-    var mt5PasswordInput by remember { mutableStateOf("") }
-    var mt5ServerInput by remember { mutableStateOf(viewModel.getMT5BrokerServer()) }
-    var mt5AccessType by remember { mutableStateOf("MASTER") }
-    var managedCredentialConsent by remember { mutableStateOf(false) }
+    var mt5LoginInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Login(selectedAccountMode)) }
+    var mt5PasswordInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Password(selectedAccountMode)) }
+    var mt5ServerInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Server(selectedAccountMode)) }
+    var mt5AccessType by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5AccessType(selectedAccountMode)) }
+    var managedCredentialConsent by remember(selectedAccountMode) { mutableStateOf(false) }
     var showMt5Password by remember { mutableStateOf(false) }
     var isConnectingBroker by remember { mutableStateOf(false) }
     var showPostLoginPairSelectorModal by remember { mutableStateOf(false) }
@@ -109,7 +126,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         isConnectingBroker = false
     }
 
-    LaunchedEffect(bridgeMode, bridgeToken) {
+    LaunchedEffect(bridgeMode, bridgeToken, selectedAccountMode) {
         if (bridgeMode && bridgeClient.baseUrl().isNotBlank() && bridgeToken.isNotBlank()) {
             while (true) {
                 try {
@@ -121,10 +138,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         when (cmd.optString("outcome")) {
                             "REJECTED" -> {
                                 val action = bridgePendingAction
-                                val original = bridgeSecrets.getMT5BridgeSafetyOriginalId()
-                                val originalAction = bridgeSecrets.getMT5BridgeSafetyOriginalAction().takeIf { original.isNotBlank() }.orEmpty()
-                                bridgeSecrets.clearMT5BridgePendingCommand()
-                                if (original.isNotBlank()) { bridgePendingId = original; bridgePendingAction = originalAction; bridgeExpectedState = when (originalAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; else -> "STOPPED" }; bridgeCommandPending = true; bridgeMessage = "Safety STOP was rejected; original $originalAction request $original remains unresolved. Terminal state is unknown." }
+                                val original = bridgeSecrets.getMT5BridgeSafetyOriginalId(selectedAccountMode)
+                                val originalAction = bridgeSecrets.getMT5BridgeSafetyOriginalAction(selectedAccountMode).takeIf { original.isNotBlank() }.orEmpty()
+                                bridgeSecrets.clearMT5BridgePendingCommand(selectedAccountMode)
+                                if (original.isNotBlank()) { bridgeSecrets.saveMT5BridgePendingCommand(original, originalAction, selectedAccountMode); bridgeSecrets.clearMT5BridgeSafetyStop(selectedAccountMode); bridgePendingId = original; bridgePendingAction = originalAction; bridgeExpectedState = when (originalAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; else -> "STOPPED" }; bridgeCommandPending = true; bridgeMessage = "Safety STOP was rejected; original $originalAction request $original remains unresolved. Terminal state is unknown." }
                                 else { bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeMessage = "$action rejected by EA: ${cmd.optString("message", "No reason supplied")}" }
                             }
                             "APPLIED" -> if (fresh.heartbeatFresh) {
@@ -132,7 +149,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 val expected = bridgeExpectedState
                                 val confirmed = fresh.state == expected && cmd.optString("state") == expected
                                 if (confirmed) {
-                                    bridgeSecrets.clearMT5BridgePendingCommand(); bridgeSecrets.clearMT5BridgeSafetyStop(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""
+                                    bridgeSecrets.clearMT5BridgePendingCommand(selectedAccountMode); bridgeSecrets.clearMT5BridgeSafetyStop(selectedAccountMode); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""
                                     bridgeMessage = "$action applied; fresh EA heartbeat confirms ${fresh.state}."
                                 } else {
                                     bridgeMessage = "$action acknowledged as applied, but fresh EA heartbeat reports actual state ${fresh.state}; target state is not confirmed. Safety reconciliation remains pending."
@@ -158,22 +175,43 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("REMOTE MT5 EA BRIDGE", modifier = Modifier.weight(1f), color = ElectricCyan, fontWeight = FontWeight.Bold)
-                        Switch(checked = bridgeMode, enabled = bridgeToken.isBlank() && !bridgeBusy, onCheckedChange = { bridgeMode = it })
+                        Switch(checked = bridgeMode, enabled = !bridgeBusy && !bridgeCommandPending && (bridgeToken.isBlank() || !bridgeMode), onCheckedChange = { bridgeMode = it })
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("DEMO", "LIVE").forEach { mode ->
+                            OutlinedButton(onClick = { selectBridgeProfile(mode) }, modifier = Modifier.weight(1f), enabled = !bridgeBusy) {
+                                Text(if (mode == selectedAccountMode) "$mode PROFILE · SELECTED" else "$mode PROFILE", fontSize = 9.sp, color = if (mode == selectedAccountMode) ElectricCyan else TextSecondary)
+                            }
+                        }
                     }
                     Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${bridgeSnapshot?.let { if (!it.terminalOnline) "OFFLINE" else if (!it.heartbeatFresh) "STALE HEARTBEAT" else "ONLINE" } ?: "UNVERIFIED"} · EA: ${bridgeSnapshot?.state ?: "UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
-                    Text("Verified account: ${bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified"} · Trade permission: ${if (bridgeSnapshot?.tradeAllowed == true) "YES" else "NO"}", color = TextSecondary, fontSize = 10.sp)
+                    Text("Selected profile: $selectedAccountMode · Verified terminal: ${bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified"} · Actual mode: ${bridgeSnapshot?.actualAccountMode?.ifBlank { "UNVERIFIED" } ?: "UNVERIFIED"}", color = TextSecondary, fontSize = 10.sp)
                     Text("Managed service: ${if (bridgeClient.managedConfigured()) "configured" else "CONFIGURATION_REQUIRED"}", color = TextSecondary, fontSize = 10.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-
-                        Button(enabled = !bridgeBusy && viewModel.app.secretsManager.getMT5BridgeAppToken().isNotBlank(), onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeClient.revoke(); bridgeSecrets.clearMT5BridgePendingCommand(); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeExpectedState = ""; bridgeSnapshot = null; bridgeMode = false; bridgeCode = ""; bridgeMessage = "Terminal pairing revoked" } catch (_: Exception) { bridgeMessage = "Revoke not confirmed" }; bridgeBusy = false } }) { Text("Revoke") }
+                        Button(enabled = !bridgeBusy && bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode).isNotBlank(), onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeClient.revoke(); bridgeSecrets.clearMT5BridgePendingCommand(selectedAccountMode); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeExpectedState = ""; bridgeSnapshot = null; bridgeMode = false; bridgeCode = ""; bridgeMessage = "$selectedAccountMode pairing revoked" } catch (_: Exception) { bridgeMessage = "Revoke not confirmed" }; bridgeBusy = false } }) { Text("Revoke $selectedAccountMode") }
                     }
                     if (bridgeMessage.isNotBlank()) Text(bridgeMessage, color = WarningAmber, fontSize = 10.sp)
                     val provisioningError = bridgeSnapshot?.raw?.optJSONObject("managed_execution")?.optString("error_message").orEmpty()
                     if (provisioningError.isNotBlank()) Text("Provisioning error: $provisioningError", color = LossRed, fontSize = 10.sp)
-                    val bridgeFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
-                    val bridgeReady = bridgeSnapshot?.let { MT5RemoteBridgeClient.canStart(it.managedState, it.accessType, bridgeFresh, it.terminalConnected, it.tradeAllowed, it.accountVerified) && it.account.isNotBlank() } == true
+                    val bridgeReady = bridgeTerminalReady
                     val supportedStrategy = selectedStrategyId == "ict-silver-bullet"
                     val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
+                    if (selectedAccountMode == "LIVE") {
+                        Text("LIVE authorization: ${if (bridgeSnapshot?.liveAuthorized == true) "ACTIVE (server-verified, short-lived)" else "NOT AUTHORIZED"}", color = if (bridgeSnapshot?.liveAuthorized == true) WarningAmber else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Button(enabled = !bridgeBusy && bridgeProfileReady && bridgeSnapshot?.liveAuthorized != true, onClick = { showLiveAuthorizationDialog = true }) {
+                            Text("AUTHORIZE LIVE SESSION (15 MIN)")
+                        }
+                        if (bridgeSnapshot?.liveAuthorized == true) {
+                            OutlinedButton(enabled = !bridgeBusy, onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeClient.clearLiveAuthorization(); bridgeSnapshot = bridgeClient.state(); bridgeMessage = "LIVE authorization revoked; new START/RESUME is blocked." } catch (_: Exception) { bridgeMessage = "LIVE authorization revocation not confirmed." }; bridgeBusy = false } }) { Text("REVOKE LIVE AUTHORIZATION") }
+                        }
+                        if (showLiveAuthorizationDialog) AlertDialog(
+                            onDismissRequest = { showLiveAuthorizationDialog = false },
+                            title = { Text("Authorize LIVE trading?") },
+                            text = { Text("This confirms LIVE profile ${bridgeSecrets.getManagedMT5Login("LIVE")} at ${bridgeSecrets.getManagedMT5Server("LIVE")} for up to 15 minutes. The connected MT5 terminal must independently report this exact account as LIVE with MASTER access and fresh readiness. This permits real-money entries after all risk checks; it does not liquidate positions or guarantee outcomes.") },
+                            confirmButton = { TextButton(onClick = { showLiveAuthorizationDialog = false; coroutineScope.launch { bridgeBusy = true; try { val expiry = bridgeClient.authorizeLiveSession(); bridgeSnapshot = bridgeClient.state(); bridgeMessage = "LIVE authorization confirmed until $expiry." } catch (e: Exception) { bridgeMessage = e.message ?: "LIVE authorization failed closed." }; bridgeBusy = false } }) { Text("AUTHORIZE LIVE") } },
+                            dismissButton = { TextButton(onClick = { showLiveAuthorizationDialog = false }) { Text("CANCEL") } }
+                        )
+                    }
                     Text("EA SUPPORTED SUBSET: ICT Silver Bullet only. Other selected strategies cannot be started by this EA.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     BridgeTelemetry(bridgeSnapshot)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -181,7 +219,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             val needsTradingReady = action == "PAUSE" || action == "RESUME"
                             val safetyOverride = bridgeCommandPending && action == "STOP"
                             OutlinedButton(enabled = bridgeMode && (if (needsTradingReady) bridgeReady else bridgeSnapshot?.connected == true) && !bridgeBusy && (!bridgeCommandPending || safetyOverride), onClick = {
-                                coroutineScope.launch { sendBridgeCommand(bridgeClient, action, JSONObject(), bridgeSecrets, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it }) }
+                                coroutineScope.launch { sendBridgeCommand(bridgeClient, action, JSONObject(), bridgeSecrets, selectedAccountMode, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it }) }
                             }) { Text(action.replace('_', ' '), fontSize = 9.sp) }
                         }
                     }
@@ -335,7 +373,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     if (active && !supportedStrategy) { bridgeMessage = "Blocked: the EA supports ict-silver-bullet only."; bridgeBusy = false; return@launch }
                                     if (active && (!MT5RemoteBridgeClient.isValidRiskPercent(riskPercent))) { bridgeMessage = "Blocked: risk must be finite and in (0, 1]%; no clamping applied."; bridgeBusy = false; return@launch }
                                     if (active && !bridgeCanStart) { bridgeMessage = "Blocked: verified account must be READY or STOPPED with a fresh, trade-authorized heartbeat."; bridgeBusy = false; return@launch }
-                                    sendBridgeCommand(bridgeClient, action, config, bridgeSecrets, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it })
+                                    sendBridgeCommand(bridgeClient, action, config, bridgeSecrets, selectedAccountMode, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it })
                                 } else viewModel.setBotStatus(active) { success, err ->
                                     statusMessage = if (success) { if (active) "24/7 Surveillance Engine activated" else "Surveillance stopped" } else err ?: "Failed to change engine state"
                                 }
@@ -797,11 +835,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             var selectedBrokerCompanyName by remember { mutableStateOf("FBS Markets Inc.") }
             var showBrokerSearchDialog by remember { mutableStateOf(false) }
             var brokerSearchQuery by remember { mutableStateOf("") }
-            var savePasswordChecked by remember { mutableStateOf(viewModel.app.secretsManager.isMT5PasswordSaveEnabled()) }
+            var savePasswordChecked by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.isManagedMT5PasswordSaveEnabled(selectedAccountMode)) }
             var showOpenDemoDialog by remember { mutableStateOf(false) }
             var showOpenRealDialog by remember { mutableStateOf(false) }
 
-            var selectedAccountMode by remember { mutableStateOf(viewModel.app.secretsManager.getMT5AccountType().ifBlank { "Demo" }) }
             val storedBal = remember {
                 viewModel.app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 } ?: 0.0
             }
@@ -809,9 +846,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             var selectedLeverage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5Leverage().takeIf { it > 0 } ?: 0) }
             var expandedLeverage by remember { mutableStateOf(false) }
             val currentSessionStatus = viewModel.app.secretsManager.getMT5SessionStatus()
-            val hasSavedLogin = viewModel.getMT5Login().isNotBlank() && viewModel.getMT5BrokerServer().isNotBlank()
+            val hasSavedLogin = bridgeSecrets.getManagedMT5Login(selectedAccountMode).isNotBlank() && bridgeSecrets.getManagedMT5Server(selectedAccountMode).isNotBlank()
             val isSessionExpired = currentSessionStatus == "SESSION_EXPIRED"
-            var isEditingCredentials by remember { mutableStateOf(!hasSavedLogin) }
+            var isEditingCredentials by remember(selectedAccountMode) { mutableStateOf(!hasSavedLogin) }
 
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -891,7 +928,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
 
                     // Active MT5 Account Overview (Official MT5 Account Card)
-                    if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null && !isEditingCredentials) {
+                    if (!bridgeMode && brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null && !isEditingCredentials) {
                         val activeLogin = viewModel.getMT5Login()
                         val activeServer = viewModel.getMT5BrokerServer()
                         val verifiedMetrics = accountMetrics!!
@@ -932,7 +969,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         Box(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(4.dp))
-                                                .background(if (selectedAccountMode.equals("Real", true)) ProfitGreen.copy(alpha = 0.2f) else ElectricCyan.copy(alpha = 0.2f))
+                                .background(if (selectedAccountMode == "LIVE") ProfitGreen.copy(alpha = 0.2f) else ElectricCyan.copy(alpha = 0.2f))
                                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
                                             Text(
@@ -1155,10 +1192,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         // Mode Selector: DEMO vs REAL
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
-                                onClick = { selectedAccountMode = "Demo" },
+                                onClick = { selectBridgeProfile("DEMO") },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (selectedAccountMode.equals("Demo", true)) ElectricCyan else DarkSurfaceVariant,
-                                    contentColor = if (selectedAccountMode.equals("Demo", true)) DarkBackground else TextSecondary
+                                    containerColor = if (selectedAccountMode == "DEMO") ElectricCyan else DarkSurfaceVariant,
+                                    contentColor = if (selectedAccountMode == "DEMO") DarkBackground else TextSecondary
                                 ),
                                 shape = RoundedCornerShape(6.dp),
                                 modifier = Modifier.weight(1f).height(38.dp)
@@ -1166,10 +1203,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 Text("DEMO ACCOUNT", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                             Button(
-                                onClick = { selectedAccountMode = "Real" },
+                                onClick = { selectBridgeProfile("LIVE") },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (selectedAccountMode.equals("Real", true)) ProfitGreen else DarkSurfaceVariant,
-                                    contentColor = if (selectedAccountMode.equals("Real", true)) DarkBackground else TextSecondary
+                                    containerColor = if (selectedAccountMode == "LIVE") ProfitGreen else DarkSurfaceVariant,
+                                    contentColor = if (selectedAccountMode == "LIVE") DarkBackground else TextSecondary
                                 ),
                                 shape = RoundedCornerShape(6.dp),
                                 modifier = Modifier.weight(1f).height(38.dp)
@@ -1333,14 +1370,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         if (!bridgeClient.managedConfigured()) {
                                             brokerConnectionMessage = "CONFIGURATION_REQUIRED"
                                         } else {
-                                            val snapshot = bridgeClient.registerManagedAccount(mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent)
+                                            bridgeMode = true
+                                            val snapshot = bridgeClient.registerManagedAccount(mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent, savePasswordChecked)
                                             bridgeMode = true
                                             bridgeSnapshot = snapshot
                                             bridgeMessage = snapshot.managedState.ifBlank { "PROVISIONING" }
                                             brokerConnectionMessage = "${snapshot.managedState.ifBlank { "PROVISIONING" }} — broker connection is not confirmed until a fresh authenticated EA heartbeat."
-                                            viewModel.app.secretsManager.saveMT5Login(mt5LoginInput.trim())
-                                            viewModel.app.secretsManager.saveMT5BrokerServer(mt5ServerInput)
-                                            viewModel.app.secretsManager.saveMT5PasswordIfAllowed(secret, savePasswordChecked)
                                             isEditingCredentials = false
                                         }
                                     } catch (e: Exception) {
@@ -1436,7 +1471,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             confirmButton = {
                                 TextButton(onClick = {
                                     showOpenRealDialog = false
-                                    selectedAccountMode = "Real"
+                                    selectBridgeProfile("LIVE")
                                 }) { Text("OK") }
                             }
                         )
@@ -1841,6 +1876,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             }
         }
 
+        if (!bridgeMode) {
         // Open Positions Section
         item {
             Text(
@@ -1939,6 +1975,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                 }
             }
+        }
         }
     }
 
@@ -2076,23 +2113,24 @@ private fun BridgeTelemetry(snapshot: MT5RemoteBridgeClient.Snapshot?) {
 
 private suspend fun sendBridgeCommand(
     client: MT5RemoteBridgeClient, action: String, config: JSONObject, secrets: com.example.security.SecretsManager,
+    profile: String,
     busy: (Boolean) -> Unit, pending: (Boolean) -> Unit, requestId: (String) -> Unit,
     pendingAction: (String) -> Unit, expected: (String) -> Unit, message: (String) -> Unit
 ) {
-    val unresolvedId = secrets.getMT5BridgePendingCommandId()
+    val unresolvedId = secrets.getMT5BridgePendingCommandId(profile)
     if (unresolvedId.isNotBlank() && action != "STOP") {
-        pending(true); requestId(unresolvedId); pendingAction(secrets.getMT5BridgePendingCommandAction())
+        pending(true); requestId(unresolvedId); pendingAction(secrets.getMT5BridgePendingCommandAction(profile))
         message("A bridge command is already unresolved. Reconcile its saved request ID or use STOP as the one safety override; no other command was sent.")
         busy(false)
         return
     }
     val id = java.util.UUID.randomUUID().toString()
-    if (unresolvedId.isNotBlank() && action == "STOP" && !secrets.saveMT5BridgeSafetyStop(unresolvedId, secrets.getMT5BridgePendingCommandAction(), id)) {
+    if (unresolvedId.isNotBlank() && action == "STOP" && !secrets.saveMT5BridgeSafetyStop(unresolvedId, secrets.getMT5BridgePendingCommandAction(profile), id, profile)) {
         message("Secure safety-stop storage failed; no STOP command was sent.")
         busy(false)
         return
     }
-    if (!secrets.saveMT5BridgePendingCommand(id, action)) {
+    if (!secrets.saveMT5BridgePendingCommand(id, action, profile)) {
         message("Secure pending-command storage failed; no command was sent.")
         busy(false)
         return
@@ -2102,6 +2140,20 @@ private suspend fun sendBridgeCommand(
     pending(true)
     busy(true)
     val result = client.command(id, action, config)
-    message(if (result.queued) "$action queued (request ${result.requestId}); awaiting matching acknowledgement and fresh heartbeat; not confirmed." else "UNKNOWN request ${result.requestId}: ${result.detail}. Do not resend; reconcile this ID or recover manually.")
+    if (result.rejected) {
+        val original = secrets.getMT5BridgeSafetyOriginalId(profile)
+        val originalAction = secrets.getMT5BridgeSafetyOriginalAction(profile)
+        if (action == "STOP" && original.isNotBlank() && originalAction.isNotBlank()) {
+            secrets.saveMT5BridgePendingCommand(original, originalAction, profile)
+            secrets.clearMT5BridgeSafetyStop(profile)
+            requestId(original); pendingAction(originalAction); pending(true)
+        } else {
+            secrets.clearMT5BridgePendingCommand(profile)
+            pending(false); requestId(""); pendingAction("")
+        }
+        message("Blocked: ${result.detail}")
+    } else {
+        message(if (result.queued) "$action queued (request ${result.requestId}); awaiting matching acknowledgement and fresh heartbeat; not confirmed." else "UNKNOWN request ${result.requestId}: ${result.detail}. Do not resend; reconcile this ID or recover manually.")
+    }
     busy(false)
 }

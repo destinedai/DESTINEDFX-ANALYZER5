@@ -2,6 +2,8 @@
 
 This Windows-only worker consumes the managed execution API in `../docs/managed-execution-protocol.md`. It claims encrypted broker credentials using the operator-only bearer, stages and compiles the EA, writes a short-lived MT5 startup INI, and launches one isolated `/portable` terminal tree for that account. The worker never places trades itself or logs broker credentials. The control plane only reports READY after a fresh, account-matched EA heartbeat; MASTER additionally needs actual trade permission. INVESTOR sessions may be reported ready for read-only viewing but START is always rejected server-side.
 
+Each queued job is bound to one DEMO or LIVE app profile and carries the expected login/server/mode into that account's EA `.set` file. The terminal must independently report the exact login, server, and `ACCOUNT_TRADE_MODE`; no profile may inherit another profile's pairing or LIVE authorization. The Android app requires a fresh, verified LIVE MASTER session and an explicit 15-minute authorization before START or RESUME.
+
 ## Prerequisites and configuration
 
 Use Python 3.11 or later on a dedicated Windows Server host. Install a genuine broker-compatible MT5 terminal and MetaEditor. Configure `worker.example.toml` with the public HTTPS control-plane URL and absolute paths for the MT5 install, terminal executable, MetaEditor, approved EA source, and worker data root. Copy to a local `worker.toml`; it contains paths only and must not be committed. Supply `DESTINEDFX_WORKER_TOKEN` from the host secret store, never the command line or config file. Set a stable unique `DESTINEDFX_WORKER_ID` per worker instance. Keep capacity to one provisioned account per worker/host unless the operator has deliberately tested and sized a multi-terminal host.

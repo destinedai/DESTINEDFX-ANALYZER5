@@ -25,11 +25,16 @@ def db():
     c=sqlite3.connect(DB_PATH, timeout=10, isolation_level=None)
     c.row_factory=sqlite3.Row
     c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA foreign_keys=ON'); c.execute('PRAGMA busy_timeout=10000')
-    c.executescript('''CREATE TABLE IF NOT EXISTS pairings(id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, app_hash TEXT NOT NULL, terminal_hash TEXT, expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, terminal_id TEXT, instance_id TEXT, account TEXT, heartbeat TEXT, created REAL NOT NULL);
+    c.executescript('''CREATE TABLE IF NOT EXISTS pairings(id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, app_hash TEXT NOT NULL, terminal_hash TEXT, expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, terminal_id TEXT, instance_id TEXT, account TEXT, heartbeat TEXT, created REAL NOT NULL, live_authorized_until REAL, live_authorized_login TEXT, live_authorized_server TEXT);
     CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id), request_id TEXT NOT NULL, action TEXT NOT NULL, config TEXT NOT NULL, ack TEXT, UNIQUE(pairing_id,request_id));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED');
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);''')
+    pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
+    for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT')):
+        if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
+    managed_columns={r['name'] for r in c.execute('PRAGMA table_info(managed_accounts)').fetchall()}
+    if 'account_mode' not in managed_columns: c.execute("ALTER TABLE managed_accounts ADD COLUMN account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED'")
     columns={r['name'] for r in c.execute('PRAGMA table_info(worker_jobs)').fetchall()}
     if 'lease_started' not in columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN lease_started REAL')
     return c
@@ -61,7 +66,7 @@ async def limits(request:Request, call_next):
 class Pair(BaseModel): model_config=ConfigDict(extra='forbid')
 class ManagedAccount(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; consent:bool
+    login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; account_mode:str; consent:bool
 class WorkerClaim(BaseModel): model_config=ConfigDict(extra='forbid'); worker_id:str=Field(min_length=1,max_length=128)
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -70,6 +75,7 @@ class WorkerUpdate(BaseModel):
 class Claim(BaseModel): model_config=ConfigDict(extra='forbid'); pairing_code:str=Field(min_length=8,max_length=64); terminal_instance_id:str=Field(min_length=1,max_length=128); account:dict[str,str]
 class Command(BaseModel): model_config=ConfigDict(extra='forbid'); request_id:str=Field(min_length=1,max_length=64); action:str; config:dict[str,Any]
 class Ack(BaseModel): model_config=ConfigDict(extra='forbid'); outcome:str; state:str; message:str=Field(default='',max_length=1000)
+class LiveAuthorization(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_live_trading:bool
 class Position(BaseModel):
     model_config=ConfigDict(extra='forbid')
     ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); volume:float=Field(gt=0,allow_inf_nan=False); open_price:float=Field(gt=0,allow_inf_nan=False); stop_loss:float=Field(ge=0,allow_inf_nan=False); take_profit:float=Field(ge=0,allow_inf_nan=False); floating_profit:float=Field(allow_inf_nan=False); commission:float|None=Field(default=None,allow_inf_nan=False); swap:float=Field(allow_inf_nan=False)
@@ -78,7 +84,7 @@ class ClosedDeal(BaseModel):
     ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); closed_at:str=Field(max_length=64); profit:float=Field(allow_inf_nan=False); commission:float=Field(allow_inf_nan=False); swap:float=Field(allow_inf_nan=False)
 class Account(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); company:str=Field(min_length=1,max_length=128); currency:str=Field(min_length=1,max_length=16)
+    login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); company:str=Field(min_length=1,max_length=128); currency:str=Field(min_length=1,max_length=16); account_mode:str
     balance:float|None=Field(default=None,gt=0,allow_inf_nan=False); equity:float|None=Field(default=None,gt=0,allow_inf_nan=False); margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); free_margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin_level:float|None=Field(default=None,ge=0,allow_inf_nan=False); leverage:int|None=Field(default=None,gt=0)
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -139,15 +145,24 @@ def fresh_heartbeat(p):
         return b if 0 <= (now()-dt.astimezone(timezone.utc)).total_seconds() <= STALE else None
     except Exception: return None
 
+def terminal_identity_matches(p, account_mode, beat):
+    try:
+        claimed=json.loads(p['account']) if p and p['account'] else {}
+        actual=beat.get('account') if beat else None
+        return bool(account_mode in ('DEMO','LIVE') and isinstance(actual,dict) and
+                    all(actual.get(k)==claimed.get(k) for k in ('login','server','company','currency','account_mode')) and
+                    actual.get('account_mode')==account_mode)
+    except Exception: return False
+
 @app.post('/v1/app/managed-account',status_code=202)
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); fernet,_=managed_config()
-    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or not x.login.isdigit() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, and valid access_type are required')
+    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
-        c.execute('INSERT INTO managed_accounts VALUES(?,?,?,?,?,0)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type))
-        c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL WHERE id=?',(digest(pairing_code),t+86400,p['id']))
+        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode) VALUES(?,?,?,?,?,0,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode))
+        c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+86400,p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) VALUES(?,?,'PROVISION','QUEUED',?)",(job_id,p['id'],t))
     return {'job_id':job_id,'status':'QUEUED'}
 
@@ -164,7 +179,10 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
         if not m:
             c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_REVOKED',error_message='Account was revoked before provisioning' WHERE id=?",(r['id'],))
             return {'job':None}
-        account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']
+        if m['account_mode'] not in ('DEMO','LIVE'):
+            c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_MODE_UNVERIFIED',error_message='Account mode must be re-verified before provisioning' WHERE id=?",(r['id'],))
+            return {'job':None}
+        account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']; account['account_mode']=m['account_mode']
         code_row=c.execute('SELECT code_hash FROM pairings WHERE id=?',(r['pairing_id'],)).fetchone()
         # Existing plaintext code is intentionally not persisted; generate a fresh one for the worker and rotate hash.
         code=secrets.token_urlsafe(18); c.execute('UPDATE pairings SET code_hash=?,expires=? WHERE id=?',(digest(code),t+86400,r['pairing_id']))
@@ -204,10 +222,10 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
             c.execute('UPDATE worker_jobs SET lease_until=? WHERE id=?',(t+120,job_id))
             job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
         pairing=c.execute('SELECT * FROM pairings WHERE id=?',(job['pairing_id'],)).fetchone()
-        managed=c.execute('SELECT access_type,revoked FROM managed_accounts WHERE pairing_id=?',(job['pairing_id'],)).fetchone()
+        managed=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(job['pairing_id'],)).fetchone()
         if job['kind']=='PROVISION' and job['status'] in ('PROVISIONING','AUTHENTICATING') and managed and not managed['revoked']:
             beat=fresh_heartbeat(pairing)
-            valid=bool(beat and beat.get('state')=='READY' and beat.get('terminal_connected') and (managed['access_type']=='INVESTOR' or beat.get('trade_allowed')))
+            valid=bool(beat and beat.get('state')=='READY' and beat.get('terminal_connected') and managed['account_mode'] in ('DEMO','LIVE') and beat.get('account',{}).get('account_mode')==managed['account_mode'] and (managed['access_type']=='INVESTOR' or beat.get('trade_allowed')))
             if valid:
                 c.execute("UPDATE worker_jobs SET status='READY',error_code=NULL,error_message=NULL WHERE id=?",(job_id,))
                 job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
@@ -231,19 +249,20 @@ def create_pair(request:Request):
     return {'pairing_id':pairing_id,'pairing_code':code,'app_token':app_token,'expires_at':iso(datetime.fromtimestamp(exp,timezone.utc))}
 @app.post('/v1/terminal/claim')
 def claim(x:Claim):
-    for k in ('login','server','company','currency'):
+    for k in ('login','server','company','currency','account_mode'):
         if k not in x.account or not x.account[k] or len(x.account[k])>128: raise HTTPException(422,'Invalid account identity')
+    if x.account['account_mode'] not in ('DEMO','LIVE'): raise HTTPException(422,'Unverified account mode')
     terminal_token=token(); terminal_id=str(uuid.uuid4()); t=time.time()
     with tx(True) as c:
         rows=c.execute('SELECT * FROM pairings WHERE consumed=0 AND expires>?',(t,)).fetchall()
         found=next((r for r in rows if hmac.compare_digest(r['code_hash'],digest(x.pairing_code))),None)
         if found is None: raise HTTPException(401,'Invalid or expired pairing code')
-        managed=c.execute('SELECT login_enc,server_enc FROM managed_accounts WHERE pairing_id=? AND revoked=0',(found['id'],)).fetchone()
+        managed=c.execute('SELECT login_enc,server_enc,account_mode FROM managed_accounts WHERE pairing_id=? AND revoked=0',(found['id'],)).fetchone()
         if managed:
             fernet,_=managed_config()
             expected_login=fernet.decrypt(managed['login_enc'].encode()).decode()
             expected_server=fernet.decrypt(managed['server_enc'].encode()).decode()
-            if x.account['login']!=expected_login or x.account['server'].casefold()!=expected_server.casefold():
+            if managed['account_mode'] not in ('DEMO','LIVE') or x.account['login']!=expected_login or x.account['server']!=expected_server or x.account['account_mode']!=managed['account_mode']:
                 raise HTTPException(401,'Authenticated terminal account does not match managed account')
         c.execute('UPDATE pairings SET consumed=1,terminal_hash=?,terminal_id=?,instance_id=?,account=? WHERE id=? AND consumed=0',(digest(terminal_token),terminal_id,x.terminal_instance_id,json.dumps(x.account,separators=(',',':')),found['id']))
         if c.total_changes<1: raise HTTPException(409,'Pairing code already consumed')
@@ -259,16 +278,41 @@ def state(authorization:str|None=Header(default=None)):
         ack=json.loads(cmd['ack']) if cmd['ack'] else None
         last_command={'id':cmd['id'],'request_id':cmd['request_id'],'action':cmd['action'],'status':'ACKNOWLEDGED' if ack else 'QUEUED',**(ack or {})}
     with tx() as c:
-        m=c.execute('SELECT access_type,revoked FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute('SELECT status,error_code,error_message FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1',(p['id'],)).fetchone()
     managed=None
+    identity_verified=False
     if m:
         actual=fresh_heartbeat(p); worker_ready=bool(job and job['status']=='READY')
-        app_status='READY' if actual and worker_ready else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
-        managed={'status':app_status,'access_type':m['access_type'],'terminal_fresh':bool(actual),'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
-    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'configuration':beat['configuration'] if online else {},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+        claimed=json.loads(p['account']) if p['account'] else {}
+        identity_verified=bool(actual and m['account_mode'] in ('DEMO','LIVE') and actual.get('account') and all(actual['account'].get(k)==claimed.get(k) for k in ('login','server','company','currency','account_mode')) and actual['account'].get('account_mode')==m['account_mode'])
+        app_status='READY' if identity_verified and worker_ready else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
+        live_auth=bool(m['account_mode']=='LIVE' and identity_verified and p['live_authorized_until'] and p['live_authorized_until']>time.time() and p['live_authorized_login']==actual['account'].get('login') and p['live_authorized_server']==actual['account'].get('server'))
+        managed={'status':app_status,'access_type':m['access_type'],'account_mode':m['account_mode'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
+    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'configuration':beat['configuration'] if online else {},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
+@app.post('/v1/app/live-authorization')
+def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
+    p=auth(authorization,'app')
+    if not x.confirm_live_trading: raise HTTPException(422,'Explicit LIVE trading confirmation is required')
+    with tx() as c:
+        m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
+    beat=fresh_heartbeat(p)
+    if not m or m['revoked'] or m['account_mode']!='LIVE' or m['access_type']!='MASTER': raise HTTPException(409,'LIVE authorization requires a non-revoked LIVE MASTER profile')
+    if not beat or beat.get('state') not in ('READY','STOPPED','PAUSED') or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY':
+        raise HTTPException(409,'LIVE authorization requires a fresh, ready terminal whose verified identity matches the LIVE profile')
+    until=time.time()+900
+    account=beat['account']
+    with tx(True) as c:
+        c.execute('UPDATE pairings SET live_authorized_until=?,live_authorized_login=?,live_authorized_server=? WHERE id=?',(until,account['login'],account['server'],p['id']))
+    return {'authorized':True,'expires_at':iso(datetime.fromtimestamp(until,timezone.utc)),'duration_seconds':900}
+@app.delete('/v1/app/live-authorization')
+def revoke_live_authorization(authorization:str|None=Header(default=None)):
+    p=auth(authorization,'app')
+    with tx(True) as c: c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
+    return {'revoked':True}
 @app.post('/v1/app/commands',status_code=202)
 def command(x:Command,authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); check_json(x.config)
@@ -276,12 +320,14 @@ def command(x:Command,authorization:str|None=Header(default=None)):
     try: uuid.UUID(x.request_id)
     except ValueError: raise HTTPException(422,'request_id must be a UUID')
     with tx() as c:
-        m=c.execute('SELECT access_type,revoked FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
     if x.action in ('START','RESUME'):
         if not m: raise HTTPException(409,'Managed account provisioning is required before trading can be enabled')
         beat=fresh_heartbeat(p)
         with tx() as c: job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
-        if m['revoked'] or m['access_type']=='INVESTOR' or not beat or beat.get('state') not in ('READY','STOPPED','PAUSED') or not beat.get('trade_allowed') or not job or job['status']!='READY': raise HTTPException(409,'Managed execution is not authorized to start or resume')
+        account=beat.get('account',{}) if beat else {}
+        live_ok=(m['account_mode']!='LIVE' or (p['live_authorized_until'] is not None and p['live_authorized_until']>time.time() and p['live_authorized_login']==account.get('login') and p['live_authorized_server']==account.get('server')))
+        if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not beat or beat.get('state') not in ('READY','STOPPED','PAUSED') or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
     serialized=json.dumps(x.config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
         c.execute('INSERT OR IGNORE INTO commands(pairing_id,request_id,action,config) VALUES(?,?,?,?)',(p['id'],x.request_id,x.action,serialized))
@@ -315,12 +361,16 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     except Exception: raise HTTPException(422,'Invalid UTC timestamp')
     if dt.tzinfo is None or abs((now()-dt.astimezone(timezone.utc)).total_seconds())>STALE: raise HTTPException(422,'Stale or future heartbeat timestamp')
     expected=json.loads(p['account'])
-    if any(getattr(x.account,k)!=expected.get(k) for k in ('login','server','company','currency')): raise HTTPException(409,'Terminal account identity mismatch')
+    if x.account.account_mode not in ('DEMO','LIVE') or any(getattr(x.account,k)!=expected.get(k) for k in ('login','server','company','currency','account_mode')):
+        with tx(True) as c:
+            c.execute('UPDATE pairings SET heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
+            c.execute("UPDATE worker_jobs SET status='FAILED',error_code='TERMINAL_IDENTITY_MISMATCH',error_message='Terminal identity or account mode changed' WHERE pairing_id=? AND kind='PROVISION' AND status='READY'",(p['id'],))
+        raise HTTPException(409,'Terminal account identity or mode mismatch')
     payload=x.model_dump(); payload['account']=x.account.model_dump(); payload['open_positions']=[v.model_dump() for v in x.open_positions]; payload['closed_deals']=[v.model_dump() for v in x.closed_deals]; payload['timestamp']=iso(dt.astimezone(timezone.utc))
     with tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(json.dumps(payload,separators=(',',':'),allow_nan=False),p['id']))
-        managed=c.execute('SELECT access_type,revoked FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
-        if managed and not managed['revoked'] and x.state=='READY' and x.terminal_connected and (managed['access_type']=='INVESTOR' or x.trade_allowed):
+        managed=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        if managed and not managed['revoked'] and managed['account_mode']==x.account.account_mode and x.state=='READY' and x.terminal_connected and (managed['access_type']=='INVESTOR' or x.trade_allowed):
             c.execute("UPDATE worker_jobs SET status='READY',error_code=NULL,error_message=NULL WHERE pairing_id=? AND kind='PROVISION' AND status IN ('LEASED','PROVISIONING','AUTHENTICATING')",(p['id'],))
     return {'accepted':True,'received_at':iso()}
 @app.delete('/v1/app/pairing')
@@ -329,6 +379,6 @@ def revoke(authorization:str|None=Header(default=None)):
     with tx(True) as c:
         c.execute('UPDATE managed_accounts SET revoked=1,login_enc=?,server_enc=?,password_enc=? WHERE pairing_id=?',('', '', '', p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) SELECT ?,id,'REVOKE','QUEUED',? FROM pairings WHERE id=?",(str(uuid.uuid4()),time.time(),p['id']))
-        c.execute('UPDATE pairings SET app_hash=?,terminal_hash=NULL,consumed=1,heartbeat=NULL WHERE id=?',(digest(secrets.token_urlsafe(32)),p['id']))
+        c.execute('UPDATE pairings SET app_hash=?,terminal_hash=NULL,consumed=1,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(secrets.token_urlsafe(32)),p['id']))
         c.execute('DELETE FROM commands WHERE pairing_id=?',(p['id'],))
     return {'revoked':True,'deprovision_queued':True}

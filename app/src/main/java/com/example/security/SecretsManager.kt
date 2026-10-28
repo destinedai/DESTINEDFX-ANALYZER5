@@ -105,30 +105,73 @@ class SecretsManager(private val ctx: Context) {
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
 
     /** Bridge app credentials are persisted only when Android encrypted preferences initialized successfully. */
-    fun saveMT5BridgeAppToken(value: String): Boolean { check(isSecureStorageAvailable) { "Secure storage unavailable" }; return prefs.edit().putString(MT5_BRIDGE_TOKEN, value).commit() }
-    fun getMT5BridgeAppToken(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_TOKEN, "") ?: "" else ""
-    fun clearMT5BridgeAppToken() { if (isSecureStorageAvailable) prefs.edit().remove(MT5_BRIDGE_TOKEN).apply() }
+    private fun managedProfile(profile: String): String = profile.trim().uppercase().also { require(it == "DEMO" || it == "LIVE") { "Profile must be DEMO or LIVE" } }
+    private fun profileKey(kind: String, profile: String) = "${kind}_${managedProfile(profile).lowercase()}"
+    fun saveMT5BridgeAppToken(value: String, profile: String = "DEMO"): Boolean {
+        check(isSecureStorageAvailable) { "Secure storage unavailable" }
+        return prefs.edit().putString(profileKey(MT5_BRIDGE_TOKEN, profile), value).commit()
+    }
+    fun getMT5BridgeAppToken(profile: String = "DEMO"): String = if (isSecureStorageAvailable) {
+        prefs.getString(profileKey(MT5_BRIDGE_TOKEN, profile), "") ?: ""
+    } else ""
+    fun clearMT5BridgeAppToken(profile: String = "DEMO") {
+        if (isSecureStorageAvailable) {
+            prefs.edit().remove(profileKey(MT5_BRIDGE_TOKEN, profile)).apply()
+        }
+    }
+    fun saveManagedMT5Profile(profile: String, login: String, server: String, accessType: String, password: String, savePassword: Boolean) {
+        require(accessType == "MASTER" || accessType == "INVESTOR")
+        val mode = managedProfile(profile)
+        val edit = prefs.edit().putString("managed_mt5_${mode.lowercase()}_login", login.trim())
+            .putString("managed_mt5_${mode.lowercase()}_server", server)
+            .putString("managed_mt5_${mode.lowercase()}_access", accessType)
+            .putBoolean("managed_mt5_${mode.lowercase()}_save_password", savePassword)
+        if (savePassword) edit.putString("managed_mt5_${mode.lowercase()}_password", password)
+        else edit.remove("managed_mt5_${mode.lowercase()}_password")
+        edit.apply()
+    }
+    fun getManagedMT5Login(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_login", "") ?: ""
+    fun getManagedMT5Server(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_server", "") ?: ""
+    fun getManagedMT5AccessType(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_access", "MASTER") ?: "MASTER"
+    fun isManagedMT5PasswordSaveEnabled(profile: String): Boolean = prefs.getBoolean("managed_mt5_${managedProfile(profile).lowercase()}_save_password", false)
+    fun getManagedMT5Password(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_password", "") ?: ""
+    fun getManagedMT5SelectedProfile(): String = (prefs.getString("managed_mt5_selected_profile", "DEMO") ?: "DEMO").uppercase().takeIf { it in setOf("DEMO", "LIVE") } ?: "DEMO"
+    fun saveManagedMT5SelectedProfile(profile: String) { prefs.edit().putString("managed_mt5_selected_profile", managedProfile(profile)).apply() }
     /** Writes both reconciliation values atomically and synchronously before any command request is issued. */
-    fun saveMT5BridgePendingCommand(requestId: String, action: String): Boolean {
+    fun saveMT5BridgePendingCommand(requestId: String, action: String, profile: String = "DEMO"): Boolean {
         if (!isSecureStorageAvailable || requestId.isBlank() || action.isBlank()) return false
-        return prefs.edit().putString(MT5_BRIDGE_PENDING_ID, requestId)
-            .putString(MT5_BRIDGE_PENDING_ACTION, action).commit()
+        val suffix = managedProfile(profile).lowercase()
+        return prefs.edit().putString("${MT5_BRIDGE_PENDING_ID}_$suffix", requestId)
+            .putString("${MT5_BRIDGE_PENDING_ACTION}_$suffix", action).commit()
     }
-    fun getMT5BridgePendingCommandId(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_PENDING_ID, "") ?: "" else ""
-    fun getMT5BridgePendingCommandAction(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_PENDING_ACTION, "") ?: "" else ""
-    fun clearMT5BridgePendingCommand() {
-        if (isSecureStorageAvailable) prefs.edit().remove(MT5_BRIDGE_PENDING_ID).remove(MT5_BRIDGE_PENDING_ACTION).commit()
+    fun getMT5BridgePendingCommandId(profile: String = "DEMO"): String = if (isSecureStorageAvailable) {
+        prefs.getString("${MT5_BRIDGE_PENDING_ID}_${managedProfile(profile).lowercase()}", "") ?: ""
+    } else ""
+    fun getMT5BridgePendingCommandAction(profile: String = "DEMO"): String = if (isSecureStorageAvailable) {
+        prefs.getString("${MT5_BRIDGE_PENDING_ACTION}_${managedProfile(profile).lowercase()}", "") ?: ""
+    } else ""
+    fun clearMT5BridgePendingCommand(profile: String = "DEMO") {
+        if (isSecureStorageAvailable) {
+            val suffix = managedProfile(profile).lowercase()
+            prefs.edit().remove("${MT5_BRIDGE_PENDING_ID}_$suffix").remove("${MT5_BRIDGE_PENDING_ACTION}_$suffix").commit()
+        }
     }
-    fun saveMT5BridgeSafetyStop(originalId: String, originalAction: String, stopId: String): Boolean {
+    fun saveMT5BridgeSafetyStop(originalId: String, originalAction: String, stopId: String, profile: String = "DEMO"): Boolean {
         if (!isSecureStorageAvailable || originalId.isBlank() || originalAction.isBlank() || stopId.isBlank()) return false
-        return prefs.edit().putString(MT5_BRIDGE_SAFETY_ORIGINAL_ID, originalId)
-            .putString(MT5_BRIDGE_SAFETY_ORIGINAL_ACTION, originalAction)
-            .putString(MT5_BRIDGE_SAFETY_STOP_ID, stopId).commit()
+        val suffix = managedProfile(profile).lowercase()
+        return prefs.edit().putString("${MT5_BRIDGE_SAFETY_ORIGINAL_ID}_$suffix", originalId)
+            .putString("${MT5_BRIDGE_SAFETY_ORIGINAL_ACTION}_$suffix", originalAction)
+            .putString("${MT5_BRIDGE_SAFETY_STOP_ID}_$suffix", stopId).commit()
     }
-    fun getMT5BridgeSafetyOriginalId(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_SAFETY_ORIGINAL_ID, "") ?: "" else ""
-    fun getMT5BridgeSafetyOriginalAction(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_SAFETY_ORIGINAL_ACTION, "") ?: "" else ""
-    fun getMT5BridgeSafetyStopId(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_SAFETY_STOP_ID, "") ?: "" else ""
-    fun clearMT5BridgeSafetyStop() { if (isSecureStorageAvailable) prefs.edit().remove(MT5_BRIDGE_SAFETY_ORIGINAL_ID).remove(MT5_BRIDGE_SAFETY_ORIGINAL_ACTION).remove(MT5_BRIDGE_SAFETY_STOP_ID).commit() }
+    fun getMT5BridgeSafetyOriginalId(profile: String = "DEMO"): String = if (isSecureStorageAvailable) prefs.getString("${MT5_BRIDGE_SAFETY_ORIGINAL_ID}_${managedProfile(profile).lowercase()}", "") ?: "" else ""
+    fun getMT5BridgeSafetyOriginalAction(profile: String = "DEMO"): String = if (isSecureStorageAvailable) prefs.getString("${MT5_BRIDGE_SAFETY_ORIGINAL_ACTION}_${managedProfile(profile).lowercase()}", "") ?: "" else ""
+    fun getMT5BridgeSafetyStopId(profile: String = "DEMO"): String = if (isSecureStorageAvailable) prefs.getString("${MT5_BRIDGE_SAFETY_STOP_ID}_${managedProfile(profile).lowercase()}", "") ?: "" else ""
+    fun clearMT5BridgeSafetyStop(profile: String = "DEMO") {
+        if (isSecureStorageAvailable) {
+            val suffix = managedProfile(profile).lowercase()
+            prefs.edit().remove("${MT5_BRIDGE_SAFETY_ORIGINAL_ID}_$suffix").remove("${MT5_BRIDGE_SAFETY_ORIGINAL_ACTION}_$suffix").remove("${MT5_BRIDGE_SAFETY_STOP_ID}_$suffix").commit()
+        }
+    }
     
     fun getSupabaseUrl(): String = ""
     fun getSupabaseAnonKey(): String = ""

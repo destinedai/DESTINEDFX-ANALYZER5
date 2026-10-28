@@ -24,7 +24,7 @@ class WorkerTests(unittest.TestCase):
         self.meta.chmod(0o755)
         self.job = {"job_id": "job_123", "pairing_id": "pair_456", "pairing_code": "abcdefgh1234",
                     "bridge_url": "https://bridge.destinedfx.internal", "account": {"login": "123456", "server": "Demo-Server",
-                    "password": "secret-not-logged", "access_type": "INVESTOR"}}
+                    "password": "secret-not-logged", "access_type": "INVESTOR", "account_mode": "DEMO"}}
         self.settings = {"data_root": str(self.root / "accounts"), "mt5_install": str(self.install),
                          "terminal_exe": str(self.term), "metaeditor_exe": str(self.meta), "ea_source": str(self.source)}
 
@@ -39,9 +39,21 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("ExpertParameters=DestinedFXTraderEA.set", text)
 
     def test_set_contains_pairing_and_bridge(self):
-        text = worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234")
+        text = worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234", self.job["account"])
         self.assertIn("InpBridgeBaseURL=https://bridge.destinedfx.internal", text)
         self.assertIn("InpPairingCode=abcdefgh1234", text)
+        self.assertIn("InpExpectedLogin=123456", text)
+        self.assertIn("InpExpectedServer=Demo-Server", text)
+        self.assertIn("InpExpectedAccountMode=DEMO", text)
+
+    def test_job_requires_explicit_valid_account_mode(self):
+        missing = {**self.job, "account": {k: v for k, v in self.job["account"].items() if k != "account_mode"}}
+        with self.assertRaises(worker.ProvisionError):
+            worker.validate_job(missing)
+        unknown = {**self.job, "account": {**self.job["account"], "account_mode": "UNKNOWN"}}
+        with self.assertRaises(worker.ProvisionError) as e:
+            worker.validate_job(unknown)
+        self.assertEqual(e.exception.code, "INVALID_ACCOUNT_MODE")
 
     def test_invalid_path_and_bridge_rejected(self):
         bad = dict(self.job, job_id="../escape")

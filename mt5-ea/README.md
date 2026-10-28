@@ -2,6 +2,8 @@
 
 `DestinedFXTraderEA.mq5` is a real MQL5 Expert Advisor using `CTrade` for orders and outbound HTTPS `WebRequest` calls for the documented DestinedFX bridge v1. It is not a port of every Android signal, strategy, or risk feature and does not implement an undocumented protocol.
 
+Each managed profile provisions expected login, exact server name, and `DEMO`/`LIVE` mode as EA inputs. The EA compares these to the actual MT5 login/server and `ACCOUNT_TRADE_MODE` at claim, START, RESUME, and before every order. The bridge and Android app also verify the matching fresh heartbeat; LIVE START/RESUME additionally needs a separate, explicit, server-verified authorization that expires after 15 minutes. DEMO and LIVE use separate app pairings and encrypted local state.
+
 ## Exact strategy scope
 
 The only supported strategy is a deterministic **ICT Silver Bullet subset** (`ict-silver-bullet`): scan configured symbol/timeframe pairs on a timer; require a recent three-candle directional FVG (up to 15 closed bars old), current price within `max(0.25 × ATR(14), 2 × spread)` of the FVG midpoint/CE, and UTC London/NY killzone windows 07:00–09:00, 13:30–15:30, or 18:00–20:00. It additionally requires a prior local swing sweep with close-back rejection and a same-direction displacement candle whose body is at least 0.5 ATR. The sweep/displacement thresholds and local swing interpretation are conservative implementation choices, not a claim of parity with the app's complete ICT analysis. The app's source describes a killzone-specific liquidity sweep and 1m–5m FVG displacement model, CE entries, and 1:2 minimum RR; the app's plan specifically requires a recent unfilled directional FVG and the CE distance tolerance above.
