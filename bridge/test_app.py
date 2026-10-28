@@ -520,6 +520,7 @@ def test_closed_trade_ledger_preserves_broker_entry_metadata_and_true_costs():
 # Hosted deployment and ShowMyTrades adapter regressions.
 from email.message import Message
 from datetime import datetime, timezone
+import json
 
 def _showmytrades_payload(events=None, generated_offset_seconds=0):
     now_s=time.time()
@@ -581,7 +582,7 @@ def test_render_external_url_fallback_can_make_bridge_ready(monkeypatch):
 def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(monkeypatch):
     from starlette.requests import Request
     monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')
-    monkeypatch.setenv('ALLOW_LOOPBACK_HTTP','false')
+    monkeypatch.setattr(app,'ALLOW_LOOPBACK',False)
     http_client=TestClient(app.app,base_url='https://destinedfx-managed-bridge.onrender.com')
     assert http_client.get('/health').status_code==200
     scope={'type':'http','scheme':'http','method':'GET','path':'/health','raw_path':b'/health',
