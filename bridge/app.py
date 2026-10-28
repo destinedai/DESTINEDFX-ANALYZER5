@@ -234,8 +234,10 @@ def _showmytrades_news(symbol):
             verdict['detail']=detail
         return verdict
     except Exception as exc:
-        # Expose only the exception class for sanitized operator diagnostics; never a URL/token/body.
-        return _unknown_news(source,'NEWS UNKNOWN: calendar provider unavailable or malformed ('+type(exc).__name__+')')
+        # Diagnostic is limited to the exception type and missing symbol name; no URL/token/body is logged.
+        missing_name = getattr(exc, 'name', None) if isinstance(exc, NameError) else None
+        diagnostic = type(exc).__name__ + (':' + missing_name if missing_name else '')
+        return _unknown_news(source,'NEWS UNKNOWN: calendar provider unavailable or malformed ('+diagnostic+')')
 
 def provider_news(symbol):
     parsed=urlparse(NEWS_PROVIDER_URL)

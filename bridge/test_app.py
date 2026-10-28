@@ -579,10 +579,16 @@ def test_render_external_url_fallback_can_make_bridge_ready(monkeypatch):
     assert client.get('/health/ready').status_code==200
 
 def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(monkeypatch):
+    from starlette.requests import Request
     monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')
     monkeypatch.setenv('ALLOW_LOOPBACK_HTTP','false')
-    http_client=TestClient(app.app,base_url='http://testserver',raise_server_exceptions=False)
-    ok=http_client.get('/health',headers={'Host':'destinedfx-managed-bridge.onrender.com','X-Forwarded-Proto':'https'})
-    assert ok.status_code==200
-    spoofed=http_client.get('/health',headers={'Host':'attacker.invalid','X-Forwarded-Proto':'https'})
-    assert spoofed.status_code==400
+    http_client=TestClient(app.app,base_url='https://destinedfx-managed-bridge.onrender.com')
+    assert http_client.get('/health').status_code==200
+    scope={'type':'http','scheme':'http','method':'GET','path':'/health','raw_path':b'/health',
+           'query_string':b'','headers':[(b'host',b'attacker.invalid'),(b'x-forwarded-proto',b'https')],
+           'client':('127.0.0.1',1234),'server':('127.0.0.1',8000),'http_version':'1.1'}
+    try:
+        app.secure(Request(scope))
+        assert False, 'mismatched forwarded Host must fail closed'
+    except app.HTTPException as exc:
+        assert exc.status_code==400
