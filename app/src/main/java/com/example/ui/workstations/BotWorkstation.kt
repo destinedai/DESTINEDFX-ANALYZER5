@@ -1711,13 +1711,17 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         )
                     }
 
-                    // 1-Tap Dual Action Buttons (SELL BID / BUY ASK)
+                    if (activeBrokerType == com.example.data.broker.BrokerType.MT5) {
+                        Text("Direct MT5 orders are disabled. Use the managed EA controls above; only broker-confirmed terminal telemetry can confirm an execution.", color = WarningAmber, fontSize = 10.sp)
+                    }
+                    // Direct MT5 order routing is disabled; MT5 execution is managed-terminal only.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         // SELL BUTTON
                         Button(
+                            enabled = activeBrokerType != com.example.data.broker.BrokerType.MT5,
                             onClick = {
                                 if (!isConnected) {
                                     instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
@@ -1733,7 +1737,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         rationale = "MT5 1-Tap Execution (${String.format(java.util.Locale.US, "%.2f", instantLotSize)} lots)",
                                         lotSize = instantLotSize
                                     )
-                                    instantExecutionStatus = "✅ Deal executed: SELL ${String.format(java.util.Locale.US, "%.2f", instantLotSize)} $activeSymbol @ ${formatPrice(bidPrice, activeSymbol)} | SL: ${formatPrice(sellSl, activeSymbol)} | TP: ${formatPrice(sellTp, activeSymbol)}"
+                                    instantExecutionStatus = "Order request submitted to the local trade workflow; fill is not confirmed. Check broker order/deal history."
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = LossRed),
@@ -1755,6 +1759,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         // BUY BUTTON
                         Button(
+                            enabled = activeBrokerType != com.example.data.broker.BrokerType.MT5,
                             onClick = {
                                 if (!isConnected) {
                                     instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
@@ -1770,7 +1775,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         rationale = "MT5 1-Tap Execution (${String.format(java.util.Locale.US, "%.2f", instantLotSize)} lots)",
                                         lotSize = instantLotSize
                                     )
-                                    instantExecutionStatus = "✅ Deal executed: BUY ${String.format(java.util.Locale.US, "%.2f", instantLotSize)} $activeSymbol @ ${formatPrice(askPrice, activeSymbol)} | SL: ${formatPrice(buySl, activeSymbol)} | TP: ${formatPrice(buyTp, activeSymbol)}"
+                                    instantExecutionStatus = "Order request submitted to the local trade workflow; fill is not confirmed. Check broker order/deal history."
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen),
@@ -1793,40 +1798,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Full-Auto Smart Instant Execution Button (Zero Manual Inputs)
+                    // No deterministic strategy-plan-to-broker execution flow exists for this shortcut.
                     Button(
-                        onClick = {
-                            if (!isConnected) {
-                                instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
-                            } else if (askPrice <= 0.0 || bidPrice <= 0.0) {
-                                instantExecutionStatus = "⚠️ Waiting for live streaming quotes on $activeSymbol..."
-                            } else {
-                                val bal = accountMetrics?.balance ?: 0.0
-                                val eq = accountMetrics?.equity ?: bal
-                                val lev = accountMetrics?.leverage ?: 0
-                                val szRes = viewModel.sizeFor(activeSymbol, bal, riskPercent, askPrice, askPrice - 0.0030)
-                                val autoLots = when (szRes) {
-                                    is com.destinedfx.core.risk.SizingResult.Sized -> szRes.lots
-                                    else -> 0.02
-                                }
-                                val isBuy = askPrice >= bidPrice
-                                val execPrice = if (isBuy) askPrice else bidPrice
-                                val sl = if (isBuy) execPrice - 0.0030 else execPrice + 0.0030
-                                val tp = if (isBuy) execPrice + 0.0075 else execPrice - 0.0075
-                                val dirStr = if (isBuy) "BUY" else "SELL"
-
-                                viewModel.executeTrade(
-                                    symbol = activeSymbol,
-                                    positionType = dirStr,
-                                    entryPrice = execPrice,
-                                    stopLoss = sl,
-                                    takeProfit = tp,
-                                    rationale = "Full-Auto Smart Execution (Balance: $${String.format(java.util.Locale.US, "%.2f", bal)}, Equity: $${String.format(java.util.Locale.US, "%.2f", eq)}, Leverage: 1:$lev)",
-                                    lotSize = autoLots
-                                )
-                                instantExecutionStatus = "⚡ Full-Auto Executed: $dirStr ${String.format(java.util.Locale.US, "%.2f", autoLots)} lots $activeSymbol @ ${formatPrice(execPrice, activeSymbol)} (Bal: $${String.format(java.util.Locale.US, "%.2f", bal)}, Lev: 1:$lev)"
-                            }
-                        },
+                        enabled = false,
+                        onClick = { instantExecutionStatus = "Unavailable: no broker-validated strategy plan is available." },
                         colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("full_auto_execute_button")
@@ -1834,7 +1809,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = DarkBackground)
                             Text(
-                                text = "⚡ SMART FULL-AUTO EXECUTE (AUTO BALANCE & LEVERAGE)",
+                                text = "FULL-AUTO ORDERING UNAVAILABLE — VERIFIED PLAN REQUIRED",
                                 fontWeight = FontWeight.Black,
                                 fontSize = 11.sp,
                                 color = DarkBackground,

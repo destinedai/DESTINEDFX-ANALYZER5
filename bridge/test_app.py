@@ -29,14 +29,15 @@ def test_pairing_expiry():
 
 def test_duplicate_request_ids_delivery_ack_and_replay():
     p=pair(); t=claimed(p); ah={'Authorization':'Bearer '+p['app_token']}; th={'Authorization':'Bearer '+t['terminal_token']}
-    req={'request_id':str(uuid.uuid4()),'action':'START','config':{'strategy':'ict-silver-bullet','symbols':['EURUSD']}}
+    req={'request_id':str(uuid.uuid4()),'action':'STOP','config':{}}
     a=client.post('/v1/app/commands',json=req,headers=ah); b=client.post('/v1/app/commands',json=req,headers=ah)
     assert a.status_code==202 and a.json()['id']==b.json()['id']
-    changed={**req,'action':'STOP'}
+    changed={**req,'action':'START'}
     assert client.post('/v1/app/commands',json=changed,headers=ah).status_code==409
     delivered=client.get('/v1/terminal/commands?cursor=0',headers=th).json(); assert delivered['commands'][0]['id']==a.json()['id']
     assert client.get('/v1/terminal/commands?cursor='+str(delivered['cursor']),headers=th).json()['commands']
-    ack={'outcome':'APPLIED','state':'READY','message':'accepted by demo EA'}
+    assert client.post(f"/v1/terminal/commands/{a.json()['id']}/ack",json={'outcome':'APPLIED','state':'RUNNING','message':'contradictory'},headers=th).status_code==422
+    ack={'outcome':'APPLIED','state':'STOPPED','message':'applied'}
     assert client.post(f"/v1/terminal/commands/{a.json()['id']}/ack",json=ack,headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['last_command']['request_id']==req['request_id'] and state['last_command']['status']=='ACKNOWLEDGED'
@@ -186,7 +187,7 @@ def test_worker_lease_owner_and_terminal_auth_timeout(monkeypatch):
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'owner'}).json()
     wrong=client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'other','status':'AUTHENTICATING'})
     assert wrong.status_code==403
-    with app.tx(True) as c: c.execute('UPDATE worker_jobs SET status="AUTHENTICATING",lease_until=? WHERE id=?',(time.time()-181,job['job_id']))
+    with app.tx(True) as c: c.execute('UPDATE worker_jobs SET status="AUTHENTICATING",lease_until=?,lease_started=? WHERE id=?',(time.time()+120,time.time()-301,job['job_id']))
     status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=owner',headers=wh).json()
     assert status['status']=='FAILED' and status['error_code']=='TERMINAL_AUTH_TIMEOUT'
 
@@ -204,3 +205,44 @@ def test_placeholder_managed_origin_is_configuration_required(monkeypatch):
     p,ah=managed_pair()
     r=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'secret','access_type':'MASTER','consent':True})
     assert r.status_code==503 and r.json()['detail']['code']=='CONFIGURATION_REQUIRED'
+
+def test_start_requires_managed_account_and_fresh_authorized_terminal():
+    p=pair(); ah={'Authorization':'Bearer '+p['app_token']}
+    req={'request_id':str(uuid.uuid4()),'action':'START','config':{'strategy':'ict-silver-bullet'}}
+    assert client.post('/v1/app/commands',json=req,headers=ah).status_code==409
+
+def test_heartbeat_rejects_impossible_numeric_telemetry():
+    p=pair(); t=claimed(p); th={'Authorization':'Bearer '+t['terminal_token']}
+    position={'ticket':'10','position_id':'9','symbol':'EURUSD','direction':'BUY','volume':-0.01,'open_price':1.1,'stop_loss':1.09,'take_profit':1.12,'floating_profit':1.0,'commission':None,'swap':0.0}
+    assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(open_positions=[position]),headers=th).status_code==422
+    bad_account={**ACCOUNT,'balance':-100,'equity':100,'margin':0,'free_margin':100,'margin_level':0,'leverage':100}
+    assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(account=bad_account),headers=th).status_code==422
+
+def test_expired_active_worker_lease_is_reclaimable_and_old_owner_is_fenced(monkeypatch):
+    managed_env(monkeypatch); p,ah=managed_pair()
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'99','server':'S','password':'secret','access_type':'MASTER','consent':True})
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'first'}).json()
+    client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'first','status':'AUTHENTICATING'})
+    with app.tx(True) as c: c.execute('UPDATE worker_jobs SET lease_until=? WHERE id=?',(time.time()-1,job['job_id']))
+    expired=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=first',headers=wh)
+    assert expired.status_code==409
+    reclaimed=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'second'}).json()
+    assert reclaimed['job_id']==job['job_id'] and reclaimed['worker_id']=='second'
+    old=client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'first','status':'AUTHENTICATING'})
+    assert old.status_code==403
+
+def test_revocation_failure_is_reported_and_queued_provision_is_not_mislabeled(monkeypatch):
+    managed_env(monkeypatch); p,ah=managed_pair()
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'111','server':'S','password':'secret','access_type':'MASTER','consent':True})
+    assert client.delete('/v1/app/pairing',headers=ah).status_code==200
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    # The older PROVISION job is marked failed; only the actual REVOKE job is returned.
+    assert client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker'}).json()['job'] is None
+    revoke=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker'}).json()
+    assert revoke['kind']=='REVOKE'
+    update=client.patch('/v1/worker/jobs/'+revoke['job_id'],headers=wh,json={'worker_id':'worker','status':'FAILED','error_code':'REVOKE_MARKER_NOT_FOUND'})
+    assert update.status_code==200
+    with app.tx() as c:
+        row=c.execute('SELECT status,error_code FROM worker_jobs WHERE id=?',(revoke['job_id'],)).fetchone()
+    assert tuple(row)==('FAILED','REVOKE_MARKER_NOT_FOUND')

@@ -112,8 +112,6 @@ open class DestinedFXViewModel(
     private val client by lazy { OkHttpClient() }
     private val notificationService = NotificationService(OkHttpClient())
 
-    private val _mt5Connected = MutableStateFlow(false)
-    private val _mt5Balance = MutableStateFlow(0.0)
     private val _botActive = MutableStateFlow(false)
 
     suspend fun resolveRealPrice(symbol: String, timeframe: String): ResolvedPrice? {
@@ -691,13 +689,8 @@ open class DestinedFXViewModel(
     val nextNfpDate = "Friday, July 3, 2026"
     val showHaltNotification = MutableStateFlow(false)
 
-    // MetaTrader Broker Connection Configurations & Themes (100% Free Lifetime Active)
+    // Shared app appearance settings
     val themeMode = MutableStateFlow("System") // "System", "Light", "Dark"
-    val brokerServer = MutableStateFlow(if (isPreview) "" else app.secretsManager.getMT5BrokerServer())
-    val mtAccountNumber = MutableStateFlow("1028471")
-    val mtBrokerPassword = MutableStateFlow("••••••••••••")
-    val terminalMode = MutableStateFlow("MT5 Gateway")
-    val mt5GatewayUrl = MutableStateFlow("")
 
     // Text To Speech Voice System
     private var tts: TextToSpeech? = null
@@ -1329,6 +1322,9 @@ open class DestinedFXViewModel(
         viewModelScope.launch {
             try {
                 if (active) {
+                    if (app.brokerManager.selectedBrokerType.value == com.example.data.broker.BrokerType.MT5) {
+                        throw IllegalStateException("Local MT5 automation is disabled; use the authenticated managed-terminal EA control.")
+                    }
                     val gateway = app.brokerManager.activeBroker.value
                     if (gateway.connectionStatus.value != com.example.data.broker.BrokerConnectionStatus.CONNECTED || gateway.accountMetrics.value == null) {
                         throw IllegalStateException("Bot activation blocked: a verified authenticated account snapshot is required.")
@@ -1473,14 +1469,6 @@ open class DestinedFXViewModel(
         }
     }
 
-    private fun updateFloatingCapital() {
-        if (_mt5Connected.value) {
-            accountCapital.value = _mt5Balance.value
-        } else {
-            accountCapital.value = 0.0
-        }
-    }
-
     private fun closeTradeAutomated(trade: TradeEntity, status: String, pips: Int, pl: Double) {
         viewModelScope.launch {
             repository.updateTrade(
@@ -1504,11 +1492,14 @@ open class DestinedFXViewModel(
     ) {
         viewModelScope.launch {
             try {
+                if (app.brokerManager.selectedBrokerType.value == com.example.data.broker.BrokerType.MT5) {
+                    throw IllegalStateException("Direct MT5 orders are disabled; use the managed terminal EA control.")
+                }
                 val direction = if (positionType.equals("Long", true) || positionType.equals("BUY", true)) 
                     com.example.domain.model.SignalDirection.LONG else com.example.domain.model.SignalDirection.SHORT
                 
-                val currentPrice = tickers.value[symbol]?.price ?: entryPrice
-                val actualEntry = if (entryPrice > 0.0) entryPrice else currentPrice
+                if (!entryPrice.isFinite() || entryPrice <= 0.0) throw IllegalArgumentException("A valid current entry quote is required; no fallback price is used.")
+                val actualEntry = entryPrice
 
                 val signal = com.example.domain.model.TradeSignal(
                     id = UUID.randomUUID().toString(),
@@ -1528,28 +1519,15 @@ open class DestinedFXViewModel(
                 app.tradeUseCase.executeTrade(signal)
                 
                 withContext(Dispatchers.Main) {
-                    speakText("Order execution confirmed by broker.")
-                    actionAlertMessage.value = "Trade Active: $symbol $positionType"
+                    speakText("Order request returned; fill confirmation is not available here.")
+                    actionAlertMessage.value = "Order request returned for $symbol $positionType; broker fill is not confirmed by this result. Verify the terminal order and deal history."
                 }
 
-                if (telegramNotificationsEnabled.value) {
-                    val dir = if (direction == com.example.domain.model.SignalDirection.LONG) "BUY 🟢" else "SELL 🔴"
-                    val alert = "🚀 *DestinedFX Instant Trade Executed* 🚀\n\n" +
-                            "• Instrument: *$symbol*\n" +
-                            "• Direction: *$dir*\n" +
-                            "• Entry: *${String.format(java.util.Locale.US, "%.5f", actualEntry)}*\n" +
-                            "• Stop Loss: *${if (stopLoss > 0.0) String.format(java.util.Locale.US, "%.5f", stopLoss) else "—"}*\n" +
-                            "• Take Profit: *${if (takeProfit > 0.0) String.format(java.util.Locale.US, "%.5f", takeProfit) else "—"}*\n" +
-                            "• Lot Size: *$lotSize*\n" +
-                            "• Broker: *MT5 Terminal (Instant Deal)*\n" +
-                            "• Status: *Active & Filled* ✅"
-                    notificationService.sendTelegramMessage(telegramBotToken.value, telegramChatId.value, alert)
-                }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     val error = e.message ?: "Unknown execution error"
-                    speakText("Trade rejected: $error")
-                    actionAlertMessage.value = "Execution Failed: $error"
+                    speakText("Trade request failed or needs manual outcome reconciliation: $error")
+                    actionAlertMessage.value = "Trade request failed or outcome is unknown: $error"
                 }
             }
         }
@@ -1585,73 +1563,13 @@ open class DestinedFXViewModel(
         currency: String = "USD",
         onResult: (Boolean, String?) -> Unit
     ) {
-        if (isPreview) {
-            onResult(false, "Broker login is disabled in preview mode.")
-            return
-        }
-        val cleanLogin = login.trim()
-        val cleanServer = server.trim()
-        if (cleanLogin.isBlank() || !cleanLogin.all { it.isDigit() }) {
-            onResult(false, "Enter the numeric MT5 Login provided by your broker.")
-            return
-        }
-        if (password.isBlank() || cleanServer.isBlank()) {
-            onResult(false, "MT5 master Password and Server are required.")
-            return
-        }
-        if (investorPassword.isNotBlank()) {
-            onResult(false, "Investor-password authentication is not supported by the configured MetaAPI flow; no read-only session was created.")
-            return
-        }
-        viewModelScope.launch {
-            brokerConnected.value = false
-            try {
-                app.mt5GatewayAdapter.disconnect()
-                app.secretsManager.saveMT5SessionStatus("CONNECTING")
-                app.secretsManager.saveMT5Login(cleanLogin)
-                app.secretsManager.saveMT5BrokerServer(cleanServer)
-                app.secretsManager.saveMT5PasswordIfAllowed(password, savePassword)
-                app.secretsManager.saveMT5InvestorPassword("")
-                app.secretsManager.saveMT5AccountNumber("")
-                app.secretsManager.saveMT5AccountBalance(0.0)
-                app.secretsManager.saveConfiguredEquity(0.0)
-                accountCapital.value = 0.0
-                configuredEquity.value = 0.0
-                app.brokerManager.selectBroker(com.example.data.broker.BrokerType.MT5)
-                val provisioned = app.mt5GatewayRepository.provisionAccount(cleanLogin, password, cleanServer)
-                if (provisioned.isFailure) throw provisioned.exceptionOrNull() ?: Exception("MetaAPI account provisioning failed.")
-                app.secretsManager.saveMT5AccountNumber(provisioned.getOrThrow())
-                val result = app.mt5GatewayAdapter.connect()
-                if (result.isSuccess) {
-                    brokerConnected.value = true
-                    app.secretsManager.saveMT5SessionStatus("CONNECTED")
-                    prefetchWatchlistSpecs()
-                    val metrics = app.mt5GatewayAdapter.accountMetrics.value ?: throw Exception("MetaAPI did not return a verified account snapshot.")
-                    accountCapital.value = metrics.balance
-                    onResult(true, "MT5 authenticated by MetaAPI • Login $cleanLogin ($cleanServer) • Balance " +
-                        String.format(java.util.Locale.US, "%.2f", metrics.balance) + " ${metrics.currency}")
-                } else {
-                    brokerConnected.value = false
-                    app.secretsManager.saveMT5SessionStatus("AUTH_FAILED")
-                    onResult(false, result.exceptionOrNull()?.message ?: "MT5 connection failed.")
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                brokerConnected.value = false
-                app.secretsManager.saveMT5SessionStatus(if (e.message?.contains("CONFIGURATION_REQUIRED") == true) "CONFIGURATION_REQUIRED" else "AUTH_FAILED")
-                onResult(false, e.message ?: "MT5 authentication failed.")
-            }
-        }
+        val message = if (isPreview) "Broker login is disabled in preview mode." else
+            "Direct MT5/MetaAPI login is disabled. Use Bot → Managed MT5; credentials are not sent by this legacy route."
+        onResult(false, message)
     }
+
     fun reconnectMT5Session(onResult: (Boolean, String?) -> Unit) {
-        val login = app.secretsManager.getMT5Login()
-        val pass = app.secretsManager.getMT5Password()
-        val server = app.secretsManager.getMT5BrokerServer()
-        if (login.isBlank() || pass.isBlank() || server.isBlank()) {
-            onResult(false, "Reconnect requires the account password again because password saving is disabled or no credentials are stored.")
-            return
-        }
-        connectToMT5Credentials(login, pass, server, savePassword = true, onResult = onResult)
+        onResult(false, "Legacy MetaAPI reconnect is disabled. Reconnect through Bot → Managed MT5 and verify a fresh terminal heartbeat.")
     }
     fun selectBroker(type: com.example.data.broker.BrokerType) {
         if (isPreview) return

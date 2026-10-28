@@ -17,13 +17,6 @@ data class RiskUiState(
     val themeMode: String         = "System"
 )
 
-/**
- * REPLACES the credential StateFlows that were exposed in DestinedFXViewModel:
- *   telegramBotToken, telegramChatId, whatsappApiKey, whatsappPhoneNumber, mtBrokerPassword
- *
- * Credentials ONLY pass through SecretsManager (Android Keystore).
- * RiskViewModel only exposes non-sensitive display values (account number, server name).
- */
 class RiskViewModel(
     private val risk: RiskRepository, private val secrets: SecretsManager
 ) : ViewModel() {
@@ -32,9 +25,6 @@ class RiskViewModel(
     val state: StateFlow<RiskUiState> = _s
 
     val themeMode       = MutableStateFlow("System")
-    val brokerServer    = MutableStateFlow("")
-    val mtAccountNumber = MutableStateFlow("")
-    val terminalMode    = MutableStateFlow("MT5 Gateway")
     val telegramEnabled = MutableStateFlow(false)
     val whatsappEnabled = MutableStateFlow(false)
     val nfpShieldActive = MutableStateFlow(true)
@@ -48,8 +38,6 @@ class RiskViewModel(
                     currentDrawdown=p.currentDailyDrawdown,
                     fixedRiskPerTrade=p.fixedRiskPercentage
                 )
-                mtAccountNumber.value = secrets.getMT5AccountNumber()
-                brokerServer.value    = secrets.getMT5BrokerServer()
                 telegramEnabled.value = secrets.getTelegramToken().isNotBlank()
                 whatsappEnabled.value = secrets.getWhatsAppApiKey().isNotBlank()
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -66,12 +54,6 @@ class RiskViewModel(
     fun setTheme(m: String) { themeMode.value=m; _s.value=_s.value.copy(themeMode=m) }
     fun calculateLotSize(bal: Double, entry: Double, sl: Double, rPct: Double, symbol: String = "") =
         QuantitativeEngine.calculateDynamicLotSize(bal, entry, sl, rPct, symbol = symbol)
-
-    fun saveBrokerCredentials(account: String, password: String, server: String, metaApiToken: String) {
-        secrets.saveMT5AccountNumber(account); secrets.saveMT5Password(password)
-        secrets.saveMT5BrokerServer(server);   secrets.saveMetaApiToken(metaApiToken)
-        mtAccountNumber.value=account; brokerServer.value=server
-    }
 
     fun saveTelegramCredentials(token: String, chatId: String) {
         secrets.saveTelegramToken(token); secrets.saveTelegramChatId(chatId)

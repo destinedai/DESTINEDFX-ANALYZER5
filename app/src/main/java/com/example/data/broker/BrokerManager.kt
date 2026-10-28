@@ -5,9 +5,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class BrokerManager(
-    val derivGateway: DerivBrokerGatewayAdapter,
-    val mt5Gateway: MT5BrokerGatewayAdapter
+    val derivGateway: BrokerGateway,
+    val mt5Gateway: BrokerGateway
 ) {
+    private val unavailableOanda: BrokerGateway = UnavailableBrokerGateway(BrokerType.OANDA, "OANDA")
     private val _selectedBrokerType = MutableStateFlow(BrokerType.MT5)
     val selectedBrokerType: StateFlow<BrokerType> = _selectedBrokerType.asStateFlow()
 
@@ -17,15 +18,15 @@ class BrokerManager(
     fun selectBroker(type: BrokerType) {
         _selectedBrokerType.value = type
         _activeBroker.value = when (type) {
-            BrokerType.DERIV -> mt5Gateway
+            BrokerType.DERIV -> derivGateway
             BrokerType.MT5 -> mt5Gateway
-            BrokerType.OANDA -> mt5Gateway
+            BrokerType.OANDA -> unavailableOanda
         }
     }
 
     fun getGateway(type: BrokerType): BrokerGateway = when (type) {
-        BrokerType.DERIV -> mt5Gateway
+        BrokerType.DERIV -> derivGateway
         BrokerType.MT5 -> mt5Gateway
-        BrokerType.OANDA -> mt5Gateway
+        BrokerType.OANDA -> unavailableOanda
     }
 }

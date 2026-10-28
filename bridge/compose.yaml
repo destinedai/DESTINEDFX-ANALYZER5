@@ -6,11 +6,14 @@ services:
     environment:
       ALLOW_LOOPBACK_HTTP: "false"
       BRIDGE_DB_PATH: /data/bridge.sqlite3
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-127.0.0.1}
     volumes:
       - bridge-data:/data
     expose:
       - "8000"
-    # Publish only to loopback behind a local TLS proxy if proxy runs on host:
+    # Keep this service private behind TLS ingress; never publish port 8000 publicly.
+    # Set TRUSTED_PROXY_IPS to the actual ingress IP/CIDR, never '*'.
+    # Publish only to loopback if proxy runs on the same host:
     # ports: ["127.0.0.1:8000:8000"]
 volumes:
   bridge-data:

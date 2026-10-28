@@ -92,6 +92,14 @@ class WorkerTests(unittest.TestCase):
         worker.revoke_pairing(self.settings, "pair_456")
         self.assertFalse(result.exists())
 
+    def test_revoke_fails_if_nonempty_tree_has_no_matching_ownership_marker(self):
+        account = Path(self.settings["data_root"]) / "unknown-job" / "terminal"
+        account.mkdir(parents=True)
+        with self.assertRaises(worker.ProvisionError) as e:
+            worker.revoke_pairing(self.settings, "pair_456")
+        self.assertEqual(e.exception.code, "REVOKE_MARKER_NOT_FOUND")
+        self.assertTrue(account.exists())
+
     def test_no_process_if_compiler_and_precompiled_ea_missing(self):
         self.meta.unlink()
         with patch.object(worker.subprocess, "Popen") as popen:

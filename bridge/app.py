@@ -29,7 +29,9 @@ def db():
     CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id), request_id TEXT NOT NULL, action TEXT NOT NULL, config TEXT NOT NULL, ack TEXT, UNIQUE(pairing_id,request_id));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);''')
+    CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);''')
+    columns={r['name'] for r in c.execute('PRAGMA table_info(worker_jobs)').fetchall()}
+    if 'lease_started' not in columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN lease_started REAL')
     return c
 @contextmanager
 def tx(immediate=False):
@@ -70,14 +72,14 @@ class Command(BaseModel): model_config=ConfigDict(extra='forbid'); request_id:st
 class Ack(BaseModel): model_config=ConfigDict(extra='forbid'); outcome:str; state:str; message:str=Field(default='',max_length=1000)
 class Position(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); volume:float; open_price:float; stop_loss:float; take_profit:float; floating_profit:float; commission:float|None=None; swap:float
+    ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); volume:float=Field(gt=0,allow_inf_nan=False); open_price:float=Field(gt=0,allow_inf_nan=False); stop_loss:float=Field(ge=0,allow_inf_nan=False); take_profit:float=Field(ge=0,allow_inf_nan=False); floating_profit:float=Field(allow_inf_nan=False); commission:float|None=Field(default=None,allow_inf_nan=False); swap:float=Field(allow_inf_nan=False)
 class ClosedDeal(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); closed_at:str=Field(max_length=64); profit:float; commission:float; swap:float
+    ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); closed_at:str=Field(max_length=64); profit:float=Field(allow_inf_nan=False); commission:float=Field(allow_inf_nan=False); swap:float=Field(allow_inf_nan=False)
 class Account(BaseModel):
     model_config=ConfigDict(extra='forbid')
     login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); company:str=Field(min_length=1,max_length=128); currency:str=Field(min_length=1,max_length=16)
-    balance:float|None=None; equity:float|None=None; margin:float|None=None; free_margin:float|None=None; margin_level:float|None=None; leverage:int|None=None
+    balance:float|None=Field(default=None,gt=0,allow_inf_nan=False); equity:float|None=Field(default=None,gt=0,allow_inf_nan=False); margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); free_margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin_level:float|None=Field(default=None,ge=0,allow_inf_nan=False); leverage:int|None=Field(default=None,gt=0)
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
     state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; closed_deals:list[ClosedDeal]
@@ -153,13 +155,15 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
 def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
     worker_auth(authorization); fernet,_=managed_config(); t=time.time()
     with tx(True) as c:
-        r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status='LEASED' AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
+        r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
         if not r: return {'job':None}
-        c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=? WHERE id=?",(x.worker_id,t+120,r['id']))
+        c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=?,lease_started=? WHERE id=?",(x.worker_id,t+120,t,r['id']))
         if r['kind']=='REVOKE': return {'job_id':r['id'],'kind':'REVOKE','pairing_id':r['pairing_id'],'worker_id':x.worker_id}
         p=c.execute('SELECT * FROM pairings WHERE id=?',(r['pairing_id'],)).fetchone()
         m=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=? AND revoked=0',(r['pairing_id'],)).fetchone()
-        if not m: return {'job_id':r['id'],'kind':'REVOKE','pairing_id':r['pairing_id'],'worker_id':x.worker_id}
+        if not m:
+            c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_REVOKED',error_message='Account was revoked before provisioning' WHERE id=?",(r['id'],))
+            return {'job':None}
         account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']
         code_row=c.execute('SELECT code_hash FROM pairings WHERE id=?',(r['pairing_id'],)).fetchone()
         # Existing plaintext code is intentionally not persisted; generate a fresh one for the worker and rotate hash.
@@ -172,17 +176,19 @@ def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(defaul
     if x.status not in ('PROVISIONING','AUTHENTICATING','READY','FAILED','REVOKED'): raise HTTPException(422,'Invalid provisioning status')
     # Only expose constrained operational codes; never reflect arbitrary worker text.
     code=(x.error_code or '')[:64]
-    safe_messages={'terminal_auth_failed':'Terminal authentication failed','bridge_unavailable':'Bridge unavailable','terminal_launch_failed':'Terminal launch failed'}
+    safe_messages={'terminal_auth_failed':'Terminal authentication failed','bridge_unavailable':'Bridge unavailable','terminal_launch_failed':'Terminal launch failed','REVOKE_PROCESS_ID_MISMATCH':'Terminal process identity could not be verified','REVOKE_PROCESS_ID_MISSING':'Terminal process identity is missing','REVOKE_MARKER_NOT_FOUND':'Terminal ownership marker was not found; operator review is required','REVOKE_CLEANUP_FAILED':'Terminal cleanup could not be verified','ACCOUNT_REVOKED':'Account was revoked before provisioning'}
     message=safe_messages.get(code,'')
     with tx(True) as c:
         r=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
         if not r: raise HTTPException(404,'Job not found')
         if r['worker_id']!=x.worker_id: raise HTTPException(403,'Worker does not own this job lease')
-        if r['kind']=='REVOKE' and x.status!='REVOKED': raise HTTPException(422,'Revocation job must be acknowledged as REVOKED')
+        if r['lease_until'] is None or r['lease_until']<time.time(): raise HTTPException(409,'Worker job lease expired; reclaim the job before continuing')
+        if r['kind']=='REVOKE' and x.status not in ('REVOKED','FAILED'): raise HTTPException(422,'Revocation job must be acknowledged as REVOKED or FAILED')
         if r['kind']!='REVOKE' and x.status=='REVOKED': raise HTTPException(422,'Only a revocation job can be marked REVOKED')
         if r['status']=='READY' and x.status in ('PROVISIONING','AUTHENTICATING'): return {'updated':True}
         if r['status'] not in ('LEASED','PROVISIONING','AUTHENTICATING'): raise HTTPException(409,'Job is not active')
-        c.execute('UPDATE worker_jobs SET status=?,error_code=?,error_message=? WHERE id=?',(x.status,code or None,message or None,job_id))
+        lease=time.time()+120 if x.status in ('PROVISIONING','AUTHENTICATING','LEASED') else r['lease_until']
+        c.execute('UPDATE worker_jobs SET status=?,lease_until=?,error_code=?,error_message=? WHERE id=?',(x.status,lease,code or None,message or None,job_id))
     return {'updated':True}
 
 @app.get('/v1/worker/jobs/{job_id}/status')
@@ -192,6 +198,11 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
         job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
         if not job: raise HTTPException(404,'Job not found')
         if job['worker_id']!=worker_id: raise HTTPException(403,'Worker does not own this job lease')
+        t=time.time()
+        if job['lease_until'] is None or job['lease_until']<t: raise HTTPException(409,'Worker job lease expired; reclaim the job before continuing')
+        if job['status'] in ('LEASED','PROVISIONING','AUTHENTICATING'):
+            c.execute('UPDATE worker_jobs SET lease_until=? WHERE id=?',(t+120,job_id))
+            job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
         pairing=c.execute('SELECT * FROM pairings WHERE id=?',(job['pairing_id'],)).fetchone()
         managed=c.execute('SELECT access_type,revoked FROM managed_accounts WHERE pairing_id=?',(job['pairing_id'],)).fetchone()
         if job['kind']=='PROVISION' and job['status'] in ('PROVISIONING','AUTHENTICATING') and managed and not managed['revoked']:
@@ -200,7 +211,7 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
             if valid:
                 c.execute("UPDATE worker_jobs SET status='READY',error_code=NULL,error_message=NULL WHERE id=?",(job_id,))
                 job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
-            elif time.time()-(job['lease_until']-120 if job['lease_until'] else job['created'])>300:
+            elif time.time()-(job['lease_started'] if job['lease_started'] else job['created'])>300:
                 c.execute("UPDATE worker_jobs SET status='FAILED',error_code='TERMINAL_AUTH_TIMEOUT',error_message='Terminal did not authenticate in time' WHERE id=?",(job_id,))
                 job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
     return {'job_id':job_id,'kind':job['kind'],'status':job['status'],'error_code':job['error_code'],'error_message':job['error_message']}
@@ -266,7 +277,8 @@ def command(x:Command,authorization:str|None=Header(default=None)):
     except ValueError: raise HTTPException(422,'request_id must be a UUID')
     with tx() as c:
         m=c.execute('SELECT access_type,revoked FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
-    if x.action in ('START','RESUME') and m:
+    if x.action in ('START','RESUME'):
+        if not m: raise HTTPException(409,'Managed account provisioning is required before trading can be enabled')
         beat=fresh_heartbeat(p)
         with tx() as c: job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
         if m['revoked'] or m['access_type']=='INVESTOR' or not beat or beat.get('state') not in ('READY','STOPPED','PAUSED') or not beat.get('trade_allowed') or not job or job['status']!='READY': raise HTTPException(409,'Managed execution is not authorized to start or resume')
@@ -289,6 +301,8 @@ def acknowledge(command_id:int,x:Ack,authorization:str|None=Header(default=None)
     with tx(True) as c:
         r=c.execute('SELECT * FROM commands WHERE id=? AND pairing_id=?',(command_id,p['id'])).fetchone()
         if not r: raise HTTPException(404,'Command not found')
+        expected_state={'START':'RUNNING','RESUME':'RUNNING','PAUSE':'PAUSED','STOP':'STOPPED','EMERGENCY_STOP':'STOPPED'}.get(r['action'])
+        if x.outcome=='APPLIED' and x.state!=expected_state: raise HTTPException(422,'Applied acknowledgement state does not match command action')
         ack=json.dumps({'outcome':x.outcome,'state':x.state,'message':x.message},separators=(',',':'))
         if r['ack'] and r['ack']!=ack: raise HTTPException(409,'Command already acknowledged differently')
         c.execute('UPDATE commands SET ack=? WHERE id=?',(ack,command_id))

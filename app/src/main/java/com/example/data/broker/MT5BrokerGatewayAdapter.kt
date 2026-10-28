@@ -5,20 +5,17 @@ import com.destinedfx.core.marketdata.MarketQuote
 import com.example.data.mt5.MT5GatewayRepository
 import com.example.domain.model.CanonicalTradePlan
 import com.example.domain.model.Position
-import com.example.domain.model.SignalDirection
-import com.example.domain.model.TradeSignal
 import com.example.domain.repository.AccountMetrics
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.UUID
 
 class MT5BrokerGatewayAdapter(
     private val mt5Repo: MT5GatewayRepository
 ) : BrokerGateway {
 
     override val brokerType: BrokerType = BrokerType.MT5
-    override val displayName: String = "MetaTrader 5 (MetaAPI)"
+    override val displayName: String = "MetaTrader 5 (managed terminal)"
 
     private val _connectionStatus = MutableStateFlow(BrokerConnectionStatus.DISCONNECTED)
     override val connectionStatus: StateFlow<BrokerConnectionStatus> = _connectionStatus.asStateFlow()
@@ -30,27 +27,10 @@ class MT5BrokerGatewayAdapter(
     override val openPositions: StateFlow<List<Position>> = _openPositions.asStateFlow()
 
     override suspend fun connect(): Result<Boolean> {
-        _connectionStatus.value = BrokerConnectionStatus.CONNECTING
-        _connectionStatus.value = BrokerConnectionStatus.AUTHENTICATING
+        _connectionStatus.value = BrokerConnectionStatus.ERROR
         _accountMetrics.value = null
         _openPositions.value = emptyList()
-        val res = mt5Repo.getAccountMetrics()
-        return if (res.isSuccess) {
-            val snapshot = res.getOrThrow()
-            if (!snapshot.balance.isFinite() || !snapshot.equity.isFinite() || snapshot.currency.isBlank()) {
-                _connectionStatus.value = BrokerConnectionStatus.ERROR
-                Result.failure(Exception("MetaAPI returned an invalid account snapshot."))
-            } else {
-                _accountMetrics.value = snapshot
-                _connectionStatus.value = BrokerConnectionStatus.CONNECTED
-                refreshPositions()
-                Result.success(true)
-            }
-        } else {
-            _accountMetrics.value = null
-            _connectionStatus.value = if (res.exceptionOrNull()?.message?.contains("CONFIGURATION_REQUIRED") == true) BrokerConnectionStatus.ERROR else BrokerConnectionStatus.AUTH_FAILED
-            Result.failure(res.exceptionOrNull() ?: Exception("MT5 connect failed"))
-        }
+        return Result.failure(IllegalStateException("Direct MT5/MetaAPI connection is disabled; authenticate through the managed terminal service."))
     }
 
     override suspend fun disconnect() {
@@ -61,50 +41,11 @@ class MT5BrokerGatewayAdapter(
     }
 
     override suspend fun executeTrade(plan: CanonicalTradePlan): Result<String> {
-        if (_connectionStatus.value != BrokerConnectionStatus.CONNECTED || _accountMetrics.value == null) {
-            return Result.failure(Exception("MT5 execution blocked: verified authenticated account snapshot required."))
-        }
-        val sig = TradeSignal(
-            id = UUID.randomUUID().toString(),
-            symbol = plan.symbol,
-            timeframe = plan.timeframe,
-            direction = plan.direction,
-            entryPrice = plan.entry,
-            stopLoss = plan.stopLoss,
-            takeProfit = plan.takeProfit,
-            confidenceScore = plan.confluenceScore,
-            rationale = plan.reason,
-            timestamp = plan.timestamp,
-            invalidationLevel = plan.invalidation,
-            entryReason = plan.reason,
-            stopLossReason = "SL",
-            takeProfitReason = "TP",
-            nearestHighYieldZone = "",
-            profitZones = emptyList(),
-            keyLevels = emptyList(),
-            strategyScores = emptyMap(),
-            signalState = plan.status,
-            executable = true,
-            blockReasons = emptyList(),
-            reasons = listOf(plan.reason),
-            dataSource = plan.provider,
-            dataHealth = plan.dataHealth,
-            mtfSummary = "",
-            spreadText = "${plan.spread}",
-            sessionLabel = "",
-            newsStatus = "CLEAR",
-            knowledge = emptyList(),
-            strategyVersion = plan.strategyVersion,
-            analysisLoadMs = 0L,
-            analysisComputeMs = 0L,
-            analysisTotalMs = 0L,
-            cacheHit = false
-        )
-        return mt5Repo.executeTrade(sig, plan.positionSize, UUID.randomUUID().toString())
+        return Result.failure(IllegalStateException("Direct MT5 orders are disabled; orders must be issued by the authenticated managed EA."))
     }
 
     override suspend fun closePosition(positionId: String): Result<Boolean> {
-        return mt5Repo.closeTrade(positionId)
+        return Result.failure(IllegalStateException("Direct MT5 position control is disabled in this app; manage existing positions on the broker terminal."))
     }
 
     override suspend fun getBrokerQuote(symbol: String): Result<MarketQuote?> {

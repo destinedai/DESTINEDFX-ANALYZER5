@@ -129,13 +129,17 @@ def revoke_pairing(settings: dict, pairing_id: str) -> None:
     if not SAFE_ID.fullmatch(pairing_id):
         raise ProvisionError("INVALID_IDENTIFIER")
     root = Path(settings["data_root"]).resolve()
+    found = False
     for marker in root.glob("*/terminal/.destinedfx-worker.json"):
         try:
             data = json.loads(marker.read_text(encoding="utf-8"))
             account_dir = marker.parent.parent.resolve()
             if account_dir.parent != root or data.get("pairing_id") != pairing_id:
                 continue
+            found = True
             pid = int(data.get("pid", 0))
+            if os.name == "nt" and pid <= 0:
+                raise ProvisionError("REVOKE_PROCESS_ID_MISSING")
             exe = str((marker.parent / Path(settings["terminal_exe"]).name).resolve())
             if os.name == "nt" and pid > 0:
                 escaped = exe.replace("'", "''")
@@ -150,8 +154,14 @@ def revoke_pairing(settings: dict, pairing_id: str) -> None:
             shutil.rmtree(account_dir)
             if account_dir.exists():
                 raise ProvisionError("REVOKE_CLEANUP_FAILED")
+        except ProvisionError:
+            raise
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            LOG.error("Could not safely remove a revoked terminal directory")
+            raise ProvisionError("REVOKE_CLEANUP_FAILED") from None
+    if not found:
+        # Empty worker state is safe; a non-empty but unidentifiable tree is not.
+        if root.exists() and any(root.iterdir()):
+            raise ProvisionError("REVOKE_MARKER_NOT_FOUND")
 
 
 def write_private(path: Path, text: str) -> None:
@@ -278,6 +288,10 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
             post_state(base, operator_token, job_id, worker_id, "REVOKED")
             LOG.info("Revocation completed for pairing %s", job.get("pairing_id", "unknown"))
         except ProvisionError as exc:
+            try:
+                post_state(base, operator_token, job_id, worker_id, "FAILED", exc.code, "Revocation failed safely; operator review is required")
+            except ProvisionError:
+                pass
             LOG.error("Revocation failed for job %s (%s)", job_id, exc.code)
         return
     try:
