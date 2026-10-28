@@ -581,7 +581,7 @@ def test_render_external_url_fallback_can_make_bridge_ready(monkeypatch):
 def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(monkeypatch):
     monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')
     monkeypatch.setenv('ALLOW_LOOPBACK_HTTP','false')
-    http_client=TestClient(app.app,base_url='http://testserver')
+    http_client=TestClient(app.app,base_url='http://testserver',raise_server_exceptions=False)
     ok=http_client.get('/health',headers={'Host':'destinedfx-managed-bridge.onrender.com','X-Forwarded-Proto':'https'})
     assert ok.status_code==200
     spoofed=http_client.get('/health',headers={'Host':'attacker.invalid','X-Forwarded-Proto':'https'})
