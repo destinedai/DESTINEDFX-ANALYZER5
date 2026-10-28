@@ -44,5 +44,7 @@ object TradeReportManager {
     private fun sumField(deals:List<JSONObject>,key:String)=deals.map{it.optDouble(key,Double.NaN)}.takeIf{it.isNotEmpty()&&it.all(Double::isFinite)}?.sum()?.toString() ?:  "UNAVAILABLE"
     private fun net(deals:List<JSONObject>):String{val p=sumField(deals,"profit");val c=sumField(deals,"commission");val s=sumField(deals,"swap");val f=sumField(deals,"fees");return if(listOf(p,c,s,f).all{it!="UNAVAILABLE"})(p.toDouble()+c.toDouble()+s.toDouble()+f.toDouble()).toString() else "UNAVAILABLE"}
     private fun accountHash(a:JSONObject)=MessageDigest.getInstance("SHA-256").digest(listOf("login","server","company","currency").joinToString("|"){a.optString(it,"UNAVAILABLE")}.toByteArray()).joinToString(""){ "%02x".format(it)}.take(12)
-    private fun maskLogin(v:String)=if(v.length>4)"*".repeat(v.length-4)+v.takeLast(4) else if(v.isBlank())"UNAVAILABLE" else "****"; private fun safe(v:String)=v.replace(Regex("[^A-Za-z0-9_-]"),"_").take(80).ifBlank{"unknown"}); private fun utcNow()=SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'",Locale.US).apply{timeZone=TimeZone.getTimeZone("UTC")}.format(Date())
+    private fun maskLogin(v:String)=if(v.length>4)"*".repeat(v.length-4)+v.takeLast(4) else if(v.isBlank())"UNAVAILABLE" else "****"
+    private fun safe(v:String)=v.replace(Regex("[^A-Za-z0-9_-]"),"_").take(80).ifBlank{"unknown"}
+    private fun utcNow()=SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'",Locale.US).apply{timeZone=TimeZone.getTimeZone("UTC")}.format(Date())
 }

@@ -115,3 +115,12 @@ def test_ea_source_contract_and_balanced_delimiters():
 
     failed = [name for name, ok in checks.items() if not ok]
     assert not failed, "EA source contract checks failed: " + ", ".join(failed)
+
+
+def test_followup_safety_contracts():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert "requiredGrossReward=2.0*(MathAbs(loss)+commissionLot)" in source
+    assert "reward/(MathAbs(checked)+commissionLot*vol)<2.0" in source
+    assert "DEAL_MAGIC" in source and "ManagedClosedPosition" in source
+    assert "hasEntry&&hasExit&&exited+0.0000001>=entered" in source
+    assert "effectiveMaxAge=MathMin" in source and "InpNewsFreshnessSeconds" in source
