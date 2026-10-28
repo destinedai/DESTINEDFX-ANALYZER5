@@ -42,3 +42,10 @@ Use the exact public origin, e.g. `https://bridge.your-real-domain.example`, as 
 Pairing codes expire after ten minutes and are single-use; app and terminal credentials are generated with OS cryptographic randomness and only SHA-256 digests are stored. Bearer comparisons use constant-time digest comparison. App revocation invalidates both token paths and clears telemetry/queued commands. SQLite transactions and WAL protect concurrent changes. Pairing creation is rate-limited per client IP. Requests have body, field count, field name, nesting, list, string, and finite-number checks. Secrets are never logged by the application. Deploy behind a trusted TLS proxy and avoid application access logs that include authorization headers or request bodies.
 
 Heartbeat timestamps must be timezone-aware UTC within the freshness window; verified identity must match the terminal claim. App status reports OFFLINE for absent/stale heartbeat. A heartbeat never promotes a worker provisioning job to READY: only the worker holding the current authenticated lease can obtain that transition through the job-status endpoint. Commands are keyed by request UUID; repeats return the original command. The terminal owns durable command-ID deduplication and should acknowledge only after applying/rejecting. This service does not claim command application until acknowledgement/telemetry.
+
+
+## Hosted deployment via Render Blueprint
+
+The repository-root render.yaml defines the HTTPS bridge, persistent SQLite/WAL disk, generated encryption key and worker token, and ShowMyTrades economic-calendar adapter. Use the deployment URL in the operator guide. A paid web service is required for persistent disk storage; do not store the trade ledger on an ephemeral filesystem.
+
+After deployment, check GET /health/ready. Healthy bridge status is not proof of a connected Windows worker or broker terminal. ShowMyTrades documentation: https://showmytrades.com/docs/api/economic-calendar

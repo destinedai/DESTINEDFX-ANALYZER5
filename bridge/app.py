@@ -2,7 +2,7 @@ import os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, u
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from typing import Any
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, quote, urlencode
 from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
@@ -58,6 +58,14 @@ def tx(immediate=False):
 
 def secure(request):
     if request.url.scheme=='https': return
+    # Render terminates public TLS and forwards HTTP to its private container.
+    # Trust forwarded HTTPS only when the server-generated origin and Host match.
+    render_origin=os.getenv('RENDER_EXTERNAL_URL','').strip()
+    forwarded_proto=request.headers.get('x-forwarded-proto','').split(',')[0].strip().lower()
+    if render_origin.lower().startswith('https://') and forwarded_proto=='https':
+        expected_host=(urlparse(render_origin).hostname or '').lower().rstrip('.')
+        actual_host=request.headers.get('host','').split(':')[0].strip('[]').lower().rstrip('.')
+        if expected_host and actual_host==expected_host: return
     peer=request.client.host if request.client else ''
     if ALLOW_LOOPBACK and peer in ('127.0.0.1','::1','localhost'): return
     raise HTTPException(400,'HTTPS is required')
@@ -123,6 +131,11 @@ def validate_news_verdict(v, symbol=None, at=None):
         return False,'NEWS UNKNOWN: malformed or unauthenticated verdict'
     t=(at or time.time()*1000); max_age=max(1,NEWS_MAX_AGE)*1000
     if retrieved>t+60000 or t-retrieved>max_age or coverage_from>t or coverage_to<t+NEWS_BEFORE*1000: return False,'NEWS UNKNOWN: stale or incomplete calendar coverage'
+    source_generated=v.get('source_generated_at_ms')
+    if source_generated is not None:
+        # Public event tables may be cached for 15 minutes while their server clock stays current.
+        if not isinstance(source_generated,(int,float)) or not math.isfinite(source_generated) or source_generated>t+60000 or t-source_generated>max(NEWS_MAX_AGE,960)*1000:
+            return False,'NEWS UNKNOWN: source calendar snapshot is stale'
     relevant=relevant_news_currencies(symbol) if symbol else None
     if symbol and relevant is None: return False,'NEWS UNKNOWN: instrument relevance mapping unavailable'
     currencies={str(x).upper() for x in affected}
@@ -135,19 +148,112 @@ def validate_news_verdict(v, symbol=None, at=None):
         return False,'HIGH-IMPACT NEWS — TRADING BLOCKED'
     return False,'NEWS UNKNOWN — TRADING BLOCKED'
 
+def _parse_utc_ms(value):
+    if not isinstance(value,str) or not value.strip(): return None
+    try:
+        dt=datetime.fromisoformat(value.strip().replace('Z','+00:00'))
+        if dt.tzinfo is None: return None
+        return int(dt.astimezone(timezone.utc).timestamp()*1000)
+    except (TypeError,ValueError,OverflowError): return None
+
+def _unknown_news(source='unavailable',detail='NEWS UNKNOWN: provider unavailable or malformed'):
+    return {'status':'UNKNOWN','detail':detail,'source':source,'affected_currencies':[],
+            'max_age_seconds':NEWS_MAX_AGE,'blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
+
+def _showmytrades_news(symbol):
+    relevant=relevant_news_currencies(symbol)
+    supported={'USD','EUR','GBP','JPY','AUD','NZD','CAD','CHF','CNY'}
+    if not relevant: return _unknown_news('ShowMyTrades Economic Calendar','NEWS UNKNOWN: instrument relevance mapping unavailable')
+    currencies=sorted({'CNY' if c=='CNH' else c for c in relevant})
+    if not set(currencies).issubset(supported):
+        return _unknown_news('ShowMyTrades Economic Calendar','NEWS UNKNOWN: calendar does not cover every instrument currency')
+    if NEWS_BEFORE<0 or NEWS_AFTER<0 or NEWS_AFTER>21600 or NEWS_BEFORE>29*86400:
+        return _unknown_news('ShowMyTrades Economic Calendar','NEWS UNKNOWN: configured blackout exceeds provider coverage')
+    days=max(2,min(30,math.ceil(max(NEWS_BEFORE,1)/86400)+1))
+    query=urlencode({'currency':','.join(currencies),'impact':'high','days':days,'format':'json'})
+    request=urllib.request.Request(NEWS_PROVIDER_URL.rstrip('/')+'?'+query,headers={
+        'Accept':'application/json','User-Agent':'DestinedFXAnalyzer/1.0'
+    })
+    source='ShowMyTrades Economic Calendar'
+    try:
+        with urllib.request.urlopen(request,timeout=8) as response:
+            if response.headers.get_content_type()!='application/json':
+                return _unknown_news(source,'NEWS UNKNOWN: calendar returned a non-JSON content type')
+            raw=response.read(256*1024+1)
+        if len(raw)>256*1024: return _unknown_news(source,'NEWS UNKNOWN: calendar response exceeded size limit')
+        payload=json.loads(raw.decode('utf-8'))
+        if not isinstance(payload,dict) or not isinstance(payload.get('events'),list) or len(payload['events'])>5000:
+            return _unknown_news(source,'NEWS UNKNOWN: calendar response schema is invalid')
+        server_time=payload.get('server_time')
+        if isinstance(server_time,bool) or not isinstance(server_time,(int,float)) or not math.isfinite(server_time) or server_time<=0:
+            return _unknown_news(source,'NEWS UNKNOWN: calendar server clock is missing')
+        server_ms=int(server_time*1000); now_ms=int(time.time()*1000)
+        if server_ms>now_ms+60000 or now_ms-server_ms>max(1,NEWS_MAX_AGE)*1000:
+            return _unknown_news(source,'NEWS UNKNOWN: calendar server clock is stale')
+        generated_ms=_parse_utc_ms(payload.get('generated_at'))
+        coverage_from=_parse_utc_ms(payload.get('from')); coverage_to=_parse_utc_ms(payload.get('to'))
+        if generated_ms is None or coverage_from is None or coverage_to is None:
+            return _unknown_news(source,'NEWS UNKNOWN: calendar timestamps are incomplete')
+        if generated_ms>server_ms+60000 or server_ms-generated_ms>max(NEWS_MAX_AGE,960)*1000:
+            return _unknown_news(source,'NEWS UNKNOWN: calendar schedule snapshot is stale')
+        if coverage_from>server_ms or coverage_to<server_ms+NEWS_BEFORE*1000:
+            return _unknown_news(source,'NEWS UNKNOWN: calendar coverage is incomplete')
+        verdict={'status':'CLEAR','source':source,'affected_currencies':currencies,
+                 'retrieved_at_ms':server_ms,'source_generated_at_ms':generated_ms,
+                 'coverage_from_ms':coverage_from,'coverage_to_ms':coverage_to,
+                 'max_age_seconds':NEWS_MAX_AGE,'blackout_before_seconds':NEWS_BEFORE,
+                 'blackout_after_seconds':NEWS_AFTER}
+        active=[]
+        for event in payload['events']:
+            if not isinstance(event,dict): return _unknown_news(source,'NEWS UNKNOWN: malformed calendar event')
+            currency=str(event.get('currency','')).strip().upper()
+            impact=str(event.get('impact','')).strip().lower()
+            if impact!='high' or currency not in currencies: continue
+            event_status=str(event.get('status','')).strip().lower()
+            if event_status not in {'scheduled','moved','tentative'}:
+                return _unknown_news(source,'NEWS UNKNOWN: unrecognized high-impact event status')
+            ts=event.get('ts')
+            if isinstance(ts,bool) or not isinstance(ts,(int,float)) or not math.isfinite(ts) or ts<=0:
+                return _unknown_news(source,'NEWS UNKNOWN: high-impact event time is missing')
+            event_ms=int(ts*1000)
+            if event_ms<coverage_from-6*60*60*1000 or event_ms>coverage_to+60000:
+                return _unknown_news(source,'NEWS UNKNOWN: event timestamp falls outside declared coverage')
+            if event_ms-NEWS_BEFORE*1000<=server_ms<=event_ms+NEWS_AFTER*1000:
+                active.append((abs(event_ms-server_ms),event_ms,currency,event_status))
+        if active:
+            _,event_ms,currency,event_status=min(active)
+            verdict.update({'status':'HIGH_IMPACT_WINDOW','event_time_ms':event_ms,
+                            'currency':currency,'event_status':event_status})
+            _,detail=validate_news_verdict(verdict,symbol,at=server_ms)
+            if detail.startswith('NEWS UNKNOWN'): return _unknown_news(source,detail)
+            verdict['detail']=detail
+        else:
+            ok,detail=validate_news_verdict(verdict,symbol,at=server_ms)
+            if not ok: return _unknown_news(source,detail)
+            verdict['detail']=detail
+        return verdict
+    except Exception:
+        return _unknown_news(source,'NEWS UNKNOWN: calendar provider unavailable or malformed')
+
 def provider_news(symbol):
     parsed=urlparse(NEWS_PROVIDER_URL)
-    if not NEWS_PROVIDER_URL or parsed.scheme.lower()!='https' or not parsed.hostname or parsed.username or parsed.password or NEWS_BEFORE<0 or NEWS_AFTER<0: return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider is not configured as a credential-free HTTPS endpoint','source':'unconfigured','max_age_seconds':NEWS_MAX_AGE,'blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
+    if not NEWS_PROVIDER_URL or parsed.scheme.lower()!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or NEWS_BEFORE<0 or NEWS_AFTER<0:
+        return _unknown_news('unconfigured','NEWS UNKNOWN: provider is not configured as a credential-free HTTPS endpoint')
+    if parsed.hostname.lower().rstrip('.') in {'showmytrades.com','www.showmytrades.com'} and parsed.path.rstrip('/')=='/api/public/calendar/v1':
+        return _showmytrades_news(symbol)
     try:
         q=urllib.request.Request(NEWS_PROVIDER_URL+'?symbol='+quote(symbol),headers={'Accept':'application/json','Authorization':'Bearer '+NEWS_PROVIDER_TOKEN} if NEWS_PROVIDER_TOKEN else {'Accept':'application/json'})
         with urllib.request.urlopen(q,timeout=5) as response:
-            if response.headers.get_content_type()!='application/json': return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider returned a non-JSON content type','source':'provider','max_age_seconds':NEWS_MAX_AGE,'blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
-            value=json.loads(response.read(256*1024).decode('utf-8'))
+            if response.headers.get_content_type()!='application/json': return _unknown_news('provider','NEWS UNKNOWN: provider returned a non-JSON content type')
+            raw=response.read(256*1024+1)
+        if len(raw)>256*1024: return _unknown_news('provider','NEWS UNKNOWN: provider response exceeded size limit')
+        value=json.loads(raw.decode('utf-8'))
+        if not isinstance(value,dict): return _unknown_news('provider','NEWS UNKNOWN: provider schema is invalid')
         ok,detail=validate_news_verdict(value,symbol)
-        value['status']=value.get('status','UNKNOWN') if ok and detail.startswith('NEWS CLEAR') else 'UNKNOWN' if not value.get('status') else value.get('status')
+        if not ok and value.get('status')=='CLEAR': value['status']='UNKNOWN'
         value['detail']=detail; value['max_age_seconds']=NEWS_MAX_AGE; value['blackout_before_seconds']=NEWS_BEFORE; value['blackout_after_seconds']=NEWS_AFTER
         return value
-    except Exception: return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider unavailable or malformed','source':'unavailable','max_age_seconds':NEWS_MAX_AGE,'blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
+    except Exception: return _unknown_news('unavailable','NEWS UNKNOWN: provider unavailable or malformed')
 
 def auth(header, kind):
     if not header or not header.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
@@ -205,7 +311,7 @@ def validate_origin(raw, allow_loopback=False):
 def managed_config():
     key=os.getenv('CREDENTIALS_FERNET_KEY','')
     worker=os.getenv('WORKER_TOKEN','')
-    bridge_url=os.getenv('BRIDGE_BASE_URL','').strip()
+    bridge_url=os.getenv('BRIDGE_BASE_URL','').strip() or os.getenv('RENDER_EXTERNAL_URL','').strip()
     if not key or len(worker)<32 or len(worker)>512 or not validate_origin(bridge_url, allow_loopback=ALLOW_LOOPBACK):
         raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
     try: return Fernet(key.encode()), worker

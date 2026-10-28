@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: destinedfx-managed-bridge
+    runtime: docker
+    plan: starter
+    rootDir: bridge
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/ready
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: BRIDGE_DB_PATH
+        value: /data/bridge.sqlite3
+      - key: ALLOW_LOOPBACK_HTTP
+        value: "false"
+      - key: CREDENTIALS_FERNET_KEY
+        generateValue: true
+      - key: WORKER_TOKEN
+        generateValue: true
+      - key: NEWS_PROVIDER_URL
+        value: https://showmytrades.com/api/public/calendar/v1
+      - key: NEWS_BLACKOUT_BEFORE_SECONDS
+        value: "1800"
+      - key: NEWS_BLACKOUT_AFTER_SECONDS
+        value: "1800"
+      - key: NEWS_MAX_AGE_SECONDS
+        value: "120"
+    disk:
+      name: destinedfx-bridge-data
+      mountPath: /data
+      sizeGB: 1

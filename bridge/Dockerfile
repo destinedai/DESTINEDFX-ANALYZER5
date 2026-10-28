@@ -7,4 +7,4 @@ COPY app.py .
 RUN useradd --system --uid 10001 bridge && mkdir -p /data && chown -R bridge:bridge /data /srv/bridge
 USER bridge
 EXPOSE 8000
-CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips \"${TRUSTED_PROXY_IPS:-127.0.0.1}\""]
+CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port \"${PORT:-8000}\" --proxy-headers --forwarded-allow-ips \"${TRUSTED_PROXY_IPS:-127.0.0.1}\""]

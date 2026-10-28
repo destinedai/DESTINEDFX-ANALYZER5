@@ -515,3 +515,74 @@ def test_closed_trade_ledger_preserves_broker_entry_metadata_and_true_costs():
     assert trade['payload']['deals'][0]['opened_at']=='2026-10-28 10:00:00 (broker server time)'
     assert trade['payload']['deals'][0]['commission']==-0.14
     assert trade['payload']['deals'][0]['fees']==-0.02
+
+
+# Hosted deployment and ShowMyTrades adapter regressions.
+from email.message import Message
+from datetime import datetime, timezone
+
+def _showmytrades_payload(events=None, generated_offset_seconds=0):
+    now_s=time.time()
+    def stamp(seconds):
+        return datetime.fromtimestamp(seconds,timezone.utc).isoformat().replace('+00:00','Z')
+    return {'server_time':now_s,'generated_at':stamp(now_s-generated_offset_seconds),
+            'from':stamp(now_s-6*60*60),'to':stamp(now_s+2*24*60*60),
+            'events':events or [],
+            'attribution':{'required':False,'text':'Economic calendar by ShowMyTrades',
+                           'url':'https://showmytrades.com/tools/economic-calendar'}}
+
+class _MockCalendarResponse:
+    def __init__(self,payload):
+        self._body=json.dumps(payload).encode()
+        self.headers=Message()
+        self.headers['Content-Type']='application/json'
+    def __enter__(self): return self
+    def __exit__(self,*args): return False
+    def read(self,limit=-1): return self._body if limit<0 else self._body[:limit]
+
+def test_showmytrades_adapter_blocks_relevant_high_impact_window(monkeypatch):
+    monkeypatch.setattr(app,'NEWS_PROVIDER_URL','https://showmytrades.com/api/public/calendar/v1')
+    event={'ts':time.time()+600,'currency':'USD','impact':'high','title':'Test CPI','status':'scheduled'}
+    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: _MockCalendarResponse(_showmytrades_payload([event])))
+    verdict=app.provider_news('EURUSD')
+    assert verdict['status']=='HIGH_IMPACT_WINDOW'
+    assert verdict['currency']=='USD'
+    assert 'high-impact' in verdict['detail'].lower()
+
+def test_showmytrades_adapter_clears_only_with_fresh_complete_coverage(monkeypatch):
+    monkeypatch.setattr(app,'NEWS_PROVIDER_URL','https://showmytrades.com/api/public/calendar/v1')
+    payload=_showmytrades_payload([])
+    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: _MockCalendarResponse(payload))
+    verdict=app.provider_news('EURUSD')
+    assert verdict['status']=='CLEAR'
+    assert verdict['coverage_to_ms']>=int(time.time()*1000)+app.NEWS_BEFORE*1000
+
+def test_showmytrades_adapter_fails_closed_on_stale_calendar_snapshot(monkeypatch):
+    monkeypatch.setattr(app,'NEWS_PROVIDER_URL','https://showmytrades.com/api/public/calendar/v1')
+    payload=_showmytrades_payload([],generated_offset_seconds=1200)
+    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: _MockCalendarResponse(payload))
+    verdict=app.provider_news('EURUSD')
+    assert verdict['status']=='UNKNOWN'
+    assert 'stale' in verdict['detail'].lower()
+
+def test_showmytrades_adapter_fails_closed_on_provider_errors(monkeypatch):
+    monkeypatch.setattr(app,'NEWS_PROVIDER_URL','https://showmytrades.com/api/public/calendar/v1')
+    def broken(*args,**kwargs): raise OSError('offline')
+    monkeypatch.setattr(app.urllib.request,'urlopen',broken)
+    assert app.provider_news('EURUSD')['status']=='UNKNOWN'
+
+def test_render_external_url_fallback_can_make_bridge_ready(monkeypatch):
+    monkeypatch.delenv('BRIDGE_BASE_URL',raising=False)
+    monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')
+    monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
+    monkeypatch.setenv('WORKER_TOKEN','render-worker-token-test-fixture-at-least-32-chars')
+    assert client.get('/health/ready').status_code==200
+
+def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(monkeypatch):
+    monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')
+    monkeypatch.setenv('ALLOW_LOOPBACK_HTTP','false')
+    http_client=TestClient(app.app,base_url='http://testserver')
+    ok=http_client.get('/health',headers={'Host':'destinedfx-managed-bridge.onrender.com','X-Forwarded-Proto':'https'})
+    assert ok.status_code==200
+    spoofed=http_client.get('/health',headers={'Host':'attacker.invalid','X-Forwarded-Proto':'https'})
+    assert spoofed.status_code==400
