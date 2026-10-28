@@ -440,3 +440,20 @@ def test_trade_ledger_ingestion_is_idempotent_and_paginated():
         assert c.execute('SELECT COUNT(*) FROM trade_ledger WHERE pairing_id=?',(p['pairing_id'],)).fetchone()[0]==1
     rows=client.get('/v1/app/trades?limit=1',headers={'Authorization':'Bearer '+p['app_token']})
     assert rows.status_code==200 and len(rows.json()['trades'])==1 and rows.json()['cursor']>0
+
+def test_news_verdict_fail_closed_and_symbol_relevance():
+    now=int(time.time()*1000)
+    clear={'status':'CLEAR','source':'fixture-provider','retrieved_at_ms':now,'coverage_from_ms':now-1000,'coverage_to_ms':now+3600000,'affected_currencies':['EUR','USD']}
+    assert app.validate_news_verdict(clear,'EURUSD')[0] is True
+    stale={**clear,'retrieved_at_ms':now-121000}
+    assert app.validate_news_verdict(stale,'EURUSD')[0] is False
+    incomplete={**clear,'source':'','affected_currencies':[]}
+    assert app.validate_news_verdict(incomplete,'EURUSD')[0] is False
+    event=now+600000
+    blocked={**clear,'status':'HIGH_IMPACT_WINDOW','event_time_ms':event,'currency':'USD','event':'CPI','affected_currencies':['USD']}
+    ok,detail=app.validate_news_verdict(blocked,'EURUSD')
+    assert ok is False and 'BLOCKED' in detail
+    unrelated={**blocked,'affected_currencies':['JPY'],'currency':'JPY'}
+    ok,detail=app.validate_news_verdict(unrelated,'EURUSD')
+    assert ok is True and 'no relevant' in detail
+    assert app.validate_news_verdict(clear,'UNKNOWN_SYMBOL')[0] is False

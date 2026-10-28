@@ -17,6 +17,7 @@ STALE=int(os.getenv('HEARTBEAT_STALE_SECONDS','15'))
 RECOVERY_GRACE=int(os.getenv('HEARTBEAT_RECOVERY_GRACE_SECONDS','120'))
 NEWS_BEFORE=int(os.getenv('NEWS_BLACKOUT_BEFORE_SECONDS','1800'))
 NEWS_AFTER=int(os.getenv('NEWS_BLACKOUT_AFTER_SECONDS','1800'))
+NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
@@ -86,10 +87,10 @@ class Ack(BaseModel): model_config=ConfigDict(extra='forbid'); outcome:str; stat
 class LiveAuthorization(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_live_trading:bool
 class Position(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); volume:float=Field(gt=0,allow_inf_nan=False); open_price:float=Field(gt=0,allow_inf_nan=False); stop_loss:float=Field(ge=0,allow_inf_nan=False); take_profit:float=Field(ge=0,allow_inf_nan=False); floating_profit:float=Field(allow_inf_nan=False); commission:float|None=Field(default=None,allow_inf_nan=False); swap:float=Field(allow_inf_nan=False)
+    ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); volume:float=Field(gt=0,allow_inf_nan=False); open_price:float=Field(gt=0,allow_inf_nan=False); stop_loss:float=Field(ge=0,allow_inf_nan=False); take_profit:float=Field(ge=0,allow_inf_nan=False); floating_profit:float=Field(allow_inf_nan=False); commission:float|None=Field(default=None,allow_inf_nan=False); swap:float=Field(allow_inf_nan=False); fees:float|None=Field(default=None,allow_inf_nan=False)
 class ClosedDeal(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); closed_at:str=Field(max_length=64); profit:float=Field(allow_inf_nan=False); commission:float=Field(allow_inf_nan=False); swap:float=Field(allow_inf_nan=False)
+    ticket:int|str; position_id:int|str; symbol:str=Field(max_length=64); closed_at:str=Field(max_length=64); profit:float=Field(allow_inf_nan=False); commission:float=Field(allow_inf_nan=False); swap:float=Field(allow_inf_nan=False); fees:float|None=Field(default=None,allow_inf_nan=False)
 class ActiveOrder(BaseModel):
     model_config=ConfigDict(extra='forbid')
     ticket:int|str; position_id:int|str=0; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); state:str=Field(max_length=32)
@@ -105,36 +106,46 @@ class Heartbeat(BaseModel):
 
 def relevant_news_currencies(symbol):
     s=''.join(ch for ch in (symbol or '').upper() if ch.isalnum())
-    if len(s)==6 and s[:3].isalpha() and s[3:].isalpha(): return {s[:3],s[3:]}
-    explicit={'XAUUSD':{'XAU','USD'},'XAGUSD':{'XAG','USD'},'US30':{'USD'},'NAS100':{'USD'},'SPX500':{'USD'}}
-    return explicit.get(s)
+    explicit={'XAUUSD':{'XAU','USD'},'XAGUSD':{'XAG','USD'},'XPTUSD':{'XPT','USD'},'BTCUSD':{'BTC','USD'},'ETHUSD':{'ETH','USD'},'US30':{'USD'},'NAS100':{'USD'},'US100':{'USD'},'SPX500':{'USD'},'GER40':{'EUR'},'UK100':{'GBP'},'JPN225':{'JPY'}}
+    if s in explicit: return explicit[s]
+    currencies={'USD','EUR','GBP','JPY','CHF','CAD','AUD','NZD','CNH','NOK','SEK','SGD','HKD','ZAR','MXN','TRY','PLN'}
+    # Broker prefixes/suffixes are tolerated only when the first six characters are a known FX pair.
+    if len(s)>=6 and s[:3] in currencies and s[3:6] in currencies: return {s[:3],s[3:6]}
+    return None
 
 def validate_news_verdict(v, symbol=None, at=None):
     if not isinstance(v,dict): return False,'NEWS UNKNOWN: verdict missing'
     status=str(v.get('status','')).upper(); retrieved=v.get('retrieved_at_ms'); coverage_from=v.get('coverage_from_ms'); coverage_to=v.get('coverage_to_ms')
-    if status not in ('CLEAR','HIGH_IMPACT_WINDOW','UNKNOWN') or not all(isinstance(x,(int,float)) and math.isfinite(x) for x in (retrieved,coverage_from,coverage_to)):
+    source=v.get('source'); affected=v.get('affected_currencies')
+    if status not in ('CLEAR','HIGH_IMPACT_WINDOW','UNKNOWN') or not isinstance(source,str) or not source.strip() or not isinstance(affected,list) or not all(isinstance(x,str) and x.strip() for x in affected) or not all(isinstance(x,(int,float)) and math.isfinite(x) for x in (retrieved,coverage_from,coverage_to)):
         return False,'NEWS UNKNOWN: malformed or unauthenticated verdict'
-    t=(at or time.time()*1000); max_age=6*3600*1000
+    t=(at or time.time()*1000); max_age=max(1,NEWS_MAX_AGE)*1000
     if retrieved>t+60000 or t-retrieved>max_age or coverage_from>t or coverage_to<t+NEWS_BEFORE*1000: return False,'NEWS UNKNOWN: stale or incomplete calendar coverage'
     relevant=relevant_news_currencies(symbol) if symbol else None
     if symbol and relevant is None: return False,'NEWS UNKNOWN: instrument relevance mapping unavailable'
-    currencies={str(x).upper() for x in v.get('affected_currencies',[]) if isinstance(x,str)}
-    if relevant and currencies and not relevant.intersection(currencies): return True,'NEWS CLEAR: no relevant affected currency'
+    currencies={str(x).upper() for x in affected}
+    if relevant and not relevant.intersection(currencies): return True,'NEWS CLEAR: no relevant affected currency'
     if status=='CLEAR': return True,'NEWS CLEAR'
-    if status=='HIGH_IMPACT_WINDOW': return False,'HIGH-IMPACT NEWS — TRADING BLOCKED'
+    if status=='HIGH_IMPACT_WINDOW':
+        event_ms=v.get('event_time_ms'); currency=v.get('currency')
+        if not isinstance(event_ms,(int,float)) or not math.isfinite(event_ms) or not isinstance(currency,str) or not currency.strip(): return False,'NEWS UNKNOWN: high-impact event evidence is incomplete'
+        if t < event_ms-NEWS_BEFORE*1000 or t > event_ms+NEWS_AFTER*1000: return True,'NEWS CLEAR: high-impact event is outside blackout window'
+        return False,'HIGH-IMPACT NEWS — TRADING BLOCKED'
     return False,'NEWS UNKNOWN — TRADING BLOCKED'
 
 def provider_news(symbol):
     parsed=urlparse(NEWS_PROVIDER_URL)
-    if not NEWS_PROVIDER_URL or parsed.scheme.lower()!='https' or not parsed.hostname or parsed.username or parsed.password or NEWS_BEFORE<0 or NEWS_AFTER<0: return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider is not configured as a credential-free HTTPS endpoint','source':'unconfigured'}
+    if not NEWS_PROVIDER_URL or parsed.scheme.lower()!='https' or not parsed.hostname or parsed.username or parsed.password or NEWS_BEFORE<0 or NEWS_AFTER<0: return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider is not configured as a credential-free HTTPS endpoint','source':'unconfigured','max_age_seconds':NEWS_MAX_AGE,'blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
     try:
         q=urllib.request.Request(NEWS_PROVIDER_URL+'?symbol='+quote(symbol),headers={'Accept':'application/json','Authorization':'Bearer '+NEWS_PROVIDER_TOKEN} if NEWS_PROVIDER_TOKEN else {'Accept':'application/json'})
-        with urllib.request.urlopen(q,timeout=5) as response: value=json.loads(response.read(256*1024).decode('utf-8'))
+        with urllib.request.urlopen(q,timeout=5) as response:
+            if response.headers.get_content_type()!='application/json': return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider returned a non-JSON content type','source':'provider','max_age_seconds':NEWS_MAX_AGE,'blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
+            value=json.loads(response.read(256*1024).decode('utf-8'))
         ok,detail=validate_news_verdict(value,symbol)
         value['status']=value.get('status','UNKNOWN') if ok and detail.startswith('NEWS CLEAR') else 'UNKNOWN' if not value.get('status') else value.get('status')
-        value['detail']=detail; value['blackout_before_seconds']=NEWS_BEFORE; value['blackout_after_seconds']=NEWS_AFTER
+        value['detail']=detail; value['max_age_seconds']=NEWS_MAX_AGE; value['blackout_before_seconds']=NEWS_BEFORE; value['blackout_after_seconds']=NEWS_AFTER
         return value
-    except Exception: return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider unavailable or malformed','source':'unavailable','blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
+    except Exception: return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider unavailable or malformed','source':'unavailable','max_age_seconds':NEWS_MAX_AGE,'blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
 
 def auth(header, kind):
     if not header or not header.startswith('Bearer '): raise HTTPException(401,'Bearer token required')

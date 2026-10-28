@@ -16,7 +16,7 @@ pytest -q
 
 The HTTP exception is accepted only for IPv4/IPv6 loopback clients. Do not set it on a public deployment. `GET /health` is a liveness check; `GET /health/ready` verifies database access and the mandatory managed-execution configuration and returns HTTP 503 until the service is safe to use.
 
-Automated execution also requires `NEWS_PROVIDER_URL` to be configured with an authorized HTTPS economic-calendar provider. The provider response must contain a timestamped `status`, `source`, coverage interval, affected currencies, and event window when applicable. `NEWS_PROVIDER_TOKEN` is read only from the service environment. Missing, stale, incomplete, malformed, or unavailable provider data returns `UNKNOWN` and blocks automated entries; it is never treated as a clear calendar. The conservative defaults are `NEWS_BLACKOUT_BEFORE_SECONDS=1800` and `NEWS_BLACKOUT_AFTER_SECONDS=1800`.
+Automated execution also requires `NEWS_PROVIDER_URL` to be configured with an authorized HTTPS economic-calendar provider. The provider response must contain a timestamped `status`, `source`, coverage interval, affected currencies, and event window when applicable. `NEWS_PROVIDER_TOKEN` is read only from the service environment. Missing, stale, incomplete, malformed, non-JSON, or unavailable provider data returns `UNKNOWN` and blocks automated entries; it is never treated as a clear calendar. New-order verdict freshness is capped at 120 seconds through `NEWS_MAX_AGE_SECONDS`; the conservative blackout defaults are `NEWS_BLACKOUT_BEFORE_SECONDS=1800` and `NEWS_BLACKOUT_AFTER_SECONDS=1800`.
 
 ## Deployment and TLS
 

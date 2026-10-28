@@ -29,7 +29,7 @@ object TradeReportManager {
             val identity = safe(record.optString("identity", "unknown"))
             val mode = record.optString("account_mode", "UNVERIFIED").uppercase()
             val kind = if (status == "CLOSED") "FINAL_TRADE_REPORT" else "OPEN_TRADE"
-            val fileName = "${kind}_${safe(mode)}_${identity}_${dateKey()}.pdf"
+            val fileName = "${kind}_${safe(mode)}_${identity}.pdf"
             try {
                 val saved = writePdf(context, record, fileName, mode, status)
                 generated++; paths += saved
@@ -59,14 +59,18 @@ object TradeReportManager {
         line("Broker/company", "${account.optString("company", "UNAVAILABLE")} / ${account.optString("server", "UNAVAILABLE")}")
         line("Currency", account.optString("currency", "UNAVAILABLE"))
         line("Account login", maskLogin(account.optString("login", "UNAVAILABLE")))
+        line("Balance / equity", "${account.optString("balance", "UNAVAILABLE")} / ${account.optString("equity", "UNAVAILABLE")} ${account.optString("currency", "UNAVAILABLE")}")
+        line("Used/free margin", "${account.optString("margin", "UNAVAILABLE")} / ${account.optString("free_margin", "UNAVAILABLE")}")
+        line("Margin level / leverage", "${account.optString("margin_level", "UNAVAILABLE")} / ${account.optString("leverage", "UNAVAILABLE")}")
         line("Symbol / direction", "${record.optString("symbol", signal.optString("symbol", "UNAVAILABLE"))} / ${record.optString("direction", signal.optString("direction", "UNAVAILABLE"))}")
         line("Strategy / timeframe", "${signal.optString("strategy", "ict-silver-bullet")} / ${signal.optString("timeframe", "UNAVAILABLE")}")
         line("Order ticket", record.optString("order_ticket", "UNAVAILABLE")); line("Deal ticket(s)", deals.map { it.optString("ticket", "UNAVAILABLE") }.joinToString(", ")); line("Position ID", record.optString("position_id", "UNAVAILABLE"))
         line("Requested volume", signal.optString("requested_volume", "UNAVAILABLE")); line("Executed volume", signal.optString("executed_volume", "UNAVAILABLE"))
+        line("Submission / fill time", "${record.optString("submitted_at", "UNAVAILABLE")} / ${record.optString("opened_at", "UNAVAILABLE")}"); line("Close time", record.optString("closed_at", "UNAVAILABLE"))
         line("Entry price", signal.optString("entry", deal.optString("price", "UNAVAILABLE"))); line("Stop loss / take profit", "${signal.optString("stop_loss", "UNAVAILABLE")} / ${signal.optString("take_profit", "UNAVAILABLE")}")
         line("Execution status", signal.optString("execution_state", status)); line("News verdict", signal.optString("news_detail", "UNAVAILABLE")); line("News source / retrieval", "${signal.optString("news_source", "UNAVAILABLE")} / ${signal.optString("news_retrieved_at_ms", "UNAVAILABLE")}")
         if (status == "OPEN") line("Floating/unrealized P/L", payload.optJSONArray("positions")?.toString() ?: "UNAVAILABLE")
-        else { line("Gross realized P/L", sumField(deals, "profit")); line("Commission", sumField(deals, "commission")); line("Swap", sumField(deals, "swap")); line("Net realized P/L", net(deals)) }
+        else { line("Gross realized P/L", sumField(deals, "profit")); line("Commission", sumField(deals, "commission")); line("Swap", sumField(deals, "swap")); line("Separate fees", sumField(deals, "fees")); line("Net realized P/L", net(deals)) }
         line("Generated UTC", utcNow())
         line("Unavailable values", "UNAVAILABLE means the broker did not supply the field in the reconciled record.")
         document.finishPage(page)
@@ -85,7 +89,7 @@ object TradeReportManager {
         val file = File(dir, fileName); FileOutputStream(file).use { document.writeTo(it) }; return file.absolutePath
     }
     private fun sumField(deals: List<JSONObject>, key: String): String { val values = deals.map { it.optDouble(key, Double.NaN) }; return if (values.isNotEmpty() && values.all { it.isFinite() }) values.sum().toString() else "UNAVAILABLE" }
-    private fun net(deals: List<JSONObject>): String { val p=sumField(deals,"profit"); val c=sumField(deals,"commission"); val s=sumField(deals,"swap"); return if (p!="UNAVAILABLE"&&c!="UNAVAILABLE"&&s!="UNAVAILABLE") (p.toDouble()+c.toDouble()+s.toDouble()).toString() else "UNAVAILABLE" }
+    private fun net(deals: List<JSONObject>): String { val p=sumField(deals,"profit"); val c=sumField(deals,"commission"); val s=sumField(deals,"swap"); val f=sumField(deals,"fees"); return if (p!="UNAVAILABLE"&&c!="UNAVAILABLE"&&s!="UNAVAILABLE"&&f!="UNAVAILABLE") (p.toDouble()+c.toDouble()+s.toDouble()+f.toDouble()).toString() else "UNAVAILABLE" }
     private fun maskLogin(value: String) = if (value.length > 4) "*".repeat(value.length - 4) + value.takeLast(4) else if (value.isBlank()) "UNAVAILABLE" else "****"
     private fun safe(value: String) = value.replace(Regex("[^A-Za-z0-9_-]"), "_").take(80).ifBlank { "unknown" }
     private fun dateKey() = SimpleDateFormat("yyyyMMdd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())

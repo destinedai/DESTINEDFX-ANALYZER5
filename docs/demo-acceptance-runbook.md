@@ -38,3 +38,15 @@ Retain timestamped redacted bridge health/readiness responses, worker lifecycle 
 ## Current environment limitation
 
 The repository test environment has no Windows MT5 terminal, MetaEditor, broker credentials, deployed production bridge, or broker DEMO account. Its automated coverage validates protocol, lifecycle, URL safety, telemetry schema, native Android gates, EA source contracts, and failure handling only. It does **not** verify a genuine broker connection, MetaEditor compilation, DEMO order, fill, partial fill, SL/TP, closed deal, official MT5 visibility, WebRequest allowlist, or recovery against a real terminal. Those items remain unverified until this runbook is executed by an authorized operator.
+
+## All-strategy parity acceptance
+
+The EA now accepts the same eight managed identifiers as the Android registry and dispatches each to a deterministic closed-candle path: SMC confluence, ICT Silver Bullet, Wyckoff, Supply and Demand, Volatility Breakout, Mean Reversion, Multi-EMA Trend Following, and Liquidity/Stop Hunts. For each selected identifier, record the strategy ID/version in the START configuration, heartbeat, signal, ledger record, and PDF report. Verify at least one positive fixture and one invalidation or insufficient-data WAIT/REJECT result per strategy before enabling it on DEMO. Do not infer success from the Android signal engine; the genuine MT5 terminal must show the corresponding EA rationale and broker-reconciled result.
+
+For every strategy, verify decisions use closed candles only, reject stale quotes or insufficient history, deduplicate the same signal bar, and retain the reason when news, cost, risk, margin, minimum volume, or broker constraints reject an entry. Breakout volume is broker tick activity and must never be described as centralized exchange volume. Unsupported instruments or missing provider mappings remain `NEWS UNKNOWN — AUTOMATED ENTRY BLOCKED`.
+
+## Audit findings and resolution
+
+The repository audit found that the Android registry and deterministic Kotlin engine exposed eight strategies, but the managed EA validator and scanner accepted only ICT Silver Bullet. The EA now validates and dispatches all eight identifiers through closed-candle, strategy-specific setup functions; the runbook still requires genuine MT5 DEMO evidence for each path. The audit also found a six-hour EA-side news acceptance window; it is now bounded by the bridge-provided freshness value, capped at 120 seconds, with strict source, coverage, relevance, and event evidence checks. Separate broker fees were absent from the closed-deal/PDF net calculation; fee fields now remain nullable when unavailable and net P/L is reported as `UNAVAILABLE` rather than silently assuming zero.
+
+Still unavailable in this repository environment are Windows MetaEditor compilation, a genuine broker news provider, MT5 WebRequest configuration, broker DEMO credentials, real fills/partial fills, and broker-confirmed report reconciliation. These are acceptance gates, not claims of completion.
