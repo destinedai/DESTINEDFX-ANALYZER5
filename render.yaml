@@ -3,9 +3,8 @@ services:
     name: destinedfx-managed-bridge
     runtime: docker
     plan: starter
-    rootDir: bridge
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    dockerfilePath: ./bridge/Dockerfile
+    dockerContext: ./bridge
     healthCheckPath: /health/ready
     autoDeploy: true
     envVars:

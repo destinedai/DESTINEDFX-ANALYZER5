@@ -35,3 +35,8 @@ This environment does not include Windows, an MT5 terminal, MetaEditor, a produc
 The worker writes the exact public HTTPS origin into the EA input `InpBridgeBaseURL`, but it does not claim to edit the terminal's **Tools → Options → Expert Advisors → Allow WebRequest for listed URL** allowlist. The operator must add the same origin manually in each isolated terminal (or use a separately verified broker/MetaTrader deployment mechanism) before startup. Successful process launch, EA compilation, or command queueing is not evidence of bridge connectivity; only a terminal claim followed by fresh authenticated heartbeat telemetry makes the worker job READY.
 
 MetaQuotes documents `/config` startup with account login, server, password, and EA auto-start parameters; the official terminal is therefore technically automatable on Windows. This is distinct from MetaQuotes Virtual Hosting, which is rented/migrated through an MT5/MQL5 user workflow and cannot be assumed to be a free, centrally provisioned DestinedFX fleet. See the platform references in `../docs/mql5-platform-notes.md` and cost/setup notes in `../docs/managed-execution-operator-setup.md`.
+
+
+## Quick-start worker kit
+
+The GitHub Actions workflow publishes the DestinedFX-Windows-Worker-Kit artifact with the Python worker, sample config, EA source and launch-worker.ps1. Extract on Windows with the genuine broker MT5 desktop terminal and MetaEditor installed. The launcher prompts for the service URL and paths, reads the worker token through hidden input, and never writes the token into worker.toml. It runs in the foreground. MT5 WebRequest allowlisting is still a manual step. Running the worker process alone is not proof of account readiness.

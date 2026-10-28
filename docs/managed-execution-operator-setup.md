@@ -17,3 +17,14 @@ The Android app can control an account only after a DestinedFX-operated service 
 MetaQuotes' current VPS page lists $15 for one month, $13 per month on a three-month plan, $10.83 per month on a six-month plan, and $10 per month on a twelve-month plan. It advertises a 24-hour trial that automatically switches to the paid plan. That offering is rented and migrated through an MT5/MQL5 account workflow; it is not a DestinedFX-controlled API for automatic server provisioning. It should not be represented as a free pooled fleet for this app. See [official plans](https://www.mql5.com/en/vps) and [MetaQuotes virtual-hosting guide](https://www.metatrader5.com/en/terminal/help/virtual_hosting).
 
 MetaQuotes documents a desktop-terminal startup INI that can contain login, server and password and can auto-start an EA. That makes the worker technically feasible, but the password appears in a plaintext transient configuration file. Production deployment therefore requires restrictive host ACLs, encrypted storage, isolated terminal data and process directories, careful file cleanup, and operational security review. See [terminal startup configuration](https://www.metatrader5.com/en/terminal/help/start_advanced/start).
+
+
+## Quick deployment
+
+1. Open the [DestinedFX Render Blueprint](https://render.com/deploy?repo=https://github.com/destinedai/DESTINEDFX-ANALYZER5) and authorize Render to access this repository.
+2. Select a paid web-service plan because the bridge needs persistent SQLite/WAL storage. The blueprint generates the Fernet key and worker token, attaches a disk, and configures ShowMyTrades economic calendar data.
+3. When deployed, open https://YOUR-SERVICE.onrender.com/health/ready. It must return {"status":"ready","database":"ok","managed_execution":"configured"}. If not, do not submit broker credentials.
+4. In DestinedFX → Bot → Remote MT5 EA Bridge, enter the public HTTPS origin in **Managed bridge HTTPS URL**, tap **SAVE BRIDGE URL**, then **CHECK CONNECTION**.
+5. Download DestinedFX-Windows-Worker-Kit from GitHub Actions, extract it on Windows with desktop MT5 and MetaEditor installed, run launch-worker.ps1, enter the generated worker token at the hidden prompt, and add the bridge origin to the managed MT5 terminal's WebRequest allowlist.
+
+A worker is READY only after the genuine EA sends a fresh heartbeat matching broker login, exact server, company, currency and account mode. Start with a dedicated DEMO MASTER profile. LIVE remains separate and requires the existing explicit 15-minute authorization.

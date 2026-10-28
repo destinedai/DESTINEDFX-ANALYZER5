@@ -6,7 +6,7 @@ This procedure is for one authorized broker DEMO account only. It must be execut
 
 Record the bridge base URL, worker ID, MT5 terminal build, EA source/compiled build hash, broker company, exact server, login, currency, and account mode. Confirm that no broker password, worker token, Fernet key, or hosting secret is written into this record. Configure the MT5 terminal WebRequest allowlist manually with the exact bridge origin; the worker marker records this as an operator-required condition because MT5 does not reliably configure the allowlist through the startup INI.
 
-Confirm `DESTINEDFX_WORKER_ID` is stable and present in the Windows service environment. Confirm the bridge `/health` liveness endpoint and `/health/ready` readiness endpoint, persistent database path, worker token authentication, and database backup policy. Confirm the Android repository variable `MT5_MANAGED_SERVICE_URL` is the exact HTTPS origin; never insert a placeholder URL.
+Confirm `DESTINEDFX_WORKER_ID` is stable and present in the Windows service environment. Confirm the bridge `/health` liveness endpoint and `/health/ready` readiness endpoint, persistent database path, worker token authentication, and database backup policy. Confirm the app's Bot → Remote MT5 EA Bridge URL or embedded `MT5_MANAGED_SERVICE_URL` is the exact HTTPS origin; never insert a placeholder URL.
 
 ## Execution checklist
 

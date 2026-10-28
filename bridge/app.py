@@ -209,7 +209,8 @@ def _showmytrades_news(symbol):
             currency=str(event.get('currency','')).strip().upper()
             impact=str(event.get('impact','')).strip().lower()
             if impact!='high' or currency not in currencies: continue
-            event_status=str(event.get('status','')).strip().lower()
+            # The documented calendar schema omits event.status; absent means still listed as scheduled.
+            event_status=str(event.get('status','scheduled')).strip().lower()
             if event_status not in {'scheduled','moved','tentative'}:
                 return _unknown_news(source,'NEWS UNKNOWN: unrecognized high-impact event status')
             ts=event.get('ts')
