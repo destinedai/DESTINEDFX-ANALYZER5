@@ -24,6 +24,10 @@ jobs:
 
   build:
     runs-on: ubuntu-24.04
+    # Set this public URL as a GitHub Actions repository variable only after the
+    # managed bridge is deployed. It is embedded in the APK; never put secrets here.
+    env:
+      MT5_MANAGED_SERVICE_URL: ${{ vars.MT5_MANAGED_SERVICE_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +53,34 @@ jobs:
 
       - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
+
+      - name: Validate configured managed-service URL (if supplied)
+        if: env.MT5_MANAGED_SERVICE_URL != ''
+        run: |
+          python - <<'PY'
+          import ipaddress, os
+          from urllib.parse import urlparse
+          raw = os.environ["MT5_MANAGED_SERVICE_URL"].strip()
+          u = urlparse(raw)
+          host = (u.hostname or "").lower().rstrip(".")
+          placeholder = (
+              host in {"example.com", "example.org", "example.net", "testserver", "bridge.example",
+                       "localhost", "0.0.0.0"} or "example" in host or
+              host.startswith("your-") or host.startswith("placeholder") or
+              host.endswith(".localhost") or host.endswith(".test") or host.endswith(".invalid")
+          )
+          private = False
+          try:
+              ip = ipaddress.ip_address(host)
+              private = not ip.is_global
+          except ValueError:
+              pass
+          if (u.scheme != "https" or not host or u.username or u.password or u.query or u.fragment
+              or u.path not in ("", "/") or u.port not in (None, 443) and not (1 <= u.port <= 65535)
+              or placeholder or private):
+              raise SystemExit("MT5_MANAGED_SERVICE_URL must be a real public HTTPS origin without a path, credentials, query, or fragment.")
+          print("Managed-service URL format accepted; no connection or deployment is implied.")
+          PY
 
       - name: Run unit tests
         run: |
