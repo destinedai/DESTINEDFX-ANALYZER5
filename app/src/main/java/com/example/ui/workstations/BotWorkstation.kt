@@ -842,7 +842,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = "METAAPI BACKEND",
+                                text = "DESTINEDFX MANAGED BRIDGE",
                                 fontSize = 8.sp,
                                 color = Color(0xFF2196F3),
                                 fontWeight = FontWeight.Black,
@@ -871,24 +871,20 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 ) {
                                     Icon(Icons.Default.Warning, contentDescription = null, tint = LossRed, modifier = Modifier.size(18.dp))
                                     Column {
-                                        Text("SESSION EXPIRED", fontSize = 11.sp, fontWeight = FontWeight.Black, color = LossRed)
-                                        Text("Authorization expired for account ${viewModel.getMT5Login()}. Tap Reconnect to refresh.", fontSize = 9.sp, color = TextPrimary)
+                                        Text("MANAGED SESSION EXPIRED", fontSize = 11.sp, fontWeight = FontWeight.Black, color = LossRed)
+                                        Text("Managed execution authorization expired for account ${viewModel.getMT5Login()}. Re-enter credentials to provision it again.", fontSize = 9.sp, color = TextPrimary)
                                     }
                                 }
                                 Button(
                                     onClick = {
-                                        isConnectingBroker = true
-                                        brokerConnectionMessage = null
-                                        viewModel.reconnectMT5Session { success, msg ->
-                                            isConnectingBroker = false
-                                            brokerConnectionMessage = msg
-                                        }
+                                        brokerConnectionMessage = "Re-enter broker credentials and consent to reconnect through the DestinedFX managed bridge."
+                                        isEditingCredentials = true
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White),
                                     shape = RoundedCornerShape(6.dp),
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                 ) {
-                                    Text("RECONNECT", fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                    Text("RE-ENTER", fontSize = 10.sp, fontWeight = FontWeight.Black)
                                 }
                             }
                         }
