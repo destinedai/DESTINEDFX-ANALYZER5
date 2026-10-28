@@ -185,6 +185,38 @@ def test_ready_job_is_downgraded_when_heartbeat_goes_stale(monkeypatch):
     status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-stale',headers=wh).json()
     assert status['status']=='AUTHENTICATING' and status['error_code']=='TERMINAL_HEARTBEAT_STALE'
 
+def test_ready_job_recovers_within_grace_and_fails_after_recovery_deadline(monkeypatch):
+    managed_env(monkeypatch); p,ah=managed_pair()
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-recovery'}).json()
+    client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-recovery','status':'AUTHENTICATING'})
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'recovery-terminal','account':ACCOUNT}).json()
+    th={'Authorization':'Bearer '+terminal['terminal_token']}
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
+    assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='READY'
+    with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
+    assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='AUTHENTICATING'
+    assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data()).status_code==200
+    assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='READY'
+    with app.tx(True) as c:
+        c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
+        c.execute('UPDATE worker_jobs SET status="AUTHENTICATING",stale_since=?,recovery_deadline=? WHERE id=?',(time.time()-300,time.time()-1,job['job_id']))
+    assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='FAILED'
+
+def test_error_heartbeat_blocks_start_but_stop_remains_available(monkeypatch):
+    managed_env(monkeypatch); p,ah=managed_pair()
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-error'}).json()
+    client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-error','status':'AUTHENTICATING'})
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'error-terminal','account':ACCOUNT}).json()
+    th={'Authorization':'Bearer '+terminal['terminal_token']}
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='ERROR',last_error='EA failed'))
+    assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-error',headers=wh).json()['status']=='AUTHENTICATING'
+    assert client.post('/v1/app/commands',headers=ah,json=command_req('START')).status_code==409
+    assert client.post('/v1/app/commands',headers=ah,json=command_req('STOP')).status_code==202
+
 def test_investor_can_be_ready_for_read_only_but_never_start(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
     client.post('/v1/app/managed-account',headers=ah,json={'login':'77','server':'ReadOnly','password':'investor','access_type':'INVESTOR','account_mode':'DEMO','consent':True})
@@ -378,7 +410,7 @@ def test_malformed_managed_origin_fails_closed(monkeypatch):
 
 
 def test_origin_validation_rejects_non_public_and_malformed_values():
-    for origin in ('https://bridge.invalid:0','https://bridge.invalid:99999','https://10.0.0.4','https://[::1]',
+    for origin in ('https://bridge.invalid:0','https://bridge.invalid:99999','https://10.0.0.4','https://100.64.0.1','https://192.0.2.1','https://198.18.0.1','https://203.0.113.1','https://[::1]','https://[::ffff:10.0.0.1]','https://[fe80::1%25eth0]','https://[2001:db8::1]',
                    'https://user:pass@bridge.invalid','https://bridge.invalid/path','https://bridge.invalid/?x=1'):
         assert app.validate_origin(origin) is None
     assert app.validate_origin('http://127.0.0.1', allow_loopback=True)=='http://127.0.0.1'

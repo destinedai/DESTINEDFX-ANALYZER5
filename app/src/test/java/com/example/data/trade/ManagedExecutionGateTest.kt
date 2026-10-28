@@ -14,13 +14,14 @@ class ManagedExecutionGateTest {
         actualLogin: String = expectedLogin,
         expectedServer: String = "Broker-Exact",
         actualServer: String = expectedServer,
+        eaState: String = "READY",
         fresh: Boolean = true,
         terminalConnected: Boolean = true,
         tradeAllowed: Boolean = true,
         accountVerified: Boolean = true,
         liveAuthorized: Boolean = true
     ) = MT5RemoteBridgeClient.canStart(
-        profile, state, access, mode, expectedLogin, actualLogin, expectedServer, actualServer,
+        profile, state, access, mode, expectedLogin, actualLogin, expectedServer, actualServer, eaState,
         fresh, terminalConnected, tradeAllowed, accountVerified, liveAuthorized
     )
 
@@ -60,6 +61,7 @@ class ManagedExecutionGateTest {
     @Test fun nonReadyOrNoTradePermissionIsRejected() {
         assertFalse(allowed(state = "PROVISIONING"))
         assertFalse(allowed(tradeAllowed = false))
+        assertFalse(allowed(eaState = "ERROR"))
     }
 
     @Test fun demoHasItsOwnModeAndDoesNotNeedOrInheritLiveAuthorization() {

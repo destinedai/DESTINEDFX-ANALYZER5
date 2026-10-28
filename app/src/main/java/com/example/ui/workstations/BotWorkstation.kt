@@ -68,12 +68,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         MT5RemoteBridgeClient.canStart(selectedAccountMode, snapshot.managedState, snapshot.accessType, snapshot.actualAccountMode,
             bridgeSecrets.getManagedMT5Login(selectedAccountMode), snapshot.actualLogin,
             bridgeSecrets.getManagedMT5Server(selectedAccountMode), snapshot.actualServer,
+            snapshot.state,
             snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, snapshot.liveAuthorized)
     } == true
     val bridgeProfileReady = bridgeSnapshot?.let { snapshot ->
         MT5RemoteBridgeClient.canStart(selectedAccountMode, snapshot.managedState, snapshot.accessType, snapshot.actualAccountMode,
             bridgeSecrets.getManagedMT5Login(selectedAccountMode), snapshot.actualLogin,
             bridgeSecrets.getManagedMT5Server(selectedAccountMode), snapshot.actualServer,
+            snapshot.state,
             snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, true)
     } == true
     fun selectBridgeProfile(profile: String) {

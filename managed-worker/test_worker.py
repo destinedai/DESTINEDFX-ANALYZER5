@@ -69,7 +69,14 @@ class WorkerTests(unittest.TestCase):
             "https://bridge.destinedfx.internal:0",
             "https://bridge.destinedfx.internal:99999",
             "https://10.0.0.4",
+            "https://100.64.0.1",
+            "https://192.0.2.1",
+            "https://198.18.0.1",
+            "https://203.0.113.1",
             "https://[::1]",
+            "https://[::ffff:10.0.0.1]",
+            "https://[fe80::1%25eth0]",
+            "https://[2001:db8::1]",
             "https://user:pass@bridge.destinedfx.internal",
             "https://bridge.destinedfx.internal/path",
             "https://bridge.destinedfx.internal/?x=1",
@@ -146,20 +153,63 @@ class WorkerTests(unittest.TestCase):
     def test_supervision_restarts_owned_terminal_with_bounded_retries(self):
         result = worker.provision(self.job, self.settings, launch=False)
         marker = result / "terminal" / ".destinedfx-worker.json"
-        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING"}', encoding="utf-8")
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO"}', encoding="utf-8")
         fake = type("Process", (), {"pid": 100})()
-        with patch.object(worker, "process_is_owned", return_value=False), patch.object(worker.subprocess, "Popen", return_value=fake):
+        with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD), patch.object(worker.subprocess, "Popen", return_value=fake) as popen:
             outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
         self.assertEqual(outcome[0]["status"], "RESTARTED")
+        args = popen.call_args.args[0]
+        self.assertTrue(any(str(value).startswith("/config:") for value in args))
+        self.assertIn("/portable", args)
         self.assertEqual(worker.json.loads(marker.read_text())["restart_count"], 1)
-        with patch.object(worker, "process_is_owned", return_value=False):
+        with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD):
             outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
         self.assertEqual(outcome[0]["status"], "RESTART_LIMIT")
+
+    def test_marker_update_failure_never_deletes_tree_while_spawned_process_is_unverified(self):
+        fake = type("Process", (), {"pid": 4321})()
+        compiled = self.root / "trusted.ex5"
+        compiled.write_bytes(b"compiled")
+        with patch.object(worker.subprocess, "Popen", return_value=fake), \
+             patch.object(worker, "update_marker", side_effect=OSError("marker storage failed")), \
+             patch.object(worker, "process_is_owned", return_value=worker.ProcessState.OWNED_RUNNING), \
+             patch.object(worker, "terminate_owned_process", return_value=worker.ProcessState.UNKNOWN):
+            with self.assertRaises(worker.ProvisionError) as error:
+                worker.provision(self.job, {**self.settings, "compiled_ea": str(compiled)})
+        self.assertEqual(error.exception.code, "TERMINAL_OWNERSHIP_UNVERIFIED")
+        account = Path(self.settings["data_root"]) / self.job["job_id"]
+        self.assertTrue(account.exists())
+        self.assertTrue((account / "terminal" / ".destinedfx-worker.json").exists())
+
+    def test_process_states_do_not_restart_unknown_or_mismatched_processes(self):
+        result = worker.provision(self.job, self.settings, launch=False)
+        marker = result / "terminal" / ".destinedfx-worker.json"
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING"}', encoding="utf-8")
+        for state in (worker.ProcessState.UNKNOWN, worker.ProcessState.IDENTITY_MISMATCH):
+            with patch.object(worker, "process_is_owned", return_value=state), patch.object(worker.subprocess, "Popen") as popen:
+                outcome = worker.supervise_terminals(self.settings)
+            self.assertEqual(outcome[0]["status"], "OPERATOR_REVIEW")
+            popen.assert_not_called()
 
     def test_config_has_no_secret(self):
         cfg = (Path(__file__).parent / "worker.example.toml").read_text()
         self.assertNotIn("password", cfg.lower())
         self.assertNotIn("worker_token", cfg.lower())
+
+    def test_worker_identity_is_required_and_stable_across_restart(self):
+        with self.assertRaises(worker.ProvisionError) as error:
+            worker.load_worker_id({})
+        self.assertEqual(error.exception.code, "WORKER_ID_MISSING_STABLE_ID_REQUIRED")
+        first = worker.load_worker_id({"DESTINEDFX_WORKER_ID": "host-worker-01"})
+        restarted = worker.load_worker_id({"DESTINEDFX_WORKER_ID": "host-worker-01"})
+        self.assertEqual(first, restarted)
+
+    def test_restart_configuration_has_expected_identity_and_no_password(self):
+        text = worker.restart_ini_contents({"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO"})
+        self.assertIn("Login=123456", text)
+        self.assertIn("Server=Demo-Server", text)
+        self.assertIn("Expert=DestinedFXTraderEA", text)
+        self.assertNotIn("Password=", text)
 
 
 if __name__ == "__main__":

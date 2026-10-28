@@ -78,7 +78,7 @@ jobs:
               ip = ipaddress.ip_address(host.strip("[]"))
               private = not ip.is_global
           except ValueError:
-              pass
+              private = ":" in host or all(ch in "0123456789." for ch in host)
           if (u.scheme != "https" or not host or u.username or u.password or u.query or u.fragment
               or u.path not in ("", "/") or port == 0 or port is not None and not (1 <= port <= 65535)
               or placeholder or private):

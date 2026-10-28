@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,13 @@ LOGIN = re.compile(r"^[0-9]{1,20}$")
 SAFE_SERVER = re.compile(r"^[A-Za-z0-9 ._:-]{1,128}$")
 SAFE_SYMBOL = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 VALID_ACCESS = {"MASTER", "INVESTOR"}
+
+
+class ProcessState(str, Enum):
+    OWNED_RUNNING = "OWNED_RUNNING"
+    DEFINITELY_DEAD = "DEFINITELY_DEAD"
+    UNKNOWN = "UNKNOWN"
+    IDENTITY_MISMATCH = "IDENTITY_MISMATCH"
 
 def validate_origin(raw: str) -> str | None:
     value = (raw or "").strip().rstrip("/")
@@ -47,13 +56,16 @@ def validate_origin(raw: str) -> str | None:
             or parsed.query or parsed.fragment or parsed.path not in ("", "/") or placeholder
             or port is not None and not (1 <= port <= 65535)):
         return None
+    host_for_url = host.strip("[]")
     try:
-        address = ipaddress.ip_address(host.strip("[]"))
-        if address.is_private or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or address.is_unspecified:
+        address = ipaddress.ip_address(host_for_url)
+        if not address.is_global:
             return None
     except ValueError:
-        pass
-    return f"https://{host}" + (f":{port}" if port else "")
+        if ":" in host_for_url or re.fullmatch(r"[0-9.]+", host_for_url):
+            return None
+    serialized_host = f"[{host_for_url}]" if ":" in host_for_url else host_for_url
+    return f"https://{serialized_host}" + (f":{port}" if port else "")
 
 
 class ProvisionError(Exception):
@@ -87,23 +99,107 @@ def terminal_records(root: Path) -> list[tuple[Path, dict[str, Any]]]:
     return records
 
 
-def process_is_owned(pid: int, executable: Path) -> bool:
-    """Return true only when the recorded PID is alive and belongs to this executable."""
+def process_is_owned(pid: int, executable: Path) -> ProcessState:
+    """Inspect a recorded process without treating inconclusive evidence as death."""
     if pid <= 0:
-        return False
+        return ProcessState.DEFINITELY_DEAD
     if os.name != "nt":
         try:
             os.kill(pid, 0)
-            return executable.is_file()
+        except ProcessLookupError:
+            return ProcessState.DEFINITELY_DEAD
         except OSError:
-            return False
+            return ProcessState.UNKNOWN
+        proc_exe = Path(f"/proc/{pid}/exe")
+        try:
+            if not proc_exe.exists():
+                return ProcessState.UNKNOWN
+            return (ProcessState.OWNED_RUNNING if proc_exe.resolve() == executable.resolve()
+                    else ProcessState.IDENTITY_MISMATCH)
+        except (OSError, RuntimeError):
+            return ProcessState.UNKNOWN
     escaped = str(executable.resolve()).replace("'", "''")
     script = (f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; "
               f"if(-not $p -or -not $p.ExecutablePath) {{exit 1}}; "
               f"if(([IO.Path]::GetFullPath($p.ExecutablePath) -ine '{escaped}')) {{exit 2}}; exit 0")
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
-    return result.returncode == 0
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ProcessState.UNKNOWN
+    return {0: ProcessState.OWNED_RUNNING, 1: ProcessState.DEFINITELY_DEAD,
+            2: ProcessState.IDENTITY_MISMATCH}.get(result.returncode, ProcessState.UNKNOWN)
+
+
+def write_marker_atomic(path: Path, record: dict[str, Any]) -> None:
+    """Durably replace a lifecycle marker without exposing a partial JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(record, separators=(",", ":")))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def update_marker(path: Path, record: dict[str, Any]) -> None:
+    write_marker_atomic(path, record)
+
+
+def terminate_owned_process(pid: int, executable: Path) -> ProcessState:
+    """Terminate only an identity-verified process and re-check that it exited."""
+    state = process_is_owned(pid, executable)
+    if state != ProcessState.OWNED_RUNNING:
+        return state
+    if os.name != "nt":
+        try:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(20):
+                if process_is_owned(pid, executable) == ProcessState.DEFINITELY_DEAD:
+                    return ProcessState.DEFINITELY_DEAD
+                time.sleep(0.05)
+            return ProcessState.UNKNOWN
+        except OSError:
+            return ProcessState.UNKNOWN
+    escaped = str(executable.resolve()).replace("'", "''")
+    script = (f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; "
+              f"if(-not $p -or -not $p.ExecutablePath) {{exit 1}}; "
+              f"if(([IO.Path]::GetFullPath($p.ExecutablePath) -ine '{escaped}')) {{exit 2}}; "
+              f"Stop-Process -Id {pid} -Force -ErrorAction Stop; Start-Sleep -Milliseconds 200; "
+              f"$q=Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; if($q) {{exit 3}}; exit 0")
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ProcessState.UNKNOWN
+    return ProcessState.DEFINITELY_DEAD if result.returncode == 0 else (ProcessState.IDENTITY_MISMATCH if result.returncode == 2 else ProcessState.UNKNOWN)
+
+
+def restart_ini_contents(record: dict[str, Any]) -> str:
+    """Build a restart INI from non-secret, worker-recorded identity only."""
+    login = record.get("expected_login", "")
+    server = record.get("expected_server", "")
+    mode = record.get("account_mode", "")
+    if not (LOGIN.fullmatch(str(login)) and SAFE_SERVER.fullmatch(str(server)) and mode in {"DEMO", "LIVE"}):
+        raise ProvisionError("RESTART_CONFIGURATION_UNVERIFIED")
+    return ("[Common]\n"
+            f"Login={login}\nServer={server}\nKeepPrivate=1\nNewsEnable=0\nProxyEnable=0\n"
+            "\n[Experts]\nAllowDllImport=0\nEnabled=1\nAccount=1\nProfile=1\n"
+            "\n[StartUp]\nExpert=DestinedFXTraderEA\nSymbol=EURUSD\nPeriod=M5\n"
+            "ExpertParameters=DestinedFXTraderEA.set\n")
 
 
 def supervise_terminals(settings: dict, base: str | None = None, token: str | None = None,
@@ -128,10 +224,19 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
                     token, "GET").get("status")
             except ProvisionError:
                 backend_status = None
-        if process_is_owned(pid, executable):
+        state = process_is_owned(pid, executable)
+        if state == ProcessState.OWNED_RUNNING:
             record["status"] = backend_status or "RUNNING"
-            marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+            update_marker(marker, record)
             results.append({"job_id": record["job_id"], "status": record["status"]})
+            continue
+        if state in {ProcessState.UNKNOWN, ProcessState.IDENTITY_MISMATCH}:
+            record["status"] = "OPERATOR_REVIEW"
+            try:
+                update_marker(marker, record)
+            except OSError:
+                pass
+            results.append({"job_id": record["job_id"], "status": "OPERATOR_REVIEW", "process_state": state.value})
             continue
         retries = int(record.get("restart_count", 0) or 0)
         backoff = max(0, int(settings.get("restart_backoff_seconds", 30)))
@@ -142,7 +247,7 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
             continue
         if retries >= max_retries:
             record["status"] = "RESTART_LIMIT"
-            marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+            update_marker(marker, record)
             if base and token and worker_id:
                 try:
                     post_state(base, token, record["job_id"], worker_id, "FAILED", "TERMINAL_RESTART_LIMIT", "Terminal restart limit reached; operator review is required")
@@ -150,17 +255,35 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
                     pass
             results.append({"job_id": record["job_id"], "status": "RESTART_LIMIT"})
             continue
+        restart_ini = terminal_home.parent / f"restart-{uuid.uuid4().hex}.ini"
         try:
-            proc = subprocess.Popen([str(executable), "/portable"], cwd=str(terminal_home),
+            write_private(restart_ini, restart_ini_contents(record))
+            proc = subprocess.Popen([str(executable), f"/config:{restart_ini}", "/portable"], cwd=str(terminal_home),
                                     shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, close_fds=True)
-        except OSError:
+        except (OSError, ProvisionError):
             record["status"] = "RESTART_FAILED"
-            marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+            update_marker(marker, record)
             results.append({"job_id": record["job_id"], "status": "RESTART_FAILED"})
             continue
+        finally:
+            restart_ini.unlink(missing_ok=True)
         record.update(pid=proc.pid, restart_count=retries + 1, status="AUTHENTICATING", last_restart=time.time())
-        marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+        try:
+            update_marker(marker, record)
+        except Exception:
+            after_failure = process_is_owned(proc.pid, executable)
+            if after_failure == ProcessState.OWNED_RUNNING:
+                after_failure = terminate_owned_process(proc.pid, executable)
+            if after_failure != ProcessState.DEFINITELY_DEAD:
+                record["status"] = "OPERATOR_REVIEW"
+                try:
+                    update_marker(marker, record)
+                except OSError:
+                    pass
+                results.append({"job_id": record["job_id"], "status": "OPERATOR_REVIEW"})
+                continue
+            raise
         if base and token and worker_id:
             try:
                 post_state(base, token, record["job_id"], worker_id, "AUTHENTICATING")
@@ -178,9 +301,14 @@ def quarantine_terminal(settings: dict, job_id: str) -> str:
             continue
         terminal_home = marker.parent
         executable = (terminal_home / Path(settings["terminal_exe"]).name).resolve()
-        if process_is_owned(int(record.get("pid", 0) or 0), executable):
+        state = process_is_owned(int(record.get("pid", 0) or 0), executable)
+        if state == ProcessState.OWNED_RUNNING:
             record["status"] = "OPERATOR_REVIEW"
-            marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+            update_marker(marker, record)
+            return "OPERATOR_REVIEW"
+        if state != ProcessState.DEFINITELY_DEAD:
+            record["status"] = "OPERATOR_REVIEW"
+            update_marker(marker, record)
             return "OPERATOR_REVIEW"
         account_dir = terminal_home.parent
         quarantine = root / ".quarantine"
@@ -271,19 +399,16 @@ def revoke_pairing(settings: dict, pairing_id: str) -> None:
                 continue
             found = True
             pid = int(data.get("pid", 0))
-            if os.name == "nt" and pid <= 0:
-                raise ProvisionError("REVOKE_PROCESS_ID_MISSING")
-            exe = str((marker.parent / Path(settings["terminal_exe"]).name).resolve())
-            if os.name == "nt" and pid > 0:
-                escaped = exe.replace("'", "''")
-                script = (f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; "
-                          f"if(-not $p) {{exit 0}}; "
-                          f"if(-not $p.ExecutablePath -or ([IO.Path]::GetFullPath($p.ExecutablePath) -ine '{escaped}')) {{exit 2}}; "
-                          f"Stop-Process -Id {pid} -Force -ErrorAction Stop; Wait-Process -Id {pid} -Timeout 10 -ErrorAction SilentlyContinue; exit 0")
-                result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                                        shell=False, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                if result.returncode != 0:
-                    raise ProvisionError("REVOKE_PROCESS_IDENTITY_MISMATCH")
+            exe = Path(data.get("executable") or (marker.parent / Path(settings["terminal_exe"]).name).resolve())
+            state = process_is_owned(pid, exe)
+            if state == ProcessState.OWNED_RUNNING:
+                state = terminate_owned_process(pid, exe)
+            if state == ProcessState.IDENTITY_MISMATCH:
+                raise ProvisionError("REVOKE_PROCESS_IDENTITY_MISMATCH")
+            if state == ProcessState.UNKNOWN:
+                raise ProvisionError("REVOKE_PROCESS_OWNERSHIP_UNKNOWN")
+            if state != ProcessState.DEFINITELY_DEAD:
+                raise ProvisionError("REVOKE_PROCESS_NOT_TERMINATED")
             shutil.rmtree(account_dir)
             if account_dir.exists():
                 raise ProvisionError("REVOKE_CLEANUP_FAILED")
@@ -397,14 +522,30 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
         ini.unlink(missing_ok=True)
         return account_dir
     args = [str(account_terminal), f"/config:{ini}", "/portable"]
+    marker = terminal_home / ".destinedfx-worker.json"
+    record = {"job_id": job["job_id"], "pairing_id": job["pairing_id"], "account_dir": str(account_dir),
+              "executable": str(account_terminal.resolve()), "pid": 0, "restart_count": 0,
+              "status": "LAUNCH_PENDING", "created": time.time(), "expected_login": job["account"]["login"],
+              "expected_server": job["account"]["server"], "account_mode": job["account"]["account_mode"]}
     try:
+        write_marker_atomic(marker, record)
         proc = subprocess.Popen(args, cwd=str(terminal_home), shell=False, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
-        write_private(terminal_home / ".destinedfx-worker.json",
-                      json.dumps({"job_id": job["job_id"], "pairing_id": job["pairing_id"], "account_dir": str(account_dir),
-                                  "pid": proc.pid, "executable": str(account_terminal), "restart_count": 0,
-                                  "status": "AUTHENTICATING", "created": time.time()}, separators=(",", ":")))
-    except OSError:
+        record.update(pid=proc.pid, status="AUTHENTICATING")
+        update_marker(marker, record)
+    except (OSError, ProvisionError):
+        if "proc" in locals():
+            state = process_is_owned(proc.pid, account_terminal)
+            if state == ProcessState.OWNED_RUNNING:
+                state = terminate_owned_process(proc.pid, account_terminal)
+            if state != ProcessState.DEFINITELY_DEAD:
+                record["status"] = "OPERATOR_REVIEW"
+                try:
+                    update_marker(marker, record)
+                except OSError:
+                    pass
+                ini.unlink(missing_ok=True)
+                raise ProvisionError("TERMINAL_OWNERSHIP_UNVERIFIED") from None
         ini.unlink(missing_ok=True)
         raise ProvisionError("TERMINAL_LAUNCH_FAILED") from None
     finally:
@@ -415,14 +556,30 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
 
 
 def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
-    """Provision with cleanup of unlaunched partial trees; preserve owned live trees for review."""
+    """Provision with evidence-based cleanup; never delete a possibly live tree."""
     root = Path(settings["data_root"]).resolve()
     account_dir = safe_child(root, job["job_id"])
     try:
         return _provision(job, settings, launch=launch)
     except Exception:
         marker = account_dir / "terminal" / ".destinedfx-worker.json"
-        if not marker.exists() and account_dir.exists():
+        if marker.exists():
+            try:
+                record = json.loads(marker.read_text(encoding="utf-8"))
+                executable = Path(record.get("executable", ""))
+                state = process_is_owned(int(record.get("pid", 0) or 0), executable)
+                if state == ProcessState.OWNED_RUNNING:
+                    state = terminate_owned_process(int(record["pid"]), executable)
+                if state == ProcessState.DEFINITELY_DEAD:
+                    shutil.rmtree(account_dir, ignore_errors=False)
+                else:
+                    record["status"] = "OPERATOR_REVIEW"
+                    update_marker(marker, record)
+            except (OSError, ValueError, TypeError, KeyError):
+                pass
+        elif account_dir.exists():
+            # The marker is created before Popen. Absence therefore proves that
+            # no terminal process could have been launched for this tree.
             shutil.rmtree(account_dir, ignore_errors=False)
         raise
 
@@ -495,6 +652,16 @@ def load_settings(path: Path) -> dict:
         raise ProvisionError("INVALID_WORKER_CONFIG") from None
 
 
+def load_worker_id(environment: dict[str, str] | None = None) -> str:
+    values = environment if environment is not None else os.environ
+    worker_id = values.get("DESTINEDFX_WORKER_ID", "")
+    if not worker_id:
+        raise ProvisionError("WORKER_ID_MISSING_STABLE_ID_REQUIRED")
+    if not SAFE_ID.fullmatch(worker_id):
+        raise ProvisionError("INVALID_WORKER_ID")
+    return worker_id
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("worker.toml"))
@@ -508,9 +675,7 @@ def main() -> int:
         token = os.environ.get("DESTINEDFX_WORKER_TOKEN", "")
         if not token:
             raise ProvisionError("WORKER_TOKEN_MISSING")
-        worker_id = os.environ.get("DESTINEDFX_WORKER_ID", "") or str(uuid.uuid4())
-        if not SAFE_ID.fullmatch(worker_id):
-            raise ProvisionError("INVALID_WORKER_ID")
+        worker_id = load_worker_id()
         while True:
             try:
                 supervise_terminals(config, config["control_plane_url"], token, worker_id)

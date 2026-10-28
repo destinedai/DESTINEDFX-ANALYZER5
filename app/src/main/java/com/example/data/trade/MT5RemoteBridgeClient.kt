@@ -206,15 +206,36 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
                 if (uri.userInfo != null || uri.query != null || uri.fragment != null || uri.path.orEmpty().trimEnd('/').isNotEmpty()) return null
                 if (placeholder || scheme != "https" && !(scheme == "http" && loopback)) return null
                 if (port == 0 || port !in -1..65535 || scheme == "https" && loopback) return null
-                val literal = runCatching { InetAddress.getByName(host) }.getOrNull()
-                if (literal != null && (literal.isAnyLocalAddress || literal.isLoopbackAddress || literal.isLinkLocalAddress || literal.isSiteLocalAddress || literal.isMulticastAddress)) return null
-                "$scheme://$host" + if (port >= 0) ":$port" else ""
+                val literal = if (host.matches(Regex("^[0-9a-fA-F:.%]+$"))) runCatching { InetAddress.getByName(host) }.getOrNull() else null
+                if (literal == null && (host.contains(":") || host.matches(Regex("^[0-9.]+$")))) return null
+                if (literal != null && !isPublicIpLiteral(host, literal)) return null
+                val serializedHost = if (host.contains(":")) "[$host]" else host
+                "$scheme://$serializedHost" + if (port >= 0) ":$port" else ""
             } catch (_: Exception) { null }
+        }
+
+        private fun isPublicIpLiteral(raw: String, address: InetAddress): Boolean {
+            if (raw.contains('%') || address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress || address.isMulticastAddress) return false
+            val ipv4 = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$").matchEntire(raw)
+            if (ipv4 != null) {
+                val o = ipv4.groupValues.drop(1).map { it.toIntOrNull() ?: -1 }
+                if (o.any { it !in 0..255 }) return false
+                val first = o[0]; val second = o[1]; val third = o[2]
+                return first !in setOf(0, 10, 127, 169, 224) &&
+                    !(first == 100 && second in 64..127) && !(first == 172 && second in 16..31) &&
+                    !(first == 192 && (second == 168 || (second == 0 && third == 0))) &&
+                    !(first == 198 && second in 18..19) && !(first == 198 && second == 51 && third == 100) &&
+                    !(first == 203 && second == 0 && third == 113)
+            }
+            val lower = raw.lowercase()
+            return !lower.startsWith("::ffff:") && !lower.startsWith("2001:db8:") &&
+                !lower.startsWith("fc") && !lower.startsWith("fd")
         }
 
         internal fun canStart(
             selectedProfile: String, managedState: String, accessType: String, actualMode: String,
             expectedLogin: String, actualLogin: String, expectedServer: String, actualServer: String,
+            eaState: String,
             heartbeatFresh: Boolean, terminalConnected: Boolean, tradeAllowed: Boolean,
             accountVerified: Boolean, liveAuthorized: Boolean
         ): Boolean = selectedProfile.uppercase() in setOf("DEMO", "LIVE") &&
@@ -222,7 +243,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             managedState.equals("READY", true) && accessType.equals("MASTER", true) &&
             actualMode.equals(selectedProfile, true) && expectedLogin.isNotBlank() && actualLogin == expectedLogin &&
             expectedServer.isNotBlank() && actualServer == expectedServer && heartbeatFresh && terminalConnected &&
-            tradeAllowed && accountVerified && selectedProfile.uppercase() in setOf("DEMO", "LIVE")
+            tradeAllowed && accountVerified && eaState.uppercase() in setOf("READY", "RUNNING", "PAUSED", "STOPPED") && selectedProfile.uppercase() in setOf("DEMO", "LIVE")
 
         internal fun isValidRiskPercent(value: Double): Boolean = value.isFinite() && value > 0.0 && value <= 1.0
 
