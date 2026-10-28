@@ -35,7 +35,6 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
     fun baseUrl(): String {
         return com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.trim().trimEnd('/')
     }
-    }
 
     fun managedConfigured(): Boolean = validateBaseUrl(com.example.BuildConfig.MT5_MANAGED_SERVICE_URL) != null
 
