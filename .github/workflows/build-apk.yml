@@ -19,6 +19,8 @@ jobs:
         run: python -m pytest -q bridge
       - name: Run managed-worker tests
         run: python -m unittest discover -s managed-worker -p 'test_*.py' -v
+      - name: Run MT5 EA source-contract checks
+        run: python -m pytest -q mt5-ea/test_ea_source.py
 
   build:
     runs-on: ubuntu-24.04
