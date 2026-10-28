@@ -1329,12 +1329,15 @@ open class DestinedFXViewModel(
                     if (gateway.connectionStatus.value != com.example.data.broker.BrokerConnectionStatus.CONNECTED || gateway.accountMetrics.value == null) {
                         throw IllegalStateException("Bot activation blocked: a verified authenticated account snapshot is required.")
                     }
-                    app.autonomousBotEngine.startBot(
+                    val startResult = app.autonomousBotEngine.startBot(
                         symbol = selectedTicker.value,
                         strategyId = selectedStrategyId.value,
                         timeframe = selectedTimeframe.value,
                         riskPercent = riskPercent.value
                     )
+                    startResult.getOrElse { error ->
+                        throw error
+                    }
                 } else {
                     app.autonomousBotEngine.stopBot()
                 }

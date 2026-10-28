@@ -125,7 +125,13 @@ def validate_origin(raw, allow_loopback=False):
         if not (allow_loopback and loopback): return None
     elif parsed.scheme!='https' or loopback or placeholder:
         return None
-    return f'{parsed.scheme}://{host}' + (f':{parsed.port}' if parsed.port else '')
+    try:
+        port=parsed.port
+    except ValueError:
+        return None
+    if port is not None and not (1 <= port <= 65535):
+        return None
+    return f'{parsed.scheme}://{host}' + (f':{port}' if port else '')
 
 def managed_config():
     key=os.getenv('CREDENTIALS_FERNET_KEY','')
@@ -236,6 +242,18 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
 
 @app.get('/health')
 def health(): return {'status':'ok'}
+@app.get('/health/ready')
+def readiness():
+    """Report whether the bridge can safely accept managed-execution work."""
+    try:
+        managed_config()
+        with tx() as c:
+            c.execute('SELECT 1').fetchone()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
+    return {'status':'ready','database':'ok','managed_execution':'configured'}
 @app.post('/v1/pairings',status_code=201)
 def create_pair(request:Request):
     ip=request.client.host if request.client else 'unknown'; t=time.time()
@@ -369,9 +387,11 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     payload=x.model_dump(); payload['account']=x.account.model_dump(); payload['open_positions']=[v.model_dump() for v in x.open_positions]; payload['closed_deals']=[v.model_dump() for v in x.closed_deals]; payload['timestamp']=iso(dt.astimezone(timezone.utc))
     with tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(json.dumps(payload,separators=(',',':'),allow_nan=False),p['id']))
-        managed=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
-        if managed and not managed['revoked'] and managed['account_mode']==x.account.account_mode and x.state=='READY' and x.terminal_connected and (managed['access_type']=='INVESTOR' or x.trade_allowed):
-            c.execute("UPDATE worker_jobs SET status='READY',error_code=NULL,error_message=NULL WHERE pairing_id=? AND kind='PROVISION' AND status IN ('LEASED','PROVISIONING','AUTHENTICATING')",(p['id'],))
+        # Heartbeats establish terminal telemetry only.  A heartbeat must never
+        # promote a provisioning job: after lease expiry, an old terminal could
+        # otherwise mark a job reclaimed by another worker as READY.  Only the
+        # lease-owning worker's authenticated status poll may perform that
+        # transition (see worker_job_status above).
     return {'accepted':True,'received_at':iso()}
 @app.delete('/v1/app/pairing')
 def revoke(authorization:str|None=Header(default=None)):

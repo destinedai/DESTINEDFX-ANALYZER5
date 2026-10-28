@@ -156,6 +156,10 @@ def test_ready_requires_fresh_actual_heartbeat_and_worker_ready(monkeypatch):
     th={'Authorization':'Bearer '+terminal['terminal_token']}
     client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
     state=client.get('/v1/app/state',headers=ah).json()
+    assert state['managed_execution']['status']!='READY'
+    status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker',headers=wh).json()
+    assert status['status']=='READY'
+    state=client.get('/v1/app/state',headers=ah).json()
     assert state['managed_execution']['status']=='READY'
     assert client.post('/v1/app/commands',headers=ah,json=command_req()).status_code==202
     assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='RUNNING')).status_code==200
@@ -176,6 +180,7 @@ def test_investor_can_be_ready_for_read_only_but_never_start(monkeypatch):
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed-ro','account':investor_account}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
     assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(trade_allowed=False,account={**investor_account,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100})).status_code==200
+    assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-ro',headers=wh).json()['status']=='READY'
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['managed_execution']['status']=='READY' and state['managed_execution']['access_type']=='INVESTOR'
     assert client.post('/v1/app/commands',headers=ah,json=command_req()).status_code==409
@@ -264,6 +269,7 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     hb={**heartbeat_data(account={**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100})}
     if access_type=='INVESTOR': hb['trade_allowed']=False
     assert client.post('/v1/terminal/heartbeat',headers=th,json=hb).status_code==200
+    assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-live',headers=wh).json()['status']=='READY'
     return p,ah,wh,job,th,actual
 
 
@@ -333,3 +339,24 @@ def test_live_authorization_revocation_and_profile_pairing_isolation(monkeypatch
     assert demo_state.get('managed_execution',{}).get('live_authorized') is False
     assert client.delete('/v1/app/live-authorization',headers=live_ah).json()['revoked'] is True
     assert client.get('/v1/app/state',headers=live_ah).json()['managed_execution']['live_authorized'] is False
+
+
+def test_readiness_requires_valid_managed_configuration_and_storage(monkeypatch):
+    monkeypatch.delenv('CREDENTIALS_FERNET_KEY', raising=False)
+    monkeypatch.delenv('WORKER_TOKEN', raising=False)
+    monkeypatch.delenv('BRIDGE_BASE_URL', raising=False)
+    response=client.get('/health/ready')
+    assert response.status_code==503
+    managed_env(monkeypatch)
+    response=client.get('/health/ready')
+    assert response.status_code==200
+    assert response.json()=={'status':'ready','database':'ok','managed_execution':'configured'}
+
+
+def test_malformed_managed_origin_fails_closed(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.invalid:99999')
+    p,ah=managed_pair()
+    response=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'x','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='CONFIGURATION_REQUIRED'
