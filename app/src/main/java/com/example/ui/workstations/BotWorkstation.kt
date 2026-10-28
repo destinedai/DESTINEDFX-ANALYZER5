@@ -2099,6 +2099,10 @@ private fun BridgeTelemetry(snapshot: MT5RemoteBridgeClient.Snapshot?) {
     Text("LIVE POSITIONS (${positions?.size ?: unavailable})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     if (positions == null || !snapshot!!.snapshotsValid || positions.isEmpty()) Text(if (positions?.isEmpty() == true && snapshot.snapshotsValid) "No open positions confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
     positions.orEmpty().forEach { p -> Text("#${p.optString("ticket", unavailable)} / ${p.optString("position_id", unavailable)} · ${p.optString("symbol", unavailable)} ${p.optString("direction", unavailable)} · volume ${p.optString("volume", unavailable)} · entry ${p.optString("open_price", unavailable)} · current broker P/L ${p.optString("floating_profit", unavailable)} · SL ${p.optString("stop_loss", unavailable)} · TP ${p.optString("take_profit", unavailable)} · swap ${p.optString("swap", unavailable)}", color = TextPrimary, fontSize = 10.sp) }
+    val activeOrders = snapshot?.activeOrders
+    Text("PENDING BROKER ORDERS (${activeOrders?.size ?: unavailable})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    if (activeOrders == null || !snapshot!!.snapshotsValid || activeOrders.isEmpty()) Text(if (activeOrders?.isEmpty() == true && snapshot.snapshotsValid) "No pending orders confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
+    activeOrders.orEmpty().forEach { order -> Text("#${order.optString("ticket", unavailable)} · ${order.optString("symbol", unavailable)} ${order.optString("direction", unavailable)} · remaining ${order.optString("remaining_volume", unavailable)} · price ${order.optString("open_price", unavailable)} · SL ${order.optString("stop_loss", unavailable)} · TP ${order.optString("take_profit", unavailable)} · state ${order.optString("state", unavailable)}", color = TextPrimary, fontSize = 10.sp) }
     val deals = snapshot?.closedDeals
     val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
     val recent = deals.orEmpty().filter { deal ->
@@ -2109,7 +2113,8 @@ private fun BridgeTelemetry(snapshot: MT5RemoteBridgeClient.Snapshot?) {
     val netValues = recent.mapNotNull { deal -> listOf("profit", "commission", "swap").map { key -> deal.opt(key) }.takeIf { it.all { v -> v is Number && v.toDouble().isFinite() } }?.sumOf { (it as Number).toDouble() } }
     Text("REALIZED DEAL NET (last 7 days / available deals): ${if (deals == null || !snapshot!!.snapshotsValid || netValues.size != recent.size) unavailable else netValues.sum().toString()} ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 10.sp)
     deals.orEmpty().take(10).forEach { deal -> Text("Closed deal #${deal.optString("ticket", unavailable)} / position ${deal.optString("position_id", unavailable)} · ${deal.optString("symbol", unavailable)} · closed ${deal.optString("closed_at", unavailable)} · realized ${deal.optString("profit", unavailable)} · commission ${deal.optString("commission", unavailable)} · swap ${deal.optString("swap", unavailable)}", color = TextSecondary, fontSize = 10.sp) }
-    Text("Last signal: ${snapshot?.lastSignal?.toString() ?: unavailable}", color = TextSecondary, fontSize = 10.sp)
+    val lastSignal = snapshot?.lastSignal
+    Text("Last signal: ${lastSignal?.optString("execution_state", lastSignal?.optString("state", unavailable)) ?: unavailable} · requested ${lastSignal?.optString("requested_volume", unavailable) ?: unavailable} · executed ${lastSignal?.optString("executed_volume", unavailable) ?: unavailable} · order ${lastSignal?.optString("order", unavailable) ?: unavailable} · deal ${lastSignal?.optString("deal", unavailable) ?: unavailable}", color = TextSecondary, fontSize = 10.sp)
     snapshot?.raw?.optString("last_error")?.takeIf { it.isNotBlank() }?.let { Text("EA ERROR: $it", color = LossRed, fontSize = 10.sp) }
 }
 

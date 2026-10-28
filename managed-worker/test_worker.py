@@ -109,6 +109,10 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue((result / "terminal/MQL5/Experts/DestinedFXTraderEA.ex5").is_file())
         self.assertTrue((result / "terminal/MQL5/Presets/DestinedFXTraderEA.set").is_file())
 
+    def test_terminal_that_never_authenticates_times_out_without_ready_promotion(self):
+        with patch.object(worker, "request_json", return_value={"status": "AUTHENTICATING"}), patch.object(worker.time, "sleep"):
+            self.assertEqual(worker.wait_for_terminal("https://bridge.realcop.com", "x" * 32, "job_123", "worker-01", timeout=1), "TIMEOUT")
+
     def test_no_process_if_ea_source_missing(self):
         self.source.unlink()
         with patch.object(worker.subprocess, "Popen") as popen:
@@ -153,7 +157,7 @@ class WorkerTests(unittest.TestCase):
     def test_supervision_restarts_owned_terminal_with_bounded_retries(self):
         result = worker.provision(self.job, self.settings, launch=False)
         marker = result / "terminal" / ".destinedfx-worker.json"
-        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO"}', encoding="utf-8")
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO","access_type":"MASTER","bridge_url":"https://bridge.realcop.com"}', encoding="utf-8")
         fake = type("Process", (), {"pid": 100})()
         with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD), patch.object(worker.subprocess, "Popen", return_value=fake) as popen:
             outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
@@ -205,11 +209,21 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(first, restarted)
 
     def test_restart_configuration_has_expected_identity_and_no_password(self):
-        text = worker.restart_ini_contents({"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO"})
+        text = worker.restart_ini_contents({"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.realcop.com"})
         self.assertIn("Login=123456", text)
         self.assertIn("Server=Demo-Server", text)
+        self.assertIn("AllowLiveTrading=1", text)
         self.assertIn("Expert=DestinedFXTraderEA", text)
         self.assertNotIn("Password=", text)
+
+    def test_restart_configuration_rejects_missing_or_invalid_identity_and_investor_is_read_only(self):
+        for record in ({"expected_login": "", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.realcop.com"},
+                       {"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "BROKER", "bridge_url": "https://bridge.realcop.com"},
+                       {"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.invalid"}):
+            with self.assertRaises(worker.ProvisionError):
+                worker.restart_ini_contents(record)
+        investor = worker.restart_ini_contents({"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "INVESTOR", "bridge_url": "https://bridge.realcop.com"})
+        self.assertIn("AllowLiveTrading=0", investor)
 
 
 if __name__ == "__main__":

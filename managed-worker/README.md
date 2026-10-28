@@ -24,6 +24,10 @@ Each account gets a separately copied MT5 installation and portable data directo
 
 ## Limits and go-live checks
 
+Restart markers preserve the non-secret login, exact server, DEMO/LIVE mode, MASTER/INVESTOR access type, bridge origin, optional claimed company/currency, executable identity, and explicit `startup_requires_start_command`/`webrequest_allowlist_required` state. Restart INIs never contain a password. MASTER restarts retain the terminal permission setting they require; INVESTOR restarts force `AllowLiveTrading=0`. The EA still starts in a safe non-trading state and must receive a fresh authenticated heartbeat before the bridge can report READY. MT5 WebRequest allowlisting is an operator step, not something the worker pretends to have configured.
+
+The EA reports submitted orders, pending active orders, partial/actual executed volume, broker-confirmed positions, SL/TP, and closed deals separately. `TRADE_RETCODE_PLACED` is never presented as a fill. For risk sizing, the EA uses observed broker commission history when available and blocks a trade when reliable commission data is unavailable rather than fabricating a fee or claiming a hard loss guarantee under slippage/gaps.
+
 This environment does not include Windows, an MT5 terminal, MetaEditor, a production HTTPS service, or host credentials. The worker has only been tested with fake terminal/compiler executables on Linux; the EA has not been compiled here and no real or demo account has been authenticated. The lifecycle code is unit-testable but is not production-verified until exercised on the actual Windows host with the genuine terminal. A stale terminal heartbeat immediately disables new app START/RESUME commands, then receives a bounded recovery grace period measured from the stale transition rather than original job creation; a fresh account-matched heartbeat restores READY only through the current lease owner. A stale or ERROR state does not close existing positions. Test only with an authorized demo account until broker permissions, terminal lifecycle, order execution and failure recovery are independently verified.
 
 ## MT5 WebRequest allowlist

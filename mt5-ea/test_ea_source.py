@@ -60,7 +60,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "stale heartbeat fails closed": "HEARTBEAT_STALE_SECONDS 15" in source and "TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS" in source and "No accepted heartbeat within HEARTBEAT_STALE_SECONDS=15" in source,
         "trade gate requires fresh accepted heartbeat": "g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS" in source and 'void Scan(){if(g_state!="RUNNING"' in source,
         "heartbeat excludes app-only fields": all(x not in heartbeat for x in ["pairing_status", "terminal_online", "heartbeat_age_seconds", "ea_state", "last_heartbeat_at", "last_command"]),
-        "heartbeat required fields": all(('\\"' + x + '\\"') in heartbeat for x in ["state", "timestamp", "terminal_connected", "trade_allowed", "account", "account_mode", "configuration", "last_signal", "last_error", "open_positions", "closed_deals"]),
+        "heartbeat required fields": all(('\\"' + x + '\\"') in heartbeat for x in ["state", "timestamp", "terminal_connected", "trade_allowed", "account", "account_mode", "configuration", "last_signal", "last_error", "open_positions", "active_orders", "closed_deals"]),
         "ISO UTC formatter": "T%02d:%02d:%02dZ" in source and "IsoUtc(TimeGMT())" in heartbeat and "TimeToString" not in source,
         "no body NUL sent": "if(n>0&&data[n-1]==0)ArrayResize(data,n-1)" in source,
         "nested command runtime config": "ConfigObject(obj)" in source and "ValidConfig(cfgobj,syms,tfs,risk,daily,concurrent,why)" in source,
@@ -79,6 +79,8 @@ def test_ea_source_contract_and_balanced_delimiters():
         "claim and heartbeat bind reported mode": 'InpExpectedAccountMode' in source and 'BrokerAccountMode()' in source and 'AccountIdentityMatches()' in source and '\\"account_mode\\":\\"%s\\"' in source,
         "actual identity checked before every order": 'bool Place(' in source and 'if(!AccountIdentityMatches())' in source and 'InpExpectedLogin' in source and 'InpExpectedServer' in source,
         "open-position fee unavailable": '\\"commission\\":null' in source,
+        "pending and partial order evidence": "OrdersJson()" in source and "TRADE_RETCODE_PLACED" in source and "PARTIALLY_FILLED" in source and "executed_volume" in source,
+        "commission history is required for sizing": "ObservedCommissionPerLot" in source and "Commission history unavailable; trade blocked" in source,
         "signal dedupe persisted before submission": "if(!Remember(key))" in source and "PersistSeen()" in source and 'FileOpen(SeenFile(),FILE_READ' in source and "AtomicWrite" in source,
         "README discloses persisted dedupe": "persisted in an account-login-scoped" in readme,
     }

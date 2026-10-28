@@ -193,11 +193,15 @@ def restart_ini_contents(record: dict[str, Any]) -> str:
     login = record.get("expected_login", "")
     server = record.get("expected_server", "")
     mode = record.get("account_mode", "")
-    if not (LOGIN.fullmatch(str(login)) and SAFE_SERVER.fullmatch(str(server)) and mode in {"DEMO", "LIVE"}):
+    access = record.get("access_type", "")
+    bridge_url = record.get("bridge_url", "")
+    if not (LOGIN.fullmatch(str(login)) and SAFE_SERVER.fullmatch(str(server)) and mode in {"DEMO", "LIVE"}
+            and access in VALID_ACCESS and validate_origin(str(bridge_url))):
         raise ProvisionError("RESTART_CONFIGURATION_UNVERIFIED")
+    allow_trade = "1" if access == "MASTER" else "0"
     return ("[Common]\n"
             f"Login={login}\nServer={server}\nKeepPrivate=1\nNewsEnable=0\nProxyEnable=0\n"
-            "\n[Experts]\nAllowDllImport=0\nEnabled=1\nAccount=1\nProfile=1\n"
+            f"\n[Experts]\nAllowLiveTrading={allow_trade}\nAllowDllImport=0\nEnabled=1\nAccount=1\nProfile=1\n"
             "\n[StartUp]\nExpert=DestinedFXTraderEA\nSymbol=EURUSD\nPeriod=M5\n"
             "ExpertParameters=DestinedFXTraderEA.set\n")
 
@@ -268,7 +272,8 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
             continue
         finally:
             restart_ini.unlink(missing_ok=True)
-        record.update(pid=proc.pid, restart_count=retries + 1, status="AUTHENTICATING", last_restart=time.time())
+        record.update(pid=proc.pid, restart_count=retries + 1, status="AUTHENTICATING", last_restart=time.time(),
+                      restart_requires_reauthentication=True)
         try:
             update_marker(marker, record)
         except Exception:
@@ -526,7 +531,12 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
     record = {"job_id": job["job_id"], "pairing_id": job["pairing_id"], "account_dir": str(account_dir),
               "executable": str(account_terminal.resolve()), "pid": 0, "restart_count": 0,
               "status": "LAUNCH_PENDING", "created": time.time(), "expected_login": job["account"]["login"],
-              "expected_server": job["account"]["server"], "account_mode": job["account"]["account_mode"]}
+              "expected_server": job["account"]["server"], "account_mode": job["account"]["account_mode"],
+              "access_type": job["account"]["access_type"], "bridge_url": job["bridge_url"],
+              "expected_company": job["account"].get("company", ""),
+              "expected_currency": job["account"].get("currency", ""),
+              "webrequest_allowlist_required": True, "startup_requires_start_command": True,
+              "restart_requires_reauthentication": False}
     try:
         write_marker_atomic(marker, record)
         proc = subprocess.Popen(args, cwd=str(terminal_home), shell=False, stdin=subprocess.DEVNULL,

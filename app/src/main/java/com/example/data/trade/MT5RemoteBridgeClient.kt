@@ -31,7 +31,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         val terminalConnected: Boolean, val accountVerified: Boolean,
         val currency: String, val balance: Double?, val equity: Double?,
         val margin: Double?, val freeMargin: Double?, val marginLevel: Double?, val leverage: Int?,
-        val positions: List<JSONObject>?, val closedDeals: List<JSONObject>?,
+        val positions: List<JSONObject>?, val activeOrders: List<JSONObject>?, val closedDeals: List<JSONObject>?,
         val snapshotsValid: Boolean, val lastSignal: JSONObject?, val raw: JSONObject
     )
 
@@ -97,8 +97,8 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             obj.optBoolean("trade_allowed", false), terminalConnected, verified,
             account?.optString("currency").orEmpty(), account?.let { finite(it, "balance") }, account?.let { finite(it, "equity") },
             account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
-            account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("closed_deals"),
-            obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("closed_deals") != null,
+            account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
+            obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
             obj.optJSONObject("last_signal"), obj
         )
     }
@@ -162,6 +162,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             !snapshot.terminalConnected -> "MT5 terminal is not connected."
             !snapshot.tradeAllowed -> "Broker or terminal trade permission is unavailable."
             snapshot.managedState != "READY" -> "Managed service and terminal are not READY."
+            snapshot.state !in setOf("READY", "RUNNING", "PAUSED", "STOPPED") -> "EA reports ${snapshot.state}; execution is blocked until it is reconciled."
             profile == "LIVE" && requireLiveAuthorization && !snapshot.liveAuthorized -> "Current explicit LIVE authorization is missing or expired."
             else -> null
         }
