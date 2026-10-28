@@ -380,6 +380,7 @@ def claim(x:Claim):
     return {'terminal_id':terminal_id,'terminal_token':terminal_token,'poll_seconds':2}
 def ingest_trade_ledger(c, pairing_id, account_mode, payload, received):
     account=payload.get('account') or {}
+    open_positions={str(x.get('position_id')):x for x in payload.get('open_positions',[]) if isinstance(x,dict) and x.get('position_id') is not None}
     for deal in payload.get('closed_deals',[]):
         position=str(deal.get('position_id',''))
         identity='position:'+position if position else 'deal:'+str(deal.get('ticket',''))
@@ -388,11 +389,19 @@ def ingest_trade_ledger(c, pairing_id, account_mode, payload, received):
         if existing:
             old=json.loads(existing['payload']); deals=old.get('deals',[])
             if not any(str(x.get('ticket'))==str(deal.get('ticket')) for x in deals): deals.append(deal)
-            document={'kind':'closed_position','account':account,'deals':deals}
-        else: document={'kind':'closed_position','account':account,'deals':[deal]}
+            document={'kind':'closed_position','account':account,'deals':deals,'positions':payload.get('open_positions',[])}
+        else: document={'kind':'closed_position','account':account,'deals':[deal],'positions':payload.get('open_positions',[])}
+        try: closed_volume=sum(float(x.get('volume',0)) for x in document['deals'])
+        except (TypeError,ValueError): closed_volume=0.0
+        remaining=open_positions.get(position,{}).get('volume',0.0) if position else 0.0
+        try: remaining=float(remaining or 0.0)
+        except (TypeError,ValueError): remaining=0.0
+        document['closed_volume']=closed_volume; document['remaining_volume']=remaining
+        lifecycle='OPEN' if remaining>1e-9 else 'CLOSED'
+        document['lifecycle']=lifecycle
         c.execute("""INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pairing_id,identity) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,status=excluded.status,deal_ticket=excluded.deal_ticket""",
-                  (pairing_id,identity,account_mode,position,None,str(deal.get('ticket','')),str(deal.get('symbol','')),None,'CLOSED',json.dumps(document,separators=(',',':')),received,received))
+                  (pairing_id,identity,account_mode,position,None,str(deal.get('ticket','')),str(deal.get('symbol','')),None,lifecycle,json.dumps(document,separators=(',',':')),received,received))
     signal=payload.get('last_signal') or {}; order=str(signal.get('order',''))
     try: executed=float(signal.get('executed_volume',0))
     except (TypeError,ValueError): executed=0
@@ -440,11 +449,11 @@ def terminal_news_verdict(symbol:str=Query(min_length=1,max_length=64),authoriza
     return verdict
 
 @app.get('/v1/app/trades')
-def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=0,ge=0),authorization:str|None=Header(default=None)):
-    p=auth(authorization,'app')
+def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=0,ge=0),updated_after:float=Query(default=0,ge=0),authorization:str|None=Header(default=None)):
+    p=auth(authorization,'app'); watermark=time.time()
     with tx() as c:
-        rows=c.execute('SELECT rowid,* FROM trade_ledger WHERE pairing_id=? AND rowid>? ORDER BY rowid LIMIT ?', (p['id'],cursor,limit)).fetchall()
-    return {'cursor':max([cursor]+[r['rowid'] for r in rows]),'trades':[{'id':r['rowid'],'identity':r['identity'],'account_mode':r['account_mode'],'position_id':r['position_id'],'order_ticket':r['order_ticket'],'deal_ticket':r['deal_ticket'],'symbol':r['symbol'],'direction':r['direction'],'status':r['status'],'payload':json.loads(r['payload']),'updated_at':iso(datetime.fromtimestamp(r['updated'],timezone.utc))} for r in rows]}
+        rows=c.execute('SELECT rowid,* FROM trade_ledger WHERE pairing_id=? AND (rowid>? OR updated>=?) AND updated<=? ORDER BY rowid LIMIT ?', (p['id'],cursor,updated_after,watermark,limit)).fetchall()
+    return {'cursor':max([cursor]+[r['rowid'] for r in rows]),'watermark':watermark,'trades':[{'id':r['rowid'],'identity':r['identity'],'account_mode':r['account_mode'],'position_id':r['position_id'],'order_ticket':r['order_ticket'],'deal_ticket':r['deal_ticket'],'symbol':r['symbol'],'direction':r['direction'],'status':r['status'],'payload':json.loads(r['payload']),'updated_at':iso(datetime.fromtimestamp(r['updated'],timezone.utc))} for r in rows]}
 
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):

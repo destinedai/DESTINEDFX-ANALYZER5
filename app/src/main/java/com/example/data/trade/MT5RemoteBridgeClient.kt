@@ -103,12 +103,14 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         )
     }
 
-    suspend fun tradeHistory(cursor: Int = 0): Pair<Int, List<JSONObject>> {
-        val body = request("GET", "/v1/app/trades?cursor=$cursor&limit=200")
-        val rows = body.optJSONArray("trades") ?: return body.optInt("cursor", cursor) to emptyList()
+    data class TradePage(val cursor: Int, val watermark: Double, val trades: List<JSONObject>)
+
+    suspend fun tradeHistory(cursor: Int = 0, updatedAfter: Double = 0.0): TradePage {
+        val body = request("GET", "/v1/app/trades?cursor=$cursor&updated_after=$updatedAfter&limit=200")
+        val rows = body.optJSONArray("trades") ?: return TradePage(body.optInt("cursor", cursor), body.optDouble("watermark", updatedAfter), emptyList())
         val out = mutableListOf<JSONObject>()
         for (i in 0 until rows.length()) rows.optJSONObject(i)?.let(out::add)
-        return body.optInt("cursor", cursor) to out
+        return TradePage(body.optInt("cursor", cursor), body.optDouble("watermark", updatedAfter), out)
     }
 
     /** Creates one profile-scoped idempotency key; UNKNOWN is retained for reconciliation, never retried here. */
@@ -123,9 +125,11 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             if (reason != null) return CommandResult(requestId, false, reason, rejected = true)
         }
         if (action == "START") {
-            if (config.optString("strategy") != "ict-silver-bullet") return CommandResult(requestId, false, "START requires the EA-supported ict-silver-bullet strategy.", rejected = true)
+            if (config.optString("strategy") !in setOf("smc-confluence-1.0.0", "ict-silver-bullet", "wyckoff-schematics", "supply-and-demand", "breakout-momentum", "mean-reversion", "trend-following", "liquidity-stop-hunts")) return CommandResult(requestId, false, "START requires a registered managed strategy.", rejected = true)
             val risk = config.optDouble("risk_percent", Double.NaN)
             if (!isValidRiskPercent(risk)) return CommandResult(requestId, false, "Risk must be finite and in (0, 1] percent.", rejected = true)
+            val daily = config.optDouble("max_daily_loss_percent", 2.0)
+            if (!isValidDailyLossPercent(daily)) return CommandResult(requestId, false, "Daily loss must be finite, positive, and no greater than 2 percent.", rejected = true)
         }
         return try {
             request("POST", "/v1/app/commands", commandPayload(requestId, action, config))
@@ -255,6 +259,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             tradeAllowed && accountVerified && newsClear && eaState.uppercase() in setOf("READY", "RUNNING", "PAUSED", "STOPPED") && selectedProfile.uppercase() in setOf("DEMO", "LIVE")
 
         internal fun isValidRiskPercent(value: Double): Boolean = value.isFinite() && value > 0.0 && value <= 1.0
+        internal fun isValidDailyLossPercent(value: Double): Boolean = value.isFinite() && value > 0.0 && value <= 2.0
 
         internal fun commandPayload(requestId: String, action: String, config: JSONObject = JSONObject()): JSONObject {
             require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }

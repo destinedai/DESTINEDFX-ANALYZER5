@@ -140,9 +140,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val fresh = bridgeClient.state()
                     bridgeSnapshot = fresh
                     runCatching {
-                        val records = mutableListOf<JSONObject>(); var cursor = 0; var next: Int
-                        do { val page = bridgeClient.tradeHistory(cursor); next = page.first; records += page.second; if (next <= cursor) break; cursor = next } while (records.size < 1000)
+                        val syncPrefs = reportContext.getSharedPreferences("destinedfx_trade_sync", android.content.Context.MODE_PRIVATE)
+                        val syncKey = selectedAccountMode.uppercase()
+                        val records = mutableListOf<JSONObject>(); var cursor = syncPrefs.getInt("${syncKey}_cursor", 0); var updatedAfter = syncPrefs.getString("${syncKey}_watermark", "0")?.toDoubleOrNull() ?: 0.0; var next: Int; var watermark = updatedAfter
+                        do { val page = bridgeClient.tradeHistory(cursor, updatedAfter); next = page.cursor; watermark = maxOf(watermark, page.watermark); records += page.trades; if (next <= cursor) break; cursor = next } while (true)
                         val result = TradeReportManager.sync(reportContext, records)
+                        syncPrefs.edit().putInt("${syncKey}_cursor", cursor).putString("${syncKey}_watermark", watermark.toString()).apply()
                         reportStatus = "Trade reports: ${result.generated} synchronized/generated, ${result.failed} failed"
                     }.onFailure { reportStatus = "Trade reports: sync unavailable; retrying (${it.javaClass.simpleName})" }
                     val cmd = fresh.raw.optJSONObject("last_command")
