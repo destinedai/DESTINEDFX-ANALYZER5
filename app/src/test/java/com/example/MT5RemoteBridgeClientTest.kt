@@ -42,4 +42,18 @@ class MT5RemoteBridgeClientTest {
         val id = "2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18"
         assertEquals(id, MT5RemoteBridgeClient.commandPayload(id, "STOP").getString("request_id"))
     }
+
+    @Test fun serviceOriginValidationRejectsUnsafeOrigins() {
+        listOf(
+            "https://bridge.realcop.com:0",
+            "https://bridge.realcop.com:99999",
+            "https://10.0.0.4",
+            "https://[::1]",
+            "https://user:pass@bridge.realcop.com",
+            "https://bridge.realcop.com/path",
+            "https://bridge.realcop.com/?query=1",
+            "https://bridge.example"
+        ).forEach { assertEquals(null, MT5RemoteBridgeClient.validServiceOrigin(it)) }
+        assertEquals("https://bridge.realcop.com:443", MT5RemoteBridgeClient.validServiceOrigin(" HTTPS://Bridge.RealCop.com:443/ "))
+    }
 }

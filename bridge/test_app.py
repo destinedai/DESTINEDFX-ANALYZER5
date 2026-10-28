@@ -170,6 +170,21 @@ def test_ready_requires_fresh_actual_heartbeat_and_worker_ready(monkeypatch):
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['managed_execution']['status']!='READY'
 
+def test_ready_job_is_downgraded_when_heartbeat_goes_stale(monkeypatch):
+    managed_env(monkeypatch); p,ah=managed_pair()
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-stale'}).json()
+    client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-stale','status':'AUTHENTICATING'})
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'stale-terminal','account':ACCOUNT}).json()
+    th={'Authorization':'Bearer '+terminal['terminal_token']}
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
+    assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-stale',headers=wh).json()['status']=='READY'
+    with app.tx(True) as c:
+        c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
+    status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-stale',headers=wh).json()
+    assert status['status']=='AUTHENTICATING' and status['error_code']=='TERMINAL_HEARTBEAT_STALE'
+
 def test_investor_can_be_ready_for_read_only_but_never_start(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
     client.post('/v1/app/managed-account',headers=ah,json={'login':'77','server':'ReadOnly','password':'investor','access_type':'INVESTOR','account_mode':'DEMO','consent':True})
@@ -360,3 +375,10 @@ def test_malformed_managed_origin_fails_closed(monkeypatch):
     response=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'x','access_type':'MASTER','account_mode':'DEMO','consent':True})
     assert response.status_code==503
     assert response.json()['detail']['code']=='CONFIGURATION_REQUIRED'
+
+
+def test_origin_validation_rejects_non_public_and_malformed_values():
+    for origin in ('https://bridge.invalid:0','https://bridge.invalid:99999','https://10.0.0.4','https://[::1]',
+                   'https://user:pass@bridge.invalid','https://bridge.invalid/path','https://bridge.invalid/?x=1'):
+        assert app.validate_origin(origin) is None
+    assert app.validate_origin('http://127.0.0.1', allow_loopback=True)=='http://127.0.0.1'

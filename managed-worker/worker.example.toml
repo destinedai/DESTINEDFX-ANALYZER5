@@ -9,3 +9,6 @@ ea_source = "D:\\DestinedFX\\release\\DestinedFXTraderEA.mq5"
 compiled_ea = ""
 symbol = "EURUSD"
 poll_seconds = 5
+auth_timeout_seconds = 300
+max_restart_retries = 3
+restart_backoff_seconds = 30

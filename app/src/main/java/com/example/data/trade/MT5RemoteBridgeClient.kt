@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URI
+import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -186,16 +187,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     }
 
     private fun validateBaseUrl(raw: String): String? {
-        return try {
-            val uri = URI(raw.trim()).normalize()
-            val host = uri.host?.lowercase()?.trimEnd('.') ?: return null
-            val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
-            val placeholder = host in setOf("example.com", "example.org", "example.net", "testserver", "bridge.example") || host.endsWith(".example") || host.startsWith("your-") || host.startsWith("placeholder") || host.contains("example")
-            if (uri.userInfo != null || uri.query != null || uri.fragment != null || uri.path.orEmpty().trimEnd('/').isNotEmpty()) return null
-            if (placeholder || uri.scheme != "https" && !(uri.scheme == "http" && loopback)) return null
-            if (uri.scheme == "https" && loopback || uri.port !in -1..65535) return null
-            "${uri.scheme}://$host" + if (uri.port >= 0) ":${uri.port}" else ""
-        } catch (_: Exception) { null }
+        return validServiceOrigin(raw)
     }
     private fun finite(obj: JSONObject, key: String): Double? = obj.optDouble(key).takeIf { it.isFinite() }
     private fun finiteInt(obj: JSONObject, key: String): Int? = obj.optInt(key).takeIf { it > 0 }
@@ -203,6 +195,23 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     class BridgeHttpException(val status: Int, val safeDescription: String) : Exception(safeDescription)
 
     companion object {
+        internal fun validServiceOrigin(raw: String): String? {
+            return try {
+                val uri = URI(raw.trim()).normalize()
+                val host = uri.host?.lowercase()?.trimEnd('.') ?: return null
+                val scheme = uri.scheme?.lowercase() ?: return null
+                val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
+                val placeholder = host in setOf("example.com", "example.org", "example.net", "testserver", "bridge.example", "localhost") || host.endsWith(".example") || host.endsWith(".localhost") || host.endsWith(".test") || host.endsWith(".invalid") || host.startsWith("your-") || host.startsWith("placeholder") || host.contains("example")
+                val port = uri.port
+                if (uri.userInfo != null || uri.query != null || uri.fragment != null || uri.path.orEmpty().trimEnd('/').isNotEmpty()) return null
+                if (placeholder || scheme != "https" && !(scheme == "http" && loopback)) return null
+                if (port == 0 || port !in -1..65535 || scheme == "https" && loopback) return null
+                val literal = runCatching { InetAddress.getByName(host) }.getOrNull()
+                if (literal != null && (literal.isAnyLocalAddress || literal.isLoopbackAddress || literal.isLinkLocalAddress || literal.isSiteLocalAddress || literal.isMulticastAddress)) return null
+                "$scheme://$host" + if (port >= 0) ":$port" else ""
+            } catch (_: Exception) { null }
+        }
+
         internal fun canStart(
             selectedProfile: String, managedState: String, accessType: String, actualMode: String,
             expectedLogin: String, actualLogin: String, expectedServer: String, actualServer: String,

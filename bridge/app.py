@@ -1,4 +1,4 @@
-import os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid
+import os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from typing import Any
@@ -115,22 +115,29 @@ def check_json(v, depth=0):
 
 def validate_origin(raw, allow_loopback=False):
     value=(raw or '').strip().rstrip('/')
-    parsed=urlparse(value)
-    host=(parsed.hostname or '').lower().rstrip('.')
+    try:
+        parsed=urlparse(value)
+        host=(parsed.hostname or '').lower().rstrip('.')
+        port=parsed.port
+    except (ValueError, UnicodeError):
+        return None
     loopback=host in ('localhost','127.0.0.1','::1')
-    placeholder=(host in {'example.com','example.org','example.net','testserver','bridge.example'} or host.endswith('.example') or host.startswith('your-') or host.startswith('placeholder') or 'example' in host)
+    placeholder=(host in {'example.com','example.org','example.net','testserver','bridge.example','localhost'} or host.endswith(('.example','.localhost','.test','.invalid')) or host.startswith('your-') or host.startswith('placeholder') or 'example' in host)
     if not host or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
         return None
     if parsed.scheme=='http':
         if not (allow_loopback and loopback): return None
     elif parsed.scheme!='https' or loopback or placeholder:
         return None
-    try:
-        port=parsed.port
-    except ValueError:
-        return None
     if port is not None and not (1 <= port <= 65535):
         return None
+    try:
+        address=ipaddress.ip_address(host.strip('[]'))
+        loopback_dev=allow_loopback and parsed.scheme=='http' and address.is_loopback
+        if not loopback_dev and (address.is_private or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or address.is_unspecified):
+            return None
+    except ValueError:
+        pass
     return f'{parsed.scheme}://{host}' + (f':{port}' if port else '')
 
 def managed_config():
@@ -229,6 +236,14 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
             job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
         pairing=c.execute('SELECT * FROM pairings WHERE id=?',(job['pairing_id'],)).fetchone()
         managed=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(job['pairing_id'],)).fetchone()
+        if job['kind']=='PROVISION' and job['status']=='READY' and managed and not managed['revoked']:
+            beat=fresh_heartbeat(pairing)
+            valid=bool(beat and beat.get('terminal_connected') and managed['account_mode'] in ('DEMO','LIVE') and terminal_identity_matches(pairing,managed['account_mode'],beat) and (managed['access_type']=='INVESTOR' or beat.get('trade_allowed')))
+            if valid:
+                c.execute('UPDATE worker_jobs SET lease_until=?,error_code=NULL,error_message=NULL WHERE id=?',(t+120,job_id))
+            else:
+                c.execute("UPDATE worker_jobs SET status='AUTHENTICATING',lease_until=?,error_code='TERMINAL_HEARTBEAT_STALE',error_message='Fresh authenticated terminal heartbeat is required' WHERE id=?",(t+120,job_id))
+            job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
         if job['kind']=='PROVISION' and job['status'] in ('PROVISIONING','AUTHENTICATING') and managed and not managed['revoked']:
             beat=fresh_heartbeat(pairing)
             valid=bool(beat and beat.get('state')=='READY' and beat.get('terminal_connected') and managed['account_mode'] in ('DEMO','LIVE') and beat.get('account',{}).get('account_mode')==managed['account_mode'] and (managed['access_type']=='INVESTOR' or beat.get('trade_allowed')))

@@ -61,8 +61,12 @@ jobs:
           import ipaddress, os
           from urllib.parse import urlparse
           raw = os.environ["MT5_MANAGED_SERVICE_URL"].strip()
-          u = urlparse(raw)
-          host = (u.hostname or "").lower().rstrip(".")
+          try:
+              u = urlparse(raw)
+              host = (u.hostname or "").lower().rstrip(".")
+              port = u.port
+          except (ValueError, UnicodeError):
+              raise SystemExit("MT5_MANAGED_SERVICE_URL has an invalid hostname or port.")
           placeholder = (
               host in {"example.com", "example.org", "example.net", "testserver", "bridge.example",
                        "localhost", "0.0.0.0"} or "example" in host or
@@ -71,12 +75,12 @@ jobs:
           )
           private = False
           try:
-              ip = ipaddress.ip_address(host)
+              ip = ipaddress.ip_address(host.strip("[]"))
               private = not ip.is_global
           except ValueError:
               pass
           if (u.scheme != "https" or not host or u.username or u.password or u.query or u.fragment
-              or u.path not in ("", "/") or u.port not in (None, 443) and not (1 <= u.port <= 65535)
+              or u.path not in ("", "/") or port == 0 or port is not None and not (1 <= port <= 65535)
               or placeholder or private):
               raise SystemExit("MT5_MANAGED_SERVICE_URL must be a real public HTTPS origin without a path, credentials, query, or fragment.")
           print("Managed-service URL format accepted; no connection or deployment is implied.")

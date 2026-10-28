@@ -65,6 +65,19 @@ class WorkerTests(unittest.TestCase):
         bad = dict(self.job, bridge_url="https://your-bridge.example")
         with self.assertRaises(worker.ProvisionError):
             worker.validate_job(bad)
+        for origin in (
+            "https://bridge.destinedfx.internal:0",
+            "https://bridge.destinedfx.internal:99999",
+            "https://10.0.0.4",
+            "https://[::1]",
+            "https://user:pass@bridge.destinedfx.internal",
+            "https://bridge.destinedfx.internal/path",
+            "https://bridge.destinedfx.internal/?x=1",
+        ):
+            self.assertIsNone(worker.validate_origin(origin), origin)
+
+    def test_valid_origin_is_normalized(self):
+        self.assertEqual(worker.validate_origin(" HTTPS://Bridge.Realcorp.com:443/ "), "https://bridge.realcorp.com:443")
 
     def test_launch_uses_argument_list_and_deletes_ini(self):
         processes = []
@@ -96,6 +109,7 @@ class WorkerTests(unittest.TestCase):
                 worker.provision(self.job, self.settings)
         self.assertEqual(e.exception.code, "EA_SOURCE_MISSING")
         popen.assert_not_called()
+        self.assertFalse((Path(self.settings["data_root"]) / self.job["job_id"]).exists())
 
     def test_revoke_removes_only_matching_worker_owned_tree(self):
         result = worker.provision(self.job, self.settings, launch=False)
@@ -119,6 +133,28 @@ class WorkerTests(unittest.TestCase):
                 worker.provision(self.job, self.settings)
         self.assertEqual(e.exception.code, "EA_COMPILER_MISSING")
         popen.assert_not_called()
+        self.assertFalse((Path(self.settings["data_root"]) / self.job["job_id"]).exists())
+
+    def test_duplicate_pairing_is_rejected_before_second_launch(self):
+        result = worker.provision(self.job, self.settings, launch=False)
+        marker = result / "terminal" / ".destinedfx-worker.json"
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":123,"status":"AUTHENTICATING"}', encoding="utf-8")
+        with self.assertRaises(worker.ProvisionError) as error:
+            worker.provision({**self.job, "job_id": "job_789"}, self.settings, launch=False)
+        self.assertEqual(error.exception.code, "DUPLICATE_TERMINAL")
+
+    def test_supervision_restarts_owned_terminal_with_bounded_retries(self):
+        result = worker.provision(self.job, self.settings, launch=False)
+        marker = result / "terminal" / ".destinedfx-worker.json"
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING"}', encoding="utf-8")
+        fake = type("Process", (), {"pid": 100})()
+        with patch.object(worker, "process_is_owned", return_value=False), patch.object(worker.subprocess, "Popen", return_value=fake):
+            outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
+        self.assertEqual(outcome[0]["status"], "RESTARTED")
+        self.assertEqual(worker.json.loads(marker.read_text())["restart_count"], 1)
+        with patch.object(worker, "process_is_owned", return_value=False):
+            outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
+        self.assertEqual(outcome[0]["status"], "RESTART_LIMIT")
 
     def test_config_has_no_secret(self):
         cfg = (Path(__file__).parent / "worker.example.toml").read_text()

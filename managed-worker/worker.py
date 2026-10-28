@@ -6,6 +6,7 @@ arguments. Importing this module is safe on non-Windows hosts for unit testing.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import logging
 import os
@@ -33,15 +34,26 @@ VALID_ACCESS = {"MASTER", "INVESTOR"}
 
 def validate_origin(raw: str) -> str | None:
     value = (raw or "").strip().rstrip("/")
-    parsed = urllib.parse.urlparse(value)
-    host = (parsed.hostname or "").lower().rstrip(".")
-    placeholder = (host in {"example.com", "example.org", "example.net", "testserver", "bridge.example"}
-                   or host.endswith(".example") or host.startswith("your-")
-                   or host.startswith("placeholder") or "example" in host)
-    if (not host or parsed.scheme != "https" or parsed.username or parsed.password
-            or parsed.query or parsed.fragment or parsed.path not in ("", "/") or placeholder):
+    try:
+        parsed = urllib.parse.urlparse(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+    except (ValueError, UnicodeError):
         return None
-    return f"https://{host}" + (f":{parsed.port}" if parsed.port else "")
+    placeholder = (host in {"example.com", "example.org", "example.net", "testserver", "bridge.example", "localhost"}
+                   or host.endswith(".example") or host.startswith("your-")
+                   or host.startswith("placeholder") or host.endswith((".localhost", ".test", ".invalid")) or "example" in host)
+    if (not host or parsed.scheme != "https" or parsed.username or parsed.password
+            or parsed.query or parsed.fragment or parsed.path not in ("", "/") or placeholder
+            or port is not None and not (1 <= port <= 65535)):
+        return None
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_multicast or address.is_reserved or address.is_unspecified:
+            return None
+    except ValueError:
+        pass
+    return f"https://{host}" + (f":{port}" if port else "")
 
 
 class ProvisionError(Exception):
@@ -58,6 +70,125 @@ def safe_child(root: Path, name: str) -> Path:
     if child.parent != root:
         raise ProvisionError("INVALID_PATH")
     return child
+
+
+def terminal_records(root: Path) -> list[tuple[Path, dict[str, Any]]]:
+    """Read only worker-owned terminal markers; malformed markers are ignored."""
+    records = []
+    if not root.exists():
+        return records
+    for marker in root.glob("*/terminal/.destinedfx-worker.json"):
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and SAFE_ID.fullmatch(str(data.get("job_id", ""))) and SAFE_ID.fullmatch(str(data.get("pairing_id", ""))):
+                records.append((marker, data))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+    return records
+
+
+def process_is_owned(pid: int, executable: Path) -> bool:
+    """Return true only when the recorded PID is alive and belongs to this executable."""
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return executable.is_file()
+        except OSError:
+            return False
+    escaped = str(executable.resolve()).replace("'", "''")
+    script = (f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}'; "
+              f"if(-not $p -or -not $p.ExecutablePath) {{exit 1}}; "
+              f"if(([IO.Path]::GetFullPath($p.ExecutablePath) -ine '{escaped}')) {{exit 2}}; exit 0")
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+    return result.returncode == 0
+
+
+def supervise_terminals(settings: dict, base: str | None = None, token: str | None = None,
+                        worker_id: str | None = None) -> list[dict[str, Any]]:
+    """Reconcile owned terminals and retry crashed portable terminals with bounded backoff.
+
+    Restarting a process never restores READY. The bridge must observe a fresh,
+    authenticated, account-matched EA heartbeat before the owning job becomes READY.
+    """
+    root = Path(settings["data_root"]).resolve()
+    max_retries = max(0, min(10, int(settings.get("max_restart_retries", 3))))
+    results = []
+    for marker, record in terminal_records(root):
+        terminal_home = marker.parent
+        executable = (terminal_home / Path(settings["terminal_exe"]).name).resolve()
+        pid = int(record.get("pid", 0) or 0)
+        backend_status = None
+        if base and token and worker_id:
+            try:
+                backend_status = request_json(
+                    f"{base.rstrip('/')}/v1/worker/jobs/{urllib.parse.quote(record['job_id'], safe='')}/status?worker_id={urllib.parse.quote(worker_id, safe='')}",
+                    token, "GET").get("status")
+            except ProvisionError:
+                backend_status = None
+        if process_is_owned(pid, executable):
+            record["status"] = backend_status or "RUNNING"
+            marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+            results.append({"job_id": record["job_id"], "status": record["status"]})
+            continue
+        retries = int(record.get("restart_count", 0) or 0)
+        backoff = max(0, int(settings.get("restart_backoff_seconds", 30)))
+        last_restart = float(record.get("last_restart", 0) or 0)
+        wait_seconds = backoff * (2 ** max(0, retries - 1))
+        if last_restart and time.time() - last_restart < wait_seconds:
+            results.append({"job_id": record["job_id"], "status": "RESTART_BACKOFF", "retry_after": round(wait_seconds - (time.time() - last_restart), 1)})
+            continue
+        if retries >= max_retries:
+            record["status"] = "RESTART_LIMIT"
+            marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+            if base and token and worker_id:
+                try:
+                    post_state(base, token, record["job_id"], worker_id, "FAILED", "TERMINAL_RESTART_LIMIT", "Terminal restart limit reached; operator review is required")
+                except ProvisionError:
+                    pass
+            results.append({"job_id": record["job_id"], "status": "RESTART_LIMIT"})
+            continue
+        try:
+            proc = subprocess.Popen([str(executable), "/portable"], cwd=str(terminal_home),
+                                    shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, close_fds=True)
+        except OSError:
+            record["status"] = "RESTART_FAILED"
+            marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+            results.append({"job_id": record["job_id"], "status": "RESTART_FAILED"})
+            continue
+        record.update(pid=proc.pid, restart_count=retries + 1, status="AUTHENTICATING", last_restart=time.time())
+        marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+        if base and token and worker_id:
+            try:
+                post_state(base, token, record["job_id"], worker_id, "AUTHENTICATING")
+            except ProvisionError:
+                pass
+        results.append({"job_id": record["job_id"], "status": "RESTARTED", "restart_count": retries + 1})
+    return results
+
+
+def quarantine_terminal(settings: dict, job_id: str) -> str:
+    """Move only a dead, worker-owned tree to quarantine; never kill an unverified process."""
+    root = Path(settings["data_root"]).resolve()
+    for marker, record in terminal_records(root):
+        if record.get("job_id") != job_id:
+            continue
+        terminal_home = marker.parent
+        executable = (terminal_home / Path(settings["terminal_exe"]).name).resolve()
+        if process_is_owned(int(record.get("pid", 0) or 0), executable):
+            record["status"] = "OPERATOR_REVIEW"
+            marker.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+            return "OPERATOR_REVIEW"
+        account_dir = terminal_home.parent
+        quarantine = root / ".quarantine"
+        quarantine.mkdir(mode=0o700, exist_ok=True)
+        destination = quarantine / f"{job_id}-{int(time.time())}"
+        account_dir.rename(destination)
+        return str(destination)
+    return "NOT_FOUND"
 
 
 def validate_job(job: Any) -> dict[str, Any]:
@@ -219,13 +350,16 @@ def compile_ea(metaeditor: Path, source: Path, output: Path, cwd: Path) -> None:
     (cwd / "compile.log").unlink(missing_ok=True)
 
 
-def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
+def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
     validate_job(job)
     root = Path(settings["data_root"]).resolve()
     install = Path(settings["mt5_install"]).resolve()
     terminal = Path(settings["terminal_exe"]).resolve()
     if not terminal.is_file():
         raise ProvisionError("TERMINAL_MISSING")
+    for _, record in terminal_records(root):
+        if record.get("pairing_id") == job["pairing_id"] and record.get("status") not in {"RESTART_LIMIT", "FAILED", "REVOKED"}:
+            raise ProvisionError("DUPLICATE_TERMINAL")
     account_dir = safe_child(root, job["job_id"])
     account_dir.mkdir(parents=True, exist_ok=False)
     # MT5 /portable keeps its data beside the executable; clone the installation
@@ -267,7 +401,9 @@ def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
         proc = subprocess.Popen(args, cwd=str(terminal_home), shell=False, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
         write_private(terminal_home / ".destinedfx-worker.json",
-                      json.dumps({"pairing_id": job["pairing_id"], "pid": proc.pid}, separators=(",", ":")))
+                      json.dumps({"job_id": job["job_id"], "pairing_id": job["pairing_id"], "account_dir": str(account_dir),
+                                  "pid": proc.pid, "executable": str(account_terminal), "restart_count": 0,
+                                  "status": "AUTHENTICATING", "created": time.time()}, separators=(",", ":")))
     except OSError:
         ini.unlink(missing_ok=True)
         raise ProvisionError("TERMINAL_LAUNCH_FAILED") from None
@@ -276,6 +412,19 @@ def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
         # CreateProcess returns. persisted broker login material is terminal-owned.
         ini.unlink(missing_ok=True)
     return account_dir
+
+
+def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
+    """Provision with cleanup of unlaunched partial trees; preserve owned live trees for review."""
+    root = Path(settings["data_root"]).resolve()
+    account_dir = safe_child(root, job["job_id"])
+    try:
+        return _provision(job, settings, launch=launch)
+    except Exception:
+        marker = account_dir / "terminal" / ".destinedfx-worker.json"
+        if not marker.exists() and account_dir.exists():
+            shutil.rmtree(account_dir, ignore_errors=False)
+        raise
 
 
 def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
@@ -310,9 +459,11 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
         if terminal_status == "READY":
             LOG.info("Terminal authenticated and fresh for job %s", job_id)
         elif terminal_status == "FAILED":
+            quarantine_terminal(settings, job_id)
             LOG.error("Terminal authentication failed for job %s", job_id)
         elif terminal_status == "TIMEOUT":
             post_state(base, operator_token, job_id, worker_id, "FAILED", "TERMINAL_AUTH_TIMEOUT", "Terminal did not authenticate in time")
+            quarantine_terminal(settings, job_id)
             LOG.error("Terminal authentication timed out for job %s", job_id)
     except ProvisionError as exc:
         try:
@@ -362,6 +513,7 @@ def main() -> int:
             raise ProvisionError("INVALID_WORKER_ID")
         while True:
             try:
+                supervise_terminals(config, config["control_plane_url"], token, worker_id)
                 run_once(config, token, worker_id)
             except ProvisionError as exc:
                 LOG.error("Worker cycle failed (%s)", exc.code)
