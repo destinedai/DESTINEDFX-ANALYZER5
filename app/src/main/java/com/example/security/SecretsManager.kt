@@ -40,6 +40,7 @@ class SecretsManager(private val ctx: Context) {
         private const val TG_STATUS = "telegram_connection_status"
         private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
         private const val MT5_BRIDGE_TOKEN = "mt5_remote_bridge_app_token"
+        private const val MT5_MANAGED_SERVICE_URL = "mt5_managed_service_url"
         private const val MT5_BRIDGE_PENDING_ID = "mt5_remote_bridge_pending_id"
         private const val MT5_BRIDGE_PENDING_ACTION = "mt5_remote_bridge_pending_action"
         private const val MT5_BRIDGE_SAFETY_ORIGINAL_ID = "mt5_remote_bridge_safety_original_id"
@@ -103,6 +104,15 @@ class SecretsManager(private val ctx: Context) {
     fun saveDerivAccountMode(v: String) = prefs.edit().putString(DERIV_ACCOUNT_MODE, v.trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo").apply()
     fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
+
+    /** Store only a public service origin, never a credential or token. */
+    fun getManagedMT5ServiceUrl(): String = if (isSecureStorageAvailable) prefs.getString(MT5_MANAGED_SERVICE_URL, "") ?: "" else ""
+    fun saveManagedMT5ServiceUrl(value: String): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val origin = value.trim().trimEnd('/')
+        if (origin.isBlank()) return false
+        return prefs.edit().putString(MT5_MANAGED_SERVICE_URL, origin).commit()
+    }
 
     /** Bridge app credentials are persisted only when Android encrypted preferences initialized successfully. */
     private fun managedProfile(profile: String): String = profile.trim().uppercase().also { require(it == "DEMO" || it == "LIVE") { "Profile must be DEMO or LIVE" } }

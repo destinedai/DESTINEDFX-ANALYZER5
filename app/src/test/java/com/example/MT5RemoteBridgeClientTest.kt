@@ -43,6 +43,14 @@ class MT5RemoteBridgeClientTest {
         assertEquals(id, MT5RemoteBridgeClient.commandPayload(id, "STOP").getString("request_id"))
     }
 
+    @Test fun runtimeBridgeUrlOverridesBuildDefaultOnlyWhenItIsValid() {
+        assertEquals("https://bridge.realcop.com", MT5RemoteBridgeClient.resolveServiceOrigin(
+            "https://bridge.realcop.com", "__CONFIGURATION_REQUIRED__"))
+        assertEquals("https://embedded.realcop.com", MT5RemoteBridgeClient.resolveServiceOrigin(
+            "http://bridge.realcop.com", "https://embedded.realcop.com"))
+        assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin("", "__CONFIGURATION_REQUIRED__"))
+    }
+
     @Test fun serviceOriginValidationRejectsUnsafeOrigins() {
         listOf(
             "https://bridge.realcop.com:0",

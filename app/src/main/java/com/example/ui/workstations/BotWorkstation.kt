@@ -58,6 +58,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgeCode by remember { mutableStateOf("") }
     var bridgeMessage by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode).let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
     var bridgeSnapshot by remember(selectedAccountMode) { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
+    var managedBridgeUrlInput by remember {
+        mutableStateOf(bridgeSecrets.getManagedMT5ServiceUrl().ifBlank {
+            com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty()
+        })
+    }
     var bridgeBusy by remember { mutableStateOf(false) }
     var bridgePendingId by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode)) }
     var bridgePendingAction by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandAction(selectedAccountMode)) }
@@ -133,7 +138,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         isConnectingBroker = false
     }
 
-    LaunchedEffect(bridgeMode, bridgeToken, selectedAccountMode) {
+    LaunchedEffect(bridgeMode, bridgeToken, selectedAccountMode, bridgeClient.baseUrl()) {
         if (bridgeMode && bridgeClient.baseUrl().isNotBlank() && bridgeToken.isNotBlank()) {
             while (true) {
                 try {
@@ -208,6 +213,45 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Text(reportStatus, color = TextSecondary, fontSize = 10.sp)
                     Text("Selected profile: $selectedAccountMode · Verified terminal: ${bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified"} · Actual mode: ${bridgeSnapshot?.actualAccountMode?.ifBlank { "UNVERIFIED" } ?: "UNVERIFIED"}", color = TextSecondary, fontSize = 10.sp)
                     Text("Managed service: ${if (bridgeClient.managedConfigured()) "configured" else "CONFIGURATION_REQUIRED"}", color = TextSecondary, fontSize = 10.sp)
+                    OutlinedTextField(
+                        value = managedBridgeUrlInput,
+                        onValueChange = { managedBridgeUrlInput = it },
+                        modifier = Modifier.fillMaxWidth().testTag("managed_bridge_url"),
+                        enabled = !bridgeBusy,
+                        label = { Text("Managed bridge HTTPS URL") },
+                        placeholder = { Text("https://your-service.onrender.com") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        supportingText = { Text("Enter the public service origin only. Never enter a token or password here.") }
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(enabled = !bridgeBusy, onClick = {
+                            val origin = MT5RemoteBridgeClient.validServiceOrigin(managedBridgeUrlInput)
+                            when {
+                                origin == null -> bridgeMessage = "Invalid bridge URL. Use a real public HTTPS origin without a path."
+                                !bridgeSecrets.isSecureStorageAvailable -> bridgeMessage = "Secure storage is unavailable; URL was not saved."
+                                !bridgeSecrets.saveManagedMT5ServiceUrl(origin) -> bridgeMessage = "Bridge URL could not be saved."
+                                else -> {
+                                    managedBridgeUrlInput = origin
+                                    bridgeSnapshot = null
+                                    bridgeMode = false
+                                    bridgeMessage = "Bridge URL saved. Tap CHECK CONNECTION."
+                                }
+                            }
+                        }) { Text("SAVE BRIDGE URL") }
+                        OutlinedButton(enabled = !bridgeBusy && bridgeClient.managedConfigured(), onClick = {
+                            coroutineScope.launch {
+                                bridgeBusy = true
+                                try {
+                                    val snapshot = bridgeClient.state()
+                                    bridgeSnapshot = snapshot
+                                    bridgeMessage = "Bridge responded. Worker: ${snapshot.managedState.ifBlank { "UNKNOWN" }}; EA: ${snapshot.state}."
+                                } catch (e: Exception) {
+                                    bridgeMessage = e.message ?: "Bridge connection failed; status is unverified."
+                                } finally { bridgeBusy = false }
+                            }
+                        }) { Text("CHECK CONNECTION") }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(enabled = !bridgeBusy && bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode).isNotBlank(), onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeClient.revoke(); bridgeSecrets.clearMT5BridgePendingCommand(selectedAccountMode); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeExpectedState = ""; bridgeSnapshot = null; bridgeMode = false; bridgeCode = ""; bridgeMessage = "$selectedAccountMode pairing revoked" } catch (_: Exception) { bridgeMessage = "Revoke not confirmed" }; bridgeBusy = false } }) { Text("Revoke $selectedAccountMode") }
                     }

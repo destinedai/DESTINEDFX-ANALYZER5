@@ -54,11 +54,11 @@ jobs:
       - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
 
-      - name: Mark APK as UI-only if managed bridge URL is unset
+      - name: Explain runtime bridge URL setup when no URL is embedded
         if: env.MT5_MANAGED_SERVICE_URL == ''
         run: |
-          echo "::warning title=Managed MT5 service not configured::MT5_MANAGED_SERVICE_URL is unset; this APK contains the configuration-required placeholder and cannot connect to managed DEMO execution."
-          echo "WARNING: MT5_MANAGED_SERVICE_URL is unset. This APK is a UI/build artifact only; managed DEMO execution is not configured." >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning title=Runtime bridge URL required::Enter the deployed public HTTPS origin in Bot > Remote MT5 EA Bridge > Managed bridge HTTPS URL."
+          echo "The APK supports runtime bridge URL setup. This does not deploy or connect the Windows worker." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate configured managed-service URL (if supplied)
         if: env.MT5_MANAGED_SERVICE_URL != ''
@@ -123,4 +123,27 @@ jobs:
         with:
           name: DestinedFX-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+
+      - name: Package Windows MT5 worker kit
+        run: |
+          mkdir -p dist/DestinedFX-Windows-Worker-Kit
+          cp managed-worker/worker.py managed-worker/worker.example.toml managed-worker/README.md managed-worker/launch-worker.ps1 dist/DestinedFX-Windows-Worker-Kit/
+          cp mt5-ea/DestinedFXTraderEA.mq5 dist/DestinedFX-Windows-Worker-Kit/
+          cat > dist/DestinedFX-Windows-Worker-Kit/START-HERE.txt <<'EOF'
+          DestinedFX Windows MT5 worker kit
+          1. Extract all files to a private folder.
+          2. Install the broker MT5 desktop terminal and MetaEditor.
+          3. Run launch-worker.ps1 in PowerShell.
+          4. Enter the public HTTPS bridge URL, MT5 install folder, stable worker ID and generated WORKER_TOKEN.
+          5. Add the bridge URL to MT5 Tools > Options > Expert Advisors > Allow WebRequest for listed URL.
+          6. Select DEMO MASTER in the Android app for the first execution test.
+          Keep worker.toml and terminal data private. Worker start does not place trades without an app command.
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DestinedFX-Windows-Worker-Kit
+          path: dist/DestinedFX-Windows-Worker-Kit/
           if-no-files-found: error

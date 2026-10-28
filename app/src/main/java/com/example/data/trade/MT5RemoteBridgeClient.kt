@@ -35,8 +35,11 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         val snapshotsValid: Boolean, val lastSignal: JSONObject?, val newsVerdict: JSONObject?, val raw: JSONObject
     )
 
-    fun baseUrl(): String = com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.trim().trimEnd('/')
-    fun managedConfigured(): Boolean = validateBaseUrl(com.example.BuildConfig.MT5_MANAGED_SERVICE_URL) != null
+    private fun configuredServiceUrl(): String = resolveServiceOrigin(
+        secrets.getManagedMT5ServiceUrl(), com.example.BuildConfig.MT5_MANAGED_SERVICE_URL
+    )
+    fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
+    fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
     fun hasPairing(): Boolean = secrets.getMT5BridgeAppToken(profile).isNotBlank()
 
     /** Registers one mode-scoped pairing. The bridge stores broker credentials encrypted; this client never logs them. */
@@ -208,6 +211,10 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     class BridgeHttpException(val status: Int, val safeDescription: String) : Exception(safeDescription)
 
     companion object {
+        internal fun resolveServiceOrigin(override: String, buildValue: String): String =
+            validServiceOrigin(override).takeIf { override.isNotBlank() }
+                ?: validServiceOrigin(buildValue).orEmpty()
+
         internal fun validServiceOrigin(raw: String): String? {
             return try {
                 val uri = URI(raw.trim()).normalize()
