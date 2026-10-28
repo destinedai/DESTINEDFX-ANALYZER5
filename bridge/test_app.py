@@ -398,6 +398,12 @@ def test_readiness_requires_valid_managed_configuration_and_storage(monkeypatch)
     response=client.get('/health/ready')
     assert response.status_code==200
     assert response.json()=={'status':'ready','database':'ok','managed_execution':'configured'}
+def test_documented_health_paths_are_implemented(monkeypatch):
+    assert client.get('/health').status_code==200
+    monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
+    monkeypatch.setenv('WORKER_TOKEN','operator-secret-test-fixture-2026-very-long')
+    monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.realcop.com')
+    assert client.get('/health/ready').status_code==200
 
 
 def test_malformed_managed_origin_fails_closed(monkeypatch):

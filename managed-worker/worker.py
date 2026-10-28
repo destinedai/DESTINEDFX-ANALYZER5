@@ -449,7 +449,8 @@ def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
             "InpSymbols=EURUSD\nInpTimeframes=M5\nInpRiskPercent=0.25\n"
             "InpMaxDailyLossPercent=2.0\nInpMaxConcurrentPositions=2\n"
             "InpPollSeconds=5\nInpScanSeconds=10\nInpHeartbeatSeconds=5\n"
-            "InpMagic=5271026\nInpDeviationPoints=20\n")
+            "InpMagic=5271026\nInpDeviationPoints=20\n"
+            "InpCostModel=OBSERVED_ROUND_TURN\nInpCommissionPerLot=0\nInpCostEvidence=\n")
 
 
 def ini_text(job: dict, access_type: str, symbol: str) -> str:
