@@ -1,8 +1,8 @@
-import os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress
+import os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
@@ -15,6 +15,10 @@ MAX_BODY=int(os.getenv('MAX_BODY_BYTES','65536'))
 PAIR_RATE=int(os.getenv('PAIR_RATE_LIMIT','10'))
 STALE=int(os.getenv('HEARTBEAT_STALE_SECONDS','15'))
 RECOVERY_GRACE=int(os.getenv('HEARTBEAT_RECOVERY_GRACE_SECONDS','120'))
+NEWS_BEFORE=int(os.getenv('NEWS_BLACKOUT_BEFORE_SECONDS','1800'))
+NEWS_AFTER=int(os.getenv('NEWS_BLACKOUT_AFTER_SECONDS','1800'))
+NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
+NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
 
 def now(): return datetime.now(timezone.utc)
@@ -30,7 +34,8 @@ def db():
     CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id), request_id TEXT NOT NULL, action TEXT NOT NULL, config TEXT NOT NULL, ack TEXT, UNIQUE(pairing_id,request_id));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED');
-    CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);''')
+    CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));''')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
     for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT')):
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
@@ -96,7 +101,40 @@ class Account(BaseModel):
     balance:float|None=Field(default=None,gt=0,allow_inf_nan=False); equity:float|None=Field(default=None,gt=0,allow_inf_nan=False); margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); free_margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin_level:float|None=Field(default=None,ge=0,allow_inf_nan=False); leverage:int|None=Field(default=None,gt=0)
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]
+    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict)
+
+def relevant_news_currencies(symbol):
+    s=''.join(ch for ch in (symbol or '').upper() if ch.isalnum())
+    if len(s)==6 and s[:3].isalpha() and s[3:].isalpha(): return {s[:3],s[3:]}
+    explicit={'XAUUSD':{'XAU','USD'},'XAGUSD':{'XAG','USD'},'US30':{'USD'},'NAS100':{'USD'},'SPX500':{'USD'}}
+    return explicit.get(s)
+
+def validate_news_verdict(v, symbol=None, at=None):
+    if not isinstance(v,dict): return False,'NEWS UNKNOWN: verdict missing'
+    status=str(v.get('status','')).upper(); retrieved=v.get('retrieved_at_ms'); coverage_from=v.get('coverage_from_ms'); coverage_to=v.get('coverage_to_ms')
+    if status not in ('CLEAR','HIGH_IMPACT_WINDOW','UNKNOWN') or not all(isinstance(x,(int,float)) and math.isfinite(x) for x in (retrieved,coverage_from,coverage_to)):
+        return False,'NEWS UNKNOWN: malformed or unauthenticated verdict'
+    t=(at or time.time()*1000); max_age=6*3600*1000
+    if retrieved>t+60000 or t-retrieved>max_age or coverage_from>t or coverage_to<t+NEWS_BEFORE*1000: return False,'NEWS UNKNOWN: stale or incomplete calendar coverage'
+    relevant=relevant_news_currencies(symbol) if symbol else None
+    if symbol and relevant is None: return False,'NEWS UNKNOWN: instrument relevance mapping unavailable'
+    currencies={str(x).upper() for x in v.get('affected_currencies',[]) if isinstance(x,str)}
+    if relevant and currencies and not relevant.intersection(currencies): return True,'NEWS CLEAR: no relevant affected currency'
+    if status=='CLEAR': return True,'NEWS CLEAR'
+    if status=='HIGH_IMPACT_WINDOW': return False,'HIGH-IMPACT NEWS — TRADING BLOCKED'
+    return False,'NEWS UNKNOWN — TRADING BLOCKED'
+
+def provider_news(symbol):
+    parsed=urlparse(NEWS_PROVIDER_URL)
+    if not NEWS_PROVIDER_URL or parsed.scheme.lower()!='https' or not parsed.hostname or parsed.username or parsed.password or NEWS_BEFORE<0 or NEWS_AFTER<0: return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider is not configured as a credential-free HTTPS endpoint','source':'unconfigured'}
+    try:
+        q=urllib.request.Request(NEWS_PROVIDER_URL+'?symbol='+quote(symbol),headers={'Accept':'application/json','Authorization':'Bearer '+NEWS_PROVIDER_TOKEN} if NEWS_PROVIDER_TOKEN else {'Accept':'application/json'})
+        with urllib.request.urlopen(q,timeout=5) as response: value=json.loads(response.read(256*1024).decode('utf-8'))
+        ok,detail=validate_news_verdict(value,symbol)
+        value['status']=value.get('status','UNKNOWN') if ok and detail.startswith('NEWS CLEAR') else 'UNKNOWN' if not value.get('status') else value.get('status')
+        value['detail']=detail; value['blackout_before_seconds']=NEWS_BEFORE; value['blackout_after_seconds']=NEWS_AFTER
+        return value
+    except Exception: return {'status':'UNKNOWN','detail':'NEWS UNKNOWN: provider unavailable or malformed','source':'unavailable','blackout_before_seconds':NEWS_BEFORE,'blackout_after_seconds':NEWS_AFTER}
 
 def auth(header, kind):
     if not header or not header.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
@@ -180,6 +218,12 @@ def terminal_identity_matches(p, account_mode, beat):
 
 def execution_state_eligible(beat):
     return bool(beat and beat.get('state') in ('READY','RUNNING','PAUSED','STOPPED'))
+
+def heartbeat_news_clear(beat, symbols=None):
+    verdict=beat.get('news_verdict') if isinstance(beat,dict) else None
+    if not isinstance(verdict,dict) or str(verdict.get('status','')).upper()!='CLEAR': return False
+    ok,_=validate_news_verdict(verdict, (symbols or [None])[0] if symbols else None)
+    return ok
 
 @app.post('/v1/app/managed-account',status_code=202)
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
@@ -323,6 +367,31 @@ def claim(x:Claim):
         c.execute('UPDATE pairings SET consumed=1,terminal_hash=?,terminal_id=?,instance_id=?,account=? WHERE id=? AND consumed=0',(digest(terminal_token),terminal_id,x.terminal_instance_id,json.dumps(x.account,separators=(',',':')),found['id']))
         if c.total_changes<1: raise HTTPException(409,'Pairing code already consumed')
     return {'terminal_id':terminal_id,'terminal_token':terminal_token,'poll_seconds':2}
+def ingest_trade_ledger(c, pairing_id, account_mode, payload, received):
+    account=payload.get('account') or {}
+    for deal in payload.get('closed_deals',[]):
+        position=str(deal.get('position_id',''))
+        identity='position:'+position if position else 'deal:'+str(deal.get('ticket',''))
+        if identity.endswith(':'): continue
+        existing=c.execute('SELECT payload FROM trade_ledger WHERE pairing_id=? AND identity=?',(pairing_id,identity)).fetchone()
+        if existing:
+            old=json.loads(existing['payload']); deals=old.get('deals',[])
+            if not any(str(x.get('ticket'))==str(deal.get('ticket')) for x in deals): deals.append(deal)
+            document={'kind':'closed_position','account':account,'deals':deals}
+        else: document={'kind':'closed_position','account':account,'deals':[deal]}
+        c.execute("""INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pairing_id,identity) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,status=excluded.status,deal_ticket=excluded.deal_ticket""",
+                  (pairing_id,identity,account_mode,position,None,str(deal.get('ticket','')),str(deal.get('symbol','')),None,'CLOSED',json.dumps(document,separators=(',',':')),received,received))
+    signal=payload.get('last_signal') or {}; order=str(signal.get('order',''))
+    try: executed=float(signal.get('executed_volume',0))
+    except (TypeError,ValueError): executed=0
+    existing_signal=c.execute('SELECT status FROM trade_ledger WHERE pairing_id=? AND identity=?',(pairing_id,'position:'+str(signal.get('position','')))).fetchone() if signal.get('position') else None
+    if order and executed>0 and not (existing_signal and existing_signal['status']=='CLOSED'):
+        identity='position:'+str(signal.get('position','')) if signal.get('position') else 'order:'+order
+        c.execute("""INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pairing_id,identity) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,status=excluded.status""",
+                  (pairing_id,identity,account_mode,str(signal.get('position','')),order,str(signal.get('deal','')),str(signal.get('symbol','')),str(signal.get('direction','')),'OPEN',json.dumps({'kind':'last_signal','account':account,'signal':signal,'positions':payload.get('open_positions',[])},separators=(',',':')),received,received))
+
 @app.get('/v1/app/state')
 def state(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); beat=json.loads(p['heartbeat']) if p['heartbeat'] else None
@@ -342,12 +411,30 @@ def state(authorization:str|None=Header(default=None)):
         actual=fresh_heartbeat(p); worker_ready=bool(job and job['status']=='READY')
         claimed=json.loads(p['account']) if p['account'] else {}
         identity_verified=bool(actual and m['account_mode'] in ('DEMO','LIVE') and actual.get('account') and all(actual['account'].get(k)==claimed.get(k) for k in ('login','server','company','currency','account_mode')) and actual['account'].get('account_mode')==m['account_mode'])
-        app_status='READY' if identity_verified and worker_ready and execution_state_eligible(actual) else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
+        app_status='READY' if identity_verified and worker_ready and execution_state_eligible(actual) and heartbeat_news_clear(actual) else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
         live_auth=bool(m['account_mode']=='LIVE' and identity_verified and p['live_authorized_until'] and p['live_authorized_until']>time.time() and p['live_authorized_login']==actual['account'].get('login') and p['live_authorized_server']==actual['account'].get('server'))
-        managed={'status':app_status,'access_type':m['access_type'],'account_mode':m['account_mode'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'execution_state_eligible':execution_state_eligible(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
-    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'configuration':beat['configuration'] if online else {},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+        managed={'status':app_status,'access_type':m['access_type'],'account_mode':m['account_mode'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
+        if actual:
+            with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
+    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
+@app.get('/v1/terminal/news-verdict')
+def terminal_news_verdict(symbol:str=Query(min_length=1,max_length=64),authorization:str|None=Header(default=None)):
+    auth(authorization,'terminal')
+    verdict=provider_news(symbol.strip().upper())
+    ok,detail=validate_news_verdict(verdict,symbol.strip().upper())
+    if not ok and verdict.get('status')=='CLEAR': verdict['status']='UNKNOWN'
+    verdict['detail']=detail; verdict['blackout_before_seconds']=NEWS_BEFORE; verdict['blackout_after_seconds']=NEWS_AFTER
+    return verdict
+
+@app.get('/v1/app/trades')
+def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=0,ge=0),authorization:str|None=Header(default=None)):
+    p=auth(authorization,'app')
+    with tx() as c:
+        rows=c.execute('SELECT rowid,* FROM trade_ledger WHERE pairing_id=? AND rowid>? ORDER BY rowid LIMIT ?', (p['id'],cursor,limit)).fetchall()
+    return {'cursor':max([cursor]+[r['rowid'] for r in rows]),'trades':[{'id':r['rowid'],'identity':r['identity'],'account_mode':r['account_mode'],'position_id':r['position_id'],'order_ticket':r['order_ticket'],'deal_ticket':r['deal_ticket'],'symbol':r['symbol'],'direction':r['direction'],'status':r['status'],'payload':json.loads(r['payload']),'updated_at':iso(datetime.fromtimestamp(r['updated'],timezone.utc))} for r in rows]}
+
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
     p=auth(authorization,'app')
@@ -383,7 +470,8 @@ def command(x:Command,authorization:str|None=Header(default=None)):
         with tx() as c: job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
         account=beat.get('account',{}) if beat else {}
         live_ok=(m['account_mode']!='LIVE' or (p['live_authorized_until'] is not None and p['live_authorized_until']>time.time() and p['live_authorized_login']==account.get('login') and p['live_authorized_server']==account.get('server')))
-        if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, eligible EA state, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
+        symbols=x.config.get('symbols',[]) if isinstance(x.config,dict) else []
+        if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or not heartbeat_news_clear(beat,symbols) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, eligible EA state, verified identity/mode, fresh CLEAR news verdict, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
     serialized=json.dumps(x.config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
         c.execute('INSERT OR IGNORE INTO commands(pairing_id,request_id,action,config) VALUES(?,?,?,?)',(p['id'],x.request_id,x.action,serialized))

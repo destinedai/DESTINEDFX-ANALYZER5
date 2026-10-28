@@ -44,6 +44,7 @@ import com.destinedfx.core.news.HighImpactNewsSentry
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import com.example.data.trade.MT5RemoteBridgeClient
+import com.example.util.TradeReportManager
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -52,6 +53,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val bridgeSecrets = viewModel.app.secretsManager
     var selectedAccountMode by remember { mutableStateOf(bridgeSecrets.getManagedMT5SelectedProfile()) }
     val bridgeClient = remember(bridgeSecrets, selectedAccountMode) { MT5RemoteBridgeClient(bridgeSecrets, selectedAccountMode) }
+    val reportContext = LocalContext.current
     var bridgeMode by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode).isNotBlank()) }
     var bridgeCode by remember { mutableStateOf("") }
     var bridgeMessage by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode).let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
@@ -60,6 +62,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgePendingId by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode)) }
     var bridgePendingAction by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandAction(selectedAccountMode)) }
     var bridgeCommandPending by remember(selectedAccountMode) { mutableStateOf(bridgePendingId.isNotBlank() && bridgePendingAction.isNotBlank()) }
+    var reportStatus by remember(selectedAccountMode) { mutableStateOf("Trade reports: waiting for authenticated broker ledger") }
     var bridgeExpectedState by remember(selectedAccountMode) { mutableStateOf(when (bridgePendingAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; "STOP", "EMERGENCY_STOP" -> "STOPPED"; else -> "" }) }
     var showLiveAuthorizationDialog by remember { mutableStateOf(false) }
     val bridgeToken = bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode)
@@ -69,14 +72,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             bridgeSecrets.getManagedMT5Login(selectedAccountMode), snapshot.actualLogin,
             bridgeSecrets.getManagedMT5Server(selectedAccountMode), snapshot.actualServer,
             snapshot.state,
-            snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, snapshot.liveAuthorized)
+            snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, snapshot.liveAuthorized,
+            snapshot.newsVerdict?.optString("status", "UNKNOWN") == "CLEAR")
     } == true
     val bridgeProfileReady = bridgeSnapshot?.let { snapshot ->
         MT5RemoteBridgeClient.canStart(selectedAccountMode, snapshot.managedState, snapshot.accessType, snapshot.actualAccountMode,
             bridgeSecrets.getManagedMT5Login(selectedAccountMode), snapshot.actualLogin,
             bridgeSecrets.getManagedMT5Server(selectedAccountMode), snapshot.actualServer,
             snapshot.state,
-            snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, true)
+            snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, true,
+            snapshot.newsVerdict?.optString("status", "UNKNOWN") == "CLEAR")
     } == true
     fun selectBridgeProfile(profile: String) {
         selectedAccountMode = profile
@@ -134,6 +139,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                 try {
                     val fresh = bridgeClient.state()
                     bridgeSnapshot = fresh
+                    runCatching {
+                        val records = mutableListOf<JSONObject>(); var cursor = 0; var next: Int
+                        do { val page = bridgeClient.tradeHistory(cursor); next = page.first; records += page.second; if (next <= cursor) break; cursor = next } while (records.size < 1000)
+                        val result = TradeReportManager.sync(reportContext, records)
+                        reportStatus = "Trade reports: ${result.generated} synchronized/generated, ${result.failed} failed"
+                    }.onFailure { reportStatus = "Trade reports: sync unavailable; retrying (${it.javaClass.simpleName})" }
                     val cmd = fresh.raw.optJSONObject("last_command")
                     if (bridgeCommandPending && cmd != null && cmd.optString("request_id") == bridgePendingId &&
                         cmd.optString("action") == bridgePendingAction && cmd.optString("status") == "ACKNOWLEDGED") {
@@ -187,6 +198,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
                     Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${bridgeSnapshot?.let { if (!it.terminalOnline) "OFFLINE" else if (!it.heartbeatFresh) "STALE HEARTBEAT" else "ONLINE" } ?: "UNVERIFIED"} · EA: ${bridgeSnapshot?.state ?: "UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    val news = bridgeSnapshot?.newsVerdict
+                    val newsStatus = news?.optString("status", "UNKNOWN")?.uppercase() ?: "UNKNOWN"
+                    Text(if (newsStatus == "CLEAR") "NEWS CLEAR · ${news?.optString("source", "provider")}" else if (newsStatus == "HIGH_IMPACT_WINDOW") "HIGH-IMPACT NEWS — TRADING BLOCKED" else "NEWS UNKNOWN — TRADING BLOCKED", color = if (newsStatus == "CLEAR") ProfitGreen else LossRed, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Text("News: ${news?.optString("detail", "Authenticated news verdict unavailable") ?: "Authenticated news verdict unavailable"} · retrieved ${news?.optString("retrieved_at_ms", "unavailable") ?: "unavailable"} · event ${news?.optString("event_time_ms", "unavailable") ?: "unavailable"}", color = TextSecondary, fontSize = 10.sp)
+                    Text(reportStatus, color = TextSecondary, fontSize = 10.sp)
                     Text("Selected profile: $selectedAccountMode · Verified terminal: ${bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified"} · Actual mode: ${bridgeSnapshot?.actualAccountMode?.ifBlank { "UNVERIFIED" } ?: "UNVERIFIED"}", color = TextSecondary, fontSize = 10.sp)
                     Text("Managed service: ${if (bridgeClient.managedConfigured()) "configured" else "CONFIGURATION_REQUIRED"}", color = TextSecondary, fontSize = 10.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

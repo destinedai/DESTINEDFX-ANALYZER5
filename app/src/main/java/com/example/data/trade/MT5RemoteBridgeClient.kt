@@ -32,7 +32,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         val currency: String, val balance: Double?, val equity: Double?,
         val margin: Double?, val freeMargin: Double?, val marginLevel: Double?, val leverage: Int?,
         val positions: List<JSONObject>?, val activeOrders: List<JSONObject>?, val closedDeals: List<JSONObject>?,
-        val snapshotsValid: Boolean, val lastSignal: JSONObject?, val raw: JSONObject
+        val snapshotsValid: Boolean, val lastSignal: JSONObject?, val newsVerdict: JSONObject?, val raw: JSONObject
     )
 
     fun baseUrl(): String = com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.trim().trimEnd('/')
@@ -99,8 +99,16 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
             account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
-            obj.optJSONObject("last_signal"), obj
+            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj
         )
+    }
+
+    suspend fun tradeHistory(cursor: Int = 0): Pair<Int, List<JSONObject>> {
+        val body = request("GET", "/v1/app/trades?cursor=$cursor&limit=200")
+        val rows = body.optJSONArray("trades") ?: return body.optInt("cursor", cursor) to emptyList()
+        val out = mutableListOf<JSONObject>()
+        for (i in 0 until rows.length()) rows.optJSONObject(i)?.let(out::add)
+        return body.optInt("cursor", cursor) to out
     }
 
     /** Creates one profile-scoped idempotency key; UNKNOWN is retained for reconciliation, never retried here. */
@@ -238,13 +246,13 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             expectedLogin: String, actualLogin: String, expectedServer: String, actualServer: String,
             eaState: String,
             heartbeatFresh: Boolean, terminalConnected: Boolean, tradeAllowed: Boolean,
-            accountVerified: Boolean, liveAuthorized: Boolean
+            accountVerified: Boolean, liveAuthorized: Boolean, newsClear: Boolean
         ): Boolean = selectedProfile.uppercase() in setOf("DEMO", "LIVE") &&
             (selectedProfile.equals("DEMO", true) || liveAuthorized) &&
             managedState.equals("READY", true) && accessType.equals("MASTER", true) &&
             actualMode.equals(selectedProfile, true) && expectedLogin.isNotBlank() && actualLogin == expectedLogin &&
             expectedServer.isNotBlank() && actualServer == expectedServer && heartbeatFresh && terminalConnected &&
-            tradeAllowed && accountVerified && eaState.uppercase() in setOf("READY", "RUNNING", "PAUSED", "STOPPED") && selectedProfile.uppercase() in setOf("DEMO", "LIVE")
+            tradeAllowed && accountVerified && newsClear && eaState.uppercase() in setOf("READY", "RUNNING", "PAUSED", "STOPPED") && selectedProfile.uppercase() in setOf("DEMO", "LIVE")
 
         internal fun isValidRiskPercent(value: Double): Boolean = value.isFinite() && value > 0.0 && value <= 1.0
 

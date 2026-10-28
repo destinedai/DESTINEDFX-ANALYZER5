@@ -19,10 +19,11 @@ class ManagedExecutionGateTest {
         terminalConnected: Boolean = true,
         tradeAllowed: Boolean = true,
         accountVerified: Boolean = true,
-        liveAuthorized: Boolean = true
+        liveAuthorized: Boolean = true,
+        newsClear: Boolean = true
     ) = MT5RemoteBridgeClient.canStart(
         profile, state, access, mode, expectedLogin, actualLogin, expectedServer, actualServer, eaState,
-        fresh, terminalConnected, tradeAllowed, accountVerified, liveAuthorized
+        fresh, terminalConnected, tradeAllowed, accountVerified, liveAuthorized, newsClear
     )
 
     @Test fun liveMasterWithVerifiedLiveIdentityFreshHeartbeatAndCurrentAuthorizationPasses() {
@@ -62,6 +63,10 @@ class ManagedExecutionGateTest {
         assertFalse(allowed(state = "PROVISIONING"))
         assertFalse(allowed(tradeAllowed = false))
         assertFalse(allowed(eaState = "ERROR"))
+    }
+
+    @Test fun unknownNewsIsRejectedBeforeExecution() {
+        assertFalse(allowed(newsClear = false))
     }
 
     @Test fun demoHasItsOwnModeAndDoesNotNeedOrInheritLiveAuthorization() {

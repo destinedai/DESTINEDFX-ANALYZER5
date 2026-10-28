@@ -87,6 +87,9 @@ def test_ea_source_contract_and_balanced_delimiters():
         "authoritative delayed-fill reconciliation": all(x in source for x in ["OnTradeTransaction", "ReconcileOrder", "HistoryOrderSelect", "DEAL_ORDER", "PARTIALLY_FILLED", "CANCELLED_OR_EXPIRED", "UNKNOWN_REQUIRES_RECONCILIATION"]),
         "restart-safe order identity": "PersistOrderState" in source and "LoadOrderState" in source and "DestinedFX_order_" in source,
         "cumulative executed volume": "g_sigExecutedVolume=executed" in source and "dealOrder!=order" in source,
+        "authoritative news gate immediately before broker call": "bool NewsClear(string sym)" in source and "if(!NewsClear(sym))" in source and "trade.Buy" in source and "NEWS_BLOCKED" in source,
+        "news verdict is timestamped and fail closed": all(x in source for x in ["retrieved_at_ms", "coverage_from_ms", "coverage_to_ms", "g_newsStatus=\"UNKNOWN\"", "NEWS UNKNOWN"]),
+        "pending news cancellation is EA-owned only": "CancelNewsBlockedPendingOrders" in source and "ORDER_MAGIC" in source and "trade.OrderDelete" in source and "HistoryOrderSelect" in source,
         "signal dedupe persisted before submission": "if(!Remember(key))" in source and "PersistSeen()" in source and 'FileOpen(SeenFile(),FILE_READ' in source and "AtomicWrite" in source,
         "README discloses persisted dedupe": "persisted in an account-login-scoped" in readme,
     }

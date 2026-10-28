@@ -16,6 +16,8 @@ pytest -q
 
 The HTTP exception is accepted only for IPv4/IPv6 loopback clients. Do not set it on a public deployment. `GET /health` is a liveness check; `GET /health/ready` verifies database access and the mandatory managed-execution configuration and returns HTTP 503 until the service is safe to use.
 
+Automated execution also requires `NEWS_PROVIDER_URL` to be configured with an authorized HTTPS economic-calendar provider. The provider response must contain a timestamped `status`, `source`, coverage interval, affected currencies, and event window when applicable. `NEWS_PROVIDER_TOKEN` is read only from the service environment. Missing, stale, incomplete, malformed, or unavailable provider data returns `UNKNOWN` and blocks automated entries; it is never treated as a clear calendar. The conservative defaults are `NEWS_BLACKOUT_BEFORE_SECONDS=1800` and `NEWS_BLACKOUT_AFTER_SECONDS=1800`.
+
 ## Deployment and TLS
 
 Copy `.env.example` to `.env`, set persistent `BRIDGE_DB_PATH=/data/bridge.sqlite3`, keep `ALLOW_LOOPBACK_HTTP=false`, and change limits only with care. `docker compose up -d --build` runs an unprivileged container and persists its WAL/database in the named volume. Back up the volume consistently; SQLite WAL files must be included in live backups or use SQLite's online backup API.
@@ -33,6 +35,7 @@ Use the exact public origin, e.g. `https://bridge.your-real-domain.example`, as 
 3. Start with a **broker demo account only** and a dedicated MT5 terminal. Verify the EA reports the live account login/server/company/currency from MT5; never type credentials into the bridge or send passwords/API keys.
 4. Pair once, verify terminal status goes OFFLINE when heartbeats stop, and exercise START/STOP/PAUSE/RESUME/EMERGENCY_STOP in demo. A 202 response only means queued; verify fresh terminal telemetry before reporting execution status.
 5. Confirm risk guards and broker-side SL/TP behavior in the EA. STOP/EMERGENCY_STOP block new entries and do not close positions. Do not proceed to a live account without independent testing and authorization.
+6. Use authenticated `GET /v1/app/trades?cursor=...&limit=...` to synchronize the durable account-scoped ledger. Repeated heartbeats are idempotent and DEMO/LIVE records remain separated by pairing/profile.
 
 ## Security behavior
 
