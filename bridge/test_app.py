@@ -494,3 +494,24 @@ def test_trade_event_cursor_pages_more_than_200_rows_without_skipping():
     assert len(page2['trades'])==5
     ids=[x['id'] for x in page1['trades']+page2['trades']]
     assert len(set(ids))==205
+
+
+
+def test_closed_trade_ledger_preserves_broker_entry_metadata_and_true_costs():
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    now=app.iso()
+    closed={'ticket':'5002','position_id':'9002','symbol':'EURUSD','direction':'BUY',
+            'entry_price':1.10125,'opened_at':'2026-10-28 10:00:00 (broker server time)',
+            'closed_at':'2026-10-28 10:30:00 (broker server time)','volume':0.01,'price':1.10325,
+            'profit':2.0,'commission':-0.14,'swap':-0.01,'fees':-0.02}
+    payload=heartbeat_data(last_signal=None,closed_deals=[closed])
+    with app.tx(True) as c:
+        app.ingest_trade_ledger(c,p['pairing_id'],'DEMO',payload,time.time())
+    page=client.get('/v1/app/trades?limit=20',headers=headers)
+    assert page.status_code==200
+    trade=next(x for x in page.json()['trades'] if x['position_id']=='9002')
+    assert trade['direction']=='BUY'
+    assert trade['payload']['deals'][0]['entry_price']==1.10125
+    assert trade['payload']['deals'][0]['opened_at']=='2026-10-28 10:00:00 (broker server time)'
+    assert trade['payload']['deals'][0]['commission']==-0.14
+    assert trade['payload']['deals'][0]['fees']==-0.02

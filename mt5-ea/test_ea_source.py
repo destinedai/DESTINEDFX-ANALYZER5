@@ -141,3 +141,9 @@ def test_trade_report_fields_come_from_ea_owned_broker_history():
     assert "HistoryDealGetInteger(d,DEAL_MAGIC)!=(ulong)InpMagic" in source
     assert 'PositionGetInteger(POSITION_MAGIC)!=(ulong)InpMagic' in source
     assert 'OrderGetInteger(ORDER_MAGIC)!=(long)InpMagic' in source
+    assert "conversionDistance=MathMin(1.0,entry*0.1)" in source
+    assert "entryCommission*share" in source
+    assert "MathAbs(entryVolume-positionExitVolume-openVolume)<=tolerance" in source
+    assert "emitted<30" in source
+    assert r'\"commission\":null' in source
+    assert "closeSwap+entrySwap*share" in source

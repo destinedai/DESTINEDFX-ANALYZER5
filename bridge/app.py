@@ -391,7 +391,7 @@ def _trade_event_signature(identity,status,payload):
     if not signal and kind=='last_signal': signal=payload
     stable={'kind':kind,'signal':_stable_signal(signal),'status':status}
     if kind=='closed_position':
-        fields=('ticket','position_id','symbol','closed_at','volume','price','profit','commission','swap','fees')
+        fields=('ticket','position_id','symbol','direction','entry_price','opened_at','closed_at','volume','price','profit','commission','swap','fees')
         stable['lifecycle']=payload.get('lifecycle')
         stable['closed_volume']=payload.get('closed_volume')
         stable['remaining_volume']=payload.get('remaining_volume')
@@ -450,7 +450,7 @@ def ingest_trade_ledger(c, pairing_id, account_mode, payload, received):
         lifecycle='OPEN' if remaining>1e-9 else 'CLOSED'; doc['lifecycle']=lifecycle
         c.execute('''INSERT INTO trade_ledger(pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,direction,status,payload,first_seen,updated)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pairing_id,identity) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,status=excluded.status,deal_ticket=excluded.deal_ticket''',
-                  (pairing_id,identity,account_mode,position,None,str(deal.get('ticket','')),str(deal.get('symbol','')),None,lifecycle,json.dumps(doc,separators=(',',':')),received,received))
+                  (pairing_id,identity,account_mode,position,str(preserved_signal.get('order','')) if isinstance(preserved_signal,dict) and preserved_signal.get('order') else None,str(deal.get('ticket','')),str(deal.get('symbol','')),str((preserved_signal or {}).get('direction') or deal.get('direction') or '') or None,lifecycle,json.dumps(doc,separators=(',',':')),received,received))
         _append_trade_ledger_event(c,pairing_id,identity)
     if signal and signal.get('position') and executed>0:
         position=str(signal.get('position')); identity='position:'+position
