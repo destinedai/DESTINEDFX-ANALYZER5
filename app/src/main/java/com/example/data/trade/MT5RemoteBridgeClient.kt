@@ -223,7 +223,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
                 val first = o[0]; val second = o[1]; val third = o[2]
                 return first !in setOf(0, 10, 127, 169, 224) &&
                     !(first == 100 && second in 64..127) && !(first == 172 && second in 16..31) &&
-                    !(first == 192 && (second == 168 || (second == 0 && third == 0))) &&
+                    !(first == 192 && (second == 168 || (second == 0 && third in setOf(0, 2)))) &&
                     !(first == 198 && second in 18..19) && !(first == 198 && second == 51 && third == 100) &&
                     !(first == 203 && second == 0 && third == 113)
             }

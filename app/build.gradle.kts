@@ -71,7 +71,7 @@ android {
       val host = uri?.host?.lowercase().orEmpty()
       val port = runCatching { uri?.port ?: -2 }.getOrNull() ?: -2
       val literalAddress = if (host.matches(Regex("^[0-9a-fA-F:.]+$"))) runCatching { InetAddress.getByName(host) }.getOrNull() else null
-      val specialIpv4 = Regex("^(0|10|127|169)\\..*|^100\\.(6[4-9]|[7-9][0-9])\\..*|^172\\.(1[6-9]|2[0-9]|3[01])\\..*|^192\\.168\\..*|^198\\.(18|19)\\..*|^198\\.51\\.100\\..*|^203\\.0\\.113\\..*|^224\\..*").matches(host)
+      val specialIpv4 = Regex("^(0|10|127|169)\\..*|^100\\.(6[4-9]|[7-9][0-9])\\..*|^172\\.(1[6-9]|2[0-9]|3[01])\\..*|^192\\.168\\..*|^192\\.0\\.(0|2)\\..*|^198\\.(18|19)\\..*|^198\\.51\\.100\\..*|^203\\.0\\.113\\..*|^224\\..*").matches(host)
       val mappedIpv6 = host.lowercase().startsWith("::ffff:")
       require(uri != null && uri.scheme.equals("https", ignoreCase = true) && host.isNotBlank() && uri.userInfo == null &&
         uri.query == null && uri.fragment == null && uri.path.orEmpty().trimEnd('/').isBlank() && port != 0 && port in -1..65535) {
