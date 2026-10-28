@@ -148,7 +148,7 @@ object PublicRestMarketFeed {
                                                 confidence = 90,
                                                 lastUpdateMillis = now,
                                                 isLive = true,
-                                                source = "TradingView Live API",
+                                                source = "TradingView scanner response",
                                                 bid = if (bid > 0) bid else close,
                                                 ask = if (ask > 0) ask else close,
                                                 hasRealSpread = true,

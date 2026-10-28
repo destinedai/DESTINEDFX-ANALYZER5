@@ -283,7 +283,7 @@ class MarketDataRepositoryImpl(
             confidence = 0,
             lastUpdateMillis = now,
             isLive = true,
-            source = "TradingView Live Feed",
+            source = "TradingView chart widget quote",
             bid = price,
             ask = price,
             hasRealSpread = false,
@@ -631,7 +631,7 @@ class MarketDataRepositoryImpl(
             if (liveTicker != null && liveTicker.price > 0.0) {
                 candles = generateCandlesFromTicker(symbol, timeframe, count, liveTicker, now)
                 if (candles.isNotEmpty()) {
-                    sourceUsed = "TradingView Live API"
+                    sourceUsed = "TradingView scanner response"
                     isDelayed = false
                 }
             }

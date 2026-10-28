@@ -292,7 +292,7 @@ open class DestinedFXViewModel(
             confidence = 90,
             lastUpdateMillis = System.currentTimeMillis(),
             isLive = true,
-            source = "TradingView Live Feed",
+            source = "TradingView chart widget quote",
             kind = "STREAM"
         )).copy(
             price = price,
@@ -300,7 +300,7 @@ open class DestinedFXViewModel(
             low = minOf(current?.low ?: price, price),
             lastUpdateMillis = System.currentTimeMillis(),
             isLive = true,
-            source = "TradingView Live Feed",
+            source = "TradingView chart widget quote",
             kind = "STREAM"
         )
         tickers.value = tickers.value + (symbol to updated)
@@ -345,13 +345,13 @@ open class DestinedFXViewModel(
     val candleFetchErrors: StateFlow<Map<String, String>> =
         if (isPreview) MutableStateFlow(emptyMap()) else app.marketDataRepository.candleFetchErrors
     val selectedApiSource: MutableStateFlow<String> =
-        if (isPreview) MutableStateFlow("TradingView Live Feed") else app.marketDataRepository.selectedApiSource
+        if (isPreview) MutableStateFlow("Chart preview only") else app.marketDataRepository.selectedApiSource
 
     fun getCandleError(symbol: String, timeframe: String): String? =
         if (isPreview) null else app.marketDataRepository.getCandleError(symbol, timeframe)
 
     fun getDataSourceForSymbol(symbol: String): String =
-        if (isPreview) "TradingView Live Feed" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
+        if (isPreview) "Chart preview only" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
 
     fun marketDataSource(symbol: String, timeframe: String): String =
         if (isPreview) "Preview has no market candles" else app.marketDataRepository.getDataSource(

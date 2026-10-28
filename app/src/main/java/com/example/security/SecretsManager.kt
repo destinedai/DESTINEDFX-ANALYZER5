@@ -39,7 +39,6 @@ class SecretsManager(private val ctx: Context) {
         private const val DERIV_ACCOUNT_MODE = "deriv_account_mode"
         private const val TG_STATUS = "telegram_connection_status"
         private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
-        private const val MT5_BRIDGE_URL = "mt5_remote_bridge_url"
         private const val MT5_BRIDGE_TOKEN = "mt5_remote_bridge_app_token"
         private const val MT5_BRIDGE_PENDING_ID = "mt5_remote_bridge_pending_id"
         private const val MT5_BRIDGE_PENDING_ACTION = "mt5_remote_bridge_pending_action"
@@ -106,8 +105,6 @@ class SecretsManager(private val ctx: Context) {
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
 
     /** Bridge app credentials are persisted only when Android encrypted preferences initialized successfully. */
-    fun saveMT5BridgeBaseUrl(value: String) { if (isSecureStorageAvailable) prefs.edit().putString(MT5_BRIDGE_URL, value).apply() }
-    fun getMT5BridgeBaseUrl(): String = prefs.getString(MT5_BRIDGE_URL, "") ?: ""
     fun saveMT5BridgeAppToken(value: String): Boolean { check(isSecureStorageAvailable) { "Secure storage unavailable" }; return prefs.edit().putString(MT5_BRIDGE_TOKEN, value).commit() }
     fun getMT5BridgeAppToken(): String = if (isSecureStorageAvailable) prefs.getString(MT5_BRIDGE_TOKEN, "") ?: "" else ""
     fun clearMT5BridgeAppToken() { if (isSecureStorageAvailable) prefs.edit().remove(MT5_BRIDGE_TOKEN).apply() }

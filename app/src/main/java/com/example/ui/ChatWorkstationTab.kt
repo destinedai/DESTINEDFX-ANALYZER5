@@ -89,12 +89,12 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "Hello! Welcome to DestinedFX. I'm ready to assist with real-time market data, institutional trade setups, strategy mechanics, or app configurations. Currently monitoring $symbol on $timeframe (CMP: $priceStr). How can I assist you today?"
 
             q.contains("how are you") || q.contains("how're you") ->
-                "I'm operating at 100% capacity! The institutional algorithmic analysis engine and live TradingView pricing feeds are fully synchronized. How can I help with your trading today?"
+                "I'm ready to help. Market-feed status depends on the selected source and its latest verified timestamp; the embedded TradingView chart is for visualization and is not treated as an OHLC API. How can I help with your trading today?"
 
             q.contains("who are you") || q.contains("what are you") || q.contains("what can you do") ->
                 "I am the DestinedFX Interactive Terminal Assistant. I provide instant guidance on:\n" +
                 "• Live Market Analysis & Structures (BOS, CHoCH, Order Blocks, FVGs)\n" +
-                "• TradingView real-time pricing and chart navigation\n" +
+                "• Chart navigation and the selected market-feed status\n" +
                 "• 1-Click Institutional Bot & MT5 Terminal ($3,000 / custom balance)\n" +
                 "• Telegram automated alerts setup via BotFather with Auto-Detect Chat ID\n" +
                 "• Mathematical Risk & Position sizing (1% rule, 2R minimum)\n" +
@@ -108,9 +108,9 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 if (freshPrice != null) {
                     val bias = ticker?.bias ?: "NEUTRAL"
                     val change = String.format(Locale.US, "%+.2f%%", ticker?.changePercent ?: 0.0)
-                    "Current Market Price (CMP) for $symbol is $priceStr ($change today). Feed: TradingView Live API. Directional bias: $bias. You can view the live interactive chart in Analyzer or Home."
+                    "Current Market Price (CMP) for $symbol is $priceStr ($change today). Source: ${ticker?.source?.ifBlank { "unavailable" } ?: "unavailable"}; status: ${if (ticker?.isLive == true) "reported live" else "not verified live"}. Directional bias: $bias. You can view the interactive chart in Analyzer or Home."
                 } else {
-                    "Live price for $symbol is currently synchronizing with TradingView scanner. Switch to the Analyzer tab or tap REFRESH to update quotes."
+                    "A current verified quote for $symbol is unavailable. Switch to the Analyzer tab or tap REFRESH to request the selected market feed; do not treat the embedded TradingView chart as an OHLC API."
                 }
             }
 

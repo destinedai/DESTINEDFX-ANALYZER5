@@ -6,6 +6,20 @@ on:
   workflow_dispatch:
 
 jobs:
+  python-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bridge test dependencies
+        run: python -m pip install -r bridge/requirements.txt
+      - name: Run bridge tests
+        run: python -m pytest -q bridge
+      - name: Run managed-worker tests
+        run: python -m unittest discover -s managed-worker -p 'test_*.py' -v
+
   build:
     runs-on: ubuntu-24.04
     steps:

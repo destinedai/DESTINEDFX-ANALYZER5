@@ -32,16 +32,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager) {
         val snapshotsValid: Boolean, val lastSignal: JSONObject?, val raw: JSONObject
     )
 
-    fun saveBaseUrl(input: String): Boolean {
-        if (!secrets.isSecureStorageAvailable) return false
-        if (secrets.getMT5BridgeAppToken().isNotBlank()) return false
-        val url = validateBaseUrl(input) ?: return false
-        secrets.saveMT5BridgeBaseUrl(url)
-        return true
-    }
     fun baseUrl(): String {
-        val buildUrl = com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.trim().trimEnd('/')
-        return if (validateBaseUrl(buildUrl) != null) buildUrl else secrets.getMT5BridgeBaseUrl().trim().trimEnd('/')
+        return com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.trim().trimEnd('/')
+    }
     }
 
     fun managedConfigured(): Boolean = validateBaseUrl(com.example.BuildConfig.MT5_MANAGED_SERVICE_URL) != null

@@ -51,7 +51,6 @@ import org.json.JSONObject
 fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgeMode by remember { mutableStateOf(viewModel.app.secretsManager.getMT5BridgeAppToken().isNotBlank()) }
     val bridgeClient = remember { MT5RemoteBridgeClient(viewModel.app.secretsManager) }
-    var bridgeUrl by remember { mutableStateOf(bridgeClient.baseUrl()) }
     var bridgeCode by remember { mutableStateOf("") }
     var bridgeMessage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5BridgePendingCommandId().let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
     var bridgeSnapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
