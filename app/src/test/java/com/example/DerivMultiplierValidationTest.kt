@@ -81,4 +81,12 @@ class DerivMultiplierValidationTest {
         assertEquals(0.0, DerivMultiplierRules.safeStakeForBalance(-10.0), 0.0)
     }
 
+
+    @Test fun newEntryIsBlockedByAnyActiveContractOrUnresolvedExecution() {
+        assertTrue(DerivMultiplierRules.canOpenNewEntry(activeContractCount = 0, unresolvedExecutionCount = 0))
+        assertFalse(DerivMultiplierRules.canOpenNewEntry(activeContractCount = 1, unresolvedExecutionCount = 0))
+        assertFalse(DerivMultiplierRules.canOpenNewEntry(activeContractCount = 0, unresolvedExecutionCount = 1))
+        assertFalse(DerivMultiplierRules.canOpenNewEntry(activeContractCount = 1, unresolvedExecutionCount = 1))
+    }
+
 }
