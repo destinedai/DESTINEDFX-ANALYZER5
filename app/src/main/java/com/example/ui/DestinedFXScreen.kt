@@ -5,8 +5,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
- * Native destinations mirroring the website's primary navigation, while retaining app-only
- * Risk and Bot workspaces, with account, disclosure and contact tools discoverable under More.
+ * The six core workspaces stay directly accessible in the bottom navigation.
+ * Home and secondary utilities remain reachable from the header's More workspaces menu.
  */
 sealed class DestinedFXScreen(val title: String, val icon: ImageVector, val tag: String) {
     object Home : DestinedFXScreen("Home", Icons.Default.Home, "nav_tab_home")
@@ -25,10 +25,10 @@ sealed class DestinedFXScreen(val title: String, val icon: ImageVector, val tag:
 
     companion object {
         val primaryScreens: List<DestinedFXScreen>
-            get() = listOf(Home, Analyzer, Strategies, Calendar, More)
+            get() = listOf(Analyzer, Strategies, Calendar, Bot, Risk, Settings)
 
         val moreScreens: List<DestinedFXScreen>
-            get() = listOf(Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings, About, Contact)
+            get() = listOf(Home, ImageAnalyzer, Watchlist, Chat, About, Contact)
 
         val allScreens: List<DestinedFXScreen>
             get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings, About, Contact)
