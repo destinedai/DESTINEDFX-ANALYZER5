@@ -686,10 +686,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
         // Target Pair Selection & Autonomous Balance & Free Margin Audit
         item {
-            val capital by viewModel.accountCapital.collectAsStateWithLifecycle()
             val dynamicAnalysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
             val ticker = viewModel.tickers.collectAsStateWithLifecycle().value[activeSymbol]
-            val cmp = ticker?.price ?: dynamicAnalysis?.entry ?: 0.0
+            val cmp = ticker?.price?.takeIf { it.isFinite() && it > 0.0 && viewModel.isDataFresh(activeSymbol) } ?: 0.0
             val isBullish = (dynamicAnalysis?.direction ?: "BUY").contains("BUY", true) || (dynamicAnalysis?.direction ?: "").contains("LONG", true)
             val effectiveEntry = if (dynamicAnalysis != null && dynamicAnalysis!!.entry > 0.0) dynamicAnalysis!!.entry else cmp
             val effectiveSl = if (dynamicAnalysis != null && dynamicAnalysis!!.stopLoss > 0.0) dynamicAnalysis!!.stopLoss else 0.0
@@ -697,15 +696,21 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             val effectiveTp2 = dynamicAnalysis?.tp2 ?: 0.0
             val effectiveTp3 = dynamicAnalysis?.tp3 ?: 0.0
 
-            var reqMarginState by remember(activeSymbol, cmp) { mutableStateOf(0.0) }
-            LaunchedEffect(activeSymbol, cmp) {
-                val res = activeBrokerGateway.calculateRequiredMargin(activeSymbol, 0.01)
-                if (res.isSuccess && (res.getOrNull() ?: 0.0) > 0.0) {
-                    reqMarginState = res.getOrNull()!!
-                } else {
-                    val spec = com.destinedfx.core.instrument.SpecRegistry.get(activeSymbol)
-                    val contractSize = spec?.contractSize ?: 100000.0
-                    reqMarginState = if (cmp > 0.0) (0.01 * contractSize * cmp) / 100.0 else 20.0
+            var reqMarginState by remember(activeSymbol, cmp, brokerConnStatus, bridgeMode) { mutableStateOf(0.0) }
+            var reqMarginVerified by remember(activeSymbol, cmp, brokerConnStatus, bridgeMode) { mutableStateOf(false) }
+            LaunchedEffect(activeSymbol, cmp, brokerConnStatus, bridgeMode) {
+                reqMarginState = 0.0
+                reqMarginVerified = false
+                if (cmp <= 0.0 || !cmp.isFinite()) return@LaunchedEffect
+                // A local margin result is verified only when returned by a connected broker.
+                // Remote MT5 performs its own final margin check in the EA before each order.
+                if (!bridgeMode && brokerConnStatus == BrokerConnectionStatus.CONNECTED) {
+                    val result = runCatching { activeBrokerGateway.calculateRequiredMargin(activeSymbol, 0.01) }.getOrNull()
+                    val margin = result?.getOrNull()
+                    if (result?.isSuccess == true && margin != null && margin.isFinite() && margin > 0.0) {
+                        reqMarginState = margin
+                        reqMarginVerified = true
+                    }
                 }
             }
 
@@ -732,7 +737,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 color = ElectricCyan
                             )
                             Text(
-                                text = "Select pair to trade • Bot audits balance & margin automatically",
+                                text = "Select a pair • broker-confirmed margin is required for a pass state",
                                 fontSize = 10.sp,
                                 color = TextSecondary
                             )
@@ -740,13 +745,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .background(ProfitGreen.copy(alpha = 0.15f))
+                                .background((if (reqMarginVerified) ProfitGreen else WarningAmber).copy(alpha = 0.15f))
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = "LIVE AUDIT",
+                                text = if (reqMarginVerified) "BROKER VERIFIED" else "UNVERIFIED",
                                 fontSize = 8.sp,
-                                color = ProfitGreen,
+                                color = if (reqMarginVerified) ProfitGreen else WarningAmber,
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace
                             )
@@ -798,15 +803,30 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         color = TextSecondary
                     )
 
-                    val freeMarginVal = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null)
-                        accountMetrics!!.freeMargin else capital
-
-                    val sizedResult = remember(activeSymbol, freeMarginVal, riskPercent, effectiveEntry, effectiveSl) {
-                        viewModel.sizeFor(activeSymbol, freeMarginVal, riskPercent, effectiveEntry, effectiveSl)
+                    val remoteMetrics = bridgeSnapshot?.takeIf { snapshot ->
+                        bridgeMode && snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh &&
+                            snapshot.terminalConnected && snapshot.accountVerified && snapshot.actualAccountMode == selectedAccountMode &&
+                            snapshot.actualLogin == bridgeSecrets.getManagedMT5Login(selectedAccountMode) &&
+                            snapshot.actualServer == bridgeSecrets.getManagedMT5Server(selectedAccountMode)
                     }
-                    val lotDisplay = when (sizedResult) {
-                        is com.destinedfx.core.risk.SizingResult.Sized -> "%.2f Lots".format(sizedResult.lots)
-                        is com.destinedfx.core.risk.SizingResult.Rejected -> "0.01 Lots"
+                    val localMetricsVerified = !bridgeMode && brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null
+                    val localFreeMargin = if (localMetricsVerified) accountMetrics!!.freeMargin.takeIf { it.isFinite() && it >= 0.0 } else null
+                    val remoteFreeMargin = remoteMetrics?.freeMargin?.takeIf { it.isFinite() && it >= 0.0 }
+                    val verifiedFreeMargin = remoteFreeMargin ?: localFreeMargin
+                    val freeMarginVal = verifiedFreeMargin ?: 0.0
+                    val marginAccountVerified = verifiedFreeMargin != null
+                    val verifiedBalance = remoteMetrics?.balance?.takeIf { it.isFinite() && it >= 0.0 }
+                        ?: if (localMetricsVerified) accountMetrics!!.balance.takeIf { it.isFinite() && it >= 0.0 } else null
+                    val verifiedEquity = remoteMetrics?.equity?.takeIf { it.isFinite() && it >= 0.0 }
+                        ?: if (localMetricsVerified) accountMetrics!!.equity.takeIf { it.isFinite() && it >= 0.0 } else null
+                    val verifiedLeverage = remoteMetrics?.leverage ?: if (localMetricsVerified) accountMetrics!!.leverage.takeIf { it > 0 } else null
+                    val sizedResult = remember(activeSymbol, verifiedFreeMargin, riskPercent, effectiveEntry, effectiveSl) {
+                        if (verifiedFreeMargin != null) viewModel.sizeFor(activeSymbol, verifiedFreeMargin, riskPercent, effectiveEntry, effectiveSl) else null
+                    }
+                    val lotDisplay = when {
+                        verifiedFreeMargin == null -> "UNVERIFIED"
+                        sizedResult is com.destinedfx.core.risk.SizingResult.Sized -> "%.2f Lots".format(sizedResult.lots)
+                        else -> "BLOCKED"
                     }
 
                     Row(
@@ -815,29 +835,21 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     ) {
                         StatChip(
                             label = "BALANCE",
-                            value = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null)
-                                "$${String.format(java.util.Locale.US, "%.2f", accountMetrics!!.balance)}"
-                            else if (capital > 0.0) "$${String.format(java.util.Locale.US, "%.2f", capital)}"
-                            else "OFFLINE",
+                            value = verifiedBalance?.let { String.format(java.util.Locale.US, "%,.2f", it) } ?: "UNVERIFIED",
                             modifier = Modifier.weight(1f),
-                            color = TextPrimary
+                            color = if (verifiedBalance != null) TextPrimary else WarningAmber
                         )
                         StatChip(
                             label = "EQUITY",
-                            value = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null)
-                                "$${String.format(java.util.Locale.US, "%.2f", accountMetrics!!.equity)}"
-                            else if (capital > 0.0) "$${String.format(java.util.Locale.US, "%.2f", capital)}"
-                            else "OFFLINE",
+                            value = verifiedEquity?.let { String.format(java.util.Locale.US, "%,.2f", it) } ?: "UNVERIFIED",
                             modifier = Modifier.weight(1f),
-                            color = TextPrimary
+                            color = if (verifiedEquity != null) TextPrimary else WarningAmber
                         )
                         StatChip(
                             label = "LEVERAGE",
-                            value = if (brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null)
-                                "1:${accountMetrics!!.leverage}"
-                            else "Leverage unavailable",
+                            value = verifiedLeverage?.let { "1:${it}" } ?: "UNVERIFIED",
                             modifier = Modifier.weight(1f),
-                            color = CyanPrimary
+                            color = if (verifiedLeverage != null) CyanPrimary else WarningAmber
                         )
                         StatChip(
                             label = "AUTO LOT",
@@ -847,32 +859,41 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         )
                     }
 
-                    val isMarginSafe = freeMarginVal >= reqMarginState && reqMarginState > 0.0
-
+                    val isMarginSafe = marginAccountVerified && reqMarginVerified && verifiedFreeMargin != null &&
+                        verifiedFreeMargin >= reqMarginState && reqMarginState > 0.0
+                    val marginStatusColor = when {
+                        isMarginSafe -> ProfitGreen
+                        marginAccountVerified && reqMarginVerified -> LossRed
+                        else -> WarningAmber
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
-                            .background(if (isMarginSafe || freeMarginVal > 0.0) ProfitGreen.copy(alpha = 0.12f) else LossRed.copy(alpha = 0.12f))
-                            .border(1.dp, if (isMarginSafe || freeMarginVal > 0.0) ProfitGreen.copy(alpha = 0.4f) else LossRed.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .background(marginStatusColor.copy(alpha = 0.12f))
+                            .border(1.dp, marginStatusColor.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
                             .padding(10.dp)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                text = if (brokerConnStatus != BrokerConnectionStatus.CONNECTED && capital <= 0.0)
-                                    "DISCONNECTED • CONNECT BROKER TO VERIFY MARGIN"
-                                else if (isMarginSafe) "MARGIN CHECK PASSED • SAFE TO EXECUTE" else "LOW FREE MARGIN WARNING",
+                                text = when {
+                                    !marginAccountVerified -> "MARGIN UNVERIFIED • FRESH ACCOUNT SNAPSHOT REQUIRED"
+                                    !reqMarginVerified -> "REQUIRED MARGIN UNVERIFIED • BROKER CHECK REQUIRED"
+                                    isMarginSafe -> "BROKER MARGIN CHECK PASSED"
+                                    else -> "INSUFFICIENT FREE MARGIN"
+                                },
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace,
-                                color = if (isMarginSafe || freeMarginVal > 0.0) ProfitGreen else LossRed
+                                color = marginStatusColor
                             )
                             Text(
-                                text = if (brokerConnStatus != BrokerConnectionStatus.CONNECTED && capital <= 0.0)
-                                    "Connect your MetaTrader 5 demo/real account below to execute live trades."
-                                else if (isMarginSafe)
-                                    "Free margin ($${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) is sufficient to cover required margin ($${String.format(java.util.Locale.US, "%.2f", reqMarginState)}) for $activeSymbol."
-                                else "Free margin ($${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) is low. Reduce lot size or deposit funds.",
+                                text = when {
+                                    !marginAccountVerified -> "No fresh account-bound free-margin snapshot is available. Saved capital is never treated as live free margin."
+                                    !reqMarginVerified -> "Required margin could not be verified by the connected broker. Remote MT5 still performs its own final margin check before any order."
+                                    isMarginSafe -> "Verified free margin (${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) covers broker-reported required margin (${String.format(java.util.Locale.US, "%.2f", reqMarginState)}). The terminal still performs final risk checks."
+                                    else -> "Verified free margin (${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) is below broker-reported required margin (${String.format(java.util.Locale.US, "%.2f", reqMarginState)}). New entries must remain blocked."
+                                },
                                 fontSize = 10.sp,
                                 color = TextPrimary
                             )
