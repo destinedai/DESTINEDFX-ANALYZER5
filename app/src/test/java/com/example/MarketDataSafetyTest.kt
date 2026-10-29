@@ -223,4 +223,19 @@ class MarketDataSafetyTest {
         ) is Decision.SwitchSource)
     }
 
+
+    @Test
+    fun freshStreamingProviderCannotBeReplacedByAnotherStream() {
+        val active = quote("Deriv WebSocket", "STREAM", 99_000L)
+        val competing = quote("OANDA Pricing stream", "STREAM", 100_001L)
+        assertTrue(QuoteArbiter.accept(
+            active, competing, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+        ) is Decision.Reject)
+
+        val staleActive = active.copy(lastUpdateMillis = 90_000L)
+        assertTrue(QuoteArbiter.accept(
+            staleActive, competing, "Deriv WebSocket", 90_000L, 2_500L, 100_000L
+        ) is Decision.Accept)
+    }
+
 }
