@@ -86,37 +86,44 @@ class DerivDemoBotService : Service() {
         val app = application as MyApplication
         val gateway = app.derivBrokerGateway
         if (!DerivMultiplierRules.isSupportedUnderlying(symbol)) {
-            update("Safety blocked — $symbol is not a supported Deriv Multiplier underlying")
-            stopSafely()
+            stopSafely("Safety blocked — $symbol is not a supported Deriv Multiplier underlying")
             return
         }
         if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.CONNECTED) {
             update("Connecting — selected account verification required")
             if (gateway.connectAndAuthorize().isFailure) {
-                update("Stopped — selected account verification failed")
-                stopSafely()
+                stopSafely("Safety blocked — selected account verification failed")
                 return
             }
         }
         val executor = DerivMultiplierExecutor(gateway, app.db.derivExecutionDao())
         if (!executor.reconcileBeforeNewEntries()) {
-            update("Safety blocked — unresolved prior execution requires broker reconciliation")
-            stopSafely()
+            stopSafely("Safety blocked — unresolved prior execution requires broker reconciliation")
             return
         }
         update("Running — scanning $symbol; no order is assumed confirmed")
         while (currentCoroutineContext().isActive && !stopRequested) {
             try {
                 val account = gateway.accountInfo.value
-                val balance = gateway.accountMetrics.value?.balance ?: account?.balance ?: 0.0
-                if (account == null || account.loginId.isBlank() || (account.mode == "demo" && !account.demoVerified) || balance <= 0.0) {
-                    update("Safety blocked — verified ${account?.mode?.uppercase() ?: "selected"} account snapshot unavailable")
-                    delay(10_000)
-                    continue
+                if (account == null) {
+                    stopSafely("Safety blocked — verified DEMO account snapshot is unavailable")
+                    return
+                }
+                val balance = gateway.accountMetrics.value?.balance ?: account.balance
+                if (!DerivMultiplierRules.isVerifiedDemoAccount(account) || !balance.isFinite() || balance <= 0.0) {
+                    stopSafely("Safety blocked — this Android bot requires a verified DEMO account; LIVE execution is disabled")
+                    return
+                }
+                val stake = DerivMultiplierRules.safeStakeForBalance(balance)
+                val minimumStake = com.destinedfx.core.broker.DerivContractLimits.getMinimumStake(
+                    symbol, DerivMultiplierProduct.MULTUP.contractType
+                )
+                if (stake < minimumStake) {
+                    stopSafely("Safety blocked — 1% risk cap permits $stake, below broker minimum $minimumStake; no order was sent")
+                    return
                 }
                 val signal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategyId)
                 if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT)) {
-                    val stake = balance * DerivMultiplierRules.MAX_RISK_PERCENT / 100.0
                     val intent = DerivMultiplierIntent(
                         signalId = signal.id,
                         symbol = symbol,
@@ -149,11 +156,11 @@ class DerivDemoBotService : Service() {
         }
     }
 
-    private fun stopSafely() {
+    private fun stopSafely(message: String = "Stopped — no new entry requests") {
         stopRequested = true
         loopJob?.cancel()
         loopJob = null
-        update("Stopped — no new entry requests")
+        update(message)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
