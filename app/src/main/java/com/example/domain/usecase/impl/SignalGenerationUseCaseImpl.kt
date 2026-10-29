@@ -238,7 +238,7 @@ class SignalGenerationUseCaseImpl(
             }
 
             val finalReport = report.copy(state = finalState, plan = finalPlan)
-            val closedCandleTimestamp = chk.cleanClosed.lastOrNull()?.timestamp
+            val closedCandleTimestamp = chk.cleanClosed.lastOrNull()?.timeMs
                 ?: return unavailable(symbol, timeframe, "NO CLOSED CANDLE available for stable signal identity", "DATA_UNAVAILABLE")
             // One stable signal identity per symbol/timeframe/strategy/closed candle. Repeated scans
             // of the same candle must not bypass execution duplicate guards.
