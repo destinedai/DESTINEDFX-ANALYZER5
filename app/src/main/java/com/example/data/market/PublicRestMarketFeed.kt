@@ -11,6 +11,48 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+
+/**
+ * Map a TradingView scanner snapshot without manufacturing bid/ask, spread, candle history,
+ * or confidence values when the response does not contain them.
+ */
+internal fun scannerQuoteFromRow(
+    symbol: String,
+    close: Double,
+    changePercent: Double,
+    high: Double,
+    low: Double,
+    bid: Double,
+    ask: Double,
+    retrievedAtMs: Long
+): MarketTicker? {
+    if (!close.isFinite() || close <= 0.0 || retrievedAtMs <= 0L) return null
+    val hasRealBidAsk = bid.isFinite() && ask.isFinite() && bid > 0.0 && ask > bid
+    val hasRealRange = high.isFinite() && low.isFinite() && high > 0.0 && low > 0.0 && high >= low
+    val validChange = changePercent.isFinite()
+    return MarketTicker(
+        symbol = symbol,
+        price = close,
+        changePercent = changePercent.takeIf { validChange } ?: 0.0,
+        high = if (hasRealRange) high else 0.0,
+        low = if (hasRealRange) low else 0.0,
+        spread = if (hasRealBidAsk) ask - bid else 0.0,
+        bias = when {
+            !validChange || changePercent == 0.0 -> "NEUTRAL"
+            changePercent > 0.0 -> "BULLISH"
+            else -> "BEARISH"
+        },
+        confidence = 0,
+        lastUpdateMillis = retrievedAtMs,
+        isLive = true,
+        source = "TradingView scanner snapshot (${symbol.substringBefore(':').uppercase(java.util.Locale.ROOT)})",
+        bid = bid.takeIf { hasRealBidAsk },
+        ask = ask.takeIf { hasRealBidAsk },
+        hasRealSpread = hasRealBidAsk,
+        kind = if (hasRealBidAsk) "POLLED_BIDASK" else "POLLED_LAST"
+    )
+}
+
 object PublicRestMarketFeed {
     private val client = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -126,34 +168,26 @@ object PublicRestMarketFeed {
                                 val s = item.optString("s") ?: continue
                                 val d = item.optJSONArray("d") ?: continue
                                 if (d.length() >= 6) {
-                                    val close = d.optDouble(0, 0.0)
-                                    val change = d.optDouble(1, 0.0)
-                                    val high = d.optDouble(2, close)
-                                    val low = d.optDouble(3, close)
-                                    val bid = d.optDouble(4, close)
-                                    val ask = d.optDouble(5, close)
-                                    val spread = if (ask > bid && bid > 0) ask - bid else close * 0.0001
-
-                                    if (close > 0.0) {
-                                        val canonicalList = tvToSymbols[s] ?: emptyList()
+                                    val close = d.optDouble(0, Double.NaN)
+                                    val change = d.optDouble(1, Double.NaN)
+                                    val high = d.optDouble(2, Double.NaN)
+                                    val low = d.optDouble(3, Double.NaN)
+                                    val bid = d.optDouble(4, Double.NaN)
+                                    val ask = d.optDouble(5, Double.NaN)
+                                    val canonicalList = tvToSymbols[s] ?: emptyList()
+                                    val ticker = scannerQuoteFromRow(
+                                        symbol = s,
+                                        close = close,
+                                        changePercent = change,
+                                        high = high,
+                                        low = low,
+                                        bid = bid,
+                                        ask = ask,
+                                        retrievedAtMs = now
+                                    )
+                                    if (ticker != null) {
                                         for (sym in canonicalList) {
-                                            results[sym] = MarketTicker(
-                                                symbol = sym,
-                                                price = close,
-                                                changePercent = change,
-                                                high = if (high > 0) high else close,
-                                                low = if (low > 0) low else close,
-                                                spread = spread,
-                                                bias = if (change >= 0) "BULLISH" else "BEARISH",
-                                                confidence = 90,
-                                                lastUpdateMillis = now,
-                                                isLive = true,
-                                                source = "TradingView scanner response",
-                                                bid = if (bid > 0) bid else close,
-                                                ask = if (ask > 0) ask else close,
-                                                hasRealSpread = true,
-                                                kind = "STREAM"
-                                            )
+                                            results[sym] = ticker.copy(symbol = sym)
                                         }
                                     }
                                 }

@@ -48,6 +48,19 @@ internal fun shouldReuseCandleCache(cachedCount: Int, requestedCount: Int, minim
 
 internal fun candleSourceKey(symbol: String, timeframe: String): String = "$symbol-${timeframe.trim().uppercase()}"
 
+/** Never merge quote snapshots from one venue into candle history fetched from another venue. */
+internal fun canMergeQuoteIntoCandle(candleSource: String, quoteSource: String): Boolean {
+    val candle = candleSource.trim().uppercase(java.util.Locale.ROOT)
+    val quote = quoteSource.trim().uppercase(java.util.Locale.ROOT)
+    if (candle.isBlank() || quote.isBlank()) return false
+    return when {
+        candle.startsWith("BINANCE") -> quote.contains("BINANCE")
+        candle.startsWith("DERIV") -> quote.contains("DERIV")
+        candle.startsWith("OANDA") -> quote.contains("OANDA")
+        else -> false
+    }
+}
+
 /** Reject stale, zero, or future-dated feed timestamps instead of counting a negative age as fresh. */
 internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean =
     timestampMs > 0L && nowMs > 0L && maxAgeMillis > 0L &&
@@ -72,6 +85,8 @@ class MarketDataRepositoryImpl(
         accountIdProvider = { secrets.getOandaAccountId() },
         isPracticeModeProvider = { !secrets.getOandaAccountId().trim().startsWith("001-") }
     )
+
+    private val binanceProvider = BinanceProvider()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.e(TAG, "Uncaught in repository scope: ${e.javaClass.simpleName}") })
     private data class CachedCandles(val candles: List<Candle>, val timestamp: Long)
@@ -517,64 +532,6 @@ class MarketDataRepositoryImpl(
         return (nowMs / timeframe.millis) * timeframe.millis
     }
 
-    private fun generateCandlesFromTicker(
-        symbol: String,
-        timeframe: String,
-        count: Int,
-        ticker: MarketTicker,
-        now: Long
-    ): List<Candle> {
-        val tf = com.destinedfx.core.marketdata.Timeframe.parse(timeframe)
-        val barDurationMs = (tf?.minutes ?: 15).toLong() * 60_000L
-        val currentOpen = now - (now % barDurationMs)
-        val currentPrice = ticker.price
-        val changePct = ticker.changePercent / 100.0
-        val baseVolatility = when {
-            symbol.contains("BTC", true) || symbol.contains("ETH", true) -> 0.004
-            symbol.contains("XAU", true) -> 0.002
-            else -> 0.001
-        }
-        val bars = mutableListOf<Candle>()
-        var prevClose = currentPrice * (1.0 - changePct * 0.4)
-
-        for (i in (count - 1) downTo 1) {
-            val barTime = currentOpen - (i * barDurationMs)
-            val factor = Math.sin((barTime / (barDurationMs * 2.0)))
-            val open = prevClose
-            val delta = open * baseVolatility * factor
-            val close = open + delta
-            val high = maxOf(open, close) + kotlin.math.abs(delta) * 0.5
-            val low = minOf(open, close) - kotlin.math.abs(delta) * 0.5
-            bars.add(
-                Candle(
-                    timestamp = barTime,
-                    open = open,
-                    high = high,
-                    low = low,
-                    close = close,
-                    volume = 100.0,
-                    complete = true
-                )
-            )
-            prevClose = close
-        }
-
-        val formingHigh = if (ticker.high > currentPrice) ticker.high else maxOf(prevClose, currentPrice) * (1.0 + baseVolatility * 0.2)
-        val formingLow = if (ticker.low in 1.0..currentPrice) ticker.low else minOf(prevClose, currentPrice) * (1.0 - baseVolatility * 0.2)
-        bars.add(
-            Candle(
-                timestamp = currentOpen,
-                open = prevClose,
-                high = maxOf(formingHigh, currentPrice),
-                low = minOf(formingLow, currentPrice),
-                close = currentPrice,
-                volume = 100.0,
-                complete = false
-            )
-        )
-        return bars
-    }
-
     override suspend fun getCandles(symbol: String, timeframe: String, count: Int): List<Candle> = withContext(Dispatchers.IO) {
         val key = candleSourceKey(symbol, timeframe)
         val now = clock()
@@ -603,23 +560,21 @@ class MarketDataRepositoryImpl(
 
         val preferred = selectedApiSource.value
 
-        // 1. Direct TradingView / Institutional quote priority FIRST:
+        // Only provider-returned OHLC bars may feed analysis. A live quote snapshot is
+        // never expanded into fabricated historical candles.
         if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
-            candles = withTimeoutOrNull(4000) { oandaProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
+            candles = withTimeoutOrNull(4_000L) { oandaProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
             if (candles.isNotEmpty()) sourceUsed = "OANDA"
         }
-        if (candles.isEmpty()) {
-            val liveTicker = _tickers.value[symbol] ?: withTimeoutOrNull(2_500L) { PublicRestMarketFeed.getLiveQuote(symbol) }
-            if (liveTicker != null && liveTicker.price > 0.0) {
-                candles = generateCandlesFromTicker(symbol, timeframe, count, liveTicker, now)
-                if (candles.isNotEmpty()) {
-                    sourceUsed = "TradingView scanner response"
-                    isDelayed = false
-                }
-            }
+
+        // Public Binance klines provide genuine OHLC bars for supported crypto symbols and
+        // do not require an API key. Quotes alone are not an OHLC fallback.
+        if (candles.isEmpty() && BinanceSymbols.toBinance(symbol) != null) {
+            candles = withTimeoutOrNull(7_000L) { binanceProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
+            if (candles.isNotEmpty()) sourceUsed = "Binance Spot OHLC candles"
         }
 
-        // 2. Deriv WebSocket fallback only if TradingView/Oanda candles are empty:
+        // Deriv WebSocket candles are a real OHLC fallback only when providers above return no bars.
         if (candles.isEmpty() && derivMarketDataGateway != null) {
             derivSymbol = withTimeoutOrNull(5_000L) { resolveDerivSymbol(symbol) }
             if (derivSymbol != null) {
@@ -649,9 +604,11 @@ class MarketDataRepositoryImpl(
                 else c
             }
 
-            // P5: Update forming candle with live ticker
+            // Update the forming bar only with a quote from the same provider. Never mix
+            // TradingView scanner prices into Deriv/OANDA/Binance OHLC history.
             val ticker = _tickers.value[symbol]
-            val processedCandles = if (ticker != null && ticker.price > 0 && candles.isNotEmpty()) {
+            val canMergeQuote = ticker != null && canMergeQuoteIntoCandle(finalSource, ticker.source)
+            val processedCandles = if (canMergeQuote && ticker != null && ticker.price > 0 && candles.isNotEmpty()) {
                 val last = candles.last()
                 if (last.timestamp == currentCandleOpen && !last.complete) {
                     val updatedLast = last.copy(
