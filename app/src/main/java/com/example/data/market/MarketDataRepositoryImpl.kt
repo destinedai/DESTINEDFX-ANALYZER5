@@ -304,7 +304,18 @@ class MarketDataRepositoryImpl(
         )
         
         return when (decision) {
-            is com.destinedfx.core.marketdata.Decision.Accept -> true
+            is com.destinedfx.core.marketdata.Decision.Accept -> {
+                // Anchor the arbiter to the first accepted source. A genuine stream may
+                // take over from polling; subsequent polls then respect stream freshness.
+                if (active == null || active == newTicker.source || newTicker.kind == "STREAM") {
+                    if (active != null && active != newTicker.source) {
+                        Log.i(TAG, "Switching active source for $symbol to ${newTicker.source}")
+                    }
+                    activeSource[symbol] = newTicker.source
+                    lastSourceUpdate[symbol] = clock()
+                }
+                true
+            }
             is com.destinedfx.core.marketdata.Decision.SwitchSource -> {
                 Log.i(TAG, "Switching active source for $symbol: ${decision.reason}")
                 activeSource[symbol] = newTicker.source
@@ -312,15 +323,10 @@ class MarketDataRepositoryImpl(
                 true
             }
             is com.destinedfx.core.marketdata.Decision.Reject -> {
-                val existingTicker = _tickers.value[symbol]
-                if (existingTicker == null || newTicker.lastUpdateMillis >= existingTicker.lastUpdateMillis) {
-                    activeSource[symbol] = newTicker.source
-                    lastSourceUpdate[symbol] = clock()
-                    true
-                } else {
-                    Log.d(TAG, "Rejecting ticker for $symbol: ${decision.reason}")
-                    false
-                }
+                // Reject is authoritative. Never accept a malformed, stale, or wrong-source
+                // quote merely because its timestamp is newer than the currently displayed one.
+                Log.d(TAG, "Rejecting ticker for $symbol: ${decision.reason}")
+                false
             }
         }
     }
@@ -367,7 +373,10 @@ class MarketDataRepositoryImpl(
                                     hasRealSpread = q.spread != null,
                                     kind = "STREAM"
                                 )
-                                _tickers.update { it + (q.symbol to ticker) }
+                                if (ticker.price > 0.0 && shouldUpdateTicker(q.symbol, ticker)) {
+                                    _tickers.update { current -> current + (q.symbol to ticker) }
+                                    _quoteDiagnostics.update { current -> current - q.symbol }
+                                }
                             },
                             onHeartbeat = {}
                         )
@@ -450,11 +459,15 @@ class MarketDataRepositoryImpl(
     private suspend fun pollAllSymbolsParallel() {
         val symbols = SymbolRegistry.getBackgroundSymbols()
         val tvQuotes = withTimeoutOrNull(4_000L) { PublicRestMarketFeed.fetchAllLiveQuotes(symbols) } ?: emptyMap()
-        if (tvQuotes.isNotEmpty()) {
-            _tickers.update { current -> current + tvQuotes }
-            _quoteDiagnostics.update { current -> current - tvQuotes.keys }
+        // Every polled quote must pass freshness, source-arbitration, and validation gates.
+        // Updating the StateFlow map directly bypasses all three protections.
+        tvQuotes.forEach { (sym, ticker) ->
+            if (shouldUpdateTicker(sym, ticker)) {
+                _tickers.update { current -> current + (sym to ticker) }
+                _quoteDiagnostics.update { current -> current - sym }
+            }
         }
-        
+
         val missing = symbols.filter { sym -> _tickers.value[sym] == null }
         if (missing.isNotEmpty()) {
             processPollingItemsIndependently(

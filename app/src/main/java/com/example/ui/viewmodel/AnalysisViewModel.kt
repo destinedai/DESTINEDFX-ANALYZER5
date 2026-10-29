@@ -6,6 +6,9 @@ import com.example.data.AnalysisEntity
 import com.example.data.AnalysisRepository
 import com.example.domain.repository.NewsRepository
 import com.example.domain.usecase.SignalGenerationUseCase
+import com.example.ui.resolveSelectedStrategyId
+import com.example.ui.signalHistoryLabel
+import com.example.ui.signalBiasLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -49,30 +52,42 @@ class AnalysisViewModel(
     fun runAnalysis() = viewModelScope.launch(Dispatchers.IO) {
         _s.value = _s.value.copy(isLoading=true, error=null)
         try {
-            val sig = signal.generateSignal(_s.value.selectedSymbol, _s.value.selectedTimeframe)
+            val ui = _s.value
+            val strategyId = resolveSelectedStrategyId(ui.selectedStrategy)
+            val sig = signal.generateSignal(ui.selectedSymbol, ui.selectedTimeframe, strategyId)
+            val signalLabel = signalHistoryLabel(sig.direction)
+            val biasLabel = signalBiasLabel(sig.direction)
             val report = buildString {
                 appendLine("[DESTINEDFX ANALYSIS -- ${sig.symbol} ${sig.timeframe}]")
-                appendLine("Strategy  : ${_s.value.selectedStrategy}")
-                appendLine("Signal    : ${sig.direction.name}")
-                appendLine("Entry     : ${String.format("%.5f", sig.entryPrice)}")
-                appendLine("Stop Loss : ${String.format("%.5f", sig.stopLoss)}")
-                appendLine("Take Prof : ${String.format("%.5f", sig.takeProfit)}")
-                appendLine("Confluence Score: ${sig.confidenceScore}/100 - rules-based, NOT A GUARANTEED WIN RATE")
+                appendLine("Strategy  : ${strategyId}")
+                appendLine("Signal    : ${signalLabel}")
+                appendLine("State     : ${sig.signalState}")
+                appendLine("Executable: ${sig.executable}")
+                appendLine("Entry     : ${String.format(java.util.Locale.US, "%.5f", sig.entryPrice)}")
+                appendLine("Stop Loss : ${String.format(java.util.Locale.US, "%.5f", sig.stopLoss)}")
+                appendLine("Take Prof : ${String.format(java.util.Locale.US, "%.5f", sig.takeProfit)}")
+                appendLine("Confluence Score: ${sig.confidenceScore.coerceIn(0, 100)}/100 - rules-based, NOT A GUARANTEED WIN RATE")
+                if (sig.blockReasons.isNotEmpty()) {
+                    appendLine()
+                    appendLine("Blockers:")
+                    sig.blockReasons.forEach { appendLine("- $it") }
+                }
                 appendLine()
                 append(sig.rationale)
             }
             history.insertAnalysis(AnalysisEntity(
-                symbol=sig.symbol, timeframe=sig.timeframe, strategy=_s.value.selectedStrategy,
-                dateMs=System.currentTimeMillis(), winRateConfidence=sig.confidenceScore.toDouble(),
-                signal=if(sig.direction.name=="LONG")"BUY" else "SELL", report=report
+                symbol = sig.symbol, timeframe = sig.timeframe, strategy = strategyId,
+                dateMs = System.currentTimeMillis(), winRateConfidence = sig.confidenceScore.coerceIn(0, 100).toDouble(),
+                signal = signalLabel, report = report
             ))
             _s.value = _s.value.copy(
-                isLoading=false, confidenceScore=sig.confidenceScore,
-                mtfBias=if(sig.direction.name=="LONG")"BULLISH" else "BEARISH",
-                analysisResult=report
+                isLoading = false, confidenceScore = sig.confidenceScore.coerceIn(0, 100),
+                mtfBias = biasLabel, analysisResult = report
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            _s.value = _s.value.copy(isLoading=false, error="Analysis failed: ${e.message}")
+            _s.value = _s.value.copy(isLoading = false, error = "Analysis failed: ${e.message}")
         }
     }
 

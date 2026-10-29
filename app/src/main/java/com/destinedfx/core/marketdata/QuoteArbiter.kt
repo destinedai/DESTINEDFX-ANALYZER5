@@ -36,7 +36,7 @@ object QuoteArbiter {
             return Decision.Reject("Incoming timestamp (${incoming.lastUpdateMillis}) is not newer than existing (${existing.lastUpdateMillis})")
         }
 
-        // (2) a STREAM quote received within the last 5 s is never replaced by a polled quote
+        // (2) a fresh STREAM quote cannot be replaced by a polled quote.
         if (existing != null && existing.kind == "STREAM" && incoming.kind != "STREAM") {
             val ageOfStream = nowMs - existing.lastUpdateMillis
             if (ageOfStream < 5000L) {
@@ -44,7 +44,21 @@ object QuoteArbiter {
             }
         }
 
-        // (3) a polled quote is accepted only if its source == activeSource, or the active source has been silent for 3x pollIntervalMs (then SwitchSource)
+        // (3) two different streaming providers must not alternate each other's quote.
+        // Keep the current stream until it has been silent for 5 s; then a fresh stream
+        // from another provider may take over. This keeps quote/candle source identity stable.
+        if (existing != null && existing.kind == "STREAM" && incoming.kind == "STREAM" &&
+            existing.source != incoming.source
+        ) {
+            val ageOfStream = nowMs - existing.lastUpdateMillis
+            if (ageOfStream < 5000L) {
+                return Decision.Reject(
+                    "Cannot replace fresh STREAM from ${existing.source} with ${incoming.source} (age ${ageOfStream}ms < 5000ms)"
+                )
+            }
+        }
+
+        // (4) a polled quote is accepted only if its source == activeSource, or the active source has been silent for 3x pollIntervalMs (then SwitchSource)
         if (incoming.kind != "STREAM") {
             if (activeSource != null && incoming.source != activeSource) {
                 val silenceDuration = nowMs - lastActiveSourceMs
