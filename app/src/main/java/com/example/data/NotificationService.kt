@@ -10,6 +10,21 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URLEncoder
 
+/**
+ * Telegram embeds the bot token in the request URL, so exception messages (including OkHttp URL
+ * parse and protocol errors) can contain it. Anything shown in the UI or logs goes through here.
+ */
+internal fun redactSecrets(text: String?, vararg secrets: String): String {
+    var out = text.orEmpty()
+    for (secret in secrets) {
+        val s = secret.trim()
+        if (s.length >= 4) out = out.replace(s, "[redacted]")
+    }
+    // Defensive: also mask anything shaped like a Telegram token (digits:35-char secret) in any URL path.
+    return out.replace(Regex("""bot\d{5,}:[A-Za-z0-9_-]{20,}"""), "bot[redacted]")
+        .replace(Regex("""\d{5,}:[A-Za-z0-9_-]{30,}"""), "[redacted]")
+}
+
 class NotificationService(private val okHttpClient: OkHttpClient) {
 
     suspend fun verifyAndConnectTelegram(botToken: String, chatId: String, verificationMessage: String): Pair<Boolean, String> {
@@ -51,7 +66,7 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                return@withContext false to "Network error validating Telegram bot: ${e.message ?: e.javaClass.simpleName}"
+                return@withContext false to "Network error validating Telegram bot: ${redactSecrets(e.message, cleanToken).ifBlank { e.javaClass.simpleName }}"
             }
 
             // Step 2: Deliver verification message to the specified Chat ID
@@ -91,7 +106,7 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
                 throw e
             } catch (e: Exception) {
                 Log.e("DestinedFX_Notification", "Telegram API error: ${e.javaClass.simpleName}")
-                return@withContext false to "Telegram dispatch failed: ${e.message ?: e.javaClass.simpleName}"
+                return@withContext false to "Telegram dispatch failed: ${redactSecrets(e.message, cleanToken).ifBlank { e.javaClass.simpleName }}"
             }
         }
     }
@@ -135,7 +150,7 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
                     null to "No chat ID found in recent updates. Please send /start to your bot in Telegram."
                 }
             } catch (e: Exception) {
-                null to "Error querying Telegram updates: ${e.message}"
+                null to "Error querying Telegram updates: ${redactSecrets(e.message, cleanToken).ifBlank { e.javaClass.simpleName }}"
             }
         }
     }
