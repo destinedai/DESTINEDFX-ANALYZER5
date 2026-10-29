@@ -111,8 +111,8 @@ class ExampleRobolectricTest {
     // 1. Terminal is NOT locked by biometrics
     assertFalse(vm.isAppLocked.value)
 
-    // 2. Open the website-inspired Home dashboard first; all native destinations remain accessible.
-    assertEquals(com.example.ui.DestinedFXScreen.Home, vm.selectedScreen.value)
+    // 2. Open the Analyzer terminal directly on a fresh install.
+    assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
     vm.selectScreen(com.example.ui.DestinedFXScreen.Analyzer)
     assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
     vm.selectScreen(com.example.ui.DestinedFXScreen.ImageAnalyzer)
@@ -132,7 +132,7 @@ class ExampleRobolectricTest {
     assertNotNull(vm.activeBrokerGateway.value)
     assertEquals(com.example.data.broker.BrokerType.MT5, vm.activeBrokerType.value)
     assertFalse(vm.brokerConnected.value)
-    assertEquals(com.example.ui.DestinedFXScreen.Home, vm.selectedScreen.value)
+    assertEquals(com.example.ui.DestinedFXScreen.Analyzer, vm.selectedScreen.value)
   }
 
   @Test
