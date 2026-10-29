@@ -2476,15 +2476,17 @@ private fun BridgeTelemetry(snapshot: MT5RemoteBridgeClient.Snapshot?) {
     if (activeOrders == null || !snapshot!!.snapshotsValid || activeOrders.isEmpty()) Text(if (activeOrders?.isEmpty() == true && snapshot.snapshotsValid) "No pending orders confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
     activeOrders.orEmpty().forEach { order -> Text("#${order.optString("ticket", unavailable)} · ${order.optString("symbol", unavailable)} ${order.optString("direction", unavailable)} · remaining ${order.optString("remaining_volume", unavailable)} · price ${order.optString("open_price", unavailable)} · SL ${order.optString("stop_loss", unavailable)} · TP ${order.optString("take_profit", unavailable)} · state ${order.optString("state", unavailable)}", color = TextPrimary, fontSize = 10.sp) }
     val deals = snapshot?.closedDeals
-    val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
-    val recent = deals.orEmpty().filter { deal ->
-        val raw = deal.optString("closed_at", "")
-        val millis = runCatching { java.time.Instant.parse(raw).toEpochMilli() }.getOrNull()
-        millis != null && millis >= cutoff
+    val netValue = if (deals == null || snapshot?.snapshotsValid != true) null
+        else MT5RemoteBridgeClient.recentClosedDealNetPnl(deals, System.currentTimeMillis())
+    Text(
+        "REALIZED DEAL NET (last 7 days, including fees): ${netValue?.toString() ?: unavailable} ${snapshot?.currency.orEmpty()}",
+        color = TextPrimary,
+        fontSize = 10.sp
+    )
+    deals.orEmpty().take(10).forEach { deal ->
+        val fees = if (deal.has("fees") && !deal.isNull("fees")) deal.opt("fees").toString() else unavailable
+        Text("Closed deal #${deal.optString("ticket", unavailable)} / position ${deal.optString("position_id", unavailable)} · ${deal.optString("symbol", unavailable)} · closed ${deal.optString("closed_at", unavailable)} · realized ${deal.optString("profit", unavailable)} · commission ${deal.optString("commission", unavailable)} · swap ${deal.optString("swap", unavailable)} · fees $fees", color = TextSecondary, fontSize = 10.sp)
     }
-    val netValues = recent.mapNotNull { deal -> listOf("profit", "commission", "swap").map { key -> deal.opt(key) }.takeIf { it.all { v -> v is Number && v.toDouble().isFinite() } }?.sumOf { (it as Number).toDouble() } }
-    Text("REALIZED DEAL NET (last 7 days / available deals): ${if (deals == null || !snapshot!!.snapshotsValid || netValues.size != recent.size) unavailable else netValues.sum().toString()} ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 10.sp)
-    deals.orEmpty().take(10).forEach { deal -> Text("Closed deal #${deal.optString("ticket", unavailable)} / position ${deal.optString("position_id", unavailable)} · ${deal.optString("symbol", unavailable)} · closed ${deal.optString("closed_at", unavailable)} · realized ${deal.optString("profit", unavailable)} · commission ${deal.optString("commission", unavailable)} · swap ${deal.optString("swap", unavailable)}", color = TextSecondary, fontSize = 10.sp) }
     val lastSignal = snapshot?.lastSignal
     Text("Last signal: ${lastSignal?.optString("execution_state", lastSignal?.optString("state", unavailable)) ?: unavailable} · requested ${lastSignal?.optString("requested_volume", unavailable) ?: unavailable} · executed ${lastSignal?.optString("executed_volume", unavailable) ?: unavailable} · order ${lastSignal?.optString("order", unavailable) ?: unavailable} · deal ${lastSignal?.optString("deal", unavailable) ?: unavailable}", color = TextSecondary, fontSize = 10.sp)
     snapshot?.raw?.optString("last_error")?.takeIf { it.isNotBlank() }?.let { Text("EA ERROR: $it", color = LossRed, fontSize = 10.sp) }
@@ -2518,23 +2520,44 @@ private suspend fun sendBridgeCommand(
     expected(when (action) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; else -> "STOPPED" })
     pending(true)
     busy(true)
-    val result = client.command(id, action, config)
-    if (result.rejected) {
+
+    fun handleDefinitiveRejection(detail: String) {
         val original = secrets.getMT5BridgeSafetyOriginalId(profile)
         val originalAction = secrets.getMT5BridgeSafetyOriginalAction(profile)
         if (action == "STOP" && original.isNotBlank() && originalAction.isNotBlank()) {
             secrets.saveMT5BridgePendingCommand(original, originalAction, profile)
             secrets.clearMT5BridgeSafetyStop(profile)
-            requestId(original); pendingAction(originalAction); pending(true)
+            requestId(original)
+            pendingAction(originalAction)
+            expected(when (originalAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; else -> "STOPPED" })
+            pending(true)
         } else {
             secrets.clearMT5BridgePendingCommand(profile)
             pending(false); requestId(""); pendingAction("")
         }
-        message("Blocked: ${result.detail}")
-    } else {
-        message(if (result.queued) "$action queued (request ${result.requestId}); awaiting matching acknowledgement and fresh heartbeat; not confirmed." else "UNKNOWN request ${result.requestId}: ${result.detail}. Do not resend; reconcile this ID or recover manually.")
+        message("Bridge rejected $action: $detail. No broker execution is claimed.")
     }
-    busy(false)
+
+    try {
+        val result = client.command(id, action, config)
+        if (result.rejected) {
+            handleDefinitiveRejection(result.detail)
+        } else {
+            message(if (result.queued) "$action queued (request ${result.requestId}); awaiting matching acknowledgement and fresh heartbeat; not confirmed."
+                else "UNKNOWN request ${result.requestId}: ${result.detail}. Do not resend; reconcile this ID or recover manually.")
+        }
+    } catch (e: Exception) {
+        val bridgeError = e as? MT5RemoteBridgeClient.BridgeHttpException
+        if (bridgeError != null && bridgeError.status in 400..499) {
+            handleDefinitiveRejection(bridgeError.safeDescription)
+        } else {
+            // A timeout/5xx can follow server acceptance. Keep this exact ID and never resend automatically.
+            pending(true); requestId(id); pendingAction(action)
+            message("UNKNOWN request $id: no confirmed response. It may have been accepted; do not resend. Reconcile this same request ID.")
+        }
+    } finally {
+        busy(false)
+    }
 }
 
 private suspend fun sendBridgeTradeCommand(
@@ -2558,21 +2581,36 @@ private suspend fun sendBridgeTradeCommand(
         return
     }
     requestId(id); pendingAction(action); serverId(""); pendingTickets(targetTickets); pending(true); busy(true)
-    val result = client.command(id, action, config)
-    when {
-        result.rejected -> {
+
+    try {
+        val result = client.command(id, action, config)
+        when {
+            result.rejected -> {
+                secrets.clearMT5BridgePendingCommand(profile)
+                pending(false); requestId(""); pendingAction(""); serverId(""); pendingTickets(emptyList())
+                message("Blocked: ${result.detail}")
+            }
+            result.queued -> {
+                serverId(result.serverCommandId)
+                message("$action queued as server command ${result.serverCommandId} (request ${result.requestId}); awaiting matching per-ticket results and fresh telemetry. Not confirmed.")
+            }
+            else -> {
+                serverId(result.serverCommandId)
+                message("UNKNOWN request ${result.requestId}${result.serverCommandId.takeIf { it.isNotBlank() }?.let { " / server command $it" }.orEmpty()}: ${result.detail}. Do not resend; reconcile this same ID.")
+            }
+        }
+    } catch (e: Exception) {
+        val bridgeError = e as? MT5RemoteBridgeClient.BridgeHttpException
+        if (bridgeError != null && bridgeError.status in 400..499) {
             secrets.clearMT5BridgePendingCommand(profile)
             pending(false); requestId(""); pendingAction(""); serverId(""); pendingTickets(emptyList())
-            message("Blocked: ${result.detail}")
+            message("Bridge rejected $action (${bridgeError.status}); no broker result is claimed.")
+        } else {
+            // Keep the generated request ID because the server may have accepted the command before the timeout.
+            pending(true); requestId(id); pendingAction(action); serverId(""); pendingTickets(targetTickets)
+            message("UNKNOWN $action request $id: no confirmed response. It may have been accepted; do not resend. Reconcile this same request ID.")
         }
-        result.queued -> {
-            serverId(result.serverCommandId)
-            message("$action queued as server command ${result.serverCommandId} (request ${result.requestId}); awaiting matching per-ticket results and fresh telemetry. Not confirmed.")
-        }
-        else -> {
-            serverId(result.serverCommandId)
-            message("UNKNOWN request ${result.requestId}${result.serverCommandId.takeIf { it.isNotBlank() }?.let { " / server command $it" }.orEmpty()}: ${result.detail}. Do not resend; reconcile this same ID.")
-        }
+    } finally {
+        busy(false)
     }
-    busy(false)
 }
