@@ -330,11 +330,20 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         )
                     }
                     Text("Managed EA strategy support is registry-validated; support does not imply profitability or real-broker testing.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    BridgeTelemetry(bridgeSnapshot)
+                    BridgeTelemetry(
+                        bridgeSnapshot, selectedAccountMode,
+                        bridgeSecrets.getManagedMT5Login(selectedAccountMode),
+                        bridgeSecrets.getManagedMT5Server(selectedAccountMode)
+                    )
                     val actionSnapshot = bridgeSnapshot
-                    val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshot != null && !bridgeBusy && !bridgeCommandPending
+                    val actionSnapshotVerified = isUsableMt5Snapshot(
+                        actionSnapshot, selectedAccountMode,
+                        bridgeSecrets.getManagedMT5Login(selectedAccountMode),
+                        bridgeSecrets.getManagedMT5Server(selectedAccountMode)
+                    )
+                    val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshotVerified && !bridgeBusy && !bridgeCommandPending
                     Text("SNAPSHOT-BOUND MANAGEMENT · $selectedAccountMode", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_snapshot_management_header"))
-                    if (actionSnapshot != null && actionSnapshot.snapshotsValid) {
+                    if (actionSnapshotVerified) {
                         val verifiedOrders = actionSnapshot.activeOrders.orEmpty()
                         Text("PENDING ORDERS (${verifiedOrders.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_pending_orders_section"))
                         if (verifiedOrders.isEmpty()) Text("No pending orders confirmed for this account.", color = TextSecondary, fontSize = 10.sp)
@@ -816,12 +825,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         color = TextSecondary
                     )
 
-                    val remoteMetrics = bridgeSnapshot?.takeIf { snapshot ->
-                        bridgeMode && snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh &&
-                            snapshot.terminalConnected && snapshot.accountVerified && snapshot.snapshotsValid && snapshot.managedState == "READY" &&
-                            snapshot.actualAccountMode == selectedAccountMode &&
-                            snapshot.actualLogin == bridgeSecrets.getManagedMT5Login(selectedAccountMode) &&
-                            snapshot.actualServer == bridgeSecrets.getManagedMT5Server(selectedAccountMode)
+                    val remoteMetrics = bridgeSnapshot.takeIf { snapshot ->
+                        bridgeMode && isUsableMt5Snapshot(
+                            snapshot, selectedAccountMode,
+                            bridgeSecrets.getManagedMT5Login(selectedAccountMode),
+                            bridgeSecrets.getManagedMT5Server(selectedAccountMode)
+                        )
                     }
                     val localMetricsVerified = !bridgeMode && brokerConnStatus == BrokerConnectionStatus.CONNECTED && accountMetrics != null
                     val localFreeMargin = if (localMetricsVerified) accountMetrics!!.freeMargin.takeIf { it.isFinite() && it >= 0.0 } else null
@@ -2471,38 +2480,95 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 }
 
 
+private fun isUsableMt5Snapshot(
+    snapshot: MT5RemoteBridgeClient.Snapshot?,
+    profile: String,
+    expectedLogin: String,
+    expectedServer: String
+): Boolean = snapshot?.let {
+    it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected &&
+        it.accountVerified && it.snapshotsValid && it.managedState == "READY" &&
+        profile in setOf("DEMO", "LIVE") && it.profileMode == profile &&
+        it.actualAccountMode == profile && expectedLogin.isNotBlank() && it.actualLogin == expectedLogin &&
+        expectedServer.isNotBlank() && it.actualServer == expectedServer
+} == true
+
 @Composable
-private fun BridgeTelemetry(snapshot: MT5RemoteBridgeClient.Snapshot?) {
-    val unavailable = "Unavailable"
-    Text("ACTUAL TERMINAL ACCOUNT · ${snapshot?.currency?.ifBlank { unavailable } ?: unavailable}", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-    Text("Balance: ${snapshot?.balance?.toString() ?: unavailable} ${snapshot?.currency.orEmpty()} · Equity: ${snapshot?.equity?.toString() ?: unavailable} ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
-    Text("Margin: ${snapshot?.margin?.toString() ?: unavailable} · Free margin: ${snapshot?.freeMargin?.toString() ?: unavailable} · Margin level: ${snapshot?.marginLevel?.toString() ?: unavailable} · Leverage: ${snapshot?.leverage?.let { "1:$it" } ?: unavailable}", color = TextPrimary, fontSize = 10.sp)
-    val positions = snapshot?.positions
-    val floatingValues = positions.orEmpty().mapNotNull { p -> if (p.has("floating_profit") && !p.isNull("floating_profit")) p.optDouble("floating_profit").takeIf { it.isFinite() } else null }
-    val floatingTotal = when { snapshot == null || !snapshot.snapshotsValid || positions == null -> unavailable; positions.isEmpty() -> "0.0"; floatingValues.size == positions.size -> floatingValues.sum().toString(); else -> unavailable }
-    Text("Floating P/L: $floatingTotal ${snapshot?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
+private fun BridgeTelemetry(
+    snapshot: MT5RemoteBridgeClient.Snapshot?,
+    selectedProfile: String,
+    expectedLogin: String,
+    expectedServer: String
+) {
+    val verified = isUsableMt5Snapshot(snapshot, selectedProfile, expectedLogin, expectedServer)
+    val current = snapshot.takeIf { verified }
+    val unavailable = if (snapshot == null) "Unavailable" else "STALE / UNVERIFIED"
+    val currency = current?.currency?.ifBlank { unavailable } ?: unavailable
+    Text("ACTUAL TERMINAL ACCOUNT · $currency", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+    Text(
+        "SNAPSHOT: ${if (verified) "FRESH · ACCOUNT VERIFIED" else if (snapshot == null) "UNAVAILABLE" else "STALE / PROFILE OR IDENTITY MISMATCH"}",
+        color = if (verified) ProfitGreen else WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold
+    )
+    Text(
+        "Balance: ${current?.balance?.toString() ?: unavailable} ${current?.currency.orEmpty()} · Equity: ${current?.equity?.toString() ?: unavailable} ${current?.currency.orEmpty()}",
+        color = TextPrimary, fontSize = 11.sp
+    )
+    Text(
+        "Margin: ${current?.margin?.toString() ?: unavailable} · Free margin: ${current?.freeMargin?.toString() ?: unavailable} · Margin level: ${current?.marginLevel?.toString() ?: unavailable} · Leverage: ${current?.leverage?.let { "1:$it" } ?: unavailable}",
+        color = TextPrimary, fontSize = 10.sp
+    )
+    val positions = current?.positions
+    val floatingValues = positions.orEmpty().mapNotNull { p ->
+        if (p.has("floating_profit") && !p.isNull("floating_profit")) p.optDouble("floating_profit").takeIf { it.isFinite() } else null
+    }
+    val floatingTotal = when {
+        current == null || positions == null -> unavailable
+        positions.isEmpty() -> "0.0"
+        floatingValues.size == positions.size -> floatingValues.sum().toString()
+        else -> unavailable
+    }
+    Text("Floating P/L: $floatingTotal ${current?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
     Text("LIVE POSITIONS (${positions?.size ?: unavailable})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-    if (positions == null || !snapshot!!.snapshotsValid || positions.isEmpty()) Text(if (positions?.isEmpty() == true && snapshot.snapshotsValid) "No open positions confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
-    positions.orEmpty().forEach { p -> Text("#${p.optString("ticket", unavailable)} / ${p.optString("position_id", unavailable)} · ${p.optString("symbol", unavailable)} ${p.optString("direction", unavailable)} · volume ${p.optString("volume", unavailable)} · entry ${p.optString("open_price", unavailable)} · current broker P/L ${p.optString("floating_profit", unavailable)} · SL ${p.optString("stop_loss", unavailable)} · TP ${p.optString("take_profit", unavailable)} · swap ${p.optString("swap", unavailable)}", color = TextPrimary, fontSize = 10.sp) }
-    val activeOrders = snapshot?.activeOrders
+    if (positions == null || positions.isEmpty()) {
+        Text(if (current != null && positions?.isEmpty() == true) "No open positions confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
+    }
+    positions.orEmpty().forEach { p ->
+        Text(
+            "#${p.optString("ticket", unavailable)} / ${p.optString("position_id", unavailable)} · ${p.optString("symbol", unavailable)} ${p.optString("direction", unavailable)} · volume ${p.optString("volume", unavailable)} · entry ${p.optString("open_price", unavailable)} · current broker P/L ${p.optString("floating_profit", unavailable)} · SL ${p.optString("stop_loss", unavailable)} · TP ${p.optString("take_profit", unavailable)} · swap ${p.optString("swap", unavailable)}",
+            color = TextPrimary, fontSize = 10.sp
+        )
+    }
+    val activeOrders = current?.activeOrders
     Text("PENDING BROKER ORDERS (${activeOrders?.size ?: unavailable})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-    if (activeOrders == null || !snapshot!!.snapshotsValid || activeOrders.isEmpty()) Text(if (activeOrders?.isEmpty() == true && snapshot.snapshotsValid) "No pending orders confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
-    activeOrders.orEmpty().forEach { order -> Text("#${order.optString("ticket", unavailable)} · ${order.optString("symbol", unavailable)} ${order.optString("direction", unavailable)} · remaining ${order.optString("remaining_volume", unavailable)} · price ${order.optString("open_price", unavailable)} · SL ${order.optString("stop_loss", unavailable)} · TP ${order.optString("take_profit", unavailable)} · state ${order.optString("state", unavailable)}", color = TextPrimary, fontSize = 10.sp) }
-    val deals = snapshot?.closedDeals
-    val netValue = if (deals == null || snapshot?.snapshotsValid != true) null
+    if (activeOrders == null || activeOrders.isEmpty()) {
+        Text(if (current != null && activeOrders?.isEmpty() == true) "No pending orders confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
+    }
+    activeOrders.orEmpty().forEach { order ->
+        Text(
+            "#${order.optString("ticket", unavailable)} · ${order.optString("symbol", unavailable)} ${order.optString("direction", unavailable)} · remaining ${order.optString("remaining_volume", unavailable)} · price ${order.optString("open_price", unavailable)} · SL ${order.optString("stop_loss", unavailable)} · TP ${order.optString("take_profit", unavailable)} · state ${order.optString("state", unavailable)}",
+            color = TextPrimary, fontSize = 10.sp
+        )
+    }
+    val deals = current?.closedDeals
+    val netValue = if (deals == null || current == null) null
         else MT5RemoteBridgeClient.recentClosedDealNetPnl(deals, System.currentTimeMillis())
     Text(
-        "REALIZED DEAL NET (last 7 days, including fees): ${netValue?.toString() ?: unavailable} ${snapshot?.currency.orEmpty()}",
-        color = TextPrimary,
-        fontSize = 10.sp
+        "REALIZED DEAL NET (last 7 days, including fees): ${netValue?.toString() ?: unavailable} ${current?.currency.orEmpty()}",
+        color = TextPrimary, fontSize = 10.sp
     )
     deals.orEmpty().take(10).forEach { deal ->
         val fees = if (deal.has("fees") && !deal.isNull("fees")) deal.opt("fees").toString() else unavailable
-        Text("Closed deal #${deal.optString("ticket", unavailable)} / position ${deal.optString("position_id", unavailable)} · ${deal.optString("symbol", unavailable)} · closed ${deal.optString("closed_at", unavailable)} · realized ${deal.optString("profit", unavailable)} · commission ${deal.optString("commission", unavailable)} · swap ${deal.optString("swap", unavailable)} · fees $fees", color = TextSecondary, fontSize = 10.sp)
+        Text(
+            "Closed deal #${deal.optString("ticket", unavailable)} / position ${deal.optString("position_id", unavailable)} · ${deal.optString("symbol", unavailable)} · closed ${deal.optString("closed_at", unavailable)} · realized ${deal.optString("profit", unavailable)} · commission ${deal.optString("commission", unavailable)} · swap ${deal.optString("swap", unavailable)} · fees $fees",
+            color = TextSecondary, fontSize = 10.sp
+        )
     }
-    val lastSignal = snapshot?.lastSignal
-    Text("Last signal: ${lastSignal?.optString("execution_state", lastSignal?.optString("state", unavailable)) ?: unavailable} · requested ${lastSignal?.optString("requested_volume", unavailable) ?: unavailable} · executed ${lastSignal?.optString("executed_volume", unavailable) ?: unavailable} · order ${lastSignal?.optString("order", unavailable) ?: unavailable} · deal ${lastSignal?.optString("deal", unavailable) ?: unavailable}", color = TextSecondary, fontSize = 10.sp)
-    snapshot?.raw?.optString("last_error")?.takeIf { it.isNotBlank() }?.let { Text("EA ERROR: $it", color = LossRed, fontSize = 10.sp) }
+    val lastSignal = current?.lastSignal
+    Text(
+        "Last signal: ${lastSignal?.optString("execution_state", lastSignal?.optString("state", unavailable)) ?: unavailable} · requested ${lastSignal?.optString("requested_volume", unavailable) ?: unavailable} · executed ${lastSignal?.optString("executed_volume", unavailable) ?: unavailable} · order ${lastSignal?.optString("order", unavailable) ?: unavailable} · deal ${lastSignal?.optString("deal", unavailable) ?: unavailable}",
+        color = TextSecondary, fontSize = 10.sp
+    )
+    current?.raw?.optString("last_error")?.takeIf { it.isNotBlank() }?.let { Text("EA ERROR: $it", color = LossRed, fontSize = 10.sp) }
 }
 
 private suspend fun sendBridgeCommand(
