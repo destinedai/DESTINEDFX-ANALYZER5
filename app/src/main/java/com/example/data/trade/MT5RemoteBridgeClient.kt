@@ -29,7 +29,8 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     data class Pairing(val code: String, val expiresAt: String)
     data class CommandResult(
         val requestId: String, val queued: Boolean, val detail: String = "", val rejected: Boolean = false,
-        val serverCommandId: String = "", val status: String = ""
+        val serverCommandId: String = "", val status: String = "",
+        val targetTickets: List<String> = emptyList()
     )
     data class CloseAllConfirmation(val token: String, val expiresAt: String, val tickets: List<String>)
     data class Snapshot(
@@ -174,8 +175,20 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             val serverId = exactIdentifier(reply, "id").orEmpty()
             val status = reply.optString("status").uppercase()
             val accepted = serverId.isNotBlank() && status in setOf("QUEUED", "ACKNOWLEDGED")
-            CommandResult(requestId, accepted, if (accepted) "" else "No complete command acknowledgement; reconcile this request ID before recovery.",
-                rejected = false, serverCommandId = serverId, status = status)
+            val serverTickets = if (action in TRADE_ACTIONS) exactIdentifierList(reply.optJSONObject("config")?.optJSONArray("tickets")) else emptyList()
+            val requestedTickets = exactIdentifierList(config.optJSONArray("tickets"))
+            val targetMismatch = action in TRADE_ACTIONS && (
+                serverTickets.isNullOrEmpty() ||
+                    (action != "CANCEL_EA_PENDING" &&
+                        (requestedTickets == null || serverTickets.toSet() != requestedTickets.toSet()))
+                )
+            val detail = when {
+                !accepted -> "No complete command acknowledgement; reconcile this request ID before recovery."
+                targetMismatch -> "Command was accepted but its returned target list is missing or differs from the request. Keep UNKNOWN and reconcile the terminal per-ticket results; do not resend."
+                else -> ""
+            }
+            CommandResult(requestId, accepted && !targetMismatch, detail,
+                rejected = false, serverCommandId = serverId, status = status, targetTickets = serverTickets.orEmpty())
         } catch (e: Exception) {
             CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
         }
@@ -320,6 +333,19 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     companion object {
         internal val TRADE_ACTIONS = setOf("CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")
         private val MAX_UINT64 = BigInteger("18446744073709551615")
+
+        /** Parses a non-empty unique list of canonical ticket strings; malformed/float IDs are rejected. */
+        internal fun exactIdentifierList(array: org.json.JSONArray?): List<String>? {
+            if (array == null || array.length() == 0) return null
+            val ids = ArrayList<String>(array.length())
+            for (i in 0 until array.length()) {
+                val raw = array.opt(i)
+                if (raw !is String) return null
+                val id = canonicalTicket(raw) ?: return null
+                ids += id
+            }
+            return ids.takeIf { it.distinct().size == it.size }
+        }
 
         /** Only JSON strings or integral JSON integer objects are trusted; floating-point IDs are rejected. */
         internal fun exactIdentifier(obj: JSONObject, key: String): String? = canonicalTicket(obj.opt(key))
