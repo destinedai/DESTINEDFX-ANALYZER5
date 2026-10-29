@@ -77,6 +77,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var showLiveAuthorizationDialog by remember { mutableStateOf(false) }
     var showCloseAllDialog by remember { mutableStateOf(false) }
     val bridgeToken = bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode)
+    // Shared fresh/profile-bound snapshot; Compose LazyColumn items have separate local scopes.
+    val verifiedRemoteSnapshotForBot = bridgeSnapshot?.takeIf { snapshot ->
+        isUsableMt5Snapshot(
+            snapshot, selectedAccountMode,
+            bridgeSecrets.getManagedMT5Login(selectedAccountMode),
+            bridgeSecrets.getManagedMT5Server(selectedAccountMode)
+        )
+    }
     val bridgeTerminalFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
     val bridgeTerminalReady = bridgeSnapshot?.let { snapshot ->
         MT5RemoteBridgeClient.canStart(selectedAccountMode, snapshot.managedState, snapshot.accessType, snapshot.actualAccountMode,
@@ -336,15 +344,18 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         bridgeSecrets.getManagedMT5Server(selectedAccountMode)
                     )
                     val actionSnapshot = bridgeSnapshot
-                    val actionSnapshotVerified = isUsableMt5Snapshot(
-                        actionSnapshot, selectedAccountMode,
-                        bridgeSecrets.getManagedMT5Login(selectedAccountMode),
-                        bridgeSecrets.getManagedMT5Server(selectedAccountMode)
-                    )
+                    val verifiedActionSnapshot = actionSnapshot?.takeIf { snapshot ->
+                        isUsableMt5Snapshot(
+                            snapshot, selectedAccountMode,
+                            bridgeSecrets.getManagedMT5Login(selectedAccountMode),
+                            bridgeSecrets.getManagedMT5Server(selectedAccountMode)
+                        )
+                    }
+                    val actionSnapshotVerified = verifiedActionSnapshot != null
                     val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshotVerified && !bridgeBusy && !bridgeCommandPending
                     Text("SNAPSHOT-BOUND MANAGEMENT · $selectedAccountMode", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_snapshot_management_header"))
-                    if (actionSnapshotVerified) {
-                        val verifiedOrders = actionSnapshot.activeOrders.orEmpty()
+                    if (verifiedActionSnapshot != null) {
+                        val verifiedOrders = verifiedActionSnapshot.activeOrders.orEmpty()
                         Text("PENDING ORDERS (${verifiedOrders.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_pending_orders_section"))
                         if (verifiedOrders.isEmpty()) Text("No pending orders confirmed for this account.", color = TextSecondary, fontSize = 10.sp)
                         verifiedOrders.forEach { order ->
@@ -371,8 +382,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }) { Text("CANCEL", fontSize = 9.sp) }
                             }
                         }
-                        val managedTicketsAvailable = MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot)
-                        val orderOwnershipKnown = actionSnapshot.activeOrders != null && actionSnapshot.activeOrders.orEmpty().all {
+                        val managedTicketsAvailable = MT5RemoteBridgeClient.managedOrderTicketList(verifiedActionSnapshot)
+                        val orderOwnershipKnown = verifiedActionSnapshot.activeOrders != null && verifiedActionSnapshot.activeOrders.orEmpty().all {
                             it.has("managed_by_ea") && it.opt("managed_by_ea") is Boolean
                         }
                         OutlinedButton(
@@ -402,7 +413,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 fontSize = 9.sp
                             )
                         }
-                        val verifiedPositions = actionSnapshot.positions.orEmpty()
+                        val verifiedPositions = verifiedActionSnapshot.positions.orEmpty()
                         Text("OPEN POSITIONS (${verifiedPositions.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_open_positions_section"))
                         if (verifiedPositions.isEmpty()) Text("No open positions confirmed for this account.", color = TextSecondary, fontSize = 10.sp)
                         verifiedPositions.forEach { position ->
@@ -430,7 +441,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }) { Text("CLOSE", fontSize = 9.sp) }
                             }
                         }
-                        val currentPositionIds = MT5RemoteBridgeClient.positionIdList(actionSnapshot)
+                        val currentPositionIds = MT5RemoteBridgeClient.positionIdList(verifiedActionSnapshot)
                         Button(
                             enabled = actionsReady && currentPositionIds?.isNotEmpty() == true,
                             onClick = { if (actionsReady && currentPositionIds?.isNotEmpty() == true) showCloseAllDialog = true },
@@ -769,7 +780,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 .clip(RoundedCornerShape(6.dp))
                                 .background((when {
                                     reqMarginVerified -> ProfitGreen
-                                    bridgeMode && remoteMetrics != null -> ElectricCyan
+                                    bridgeMode && verifiedRemoteSnapshotForBot != null -> ElectricCyan
                                     else -> WarningAmber
                                 }).copy(alpha = 0.15f))
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -777,13 +788,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Text(
                                 text = when {
                                     reqMarginVerified -> "BROKER VERIFIED"
-                                    bridgeMode && remoteMetrics != null -> "MT5 EA CHECKS MARGIN"
+                                    bridgeMode && verifiedRemoteSnapshotForBot != null -> "MT5 EA CHECKS MARGIN"
                                     else -> "UNVERIFIED"
                                 },
                                 fontSize = 8.sp,
                                 color = when {
                                     reqMarginVerified -> ProfitGreen
-                                    bridgeMode && remoteMetrics != null -> ElectricCyan
+                                    bridgeMode && verifiedRemoteSnapshotForBot != null -> ElectricCyan
                                     else -> WarningAmber
                                 },
                                 fontWeight = FontWeight.Black,
@@ -902,7 +913,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val marginStatusColor = when {
                         isMarginSafe -> ProfitGreen
                         marginAccountVerified && reqMarginVerified -> LossRed
-                        bridgeMode && remoteMetrics != null -> ElectricCyan
+                        bridgeMode && verifiedRemoteSnapshotForBot != null -> ElectricCyan
                         else -> WarningAmber
                     }
                     Box(
@@ -917,7 +928,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Text(
                                 text = when {
                                     !marginAccountVerified -> "MARGIN UNVERIFIED • FRESH ACCOUNT SNAPSHOT REQUIRED"
-                                    !reqMarginVerified && bridgeMode && remoteMetrics != null -> "MT5 EA VALIDATES MARGIN BEFORE EVERY ORDER"
+                                    !reqMarginVerified && bridgeMode && verifiedRemoteSnapshotForBot != null -> "MT5 EA VALIDATES MARGIN BEFORE EVERY ORDER"
                                     !reqMarginVerified -> "REQUIRED MARGIN UNVERIFIED • BROKER CHECK REQUIRED"
                                     isMarginSafe -> "BROKER MARGIN CHECK PASSED"
                                     else -> "INSUFFICIENT FREE MARGIN"
@@ -930,7 +941,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Text(
                                 text = when {
                                     !marginAccountVerified -> "No fresh account-bound free-margin snapshot is available. Saved capital is never treated as live free margin."
-                                    !reqMarginVerified && bridgeMode && remoteMetrics != null -> "Free margin is from a fresh verified MT5 snapshot. The remote EA must confirm required margin at the actual order boundary; this panel does not declare an entry safe."
+                                    !reqMarginVerified && bridgeMode && verifiedRemoteSnapshotForBot != null -> "Free margin is from a fresh verified MT5 snapshot. The remote EA must confirm required margin at the actual order boundary; this panel does not declare an entry safe."
                                     !reqMarginVerified -> "Required margin could not be verified by the connected broker. No margin pass is declared."
                                     isMarginSafe -> "Verified free margin (${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) covers broker-reported required margin (${String.format(java.util.Locale.US, "%.2f", reqMarginState)}). The terminal still performs final risk checks."
                                     else -> "Verified free margin (${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) is below broker-reported required margin (${String.format(java.util.Locale.US, "%.2f", reqMarginState)}). New entries must remain blocked."
