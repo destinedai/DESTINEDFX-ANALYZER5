@@ -97,7 +97,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                 OutlinedTextField(
                     value = token,
                     onValueChange = { token = it },
-                    label = { Text("Deriv Personal Access Token") },
+                    label = { Text("Deriv API key / Personal Access Token") },
                     placeholder = { Text("Trade scope; use Demo account only") },
                     visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
