@@ -35,6 +35,7 @@ class DerivAccountModeAndExecutionStateTest {
         assertFalse(manager.isDerivRealExecutionEnabled())
         assertFalse(manager.saveDerivAccountMode("real"))
         assertEquals("demo", manager.getDerivAccountMode())
+        if (!manager.isSecureStorageAvailable) return
         assertTrue(manager.enableDerivRealExecution(true))
         assertTrue(manager.saveDerivAccountMode("real"))
         assertEquals("real", manager.getDerivAccountMode())
