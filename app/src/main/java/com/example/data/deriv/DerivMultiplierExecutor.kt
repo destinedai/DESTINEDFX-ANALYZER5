@@ -67,6 +67,14 @@ class DerivMultiplierExecutor(
         val existing = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId)
         if (existing != null) return@withContext Result.failure(Exception("DUPLICATE_SIGNAL: ${intent.signalId} already exists for ${current.mode.uppercase()} account ${current.loginId} in ${existing.status}"))
         if (!reconcileBeforeNewEntries()) return@withContext Result.failure(Exception("RECONCILIATION_REQUIRED: prior Deriv execution outcome is unresolved; no purchase was sent"))
+        // Refresh active-contract state, then enforce single-contract exposure at the
+        // executor boundary so a future UI/service caller cannot bypass this guard.
+        syncKnownContracts()
+        val activeCount = dao.knownContracts(current.loginId, current.mode.uppercase()).size
+        val unresolvedCount = dao.unresolved(current.loginId, current.mode.uppercase()).size
+        if (!DerivMultiplierRules.canOpenNewEntry(activeCount, unresolvedCount)) {
+            return@withContext Result.failure(Exception("ACTIVE_CONTRACT_LIMIT: an active contract or unresolved execution exists; no additional purchase was sent"))
+        }
         val balance = gateway.accountMetrics.value?.balance ?: current.balance
         val validation = DerivMultiplierRules.validate(intent, balance, current.currency)
         if (!validation.valid) return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, validation.reason ?: "Multiplier intent rejected"))
