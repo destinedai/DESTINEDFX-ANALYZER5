@@ -3,7 +3,6 @@ package com.example.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.domain.engine.QuantitativeEngine
-import com.example.domain.model.RiskProfile
 import com.example.domain.repository.RiskRepository
 import com.example.security.SecretsManager
 import kotlinx.coroutines.Dispatchers
@@ -75,7 +74,9 @@ class RiskViewModel(
             fixedRiskPercentage = ui.fixedRiskPerTrade.coerceIn(0.1, 1.0),
             maxDailyDrawdownPercentage = ui.maxDrawdownLimit.coerceIn(1.0, 10.0),
             maxWeeklyDrawdownPercentage = ui.maxDrawdownLimit.coerceIn(1.0, 10.0) * 2.0,
-            isTradingHalted = ui.currentDrawdown >= ui.maxDrawdownLimit
+            isTradingHalted = current.isTradingHalted ||
+                current.currentDailyDrawdown >= ui.maxDrawdownLimit.coerceIn(1.0, 10.0) ||
+                current.currentWeeklyDrawdown >= ui.maxDrawdownLimit.coerceIn(1.0, 10.0) * 2.0
         ))
     }
 }
