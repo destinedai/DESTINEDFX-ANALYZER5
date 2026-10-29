@@ -149,9 +149,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var brokerConnectionMessage by remember { mutableStateOf<String?>(null) }
     var mt5LoginInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Login(selectedAccountMode)) }
-    var mt5PasswordInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Password(selectedAccountMode)) }
-    var mt5ServerInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Server(selectedAccountMode)) }
     var mt5AccessType by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5AccessType(selectedAccountMode)) }
+    var mt5PasswordInput by remember(selectedAccountMode) {
+        mutableStateOf(if (mt5AccessType == "INVESTOR") "" else bridgeSecrets.getManagedMT5Password(selectedAccountMode))
+    }
+    var mt5InvestorPasswordInput by remember(selectedAccountMode) {
+        mutableStateOf(if (mt5AccessType == "INVESTOR") bridgeSecrets.getManagedMT5Password(selectedAccountMode) else "")
+    }
+    var mt5ServerInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Server(selectedAccountMode)) }
     var mt5CostModel by remember(selectedAccountMode) { mutableStateOf("OBSERVED_ROUND_TURN") }
     var mt5CommissionPerLot by remember(selectedAccountMode) { mutableStateOf("") }
     var mt5CostEvidence by remember(selectedAccountMode) { mutableStateOf("") }
@@ -1583,12 +1588,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
                         Text(if (mt5AccessType == "INVESTOR") "Investor access can view account data but cannot trade. START will remain blocked." else "Master access permits trading; START remains blocked until a live terminal is verified.", fontSize = 9.sp, color = WarningAmber)
-                        // The selected account access type uses one password field to prevent accidental credential-mode confusion.
                         OutlinedTextField(
                             value = mt5PasswordInput,
                             onValueChange = { mt5PasswordInput = it },
-                            label = { Text(if (mt5AccessType == "INVESTOR") "Investor password" else "Master trading password") },
-                            placeholder = { Text(if (mt5AccessType == "INVESTOR") "Read-only investor password" else "Enter trading password") },
+                            label = { Text("MT5 trading password") },
+                            placeholder = { Text("Enter the master trading password") },
                             visualTransformation = if (showMt5Password) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true,
@@ -1599,7 +1603,21 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }
                             }
                         )
-                        Text("The account mode you select is checked against the authenticated MT5 terminal before trading is enabled.", fontSize = 9.sp, color = TextSecondary)
+                        OutlinedTextField(
+                            value = mt5InvestorPasswordInput,
+                            onValueChange = { mt5InvestorPasswordInput = it },
+                            label = { Text("Investor password (optional)") },
+                            placeholder = { Text("Used for read-only INVESTOR access when supplied") },
+                            visualTransformation = if (showMt5Password) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("bot_mt5_investor_password")
+                        )
+                        Text(
+                            "For INVESTOR access, the optional investor password is preferred when provided. The bridge independently blocks all trading commands for INVESTOR profiles.",
+                            fontSize = 9.sp, color = TextSecondary
+                        )
+                        Text("The selected account mode is checked against the authenticated MT5 terminal before trading is enabled.", fontSize = 9.sp, color = TextSecondary)
                         // Server Selector with Dynamic Dropdown
                         var expandedServer by remember { mutableStateOf(false) }
                         val matchedBrokers = remember(mt5ServerInput, selectedBrokerCompanyName) {
@@ -1750,8 +1768,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     brokerConnectionMessage = "Please enter your Trade Account / Login ID."
                                     return@Button
                                 }
-                                if (mt5PasswordInput.isBlank()) {
-                                    brokerConnectionMessage = "Please enter your password."
+                                val selectedTerminalPassword = if (mt5AccessType == "INVESTOR") {
+                                    mt5InvestorPasswordInput.trim().ifBlank { mt5PasswordInput }
+                                } else {
+                                    mt5PasswordInput
+                                }
+                                if (selectedTerminalPassword.isBlank()) {
+                                    brokerConnectionMessage = "Enter a password for the selected MT5 access profile."
                                     return@Button
                                 }
                                 if (mt5ServerInput.isBlank()) {
@@ -1787,7 +1810,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 isConnectingBroker = true
                                 brokerConnectionMessage = null
                                 coroutineScope.launch {
-                                    val secret = mt5PasswordInput
+                                    val secret = selectedTerminalPassword
                                     try {
                                         if (!bridgeClient.managedConfigured()) {
                                             brokerConnectionMessage = "CONFIGURATION_REQUIRED"
@@ -1807,6 +1830,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         brokerConnectionMessage = e.message?.takeIf { it == "CONFIGURATION_REQUIRED" } ?: "Managed registration failed; check service availability and credentials."
                                     } finally {
                                         mt5PasswordInput = ""
+                                        mt5InvestorPasswordInput = ""
                                         managedCredentialConsent = false
                                         isConnectingBroker = false
                                     }
