@@ -122,6 +122,18 @@ class DerivDemoBotService : Service() {
                     stopSafely("Safety blocked — 1% risk cap permits $stake, below broker minimum $minimumStake; no order was sent")
                     return
                 }
+                // Reconcile existing exposure on each scan. The mobile bot is deliberately
+                // single-contract-at-a-time so repeated candles cannot accumulate open risk.
+                if (!executor.reconcileBeforeNewEntries()) {
+                    stopSafely("Safety blocked — an earlier execution is unresolved; no new entry will be submitted")
+                    return
+                }
+                executor.syncKnownContracts()
+                if (executor.hasActiveContracts()) {
+                    update("Running — an existing contract is still active; waiting for broker settlement before another entry")
+                    delay(10_000)
+                    continue
+                }
                 val signal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategyId)
                 if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT)) {
                     val intent = DerivMultiplierIntent(
