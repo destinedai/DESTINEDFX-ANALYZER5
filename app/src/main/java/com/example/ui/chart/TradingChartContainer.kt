@@ -288,7 +288,7 @@ fun TradingViewWebView(
     val currentUrlState = rememberUpdatedState(widgetUrl)
     val chartWebView = remember { mutableStateOf<WebView?>(null) }
     val embedState = remember { mutableStateOf(TradingViewLoadState()) }
-    val hasNativeFallback = fallbackCandles.isNotEmpty()
+    val hasNativeFallback = remember(fallbackCandles) { validatedChartCandles(fallbackCandles).isNotEmpty() }
 
     LaunchedEffect(currentKey) {
         embedState.value = TradingViewLoadState()
@@ -332,7 +332,9 @@ fun TradingViewWebView(
                         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                             // A host allowlist cannot make an invalid certificate safe.
                             handler?.cancel()
-                            failCurrentChart(view, "TradingView SSL certificate validation failed")
+                            if (isTradingViewChartDocumentUrl(error?.url)) {
+                                failCurrentChart(view, "TradingView SSL certificate validation failed")
+                            }
                         }
 
                         override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -358,6 +360,7 @@ fun TradingViewWebView(
                             // If the fallback URL itself loaded, only report that its document
                             // displayed; cross-origin chart candles remain unverified.
                             if (embedState.value.path == TradingViewLoadPath.HOSTED_CHART &&
+                                embedState.value.status == TradingViewLoadStatus.LOADING &&
                                 isTradingViewChartDocumentUrl(url) &&
                                 isTradingViewChartDocumentUrl(active.url)) {
                                 embedState.value = embedState.value.displayedUnverified(
