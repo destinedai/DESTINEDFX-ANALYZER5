@@ -362,23 +362,36 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }) { Text("CANCEL", fontSize = 9.sp) }
                             }
                         }
-                        if (MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot) != null) {
-                            OutlinedButton(
-                                enabled = actionsReady && MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot) != null,
-                                modifier = Modifier.testTag("mt5_cancel_ea_pending_orders"),
-                                onClick = {
-                                if (bridgeBusy || bridgeCommandPending) return@OutlinedButton
+                        val managedTicketsAvailable = MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot)
+                        val orderOwnershipKnown = actionSnapshot.activeOrders != null && actionSnapshot.activeOrders.orEmpty().all {
+                            it.has("managed_by_ea") && it.opt("managed_by_ea") is Boolean
+                        }
+                        OutlinedButton(
+                            enabled = actionsReady && managedTicketsAvailable != null,
+                            modifier = Modifier.testTag("mt5_cancel_ea_pending_orders"),
+                            onClick = {
+                                if (bridgeBusy || bridgeCommandPending || managedTicketsAvailable == null) return@OutlinedButton
                                 bridgeBusy = true
                                 coroutineScope.launch {
                                     try {
                                         val fresh = bridgeClient.state(); bridgeSnapshot = fresh
-                                        val tickets = MT5RemoteBridgeClient.managedOrderTicketList(fresh) ?: error("Fresh EA-owned pending-order identifiers are unavailable.")
+                                        val tickets = MT5RemoteBridgeClient.managedOrderTicketList(fresh)
+                                            ?: error("Fresh EA-owned pending-order identifiers are unavailable.")
                                         val config = MT5RemoteBridgeClient.actionConfig(fresh, "CANCEL_EA_PENDING")
                                         sendBridgeTradeCommand(bridgeClient, "CANCEL_EA_PENDING", config, tickets, bridgeSecrets, selectedAccountMode,
                                             { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgePendingServerId = it }, { bridgeTradePendingTickets = it }, { bridgeMessage = it })
                                     } catch (e: Exception) { bridgeMessage = e.message ?: "EA pending-order cancellation was not sent."; bridgeBusy = false }
                                 }
-                            }) { Text("CANCEL EA PENDING ORDERS") }
+                            }
+                        ) {
+                            Text(
+                                text = when {
+                                    !orderOwnershipKnown -> "CANCEL EA PENDING ORDERS — OWNERSHIP UNKNOWN"
+                                    managedTicketsAvailable == null -> "CANCEL EA PENDING ORDERS — NONE CONFIRMED"
+                                    else -> "CANCEL EA PENDING ORDERS (${managedTicketsAvailable.size})"
+                                },
+                                fontSize = 9.sp
+                            )
                         }
                         val verifiedPositions = actionSnapshot.positions.orEmpty()
                         Text("OPEN POSITIONS (${verifiedPositions.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_open_positions_section"))
