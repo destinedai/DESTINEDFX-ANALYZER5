@@ -2597,6 +2597,9 @@ private suspend fun sendBridgeTradeCommand(
 
     try {
         val result = client.command(id, action, config)
+        // Use the server's canonical target list. CANCEL_EA_PENDING may expand
+        // between the phone snapshot and server validation; never reconcile only a stale subset.
+        pendingTickets(result.targetTickets)
         when {
             result.rejected -> {
                 secrets.clearMT5BridgePendingCommand(profile)
