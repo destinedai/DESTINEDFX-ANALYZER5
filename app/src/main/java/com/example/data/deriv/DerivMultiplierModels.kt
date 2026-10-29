@@ -36,6 +36,27 @@ object DerivMultiplierRules {
     const val MAX_MULTIPLIER = 1000
     const val MAX_SIGNAL_AGE_MS = 30_000L
 
+    /** The default mobile bot is deliberately single-contract-at-a-time. */
+    fun canOpenNewEntry(activeContractCount: Int, unresolvedExecutionCount: Int): Boolean =
+        activeContractCount == 0 && unresolvedExecutionCount == 0
+
+    /** The Android foreground bot is DEMO-only until a separate live-execution acceptance is completed. */
+    fun isVerifiedDemoAccount(account: DerivAccountInfo?): Boolean =
+        account != null &&
+            account.loginId.isNotBlank() &&
+            account.mode.equals("demo", ignoreCase = true) &&
+            account.accountType.equals("demo", ignoreCase = true) &&
+            account.demoVerified
+
+    /** Floor monetary stake to cents so rounding can never push worst-case loss over the 1% cap. */
+    fun safeStakeForBalance(balance: Double): Double {
+        if (!balance.isFinite() || balance <= 0.0) return 0.0
+        return java.math.BigDecimal.valueOf(balance)
+            .multiply(java.math.BigDecimal.valueOf(MAX_RISK_PERCENT / 100.0))
+            .setScale(2, java.math.RoundingMode.DOWN)
+            .toDouble()
+    }
+
     /** These are synthetic-index families, never Forex/CFD symbols. */
     fun isSupportedUnderlying(symbol: String): Boolean {
         val normalized = symbol.trim().uppercase()

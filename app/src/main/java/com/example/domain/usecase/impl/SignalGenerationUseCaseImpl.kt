@@ -204,59 +204,69 @@ class SignalGenerationUseCaseImpl(
             val spread = quote?.spread; val atr = report.structure?.atr
             if (spread != null && atr != null && spread > 0.15 * atr) { blockers += "SPREAD TOO WIDE: %.5f > 15%% of ATR".format(spread); state = SignalState.BLOCKED }
             if (newsVerdict.status == NewsStatus.HIGH_IMPACT_WINDOW) { blockers += newsVerdict.detail; state = SignalState.BLOCKED }
-            if (newsVerdict.status == NewsStatus.UNKNOWN) blockers += newsVerdict.detail
+            if (newsVerdict.status == NewsStatus.UNKNOWN) { blockers += newsVerdict.detail; state = SignalState.BLOCKED }
             if (health != MarketDataHealth.LIVE) blockers += "Market data is " + health.name + " (historical/delayed): analysis only, not executable"
             if (spread == null) blockers += "Spread unknown (source provides no bid/ask): not executable"
-            val cmp = quote?.mid ?: quote?.last ?: 0.0
-            var plan = report.plan
-            if ((plan == null || plan.entry == 0.0) && cmp > 0.0) {
-                val isLong = report.confluenceScore >= 40 || report.dir == com.destinedfx.core.analysis.Dir.BULL
-                val slDistance = cmp * 0.003
-                val tpDistance = slDistance * 2.0
-                val target = com.destinedfx.core.analysis.Target("TP1", if (isLong) cmp + tpDistance else cmp - tpDistance, 2.0, "Current Market Price Analysis")
-                plan = com.destinedfx.core.analysis.TradePlan(
-                    isLong = isLong,
-                    entry = cmp,
-                    stopLoss = if (isLong) cmp - slDistance else cmp + slDistance,
-                    slAtr = 1.5,
-                    targets = listOf(target),
-                    primary = target,
-                    slReason = "Calculated from current market price swing boundary"
-                )
+            // Only a plan produced by SignalEngine may be used. Never synthesize entry/SL/TP
+            // values to turn a WAIT or an incomplete analysis into an apparent trade setup.
+            val candidatePlan = report.plan
+            var finalPlan = candidatePlan.takeIf { isValidExecutionPlan(it) }
+            if (candidatePlan != null && finalPlan == null) {
+                blockers += "INVALID TRADE PLAN: entry, stop, target, or actual reward/risk failed validation"
             }
 
-            var effectiveState = state
-            if ((state.name == "WAIT" || state.name == "NEUTRAL" || state.name == "DATA_UNAVAILABLE") && plan != null && newsVerdict.status != NewsStatus.HIGH_IMPACT_WINDOW) {
-                effectiveState = if (plan.isLong) SignalState.BUY else SignalState.SELL
+            var finalState = state
+            val buyStates = setOf(SignalState.STRONG_BUY, SignalState.BUY, SignalState.WEAK_BUY)
+            val sellStates = setOf(SignalState.STRONG_SELL, SignalState.SELL, SignalState.WEAK_SELL)
+            if (finalState in buyStates || finalState in sellStates) {
+                when {
+                    finalPlan == null -> {
+                        if (candidatePlan == null) blockers += "NO VALID TRADE PLAN: analysis remains non-actionable"
+                        finalState = SignalState.WAIT
+                    }
+                    finalState in buyStates && !finalPlan.isLong -> {
+                        blockers += "TRADE PLAN DIRECTION MISMATCH: bullish state has a short plan"
+                        finalPlan = null
+                        finalState = SignalState.WAIT
+                    }
+                    finalState in sellStates && finalPlan.isLong -> {
+                        blockers += "TRADE PLAN DIRECTION MISMATCH: bearish state has a long plan"
+                        finalPlan = null
+                        finalState = SignalState.WAIT
+                    }
+                }
             }
-            val tradeable = effectiveState.name in setOf("STRONG_BUY", "BUY", "WEAK_BUY", "STRONG_SELL", "SELL", "WEAK_SELL")
-            val finalState = if (tradeable && effectiveState.name != state.name) effectiveState else state
-            val finalPlan = plan
 
             val finalReport = report.copy(state = finalState, plan = finalPlan)
-            val id = UUID.randomUUID().toString(); reports[id] = finalReport
+            val closedCandleTimestamp = chk.cleanClosed.lastOrNull()?.timeMs
+                ?: return unavailable(symbol, timeframe, "NO CLOSED CANDLE available for stable signal identity", "DATA_UNAVAILABLE")
+            // One stable signal identity per symbol/timeframe/strategy/closed candle. Repeated scans
+            // of the same candle must not bypass execution duplicate guards.
+            val id = stableAnalysisSignalId(symbol, tf.label, strategyId, closedCandleTimestamp)
+            reports[id] = finalReport
             if (reports.size > 200) reports.keys.take(100).forEach { reports.remove(it) }
             val mtfPerTfMap = finalReport.mtf?.perTf?.mapKeys { it.key.label }?.mapValues { it.value.name } ?: emptyMap()
+            val signalDirection = signalDirectionFor(finalState, finalPlan)
 
             TradeSignal(
                 id = id, symbol = symbol, timeframe = timeframe,
-                direction = if (finalPlan?.isLong == true) SignalDirection.LONG else SignalDirection.SHORT,
-                entryPrice = finalPlan?.entry ?: cmp,
+                direction = signalDirection,
+                entryPrice = finalPlan?.entry ?: 0.0,
                 stopLoss = finalPlan?.stopLoss ?: 0.0,
                 takeProfit = finalPlan?.primary?.price ?: 0.0,
-                confidenceScore = maxOf(finalReport.confluenceScore, 75),
-                rationale = "Current Market Structure Analysis: ${finalReport.mtf?.summary ?: "Verified Live"}",
+                confidenceScore = finalReport.confluenceScore.coerceIn(0, 100),
+                rationale = "Current Market Structure Analysis: ${finalReport.mtf?.summary ?: "No MTF summary available"}",
                 timestamp = now,
                 invalidationLevel = finalPlan?.stopLoss ?: 0.0,
-                entryReason = finalReport.reasons.take(6).joinToString("; ").ifBlank { "Executed at current market price based on live structure." },
+                entryReason = finalReport.reasons.take(6).joinToString("; ").ifBlank { "No qualified entry reason was produced." },
                 stopLossReason = finalPlan?.slReason ?: "N/A",
-                takeProfitReason = finalReport.plan?.targets?.joinToString { "${it.label} ${it.price} (RR ${"%.2f".format(it.rr)}, ${it.source})" } ?: "N/A",
-                nearestHighYieldZone = finalReport.plan?.primary?.let { "${it.label} @ ${it.price} (1:${"%.2f".format(it.rr)})" } ?: "Active trade setup",
-                profitZones = finalReport.plan?.targets?.map { com.example.domain.model.ProfitZone(it.label, it.price, it.rr, spec?.priceToPips(kotlin.math.abs(it.price - (finalPlan?.entry ?: cmp))) ?: 0.0, "", it.source) } ?: emptyList(),
+                takeProfitReason = finalPlan?.targets?.joinToString { "${it.label} ${it.price} (RR ${"%.2f".format(it.rr)}, ${it.source})" } ?: "N/A",
+                nearestHighYieldZone = finalPlan?.primary?.let { "${it.label} @ ${it.price} (1:${"%.2f".format(it.rr)})" } ?: "No qualified target",
+                profitZones = finalPlan?.targets?.map { com.example.domain.model.ProfitZone(it.label, it.price, it.rr, spec?.priceToPips(kotlin.math.abs(it.price - (finalPlan?.entry ?: 0.0))) ?: 0.0, "", it.source) } ?: emptyList(),
                 keyLevels = finalReport.levels.filter { !it.swept }.take(12).map { "${it.kind}: ${it.price}" },
-                strategyScores = finalReport.components.filter { it.isAvailable }.associate { it.name to (it.earned / it.available * 100).toInt() }.ifEmpty { mapOf("SMC Structure" to 85, "ICT Price Action" to 80) },
-                signalState = if (finalState.name == "WAIT" || finalState.name == "NEUTRAL") "BUY" else finalState.name,
-                executable = health == MarketDataHealth.LIVE && spread != null && blockers.isEmpty(),
+                strategyScores = finalReport.components.filter { it.isAvailable }.associate { it.name to (it.earned / it.available * 100).toInt().coerceIn(0, 100) },
+                signalState = finalState.name,
+                executable = health == MarketDataHealth.LIVE && spread != null && blockers.isEmpty() && signalDirection != SignalDirection.WAIT && finalPlan != null,
                 blockReasons = blockers,
                 reasons = finalReport.reasons,
                 dataSource = quote?.source ?: "",
@@ -291,3 +301,46 @@ class SignalGenerationUseCaseImpl(
         id = UUID.randomUUID().toString(), symbol = symbol, timeframe = tf, direction = SignalDirection.WAIT, entryPrice = 0.0, stopLoss = 0.0, takeProfit = 0.0,
         confidenceScore = 0, rationale = why, timestamp = clock(), signalState = SignalState.DATA_UNAVAILABLE.name, blockReasons = listOf(why), reasons = listOf(why), dataHealth = health)
 }
+
+
+/** Stable per-closed-candle identity keeps repeated scans from re-entering the same setup. */
+internal fun stableAnalysisSignalId(symbol: String, timeframe: String, strategyId: String, closedCandleTimestamp: Long): String {
+    val identity = listOf(
+        symbol.trim().uppercase(java.util.Locale.ROOT),
+        timeframe.trim().uppercase(java.util.Locale.ROOT),
+        strategyId.trim(),
+        closedCandleTimestamp.toString()
+    ).joinToString("|")
+    return UUID.nameUUIDFromBytes(identity.toByteArray(Charsets.UTF_8)).toString()
+}
+
+/** Validate the actual plan prices and reward/risk, not only the engine's reported RR field. */
+internal fun isValidExecutionPlan(plan: com.destinedfx.core.analysis.TradePlan?): Boolean {
+    if (plan == null) return false
+    val entry = plan.entry
+    val stop = plan.stopLoss
+    val target = plan.primary.price
+    if (!entry.isFinite() || !stop.isFinite() || !target.isFinite() || entry <= 0.0 || stop <= 0.0 || target <= 0.0) return false
+    val riskDistance = if (plan.isLong) entry - stop else stop - entry
+    val rewardDistance = if (plan.isLong) target - entry else entry - target
+    if (!riskDistance.isFinite() || !rewardDistance.isFinite() || riskDistance <= 0.0 || rewardDistance <= 0.0) return false
+    val actualRiskReward = rewardDistance / riskDistance
+    return actualRiskReward.isFinite() && actualRiskReward >= 2.0
+}
+
+/** WAIT/BLOCKED states and plans that disagree on direction can never become a buy or sell. */
+internal fun signalDirectionFor(
+    state: SignalState,
+    plan: com.destinedfx.core.analysis.TradePlan?
+): SignalDirection {
+    if (!isValidExecutionPlan(plan)) return SignalDirection.WAIT
+    val validPlan = plan!!
+    return when (state) {
+        SignalState.STRONG_BUY, SignalState.BUY, SignalState.WEAK_BUY ->
+            if (validPlan.isLong) SignalDirection.LONG else SignalDirection.WAIT
+        SignalState.STRONG_SELL, SignalState.SELL, SignalState.WEAK_SELL ->
+            if (!validPlan.isLong) SignalDirection.SHORT else SignalDirection.WAIT
+        else -> SignalDirection.WAIT
+    }
+}
+

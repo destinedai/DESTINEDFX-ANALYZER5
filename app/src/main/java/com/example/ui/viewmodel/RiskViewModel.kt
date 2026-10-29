@@ -3,7 +3,6 @@ package com.example.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.domain.engine.QuantitativeEngine
-import com.example.domain.model.RiskProfile
 import com.example.domain.repository.RiskRepository
 import com.example.security.SecretsManager
 import kotlinx.coroutines.Dispatchers
@@ -66,12 +65,18 @@ class RiskViewModel(
     }
 
     private fun persist() = viewModelScope.launch(Dispatchers.IO) {
-        risk.updateRiskProfile(RiskProfile(
-            accountBalance=0.0, fixedRiskPercentage=_s.value.fixedRiskPerTrade,
-            maxDailyDrawdownPercentage=_s.value.maxDrawdownLimit,
-            maxWeeklyDrawdownPercentage=_s.value.maxDrawdownLimit*2,
-            currentDailyDrawdown=_s.value.currentDrawdown, currentWeeklyDrawdown=0.0,
-            minimumRR=2.0, isTradingHalted=_s.value.currentDrawdown>=_s.value.maxDrawdownLimit
+        // Risk controls are only a subset of the persisted profile. Preserve the configured
+        // account balance, live drawdown measurements, minimum RR, and other fields rather
+        // than replacing them with placeholders whenever a slider changes.
+        val ui = _s.value
+        val current = risk.getRiskProfile()
+        risk.updateRiskProfile(current.copy(
+            fixedRiskPercentage = ui.fixedRiskPerTrade.coerceIn(0.1, 1.0),
+            maxDailyDrawdownPercentage = ui.maxDrawdownLimit.coerceIn(1.0, 10.0),
+            maxWeeklyDrawdownPercentage = ui.maxDrawdownLimit.coerceIn(1.0, 10.0) * 2.0,
+            isTradingHalted = current.isTradingHalted ||
+                current.currentDailyDrawdown >= ui.maxDrawdownLimit.coerceIn(1.0, 10.0) ||
+                current.currentWeeklyDrawdown >= ui.maxDrawdownLimit.coerceIn(1.0, 10.0) * 2.0
         ))
     }
 }

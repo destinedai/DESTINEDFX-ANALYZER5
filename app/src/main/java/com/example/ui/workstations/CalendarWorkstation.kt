@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.instrument.AssetClassifier
+import com.destinedfx.core.news.CalendarResult
 import com.destinedfx.core.news.NewsFilter
 import com.destinedfx.core.news.NewsStatus
 import com.example.domain.repository.NewsEvent
@@ -59,8 +60,10 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
             isLoading = true
             try {
                 val fetchedEvents = withContext(Dispatchers.IO) { viewModel.app.newsRepository.fetchUpcomingEvents() }
-                events = fetchedEvents
                 val result = withContext(Dispatchers.IO) { viewModel.app.newsRepository.calendar() }
+                // A stale cache may still be returned after a failed fetch. Do not display it as
+                // current verified calendar data when the authoritative result is UNKNOWN.
+                events = if (result is CalendarResult.Ok) fetchedEvents else emptyList()
                 val verdict = NewsFilter.evaluate(result, AssetClassifier.newsCurrencies(activeSymbol), System.currentTimeMillis())
                 newsStatus = verdict.status
                 statusDetail = verdict.detail
