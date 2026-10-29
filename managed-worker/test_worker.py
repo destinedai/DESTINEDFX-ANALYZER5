@@ -57,6 +57,17 @@ class WorkerTests(unittest.TestCase):
                                  {**account, "commission_per_lot": 0})
         self.assertEqual(error.exception.code, "INVALID_CONFIGURED_COST_EVIDENCE")
 
+    def test_zero_commission_spread_only_requires_reference_and_writes_zero(self):
+        account = {**self.job["account"], "cost_model": "ZERO_COMMISSION_SPREAD_ONLY",
+                   "commission_per_lot": 0.0, "cost_evidence": "Official broker FX zero-commission schedule"}
+        text = worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234", account)
+        self.assertIn("InpCostModel=ZERO_COMMISSION_SPREAD_ONLY", text)
+        self.assertIn("InpCommissionPerLot=0.00000000", text)
+        with self.assertRaises(worker.ProvisionError) as error:
+            worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234",
+                                 {**account, "cost_evidence": "bad\\nreference"})
+        self.assertEqual(error.exception.code, "INVALID_COST_EVIDENCE")
+
     def test_job_requires_explicit_valid_account_mode(self):
         missing = {**self.job, "account": {k: v for k, v in self.job["account"].items() if k != "account_mode"}}
         with self.assertRaises(worker.ProvisionError):
