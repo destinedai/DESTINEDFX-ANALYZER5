@@ -283,6 +283,16 @@ fun TradingViewWebView(
     }
 
     val currentKey = "${mappedSymbol}_${mappedInterval}"
+    val currentKeyState = rememberUpdatedState(currentKey)
+    val currentHtmlState = rememberUpdatedState(widgetHtml)
+    val currentUrlState = rememberUpdatedState(widgetUrl)
+    val chartWebView = remember { mutableStateOf<WebView?>(null) }
+    val embedState = remember { mutableStateOf(TradingViewLoadState()) }
+    val hasNativeFallback = fallbackCandles.isNotEmpty()
+
+    LaunchedEffect(currentKey) {
+        embedState.value = TradingViewLoadState()
+    }
 
     Box(modifier = modifier.background(Color(0xFF171B27))) {
         AndroidView(
@@ -292,6 +302,7 @@ fun TradingViewWebView(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                     )
+                    chartWebView.value = this
                     setBackgroundColor(android.graphics.Color.parseColor("#171B27"))
                     setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     overScrollMode = View.OVER_SCROLL_NEVER
@@ -306,13 +317,87 @@ fun TradingViewWebView(
                         }
                     }
                     webViewClient = object : WebViewClient() {
+                        private fun failCurrentChart(view: WebView?, reason: String) {
+                            val active = view ?: return
+                            if (active.tag != currentKeyState.value || embedState.value.status != TradingViewLoadStatus.LOADING) return
+                            val next = embedState.value.fail(reason)
+                            embedState.value = next
+                            if (next.path == TradingViewLoadPath.HOSTED_CHART && next.status == TradingViewLoadStatus.LOADING) {
+                                active.post {
+                                    currentUrlState.value?.let { active.loadUrl(it) }
+                                }
+                            }
+                        }
+
                         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                             // A host allowlist cannot make an invalid certificate safe.
                             handler?.cancel()
+                            failCurrentChart(view, "TradingView SSL certificate validation failed")
                         }
+
                         override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                             val description = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error?.description?.toString() else null
                             android.util.Log.e(TRADING_VIEW_LOG_TAG, "resource error code=${error?.errorCode} description=${redactChartDiagnostic(description.orEmpty()).take(240)}")
+                            if (request?.isForMainFrame == true || isTradingViewChartDocumentUrl(request?.url?.toString())) {
+                                failCurrentChart(view, "TradingView resource failed: ${redactChartDiagnostic(description.orEmpty()).take(120)}")
+                            }
+                        }
+
+                        override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?) {
+                            super.onReceivedHttpError(view, request, errorResponse)
+                            if (request?.isForMainFrame == true || isTradingViewChartDocumentUrl(request?.url?.toString())) {
+                                failCurrentChart(view, "TradingView returned HTTP ${errorResponse?.statusCode ?: "error"}")
+                            }
+                        }
+
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            val active = view ?: return
+                            if (active.tag != currentKeyState.value || url.isNullOrBlank()) return
+
+                            // If the fallback URL itself loaded, only report that its document
+                            // displayed; cross-origin chart candles remain unverified.
+                            if (embedState.value.path == TradingViewLoadPath.HOSTED_CHART &&
+                                isTradingViewChartDocumentUrl(url) &&
+                                isTradingViewChartDocumentUrl(active.url)) {
+                                embedState.value = embedState.value.displayedUnverified(
+                                    "TradingView chart document loaded; candle rendering is unverified."
+                                )
+                                return
+                            }
+
+                            // Inspect only our top-level Advanced Chart wrapper. Do not treat
+                            // unrelated iframe finishes as evidence of a successful embed.
+                            if (embedState.value.path != TradingViewLoadPath.OFFICIAL_WIDGET ||
+                                embedState.value.status != TradingViewLoadStatus.LOADING ||
+                                isTradingViewChartDocumentUrl(url)) return
+
+                            fun inspectEmbed(attempt: Int) {
+                                active.postDelayed({
+                                    if (active.tag != currentKeyState.value ||
+                                        embedState.value.status != TradingViewLoadStatus.LOADING) return@postDelayed
+                                    val probe = "(function(){var s=document.getElementById('tvScript');var f=document.querySelector('#destinedfx-tv-chart iframe');return (document.readyState==='complete')+'|'+(document.body&&document.body.getAttribute('data-tv-script-loaded')==='true')+'|'+!!f;})()"
+                                    active.evaluateJavascript(probe) { result ->
+                                        if (active.tag != currentKeyState.value ||
+                                            embedState.value.status != TradingViewLoadStatus.LOADING) return@evaluateJavascript
+                                        if (result.orEmpty().contains("true|true|true")) {
+                                            embedState.value = embedState.value.displayedUnverified(
+                                                "Advanced Chart script and iframe loaded; actual candle rendering is unverified."
+                                            )
+                                        } else if (attempt < 4) {
+                                            inspectEmbed(attempt + 1)
+                                        } else {
+                                            val next = embedState.value.fail("Advanced Chart did not initialize within the timeout")
+                                            embedState.value = next
+                                            if (next.path == TradingViewLoadPath.HOSTED_CHART &&
+                                                next.status == TradingViewLoadStatus.LOADING) {
+                                                currentUrlState.value?.let { active.loadUrl(it) }
+                                            }
+                                        }
+                                    }
+                                }, 1_500L)
+                            }
+                            inspectEmbed(0)
                         }
                     }
 
@@ -370,6 +455,7 @@ fun TradingViewWebView(
             },
             onRelease = { view ->
                 if (view is WebView) {
+                    if (chartWebView.value === view) chartWebView.value = null
                     view.onPause()
                     view.pauseTimers()
                     view.stopLoading()
@@ -382,6 +468,58 @@ fun TradingViewWebView(
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        when (embedState.value.status) {
+            TradingViewLoadStatus.LOADING -> {
+                Surface(
+                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                    color = Color(0xCC0D121B),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, CardBorder)
+                ) {
+                    Text("CONNECTING TO TRADINGVIEW…", modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            }
+            TradingViewLoadStatus.DISPLAYED_UNVERIFIED -> {
+                Surface(
+                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                    color = Color(0xCC0D121B),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, WarningAmber.copy(alpha = 0.8f))
+                ) {
+                    Text("EMBED LOADED · CANDLES UNVERIFIED", modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        color = WarningAmber, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            }
+            TradingViewLoadStatus.FAILED -> {
+                Surface(
+                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                    color = Color(0xF20D121B),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, LossRed.copy(alpha = 0.8f))
+                ) {
+                    Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = LossRed, modifier = Modifier.size(28.dp))
+                        Text("TRADINGVIEW CHART FAILED", color = TextPrimary, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                        Text(embedState.value.message ?: "The chart could not be loaded.", color = TextSecondary, fontSize = 10.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        Button(onClick = {
+                            val html = currentHtmlState.value ?: return@Button
+                            embedState.value = embedState.value.retry()
+                            chartWebView.value?.let { chart ->
+                                chart.tag = currentKeyState.value
+                                chart.loadDataWithBaseURL("https://s3.tradingview.com/", html, "text/html", "UTF-8", "https://s3.tradingview.com/")
+                            }
+                        }) { Text("RETRY TRADINGVIEW") }
+                        if (hasNativeFallback && onSwitchToCanvas != null) {
+                            OutlinedButton(onClick = onSwitchToCanvas) { Text("USE NATIVE CANDLE CHART") }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 @Composable
