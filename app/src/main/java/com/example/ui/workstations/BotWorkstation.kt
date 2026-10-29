@@ -1063,9 +1063,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
             InsightCard("ENGINE SAFEGUARDS & QUANT CONTROLS") {
                 InsightLine("Active Strategy", strat)
-                InsightLine("Account Capital", "$${"%.2f".format(capital)}")
+                val verifiedDisplayBalance = verifiedRemoteSnapshotForBot?.balance?.takeIf { it.isFinite() && it >= 0.0 }
+                InsightLine(
+                    if (verifiedDisplayBalance != null) "Verified MT5 Balance" else "Configured Capital (not live balance)",
+                    "${"%.2f".format(verifiedDisplayBalance ?: capital)}"
+                )
                 InsightLine("NFP Safeguard", if (nfpArmed) "ARMED (High-Impact Guard Active)" else "DISARMED")
-                InsightLine("Execution Status", if (isHalted) "HALTED (News Filter Lock)" else "NORMAL")
+                InsightLine("News / Halt Guard", if (isHalted) "HALTED (News Filter Lock)" else "No engine halt; broker/risk checks still apply")
                 InsightLine("Deterministic MTF Scan", if (isMultiScanning) "SCANNING (H1 / M15 / H4)" else consensusStatus)
                 if (isHalted) {
                     Text(
