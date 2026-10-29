@@ -805,7 +805,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                     val remoteMetrics = bridgeSnapshot?.takeIf { snapshot ->
                         bridgeMode && snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh &&
-                            snapshot.terminalConnected && snapshot.accountVerified && snapshot.actualAccountMode == selectedAccountMode &&
+                            snapshot.terminalConnected && snapshot.accountVerified && snapshot.snapshotsValid && snapshot.managedState == "READY" &&
+                            snapshot.actualAccountMode == selectedAccountMode &&
                             snapshot.actualLogin == bridgeSecrets.getManagedMT5Login(selectedAccountMode) &&
                             snapshot.actualServer == bridgeSecrets.getManagedMT5Server(selectedAccountMode)
                     }
@@ -2269,13 +2270,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         } else {
             items(openPositions) { pos ->
                 val ticker = viewModel.tickers.collectAsStateWithLifecycle().value[pos.symbol]
-                val cmp = ticker?.price ?: pos.entryPrice
+                val freshCmp = ticker?.price?.takeIf { it.isFinite() && it > 0.0 && viewModel.isDataFresh(pos.symbol) }
+                val cmp = freshCmp ?: 0.0
                 val isLong = pos.direction == com.example.domain.model.SignalDirection.LONG
                 val mult = if (isLong) 1.0 else -1.0
                 val spec = com.destinedfx.core.instrument.SpecRegistry.get(pos.symbol)
-                val contractSize = spec?.contractSize ?: 100_000.0
-                val liveFloatingPnl = if (pos.entryPrice > 0.0 && cmp > 0.0) {
-                    (cmp - pos.entryPrice) * mult * contractSize * pos.lotSize
+                val contractSize = spec?.contractSize
+                val liveFloatingPnl = if (freshCmp != null && pos.entryPrice > 0.0 && contractSize != null && contractSize.isFinite() && contractSize > 0.0) {
+                    (freshCmp - pos.entryPrice) * mult * contractSize * pos.lotSize
                 } else pos.currentProfit
                 val isProfitable = liveFloatingPnl >= 0.0
 
@@ -2307,7 +2309,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 )
                             }
                             Text(
-                                text = "Entry: ${formatPrice(pos.entryPrice, pos.symbol)} → CMP: ${formatPrice(cmp, pos.symbol)}",
+                                text = "Entry: ${formatPrice(pos.entryPrice, pos.symbol)} → CMP: ${freshCmp?.let { formatPrice(it, pos.symbol) } ?: "STALE / UNAVAILABLE"}",
                                 fontSize = 10.sp,
                                 color = TextPrimary,
                                 fontFamily = FontFamily.Monospace
