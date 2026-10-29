@@ -56,4 +56,25 @@ class SecretsManagerBridgePendingTest {
         assertEquals("demo-token", manager.getMT5BridgeAppToken("DEMO"))
         assertFalse(manager.getMT5BridgeAppToken("LIVE").isNotBlank())
     }
+
+    @Test fun derivCredentialsAreStoredOnlyInEncryptedPreferencesAndModeIsDemoOnly() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) {
+            assertFalse(manager.saveDerivApiToken("test-pat"))
+            assertEquals("", manager.getDerivApiToken())
+            assertFalse(manager.clearDerivCredentials())
+            return
+        }
+
+        assertTrue(manager.saveDerivApiToken("test-pat"))
+        assertTrue(manager.saveDerivAppId("123456"))
+        assertTrue(manager.saveDerivAccountMode("demo"))
+        assertFalse(manager.saveDerivAccountMode("real"))
+        assertEquals("demo", manager.getDerivAccountMode())
+        assertEquals("test-pat", manager.getDerivApiToken())
+        assertEquals("123456", manager.getDerivAppId())
+        assertTrue(manager.clearDerivCredentials())
+        assertEquals("", manager.getDerivApiToken())
+        assertEquals("", manager.getDerivAppId())
+    }
 }

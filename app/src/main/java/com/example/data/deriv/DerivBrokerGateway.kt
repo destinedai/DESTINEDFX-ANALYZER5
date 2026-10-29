@@ -43,10 +43,14 @@ internal fun selectDerivOptionsAccount(accounts: org.json.JSONArray, requestedMo
     return null
 }
 
+/** The direct phone connector deliberately has no REAL-account selection path. */
+internal fun selectDerivDemoOptionsAccount(accounts: org.json.JSONArray): JSONObject? =
+    selectDerivOptionsAccount(accounts, "demo")
+
 /**
  * Real Broker Gateway for Deriv.
- * Performs real authorization, balance queries, order execution (proposals + contracts),
- * and open position monitoring through Deriv WebSocket.
+ * Performs Deriv Demo authorization, balance queries, and open-contract monitoring.
+ * Order submission remains blocked until a product-specific risk and recovery path is verified.
  */
 class DerivBrokerGateway(
     private val secrets: SecretsManager,
@@ -96,6 +100,14 @@ class DerivBrokerGateway(
      * is surfaced so the user can create the correct token.
      */
     suspend fun connectAndAuthorize(apiToken: String? = null): Result<DerivAccountInfo> = withContext(Dispatchers.IO) {
+        if (!secrets.isSecureStorageAvailable) {
+            _connectionState.value = DerivConnectionState.AUTH_FAILED
+            return@withContext Result.failure(Exception("Secure Android Keystore storage is unavailable; Deriv connection is blocked."))
+        }
+        if (secrets.getDerivAccountMode() != "demo") {
+            _connectionState.value = DerivConnectionState.AUTH_FAILED
+            return@withContext Result.failure(Exception("DERIV API — DEMO MULTIPLIERS accepts Demo accounts only."))
+        }
         val token = (apiToken ?: secrets.getDerivApiToken()).trim()
         if (token.isBlank()) {
             _connectionState.value = DerivConnectionState.AUTH_FAILED
@@ -131,24 +143,30 @@ class DerivBrokerGateway(
             val accounts = accountJson.optJSONArray("data")
                 ?: throw IllegalStateException("Deriv account-list response did not contain a data array.")
 
-            val requestedMode = secrets.getDerivAccountMode().lowercase()
-                .takeIf { it == "real" || it == "demo" } ?: "demo"
+            // This connector is Demo-only even if a broker token can see both account classes.
+            val requestedMode = "demo"
             val activeAccounts = (0 until accounts.length()).mapNotNull { accounts.optJSONObject(it) }
                 .filter { it.optString("status").equals("active", ignoreCase = true) }
-            val account = selectDerivOptionsAccount(accounts, requestedMode)
+            val account = selectDerivDemoOptionsAccount(accounts)
             if (account == null) {
                 val available = activeAccounts.map { it.optString("account_type").ifBlank { "unknown" } }.distinct()
                 throw IllegalStateException(
                     "No active ${requestedMode.uppercase()} Options account was returned for this token" +
                         (if (available.isEmpty()) "." else ". Available account types: " + available.joinToString() + ".") +
-                        " Choose the matching Demo/Real mode or check this token's account/trade permissions."
+                        " Check that the token has the required account-read and trading permissions."
                 )
             }
 
             val accountId = account.optString("account_id").trim()
-            val currency = account.optString("currency").ifBlank { "USD" }
+            val currency = account.optString("currency").trim()
             val initialBalance = account.optDouble("balance", 0.0)
             if (accountId.isBlank()) throw IllegalStateException("Deriv returned an account with no account_id.")
+            if (currency.isBlank() || !currency.matches(Regex("[A-Za-z0-9]{2,20}"))) {
+                throw IllegalStateException("Deriv Demo account response omitted a valid account currency.")
+            }
+            if (!initialBalance.isFinite() || initialBalance < 0.0) {
+                throw IllegalStateException("Deriv Demo account response contained an invalid balance.")
+            }
 
             val otpRequest = Request.Builder()
                 .url("$REST_BASE/trading/v1/options/accounts/${java.net.URLEncoder.encode(accountId, "UTF-8")}/otp")
@@ -211,7 +229,17 @@ class DerivBrokerGateway(
                 )
             }
 
-            val info = DerivAccountInfo(accountId, currency, initialBalance, "")
+            val info = DerivAccountInfo(
+                loginId = accountId,
+                currency = currency,
+                balance = initialBalance,
+                email = "",
+                accountType = account.optString("account_type").lowercase(),
+                demoVerified = account.optString("account_type").equals("demo", ignoreCase = true)
+            )
+            if (!info.demoVerified) {
+                throw IllegalStateException("Deriv did not verify this as a Demo account; connection was rejected.")
+            }
             _accountInfo.value = info
             _accountMetrics.value = AccountMetrics(
                 balance = initialBalance,
@@ -413,7 +441,7 @@ class DerivBrokerGateway(
      * The limit_order values are cash-denominated P/L thresholds in account currency; they are
      * not the same as chart-price stops on an MT5/CFD position. Stake is the maximum risk amount.
      */
-    suspend fun executeOrder(
+    private suspend fun executeOrder(
         symbol: String,
         stake: Double,
         isBuy: Boolean,

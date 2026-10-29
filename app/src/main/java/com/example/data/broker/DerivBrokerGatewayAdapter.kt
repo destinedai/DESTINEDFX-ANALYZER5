@@ -1,6 +1,5 @@
 package com.example.data.broker
 
-import com.destinedfx.core.broker.DerivInstrumentResolver
 import com.destinedfx.core.instrument.InstrumentSpec
 import com.destinedfx.core.instrument.SpecRegistry
 import com.destinedfx.core.marketdata.AssetClass
@@ -9,7 +8,6 @@ import com.example.data.deriv.DerivBrokerGateway
 import com.example.data.deriv.DerivConnectionState
 import com.example.domain.model.CanonicalTradePlan
 import com.example.domain.model.Position
-import com.example.domain.model.SignalDirection
 import com.example.domain.repository.AccountMetrics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,56 +53,15 @@ class DerivBrokerGatewayAdapter(
     }
 
     override suspend fun executeTrade(plan: CanonicalTradePlan): Result<String> {
-        // Enforce explicit symbol resolution: NEVER default to R_100
-        val derivSymbol = DerivInstrumentResolver.resolve(plan.symbol)
-            ?: return Result.failure(Exception("UNSUPPORTED_INSTRUMENT: Symbol '${plan.symbol}' has no mapping on Deriv"))
+        @Suppress("UNUSED_VARIABLE")
+        val unusedPlan = plan
+        // CanonicalTradePlan contains Forex/CFD lots, chart-price SL/TP, and a 2R metric.
+        // Those values are not a validated Deriv Multiplier contract specification. Keep the
+        // generic trade pipeline fail-closed until a product-specific signal/risk mapping exists.
+        return Result.failure(Exception(
+            "UNSUPPORTED_PRODUCT_MAPPING: Forex/CFD trade plans cannot be submitted as Deriv Multipliers. No purchase was sent."
+        ))
 
-        val isBuy = plan.direction == SignalDirection.LONG
-
-        // Sizing & Risk modeling: strictly enforce 1% ceiling and fail closed on minimum stake conflict
-        val balance = accountMetrics.value?.balance ?: 0.0
-        if (balance <= 0.0 || !balance.isFinite()) {
-            return Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Non-positive or unverified account balance ($balance USD)"))
-        }
-
-        val maxAllowedRisk = balance * (plan.riskPercent.coerceIn(0.1, 1.0) / 100.0)
-        val minBrokerStake = com.destinedfx.core.broker.DerivContractLimits.getMinimumStake(derivSymbol)
-
-        if (maxAllowedRisk < minBrokerStake) {
-            return Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Required minimum broker stake ($minBrokerStake USD) for $derivSymbol exceeds maximum permitted risk budget (${String.format(java.util.Locale.US, "%.2f", maxAllowedRisk)} USD) based on 1% ceiling on account balance (${String.format(java.util.Locale.US, "%.2f", balance)} USD)."))
-        }
-
-        val targetStake = plan.riskAmount
-        if (targetStake < minBrokerStake) {
-            return Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Sized stake (${String.format(java.util.Locale.US, "%.2f", targetStake)} USD) is below broker minimum ($minBrokerStake USD). Rounding up is prohibited by 1% max risk ceiling (${String.format(java.util.Locale.US, "%.2f", maxAllowedRisk)} USD)."))
-        }
-
-        val stake = minOf(targetStake, maxAllowedRisk)
-        if (stake < minBrokerStake) {
-            return Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Final stake ($stake USD) is below broker minimum ($minBrokerStake USD)"))
-        }
-
-        val worstCaseLoss = com.destinedfx.core.broker.DerivContractLimits.calculateWorstCaseLoss(stake, if (isBuy) "MULTUP" else "MULTDOWN")
-        if (worstCaseLoss > maxAllowedRisk + 1e-6) {
-            return Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Worst-case loss ($worstCaseLoss USD) exceeds maximum permitted risk budget (${String.format(java.util.Locale.US, "%.2f", maxAllowedRisk)} USD)"))
-        }
-
-        val targetRr = plan.rr
-        if (!targetRr.isFinite() || targetRr < 2.0) {
-            return Result.failure(Exception("TRADE_PLAN_INVALID: Deriv execution requires a validated minimum 2.0R plan."))
-        }
-        val res = derivGateway.executeOrder(
-            symbol = derivSymbol,
-            stake = stake,
-            isBuy = isBuy,
-            rewardToRisk = targetRr
-        )
-        return if (res.isSuccess) {
-            val bought = res.getOrThrow()
-            Result.success("Deriv Contract #${bought.contractId} (Tx: ${bought.transactionId})")
-        } else {
-            Result.failure(res.exceptionOrNull() ?: Exception("Order failed"))
-        }
     }
 
     override suspend fun closePosition(positionId: String): Result<Boolean> {

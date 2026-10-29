@@ -359,6 +359,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             }
         }
         item {
+            DerivDemoAccountCard(viewModel)
+        }
+        item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -386,6 +389,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             val bridgeCanStart = bridgeReady && (bridgeSnapshot?.state == "READY" || bridgeSnapshot?.state == "STOPPED")
             val supportedStrategy = selectedStrategyId in StrategyRegistry.managedStrategyIds
             val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
+            val derivExecutionBlocked = activeBrokerType == BrokerType.DERIV
             val statusColor = if (bridgeMode) bridgeStatusColor else when (botSummary.state) {
                 BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
                 BotLifecycleState.EXECUTING -> CyanPrimary
@@ -427,7 +431,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         Switch(
                             checked = isRunning,
-                            enabled = !bridgeMode || (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)),
+                            enabled = if (bridgeMode) (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)) else (!derivExecutionBlocked || !isRunning),
                             onCheckedChange = { active ->
                                 if (bridgeMode) coroutineScope.launch {
                                     bridgeBusy = true
@@ -443,6 +447,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     if (active && (!MT5RemoteBridgeClient.isValidRiskPercent(riskPercent))) { bridgeMessage = "Blocked: risk must be finite and in (0, 1]%; no clamping applied."; bridgeBusy = false; return@launch }
                                     if (active && !bridgeCanStart) { bridgeMessage = "Blocked: verified account must be READY or STOPPED with a fresh, trade-authorized heartbeat."; bridgeBusy = false; return@launch }
                                     sendBridgeCommand(bridgeClient, action, config, bridgeSecrets, selectedAccountMode, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it })
+                                } else if (active && derivExecutionBlocked) {
+                                    statusMessage = "START BLOCKED — Deriv Multiplier execution requires a product-specific signal/risk mapping and durable foreground-service reconciliation. Account connection does not start trading."
                                 } else viewModel.setBotStatus(active) { success, err ->
                                     statusMessage = if (success) { if (active) "24/7 Surveillance Engine activated" else "Surveillance stopped" } else err ?: "Failed to change engine state"
                                 }
@@ -458,6 +464,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
 
                     HorizontalDivider(color = TabBorder)
+                    if (derivExecutionBlocked) {
+                        Text(
+                            "DERIV DEMO BOT: STOPPED · automated entries are blocked pending product-specific Multiplier safeguards. This is not a Forex/CFD or MT5 risk model.",
+                            color = WarningAmber,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp
+                        )
+                    }
 
                     // Last Action & Logs
                     Text(
@@ -1892,6 +1906,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     if (activeBrokerType == com.example.data.broker.BrokerType.MT5) {
                         Text("Direct MT5 orders are disabled. Use the managed EA controls above; only broker-confirmed terminal telemetry can confirm an execution.", color = WarningAmber, fontSize = 10.sp)
                     }
+                    if (activeBrokerType == BrokerType.DERIV) {
+                        Text("Deriv Multiplier entries are blocked here: this control uses Forex-style lots and price stops, not a validated Multiplier stake/contract workflow.", color = WarningAmber, fontSize = 10.sp)
+                    }
                     // Direct MT5 order routing is disabled; MT5 execution is managed-terminal only.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1899,7 +1916,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     ) {
                         // SELL BUTTON
                         Button(
-                            enabled = activeBrokerType != com.example.data.broker.BrokerType.MT5,
+                            enabled = activeBrokerType != BrokerType.MT5 && activeBrokerType != BrokerType.DERIV,
                             onClick = {
                                 if (!isConnected) {
                                     instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
@@ -1937,7 +1954,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         // BUY BUTTON
                         Button(
-                            enabled = activeBrokerType != com.example.data.broker.BrokerType.MT5,
+                            enabled = activeBrokerType != BrokerType.MT5 && activeBrokerType != BrokerType.DERIV,
                             onClick = {
                                 if (!isConnected) {
                                     instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."

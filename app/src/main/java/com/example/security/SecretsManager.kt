@@ -99,9 +99,25 @@ class SecretsManager(private val ctx: Context) {
     fun saveOandaAccountId(v: String)   = prefs.edit().putString(OANDA_ACC, v).apply()
     fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
-    fun saveDerivApiToken(v: String)    = prefs.edit().putString(DERIV_API_TOKEN, v).apply()
-    fun saveDerivAppId(v: String)       = prefs.edit().putString(DERIV_APP_ID, v).apply()
-    fun saveDerivAccountMode(v: String) = prefs.edit().putString(DERIV_ACCOUNT_MODE, v.trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo").apply()
+    /** Deriv credentials must never be persisted to the in-memory fallback as if save succeeded. */
+    fun saveDerivApiToken(v: String): Boolean {
+        if (!isSecureStorageAvailable || v.isBlank()) return false
+        return prefs.edit().putString(DERIV_API_TOKEN, v.trim()).commit()
+    }
+    fun saveDerivAppId(v: String): Boolean {
+        if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
+        return prefs.edit().putString(DERIV_APP_ID, v.trim()).commit()
+    }
+    /** Direct Deriv execution is deliberately fixed to DEMO; REAL is not an accepted mode. */
+    fun saveDerivAccountMode(v: String): Boolean {
+        if (!isSecureStorageAvailable || !v.trim().equals("demo", ignoreCase = true)) return false
+        return prefs.edit().putString(DERIV_ACCOUNT_MODE, "demo").commit()
+    }
+    fun clearDerivCredentials(): Boolean {
+        if (!isSecureStorageAvailable) return false
+        return prefs.edit().remove(DERIV_API_TOKEN).remove(DERIV_APP_ID)
+            .remove(DERIV_ACCOUNT_MODE).commit()
+    }
     fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
 
@@ -201,12 +217,12 @@ class SecretsManager(private val ctx: Context) {
     fun getSupabaseRefreshToken(): String = ""
     fun getSupabaseEmailConfirmedAt(): String = ""
 
-    fun getDerivApiToken(): String     = prefs.getString(DERIV_API_TOKEN, "") ?: ""
+    fun getDerivApiToken(): String     = if (isSecureStorageAvailable) prefs.getString(DERIV_API_TOKEN, "") ?: "" else ""
     // New Deriv REST/Options API rejects legacy App ID 1089; don't prefill a stale stored default.
-    fun getDerivAppId(): String = (prefs.getString(DERIV_APP_ID, "") ?: "")
+    fun getDerivAppId(): String = if (!isSecureStorageAvailable) "" else (prefs.getString(DERIV_APP_ID, "") ?: "")
         .trim()
         .takeUnless { it.isBlank() || it == "1089" } ?: ""
-    fun getDerivAccountMode(): String  = (prefs.getString(DERIV_ACCOUNT_MODE, "demo") ?: "demo").trim().lowercase().takeIf { it == "demo" || it == "real" } ?: "demo"
+    fun getDerivAccountMode(): String  = "demo"
     fun getTelegramConnectionStatus(): String = prefs.getString(TG_STATUS, "Not configured") ?: "Not configured"
     fun getTelegramNotificationsEnabled(): Boolean = prefs.getBoolean(TG_NOTIF_ENABLED, false)
 

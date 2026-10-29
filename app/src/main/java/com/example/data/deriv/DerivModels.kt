@@ -30,7 +30,9 @@ data class DerivAccountInfo(
     val loginId: String,
     val currency: String,
     val balance: Double,
-    val email: String
+    val email: String,
+    val accountType: String = "demo",
+    val demoVerified: Boolean = false
 )
 
 data class DerivProposalResult(

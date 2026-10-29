@@ -5,6 +5,7 @@ import com.destinedfx.core.broker.DerivInstrumentResolver
 import com.example.domain.model.CanonicalTradePlan
 import com.example.domain.model.SignalDirection
 import com.example.data.deriv.selectDerivOptionsAccount
+import com.example.data.deriv.selectDerivDemoOptionsAccount
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -31,6 +32,16 @@ class DerivTradeRiskBoundaryTest {
         assertEquals("V-DEMO", selectDerivOptionsAccount(accounts, "demo")?.optString("account_id"))
         assertEquals("V-REAL", selectDerivOptionsAccount(accounts, "real")?.optString("account_id"))
         assertEquals("V-DEMO", selectDerivOptionsAccount(accounts, "unsupported")?.optString("account_id"))
+    }
+
+    @Test
+    fun directPhoneConnectorSelectsOnlyAnActiveDemoAccount() {
+        val accounts = JSONArray()
+            .put(JSONObject().put("account_id", "V-REAL").put("account_type", "real").put("status", "active"))
+            .put(JSONObject().put("account_id", "V-OLD").put("account_type", "demo").put("status", "inactive"))
+        assertNull(selectDerivDemoOptionsAccount(accounts))
+        accounts.put(JSONObject().put("account_id", "V-DEMO").put("account_type", "demo").put("status", "active"))
+        assertEquals("V-DEMO", selectDerivDemoOptionsAccount(accounts)?.optString("account_id"))
     }
 
     @Test
