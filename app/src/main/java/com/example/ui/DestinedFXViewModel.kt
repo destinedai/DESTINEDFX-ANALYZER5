@@ -770,26 +770,10 @@ open class DestinedFXViewModel(
             isSignalScanning.value = true
             isAnalyzing.value = true
             try {
-                scanProgressStage.value = "Phase 1/5 • Fetching TradingView OHLC Candlestick Feed..."
-                delay(600L)
-                if (generation != signalScanGeneration) return@launch
-                
-                scanProgressStage.value = "Phase 2/5 • Scanning Candlestick Patterns, Pinbars & Engulfings..."
-                delay(700L)
-                if (generation != signalScanGeneration) return@launch
-
-                scanProgressStage.value = "Phase 3/5 • Mapping SMC Order Blocks, Fair Value Gaps & Sweeps..."
-                delay(700L)
-                if (generation != signalScanGeneration) return@launch
-
-                scanProgressStage.value = "Phase 4/5 • Aligning Multi-Timeframe Trend Confluences..."
-                delay(600L)
-                if (generation != signalScanGeneration) return@launch
-
-                scanProgressStage.value = "Phase 5/5 • Calculating High Win-Rate Entry, SL & TP Levels..."
-                delay(600L)
-                if (generation != signalScanGeneration) return@launch
-
+                // Report the real operation being performed rather than simulating five
+                // timed stages while no analysis has yet run.
+                scanProgressStage.value =
+                    "Loading provider quote and validated closed OHLC candles; calculating strategy and MTF checks…"
                 val sig = app.signalGenerationUseCase.generateSignal(
                     symbol, timeframe, selectedStrategyId.value, mtfTimeframes
                 )
@@ -803,11 +787,24 @@ open class DestinedFXViewModel(
                 smcBiasConfidence.value = (sig.confidenceScore.coerceIn(0, 100))
                 structureAlignment.value = if (sig.mtfSummary.isNotBlank()) sig.mtfSummary else "${sig.direction} [${sig.signalState}]"
                 modelSentimentScores.value = sig.strategyScores.mapValues { (_, score) ->
-                    Pair(if (score >= 50) "BULLISH" else "BEARISH", score)
+                    val bias = when (sig.direction) {
+                        com.example.domain.model.SignalDirection.LONG -> "BULLISH"
+                        com.example.domain.model.SignalDirection.SHORT -> "BEARISH"
+                        com.example.domain.model.SignalDirection.WAIT -> "WAIT"
+                    }
+                    Pair(bias, score.coerceIn(0, 100))
                 }
-                
-                // Only send alerts for high-conviction trades
-                if (sig.confidenceScore >= 85 && sig.direction != com.example.domain.model.SignalDirection.WAIT && sig.entryPrice > 0.0) {
+
+                // Confidence alone does not make a signal actionable. Require the engine's
+                // full executable gate (live data, valid plan, risk/news/source checks, etc.).
+                if (sig.executable &&
+                    sig.confidenceScore >= 85 &&
+                    sig.direction in setOf(
+                        com.example.domain.model.SignalDirection.LONG,
+                        com.example.domain.model.SignalDirection.SHORT
+                    ) &&
+                    sig.entryPrice.isFinite() && sig.entryPrice > 0.0
+                ) {
                     sendRealTimeNotification(sig.symbol, sig.direction.name, sig.entryPrice)
                 }
                 triggerAlgorithmicAnalysisScan(symbol, timeframe, selectedStrategyId.value)
