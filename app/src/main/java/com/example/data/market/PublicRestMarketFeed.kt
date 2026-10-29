@@ -45,7 +45,7 @@ internal fun scannerQuoteFromRow(
         confidence = 0,
         lastUpdateMillis = retrievedAtMs,
         isLive = true,
-        source = "TradingView scanner snapshot",
+        source = "TradingView scanner snapshot (${symbol.substringBefore(':').uppercase(java.util.Locale.ROOT)})",
         bid = bid.takeIf { hasRealBidAsk },
         ask = ask.takeIf { hasRealBidAsk },
         hasRealSpread = hasRealBidAsk,
