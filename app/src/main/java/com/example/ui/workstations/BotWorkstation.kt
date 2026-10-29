@@ -79,7 +79,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val bridgeToken = bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode)
     // Shared fresh/profile-bound snapshot; Compose LazyColumn items have separate local scopes.
     val verifiedRemoteSnapshotForBot = bridgeSnapshot?.takeIf { snapshot ->
-        isUsableMt5Snapshot(
+        bridgeMode && isUsableMt5Snapshot(
             snapshot, selectedAccountMode,
             bridgeSecrets.getManagedMT5Login(selectedAccountMode),
             bridgeSecrets.getManagedMT5Server(selectedAccountMode)
@@ -117,11 +117,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         bridgeSecrets.saveManagedMT5SelectedProfile(profile)
     }
     val bridgeDisplayState = when {
-        bridgeIdentityFresh && bridgeSnapshot?.managedState == "READY" -> bridgeSnapshot?.state ?: "UNKNOWN"
-        bridgeIdentityFresh -> bridgeSnapshot?.managedState?.ifBlank { "PROVISIONING" } ?: "PROVISIONING"
-        bridgeSnapshot != null -> "STALE / UNVERIFIED"
         !bridgeClient.managedConfigured() -> "CONFIGURATION_REQUIRED"
         bridgeToken.isBlank() -> "SETUP REQUIRED"
+        !bridgeMode -> "REMOTE CONTROL DISABLED"
+        verifiedRemoteSnapshotForBot != null -> bridgeSnapshot?.state ?: "UNKNOWN"
+        bridgeIdentityFresh -> bridgeSnapshot?.managedState?.ifBlank { "PROVISIONING" } ?: "PROVISIONING"
+        bridgeSnapshot != null -> "STALE / UNVERIFIED"
         else -> "OFFLINE"
     }
     val bridgeStatusColor = when {
@@ -284,7 +285,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
                     Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && bridgeSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) bridgeSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
-                    val news = bridgeSnapshot?.newsVerdict.takeIf { bridgeIdentityFresh }
+                    val news = bridgeSnapshot?.newsVerdict.takeIf { verifiedRemoteSnapshotForBot != null }
                     val newsStatus = news?.optString("status", "UNKNOWN")?.uppercase() ?: "UNKNOWN"
                     Text(if (newsStatus == "CLEAR") "NEWS CLEAR · ${news?.optString("source", "provider")}" else if (newsStatus == "HIGH_IMPACT_WINDOW") "HIGH-IMPACT NEWS — TRADING BLOCKED" else "NEWS UNKNOWN — TRADING BLOCKED", color = if (newsStatus == "CLEAR") ProfitGreen else LossRed, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     Text("News: ${news?.optString("detail", "Authenticated news verdict unavailable") ?: "Authenticated news verdict unavailable"} · retrieved ${news?.optString("retrieved_at_ms", "unavailable") ?: "unavailable"} · event ${news?.optString("event_time_ms", "unavailable") ?: "unavailable"}", color = TextSecondary, fontSize = 10.sp)
@@ -357,11 +358,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                     Text("Managed EA strategy support is registry-validated; support does not imply profitability or real-broker testing.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     BridgeTelemetry(
-                        bridgeSnapshot, selectedAccountMode,
+                        if (bridgeMode) bridgeSnapshot else null, selectedAccountMode,
                         bridgeSecrets.getManagedMT5Login(selectedAccountMode),
                         bridgeSecrets.getManagedMT5Server(selectedAccountMode)
                     )
-                    val actionSnapshot = bridgeSnapshot
+                    val actionSnapshot = if (bridgeMode) bridgeSnapshot else null
                     val verifiedActionSnapshot = actionSnapshot?.takeIf { snapshot ->
                         isUsableMt5Snapshot(
                             snapshot, selectedAccountMode,
@@ -2594,7 +2595,7 @@ private fun BridgeTelemetry(
         else -> unavailable
     }
     Text("Floating P/L: $floatingTotal ${current?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
-    Text("LIVE POSITIONS (${positions?.size ?: unavailable})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    Text("OPEN POSITIONS (${positions?.size ?: unavailable}), color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     if (positions == null || positions.isEmpty()) {
         Text(if (current != null && positions?.isEmpty() == true) "No open positions confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
     }
