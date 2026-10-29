@@ -36,6 +36,10 @@ object DerivMultiplierRules {
     const val MAX_MULTIPLIER = 1000
     const val MAX_SIGNAL_AGE_MS = 30_000L
 
+    /** The default mobile bot is deliberately single-contract-at-a-time. */
+    fun canOpenNewEntry(activeContractCount: Int, unresolvedExecutionCount: Int): Boolean =
+        activeContractCount == 0 && unresolvedExecutionCount == 0
+
     /** The Android foreground bot is DEMO-only until a separate live-execution acceptance is completed. */
     fun isVerifiedDemoAccount(account: DerivAccountInfo?): Boolean =
         account != null &&
