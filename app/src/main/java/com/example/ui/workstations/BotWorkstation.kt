@@ -120,6 +120,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var mt5PasswordInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Password(selectedAccountMode)) }
     var mt5ServerInput by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Server(selectedAccountMode)) }
     var mt5AccessType by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5AccessType(selectedAccountMode)) }
+    var mt5CostModel by remember(selectedAccountMode) { mutableStateOf("OBSERVED_ROUND_TURN") }
+    var mt5CommissionPerLot by remember(selectedAccountMode) { mutableStateOf("") }
+    var mt5CostEvidence by remember(selectedAccountMode) { mutableStateOf("") }
     var managedCredentialConsent by remember(selectedAccountMode) { mutableStateOf(false) }
     var showMt5Password by remember { mutableStateOf(false) }
     var isConnectingBroker by remember { mutableStateOf(false) }
@@ -1357,6 +1360,55 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
 
+                        Text("TRANSACTION COST MODEL", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                        Text("Choose the model that matches your broker's published pricing. Incorrect cost inputs can make risk calculations unsafe.", fontSize = 9.sp, color = WarningAmber)
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf(
+                                listOf("OBSERVED_ROUND_TURN" to "Observed history", "CONFIGURED_ROUND_TURN" to "Round-turn commission"),
+                                listOf("CONFIGURED_PER_SIDE" to "Per-side commission", "ZERO_COMMISSION_SPREAD_ONLY" to "Zero commission + spread")
+                            ).forEach { group ->
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    group.forEach { (model, label) ->
+                                        OutlinedButton(
+                                            onClick = {
+                                                mt5CostModel = model
+                                                if (model == "OBSERVED_ROUND_TURN") {
+                                                    mt5CommissionPerLot = ""
+                                                    mt5CostEvidence = ""
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = if (mt5CostModel == model) ElectricCyan else TextSecondary)
+                                        ) {
+                                            Text(if (mt5CostModel == model) "✓ $label" else label, fontSize = 8.sp, maxLines = 2)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (mt5CostModel == "CONFIGURED_ROUND_TURN" || mt5CostModel == "CONFIGURED_PER_SIDE") {
+                            OutlinedTextField(
+                                value = mt5CommissionPerLot,
+                                onValueChange = { mt5CommissionPerLot = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                                label = { Text(if (mt5CostModel == "CONFIGURED_PER_SIDE") "Commission per side / 1.00 lot" else "Round-turn commission / 1.00 lot") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("bot_cost_commission")
+                            )
+                        }
+                        if (mt5CostModel != "OBSERVED_ROUND_TURN") {
+                            OutlinedTextField(
+                                value = mt5CostEvidence,
+                                onValueChange = { mt5CostEvidence = it.filter { ch -> ch.code >= 32 && ch.code != 127 }.take(512) },
+                                label = { Text("Broker pricing evidence reference") },
+                                placeholder = { Text("Official schedule / contract-spec section") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("bot_cost_evidence")
+                            )
+                            Text("Use an actual broker fee schedule or contract specification you have checked. This reference text is not independently verified by the app. Amounts are in account currency per standard lot.", fontSize = 9.sp, color = TextSecondary)
+                        } else {
+                            Text("Observed-history mode requires representative completed EA trades on this symbol; a fresh account may be blocked until valid history exists.", fontSize = 9.sp, color = TextSecondary)
+                        }
                         Text("Balance, equity, margin, currency and leverage appear only after a verified broker account snapshot.", fontSize = 9.sp, color = TextSecondary)
                         // Leverage Selector
                         Box(modifier = Modifier.fillMaxWidth()) {
@@ -1428,6 +1480,28 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     brokerConnectionMessage = "Consent is required before sending credentials to managed execution."
                                     return@Button
                                 }
+                                val selectedCostModel = mt5CostModel
+                                val selectedCommission = when (selectedCostModel) {
+                                    "OBSERVED_ROUND_TURN", "ZERO_COMMISSION_SPREAD_ONLY" -> 0.0
+                                    else -> mt5CommissionPerLot.trim().toDoubleOrNull()
+                                }
+                                val selectedCostEvidence = if (selectedCostModel == "OBSERVED_ROUND_TURN") "" else mt5CostEvidence.trim()
+                                if (selectedCommission == null || !selectedCommission.isFinite() || selectedCommission < 0.0) {
+                                    brokerConnectionMessage = "Enter a valid finite commission value from the broker's pricing schedule."
+                                    return@Button
+                                }
+                                if (selectedCostModel in setOf("CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE") && selectedCommission <= 0.0) {
+                                    brokerConnectionMessage = "Configured commission must be greater than zero; choose zero-commission mode only when broker pricing confirms it."
+                                    return@Button
+                                }
+                                if (selectedCostModel == "ZERO_COMMISSION_SPREAD_ONLY" && selectedCommission != 0.0) {
+                                    brokerConnectionMessage = "Zero-commission mode must use a commission value of zero."
+                                    return@Button
+                                }
+                                if (selectedCostModel != "OBSERVED_ROUND_TURN" && (selectedCostEvidence.length < 8 || selectedCostEvidence.any { ch -> ch.code < 32 || ch.code == 127 })) {
+                                    brokerConnectionMessage = "Enter a reference to the actual broker pricing or contract specification (at least 8 characters)."
+                                    return@Button
+                                }
                                 isConnectingBroker = true
                                 brokerConnectionMessage = null
                                 coroutineScope.launch {
@@ -1437,7 +1511,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             brokerConnectionMessage = "CONFIGURATION_REQUIRED"
                                         } else {
                                             bridgeMode = true
-                                            val snapshot = bridgeClient.registerManagedAccount(mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent, savePasswordChecked)
+                                            val snapshot = bridgeClient.registerManagedAccount(
+                                                mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent,
+                                                savePasswordChecked, selectedCostModel, selectedCommission, selectedCostEvidence
+                                            )
                                             bridgeMode = true
                                             bridgeSnapshot = snapshot
                                             bridgeMessage = snapshot.managedState.ifBlank { "PROVISIONING" }
