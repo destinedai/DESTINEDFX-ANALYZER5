@@ -373,7 +373,10 @@ class MarketDataRepositoryImpl(
                                     hasRealSpread = q.spread != null,
                                     kind = "STREAM"
                                 )
-                                _tickers.update { it + (q.symbol to ticker) }
+                                if (ticker.price > 0.0 && shouldUpdateTicker(q.symbol, ticker)) {
+                                    _tickers.update { current -> current + (q.symbol to ticker) }
+                                    _quoteDiagnostics.update { current -> current - q.symbol }
+                                }
                             },
                             onHeartbeat = {}
                         )
