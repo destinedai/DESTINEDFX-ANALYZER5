@@ -6,8 +6,9 @@ import com.example.data.AnalysisEntity
 import com.example.data.AnalysisRepository
 import com.example.domain.repository.NewsRepository
 import com.example.domain.usecase.SignalGenerationUseCase
-import com.example.domain.model.SignalDirection
-import com.destinedfx.core.strategy.StrategyRegistry
+import com.example.ui.resolveSelectedStrategyId
+import com.example.ui.signalHistoryLabel
+import com.example.ui.signalBiasLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -52,21 +53,10 @@ class AnalysisViewModel(
         _s.value = _s.value.copy(isLoading=true, error=null)
         try {
             val ui = _s.value
-            val strategyId = StrategyRegistry.allStrategies.firstOrNull {
-                it.id.equals(ui.selectedStrategy, ignoreCase = true) ||
-                    it.name.equals(ui.selectedStrategy, ignoreCase = true)
-            }?.id ?: StrategyRegistry.SMC_CONFLUENCE.id
+            val strategyId = resolveSelectedStrategyId(ui.selectedStrategy)
             val sig = signal.generateSignal(ui.selectedSymbol, ui.selectedTimeframe, strategyId)
-            val signalLabel = when (sig.direction) {
-                SignalDirection.LONG -> "BUY"
-                SignalDirection.SHORT -> "SELL"
-                SignalDirection.WAIT -> "WAIT"
-            }
-            val biasLabel = when (sig.direction) {
-                SignalDirection.LONG -> "BULLISH"
-                SignalDirection.SHORT -> "BEARISH"
-                SignalDirection.WAIT -> "NEUTRAL"
-            }
+            val signalLabel = signalHistoryLabel(sig.direction)
+            val biasLabel = signalBiasLabel(sig.direction)
             val report = buildString {
                 appendLine("[DESTINEDFX ANALYSIS -- ${sig.symbol} ${sig.timeframe}]")
                 appendLine("Strategy  : ${strategyId}")
