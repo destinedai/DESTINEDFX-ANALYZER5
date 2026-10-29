@@ -85,7 +85,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             bridgeSecrets.getManagedMT5Server(selectedAccountMode)
         )
     }
-    val bridgeTerminalFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
+    val bridgeIdentityFresh = bridgeSnapshot?.let {
+        it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected && it.accountVerified &&
+            it.actualAccountMode == selectedAccountMode &&
+            it.actualLogin == bridgeSecrets.getManagedMT5Login(selectedAccountMode) &&
+            it.actualServer == bridgeSecrets.getManagedMT5Server(selectedAccountMode)
+    } == true
+    val bridgeTerminalFresh = bridgeIdentityFresh
     val bridgeTerminalReady = bridgeSnapshot?.let { snapshot ->
         MT5RemoteBridgeClient.canStart(selectedAccountMode, snapshot.managedState, snapshot.accessType, snapshot.actualAccountMode,
             bridgeSecrets.getManagedMT5Login(selectedAccountMode), snapshot.actualLogin,
@@ -110,12 +116,19 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         selectedAccountMode = profile
         bridgeSecrets.saveManagedMT5SelectedProfile(profile)
     }
-    val bridgeDisplayState = bridgeSnapshot?.let { if (it.managedState == "READY") it.state else it.managedState.ifBlank { it.state } } ?: if (!bridgeClient.managedConfigured()) "CONFIGURATION_REQUIRED" else if (bridgeToken.isBlank()) "SETUP REQUIRED" else "OFFLINE"
-    val bridgeStatusColor = when (bridgeDisplayState) {
-        "RUNNING" -> ProfitGreen
-        "READY" -> ElectricCyan
-        "PAUSED" -> OrangeAccent
-        "ERROR", "FAILED", "OFFLINE", "STALE" -> LossRed
+    val bridgeDisplayState = when {
+        bridgeIdentityFresh && bridgeSnapshot?.managedState == "READY" -> bridgeSnapshot?.state ?: "UNKNOWN"
+        bridgeIdentityFresh -> bridgeSnapshot?.managedState?.ifBlank { "PROVISIONING" } ?: "PROVISIONING"
+        bridgeSnapshot != null -> "STALE / UNVERIFIED"
+        !bridgeClient.managedConfigured() -> "CONFIGURATION_REQUIRED"
+        bridgeToken.isBlank() -> "SETUP REQUIRED"
+        else -> "OFFLINE"
+    }
+    val bridgeStatusColor = when {
+        bridgeDisplayState == "RUNNING" -> ProfitGreen
+        bridgeDisplayState == "READY" -> ElectricCyan
+        bridgeDisplayState == "PAUSED" -> OrangeAccent
+        bridgeDisplayState.contains("STALE") || bridgeDisplayState == "ERROR" || bridgeDisplayState == "FAILED" || bridgeDisplayState == "OFFLINE" -> LossRed
         else -> WarningAmber
     }
     val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
@@ -265,13 +278,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
                     }
-                    Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${bridgeSnapshot?.let { if (!it.terminalOnline) "OFFLINE" else if (!it.heartbeatFresh) "STALE HEARTBEAT" else "ONLINE" } ?: "UNVERIFIED"} · EA: ${bridgeSnapshot?.state ?: "UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
-                    val news = bridgeSnapshot?.newsVerdict
+                    Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && bridgeSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) bridgeSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    val news = bridgeSnapshot?.newsVerdict.takeIf { bridgeIdentityFresh }
                     val newsStatus = news?.optString("status", "UNKNOWN")?.uppercase() ?: "UNKNOWN"
                     Text(if (newsStatus == "CLEAR") "NEWS CLEAR · ${news?.optString("source", "provider")}" else if (newsStatus == "HIGH_IMPACT_WINDOW") "HIGH-IMPACT NEWS — TRADING BLOCKED" else "NEWS UNKNOWN — TRADING BLOCKED", color = if (newsStatus == "CLEAR") ProfitGreen else LossRed, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     Text("News: ${news?.optString("detail", "Authenticated news verdict unavailable") ?: "Authenticated news verdict unavailable"} · retrieved ${news?.optString("retrieved_at_ms", "unavailable") ?: "unavailable"} · event ${news?.optString("event_time_ms", "unavailable") ?: "unavailable"}", color = TextSecondary, fontSize = 10.sp)
                     Text(reportStatus, color = TextSecondary, fontSize = 10.sp)
-                    Text("Selected profile: $selectedAccountMode · Verified terminal: ${bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified"} · Actual mode: ${bridgeSnapshot?.actualAccountMode?.ifBlank { "UNVERIFIED" } ?: "UNVERIFIED"}", color = TextSecondary, fontSize = 10.sp)
+                    Text("Selected profile: $selectedAccountMode · Verified terminal: ${if (bridgeIdentityFresh) bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified" else "STALE / UNVERIFIED"} · Actual mode: ${if (bridgeIdentityFresh) bridgeSnapshot?.actualAccountMode?.ifBlank { "UNVERIFIED" } ?: "UNVERIFIED" else "UNVERIFIED"}", color = TextSecondary, fontSize = 10.sp)
                     Text("Managed service: ${if (bridgeClient.managedConfigured()) "configured" else "CONFIGURATION_REQUIRED"}", color = TextSecondary, fontSize = 10.sp)
                     OutlinedTextField(
                         value = managedBridgeUrlInput,
