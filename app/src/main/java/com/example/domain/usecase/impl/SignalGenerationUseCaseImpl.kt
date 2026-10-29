@@ -291,6 +291,17 @@ class SignalGenerationUseCaseImpl(
         }
     }
 
+    private fun toQuote(t: MarketTicker): MarketQuote? {
+        val cls = AssetClassifier.of(t.symbol)
+        return if (t.bid != null && t.ask != null && t.hasRealSpread) MarketQuote.twoSided(t.symbol, cls, t.bid, t.ask, t.lastUpdateMillis, t.lastUpdateMillis, t.source)
+        else MarketQuote.lastOnly(t.symbol, cls, t.price, t.lastUpdateMillis, t.lastUpdateMillis, t.source)
+    }
+
+    private fun unavailable(symbol: String, tf: String, why: String, health: String) = TradeSignal(
+        id = UUID.randomUUID().toString(), symbol = symbol, timeframe = tf, direction = SignalDirection.WAIT, entryPrice = 0.0, stopLoss = 0.0, takeProfit = 0.0,
+        confidenceScore = 0, rationale = why, timestamp = clock(), signalState = SignalState.DATA_UNAVAILABLE.name, blockReasons = listOf(why), reasons = listOf(why), dataHealth = health)
+}
+
 
 /** Stable per-closed-candle identity keeps repeated scans from re-entering the same setup. */
 internal fun stableAnalysisSignalId(symbol: String, timeframe: String, strategyId: String, closedCandleTimestamp: Long): String {
@@ -333,13 +344,3 @@ internal fun signalDirectionFor(
     }
 }
 
-    private fun toQuote(t: MarketTicker): MarketQuote? {
-        val cls = AssetClassifier.of(t.symbol)
-        return if (t.bid != null && t.ask != null && t.hasRealSpread) MarketQuote.twoSided(t.symbol, cls, t.bid, t.ask, t.lastUpdateMillis, t.lastUpdateMillis, t.source)
-        else MarketQuote.lastOnly(t.symbol, cls, t.price, t.lastUpdateMillis, t.lastUpdateMillis, t.source)
-    }
-
-    private fun unavailable(symbol: String, tf: String, why: String, health: String) = TradeSignal(
-        id = UUID.randomUUID().toString(), symbol = symbol, timeframe = tf, direction = SignalDirection.WAIT, entryPrice = 0.0, stopLoss = 0.0, takeProfit = 0.0,
-        confidenceScore = 0, rationale = why, timestamp = clock(), signalState = SignalState.DATA_UNAVAILABLE.name, blockReasons = listOf(why), reasons = listOf(why), dataHealth = health)
-}
