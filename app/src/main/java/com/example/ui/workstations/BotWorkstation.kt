@@ -2595,7 +2595,7 @@ private fun BridgeTelemetry(
         else -> unavailable
     }
     Text("Floating P/L: $floatingTotal ${current?.currency.orEmpty()}", color = TextPrimary, fontSize = 11.sp)
-    Text("OPEN POSITIONS (${positions?.size ?: unavailable}), color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    Text("OPEN POSITIONS (${positions?.size ?: unavailable})", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     if (positions == null || positions.isEmpty()) {
         Text(if (current != null && positions?.isEmpty() == true) "No open positions confirmed" else unavailable, color = TextSecondary, fontSize = 10.sp)
     }
