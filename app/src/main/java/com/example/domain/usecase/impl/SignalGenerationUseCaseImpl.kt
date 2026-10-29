@@ -262,7 +262,7 @@ class SignalGenerationUseCaseImpl(
                 stopLossReason = finalPlan?.slReason ?: "N/A",
                 takeProfitReason = finalPlan?.targets?.joinToString { "${it.label} ${it.price} (RR ${"%.2f".format(it.rr)}, ${it.source})" } ?: "N/A",
                 nearestHighYieldZone = finalPlan?.primary?.let { "${it.label} @ ${it.price} (1:${"%.2f".format(it.rr)})" } ?: "No qualified target",
-                profitZones = finalPlan?.targets?.map { com.example.domain.model.ProfitZone(it.label, it.price, it.rr, spec?.priceToPips(kotlin.math.abs(it.price - finalPlan.entry)) ?: 0.0, "", it.source) } ?: emptyList(),
+                profitZones = finalPlan?.targets?.map { com.example.domain.model.ProfitZone(it.label, it.price, it.rr, spec?.priceToPips(kotlin.math.abs(it.price - (finalPlan?.entry ?: 0.0))) ?: 0.0, "", it.source) } ?: emptyList(),
                 keyLevels = finalReport.levels.filter { !it.swept }.take(12).map { "${it.kind}: ${it.price}" },
                 strategyScores = finalReport.components.filter { it.isAvailable }.associate { it.name to (it.earned / it.available * 100).toInt().coerceIn(0, 100) },
                 signalState = finalState.name,
