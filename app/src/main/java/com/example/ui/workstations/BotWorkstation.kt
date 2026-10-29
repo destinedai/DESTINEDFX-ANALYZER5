@@ -767,13 +767,25 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .background((if (reqMarginVerified) ProfitGreen else WarningAmber).copy(alpha = 0.15f))
+                                .background((when {
+                                    reqMarginVerified -> ProfitGreen
+                                    bridgeMode && remoteMetrics != null -> ElectricCyan
+                                    else -> WarningAmber
+                                }).copy(alpha = 0.15f))
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = if (reqMarginVerified) "BROKER VERIFIED" else "UNVERIFIED",
+                                text = when {
+                                    reqMarginVerified -> "BROKER VERIFIED"
+                                    bridgeMode && remoteMetrics != null -> "MT5 EA CHECKS MARGIN"
+                                    else -> "UNVERIFIED"
+                                },
                                 fontSize = 8.sp,
-                                color = if (reqMarginVerified) ProfitGreen else WarningAmber,
+                                color = when {
+                                    reqMarginVerified -> ProfitGreen
+                                    bridgeMode && remoteMetrics != null -> ElectricCyan
+                                    else -> WarningAmber
+                                },
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace
                             )
@@ -843,11 +855,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val verifiedEquity = remoteMetrics?.equity?.takeIf { it.isFinite() && it >= 0.0 }
                         ?: if (localMetricsVerified) accountMetrics!!.equity.takeIf { it.isFinite() && it >= 0.0 } else null
                     val verifiedLeverage = remoteMetrics?.leverage ?: if (localMetricsVerified) accountMetrics!!.leverage.takeIf { it > 0 } else null
-                    val sizedResult = remember(activeSymbol, verifiedFreeMargin, riskPercent, effectiveEntry, effectiveSl) {
-                        if (verifiedFreeMargin != null) viewModel.sizeFor(activeSymbol, verifiedFreeMargin, riskPercent, effectiveEntry, effectiveSl) else null
+                    val sizingInputsVerified = verifiedFreeMargin != null && cmp > 0.0 &&
+                        effectiveEntry.isFinite() && effectiveEntry > 0.0 && effectiveSl.isFinite() && effectiveSl > 0.0
+                    val sizedResult = remember(activeSymbol, verifiedFreeMargin, riskPercent, effectiveEntry, effectiveSl, sizingInputsVerified) {
+                        if (sizingInputsVerified) viewModel.sizeFor(activeSymbol, verifiedFreeMargin!!, riskPercent, effectiveEntry, effectiveSl) else null
                     }
                     val lotDisplay = when {
                         verifiedFreeMargin == null -> "UNVERIFIED"
+                        !sizingInputsVerified -> "PLAN / PRICE REQUIRED"
                         sizedResult is com.destinedfx.core.risk.SizingResult.Sized -> "%.2f Lots".format(sizedResult.lots)
                         else -> "BLOCKED"
                     }
@@ -887,6 +902,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val marginStatusColor = when {
                         isMarginSafe -> ProfitGreen
                         marginAccountVerified && reqMarginVerified -> LossRed
+                        bridgeMode && remoteMetrics != null -> ElectricCyan
                         else -> WarningAmber
                     }
                     Box(
@@ -901,6 +917,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Text(
                                 text = when {
                                     !marginAccountVerified -> "MARGIN UNVERIFIED • FRESH ACCOUNT SNAPSHOT REQUIRED"
+                                    !reqMarginVerified && bridgeMode && remoteMetrics != null -> "MT5 EA VALIDATES MARGIN BEFORE EVERY ORDER"
                                     !reqMarginVerified -> "REQUIRED MARGIN UNVERIFIED • BROKER CHECK REQUIRED"
                                     isMarginSafe -> "BROKER MARGIN CHECK PASSED"
                                     else -> "INSUFFICIENT FREE MARGIN"
@@ -913,7 +930,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Text(
                                 text = when {
                                     !marginAccountVerified -> "No fresh account-bound free-margin snapshot is available. Saved capital is never treated as live free margin."
-                                    !reqMarginVerified -> "Required margin could not be verified by the connected broker. Remote MT5 still performs its own final margin check before any order."
+                                    !reqMarginVerified && bridgeMode && remoteMetrics != null -> "Free margin is from a fresh verified MT5 snapshot. The remote EA must confirm required margin at the actual order boundary; this panel does not declare an entry safe."
+                                    !reqMarginVerified -> "Required margin could not be verified by the connected broker. No margin pass is declared."
                                     isMarginSafe -> "Verified free margin (${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) covers broker-reported required margin (${String.format(java.util.Locale.US, "%.2f", reqMarginState)}). The terminal still performs final risk checks."
                                     else -> "Verified free margin (${String.format(java.util.Locale.US, "%.2f", freeMarginVal)}) is below broker-reported required margin (${String.format(java.util.Locale.US, "%.2f", reqMarginState)}). New entries must remain blocked."
                                 },
