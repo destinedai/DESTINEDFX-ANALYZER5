@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -104,7 +105,7 @@ class DerivDemoBotService : Service() {
             return
         }
         update("Running — scanning $symbol; no order is assumed confirmed")
-        while (isActive && !stopRequested) {
+        while (currentCoroutineContext().isActive && !stopRequested) {
             try {
                 val account = gateway.accountInfo.value
                 val balance = gateway.accountMetrics.value?.balance ?: account?.balance ?: 0.0
