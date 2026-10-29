@@ -12,6 +12,9 @@ import org.json.JSONObject
 import java.net.URI
 import java.net.InetAddress
 import java.math.BigInteger
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -444,6 +447,41 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             actualMode.equals(selectedProfile, true) && expectedLogin.isNotBlank() && actualLogin == expectedLogin &&
             expectedServer.isNotBlank() && actualServer == expectedServer && heartbeatFresh && terminalConnected &&
             tradeAllowed && accountVerified && newsClear && eaState.uppercase() in setOf("READY", "RUNNING", "PAUSED", "STOPPED") && selectedProfile.uppercase() in setOf("DEMO", "LIVE")
+
+        /** Null means a relevant closed deal is incomplete or has an invalid timestamp. */
+        internal fun recentClosedDealNetPnl(deals: List<JSONObject>, nowMillis: Long): Double? {
+            val cutoff = nowMillis - 7L * 24L * 60L * 60L * 1000L
+            var total = 0.0
+            for (deal in deals) {
+                val closedAt = parseIsoTimestampMillis(deal.optString("closed_at")) ?: return null
+                if (closedAt < cutoff) continue
+                var dealNet = 0.0
+                for (key in listOf("profit", "commission", "swap", "fees")) {
+                    if (!deal.has(key) || deal.isNull(key)) return null
+                    val value = deal.optDouble(key, Double.NaN)
+                    if (!value.isFinite()) return null
+                    dealNet += value
+                    if (!dealNet.isFinite()) return null
+                }
+                total += dealNet
+                if (!total.isFinite()) return null
+            }
+            return total
+        }
+
+        private fun parseIsoTimestampMillis(raw: String): Long? {
+            val match = Regex("""^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$""").matchEntire(raw.trim()) ?: return null
+            val fraction = match.groupValues[2]
+            val millis = if (fraction.isBlank()) "" else "." + fraction.padEnd(3, '0').take(3)
+            val normalized = match.groupValues[1] + millis + match.groupValues[3]
+            val pattern = if (millis.isEmpty()) "yyyy-MM-dd'T'HH:mm:ssXXX" else "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"
+            return runCatching {
+                SimpleDateFormat(pattern, Locale.US).apply {
+                    isLenient = false
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }.parse(normalized)?.time
+            }.getOrNull()
+        }
 
         internal fun isValidRiskPercent(value: Double): Boolean = value.isFinite() && value > 0.0 && value <= 1.0
         internal fun isValidDailyLossPercent(value: Double): Boolean = value.isFinite() && value > 0.0 && value <= 2.0
