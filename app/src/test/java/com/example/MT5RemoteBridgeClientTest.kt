@@ -118,6 +118,17 @@ class MT5RemoteBridgeClientTest {
         lastSignal = null, newsVerdict = null, raw = JSONObject()
     )
 
+    @Test fun serverReturnedTradeTargetListsMustBeCanonicalAndUnique() {
+        assertEquals(
+            listOf("1", "42"),
+            MT5RemoteBridgeClient.exactIdentifierList(JSONArray().put("1").put("42"))
+        )
+        assertEquals(null, MT5RemoteBridgeClient.exactIdentifierList(JSONArray()))
+        assertEquals(null, MT5RemoteBridgeClient.exactIdentifierList(JSONArray().put("1").put("1")))
+        assertEquals(null, MT5RemoteBridgeClient.exactIdentifierList(JSONArray().put(1)))
+        assertEquals(null, MT5RemoteBridgeClient.exactIdentifierList(JSONArray().put("0")))
+    }
+
     @Test fun recentClosedDealNetIncludesFeesAndRejectsUnknownFeeValues() {
         val now = Instant.parse("2026-10-29T12:00:00Z").toEpochMilli()
         val complete = JSONObject()
