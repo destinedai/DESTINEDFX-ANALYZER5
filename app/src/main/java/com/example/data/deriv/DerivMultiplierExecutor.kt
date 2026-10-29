@@ -11,6 +11,11 @@ class DerivMultiplierExecutor(
     private val accountId get() = account?.loginId.orEmpty()
     private val accountMode get() = account?.mode?.uppercase().orEmpty()
 
+    suspend fun hasActiveContracts(): Boolean = withContext(Dispatchers.IO) {
+        val current = account ?: return@withContext true
+        dao.knownContracts(current.loginId, current.mode.uppercase()).isNotEmpty()
+    }
+
     suspend fun reconcileBeforeNewEntries(): Boolean = withContext(Dispatchers.IO) {
         val current = account ?: return@withContext false
         if (gateway.connectionState.value != DerivConnectionState.CONNECTED) return@withContext false
