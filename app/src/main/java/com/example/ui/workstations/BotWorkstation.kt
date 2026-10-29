@@ -86,7 +86,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         )
     }
     val bridgeIdentityFresh = bridgeSnapshot?.let {
-        it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected && it.accountVerified &&
+        bridgeMode && it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected && it.accountVerified &&
             it.actualAccountMode == selectedAccountMode &&
             it.actualLogin == bridgeSecrets.getManagedMT5Login(selectedAccountMode) &&
             it.actualServer == bridgeSecrets.getManagedMT5Server(selectedAccountMode)
