@@ -193,6 +193,17 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                     letterSpacing = 0.4.sp
                                 )
                                 IconButton(
+                                    onClick = { viewModel.selectScreen(DestinedFXScreen.More) },
+                                    modifier = Modifier.size(30.dp).testTag("more_workspaces_button")
+                                ) {
+                                    Icon(
+                                        Icons.Default.MoreHoriz,
+                                        contentDescription = "More workspaces",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                IconButton(
                                     onClick = { showExportDialog = true },
                                     modifier = Modifier.size(30.dp).testTag("export_button")
                                 ) {
@@ -259,11 +270,8 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     .navigationBarsPadding()
                     .border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.8f)))
             ) {
-                // Primary website navigation stays visible on mobile; secondary tools live under More.
-                val moreDestinations = DestinedFXScreen.moreScreens
-                val bottomSelectedScreen = if (
-                    selectedScreen == DestinedFXScreen.More || selectedScreen in moreDestinations
-                ) DestinedFXScreen.More else selectedScreen
+                // Keep the six daily-use trading workspaces visible without opening More.
+                val bottomSelectedScreen = selectedScreen.takeIf { it in DestinedFXScreen.primaryScreens }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
