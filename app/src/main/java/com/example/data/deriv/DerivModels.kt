@@ -45,7 +45,9 @@ data class DerivProposalResult(
 data class DerivBuyResult(
     val contractId: Long,
     val transactionId: Long,
-    val buyPrice: Double
+    val buyPrice: Double,
+    val proposalId: String? = null,
+    val requestId: Int? = null
 )
 
 data class DerivSellResult(

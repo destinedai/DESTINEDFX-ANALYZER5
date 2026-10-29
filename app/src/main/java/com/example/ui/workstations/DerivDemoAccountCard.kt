@@ -163,7 +163,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
             }
             if (message.isNotBlank()) Text(message, color = if (message.contains("failed", true) || message.contains("could not", true)) LossRed else TextSecondary, fontSize = 10.sp)
             Text(
-                "Safety status: this build verifies and connects a DEMO account only. Automated entries remain blocked until a product-specific signal/risk mapping, persisted order reconciliation, and Android foreground-service recovery are implemented and tested. A connection does not mean the bot is running.",
+                "Safety status: this build verifies a DEMO account and supports only validated MULTUP/MULTDOWN contracts through the Bot foreground service. A connection does not mean the bot is running; unsupported Forex/CFD plans remain blocked.",
                 color = WarningAmber,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium

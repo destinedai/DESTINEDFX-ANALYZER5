@@ -46,6 +46,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.util.TradeReportManager
+import com.example.service.DerivDemoBotService
+import com.example.data.deriv.DerivMultiplierRules
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -103,6 +105,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     }
     val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
     val botActive by viewModel.botActive.collectAsStateWithLifecycle()
+    val derivServiceState by DerivDemoBotService.state.collectAsStateWithLifecycle()
+    val derivAccount by viewModel.app.derivBrokerGateway.accountInfo.collectAsStateWithLifecycle()
     val activeBrokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
     val activeBrokerGateway by viewModel.activeBrokerGateway.collectAsStateWithLifecycle()
     val brokerConnStatus by activeBrokerGateway.connectionStatus.collectAsStateWithLifecycle()
@@ -383,13 +387,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
         // Master Bot Control Card
         item {
-            val isRunning = if (bridgeMode) bridgeDisplayState in setOf("RUNNING", "PAUSED") else botSummary.isRunning || botActive
+            val isRunning = if (bridgeMode) bridgeDisplayState in setOf("RUNNING", "PAUSED") else if (activeBrokerType == BrokerType.DERIV) derivServiceState == "RUNNING" else botSummary.isRunning || botActive
             val bridgeFresh = bridgeTerminalFresh
             val bridgeReady = bridgeTerminalReady
             val bridgeCanStart = bridgeReady && (bridgeSnapshot?.state == "READY" || bridgeSnapshot?.state == "STOPPED")
             val supportedStrategy = selectedStrategyId in StrategyRegistry.managedStrategyIds
             val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
-            val derivExecutionBlocked = activeBrokerType == BrokerType.DERIV
+            val derivExecutionMode = activeBrokerType == BrokerType.DERIV
+            val derivSymbolSupported = DerivMultiplierRules.isSupportedUnderlying(activeSymbol)
             val statusColor = if (bridgeMode) bridgeStatusColor else when (botSummary.state) {
                 BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
                 BotLifecycleState.EXECUTING -> CyanPrimary
@@ -431,7 +436,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         Switch(
                             checked = isRunning,
-                            enabled = if (bridgeMode) (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)) else (!derivExecutionBlocked || !isRunning),
+                            enabled = if (bridgeMode) (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)) else if (derivExecutionMode) derivServiceState !in setOf("STARTING", "STOPPING") else true,
                             onCheckedChange = { active ->
                                 if (bridgeMode) coroutineScope.launch {
                                     bridgeBusy = true
@@ -447,8 +452,20 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     if (active && (!MT5RemoteBridgeClient.isValidRiskPercent(riskPercent))) { bridgeMessage = "Blocked: risk must be finite and in (0, 1]%; no clamping applied."; bridgeBusy = false; return@launch }
                                     if (active && !bridgeCanStart) { bridgeMessage = "Blocked: verified account must be READY or STOPPED with a fresh, trade-authorized heartbeat."; bridgeBusy = false; return@launch }
                                     sendBridgeCommand(bridgeClient, action, config, bridgeSecrets, selectedAccountMode, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it })
-                                } else if (active && derivExecutionBlocked) {
-                                    statusMessage = "START BLOCKED — Deriv Multiplier execution requires a product-specific signal/risk mapping and durable foreground-service reconciliation. Account connection does not start trading."
+                                } else if (derivExecutionMode) {
+                                    if (active) {
+                                        when {
+                                            derivAccount?.demoVerified != true -> statusMessage = "START BLOCKED — verify an active DEMO account first."
+                                            !derivSymbolSupported -> statusMessage = "START BLOCKED — $activeSymbol is a Forex/CFD symbol, not a supported Deriv Multiplier underlying. Select an available synthetic index."
+                                            else -> {
+                                                DerivDemoBotService.start(reportContext, activeSymbol, selectedStrategyId, selectedTimeframe)
+                                                statusMessage = "START REQUESTED — waiting for the foreground service to verify the Demo account and broker state."
+                                            }
+                                        }
+                                    } else {
+                                        DerivDemoBotService.stop(reportContext)
+                                        statusMessage = "STOP REQUESTED — no new entry requests will be generated; known contracts remain broker-tracked."
+                                    }
                                 } else viewModel.setBotStatus(active) { success, err ->
                                     statusMessage = if (success) { if (active) "24/7 Surveillance Engine activated" else "Surveillance stopped" } else err ?: "Failed to change engine state"
                                 }
@@ -464,9 +481,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
 
                     HorizontalDivider(color = TabBorder)
-                    if (derivExecutionBlocked) {
+                    if (derivExecutionMode) {
                         Text(
-                            "DERIV DEMO BOT: STOPPED · automated entries are blocked pending product-specific Multiplier safeguards. This is not a Forex/CFD or MT5 risk model.",
+                            "DERIV DEMO MULTIPLIER: $derivServiceState · supports only MULTUP/MULTDOWN on verified synthetic underlyings. Forex/CFD plans and MT5 execution remain blocked.",
                             color = WarningAmber,
                             fontWeight = FontWeight.Bold,
                             fontSize = 10.sp

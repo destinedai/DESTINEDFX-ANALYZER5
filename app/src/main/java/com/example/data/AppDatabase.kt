@@ -10,12 +10,15 @@ import com.example.data.trade.TradeEntity
 import com.example.data.trade.TradeDao
 import com.example.data.user.User
 import com.example.data.user.UserDao
+import com.example.data.deriv.DerivExecutionDao
+import com.example.data.deriv.DerivExecutionEntity
 
-@Database(entities = [TradeEntity::class, User::class, AnalysisEntity::class], version = 4, exportSchema = false)
+@Database(entities = [TradeEntity::class, User::class, AnalysisEntity::class, DerivExecutionEntity::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tradeDao(): TradeDao
     abstract fun userDao(): UserDao
     abstract fun analysisDao(): AnalysisDao
+    abstract fun derivExecutionDao(): DerivExecutionDao
 
     companion object {
         @Volatile
@@ -50,6 +53,38 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS deriv_execution_intents (
+                        signalId TEXT NOT NULL PRIMARY KEY,
+                        product TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        direction TEXT NOT NULL,
+                        stake REAL NOT NULL,
+                        currency TEXT NOT NULL,
+                        multiplier INTEGER NOT NULL,
+                        stopLossAmount REAL NOT NULL,
+                        takeProfitAmount REAL NOT NULL,
+                        strategyId TEXT NOT NULL,
+                        strategyVersion TEXT NOT NULL,
+                        signalTimestampMs INTEGER NOT NULL,
+                        requestId INTEGER,
+                        proposalId TEXT,
+                        contractId INTEGER,
+                        buyTransactionId INTEGER,
+                        sellTransactionId INTEGER,
+                        purchasePrice REAL,
+                        settlementValue REAL,
+                        settlementProfit REAL,
+                        status TEXT NOT NULL,
+                        lastError TEXT,
+                        updatedAtMs INTEGER NOT NULL
+                    )
+                """.trimIndent())
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -57,7 +92,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "destinedfx_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .fallbackToDestructiveMigrationOnDowngrade(false)
                 .build()
                 INSTANCE = instance

@@ -441,49 +441,47 @@ class DerivBrokerGateway(
      * The limit_order values are cash-denominated P/L thresholds in account currency; they are
      * not the same as chart-price stops on an MT5/CFD position. Stake is the maximum risk amount.
      */
-    private suspend fun executeOrder(
-        symbol: String,
-        stake: Double,
-        isBuy: Boolean,
-        rewardToRisk: Double = 2.0
-    ): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
+    /**
+     * Product-specific purchase path. This is intentionally not part of BrokerGateway because
+     * CanonicalTradePlan carries Forex/CFD semantics that cannot safely describe a multiplier.
+     */
+    suspend fun executeMultiplier(intent: DerivMultiplierIntent): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.CONNECTED) {
             return@withContext Result.failure(Exception("Deriv broker is not connected. Please connect in the Bot tab."))
         }
-        if (!stake.isFinite() || stake <= 0.0) {
-            return@withContext Result.failure(Exception("CANNOT_SIZE_WITHIN_RISK_LIMIT: Stake must be positive and finite."))
+        val account = _accountInfo.value
+            ?: return@withContext Result.failure(Exception("DEMO_ACCOUNT_UNVERIFIED: no verified Demo account snapshot is available."))
+        if (!account.demoVerified || account.accountType != "demo") {
+            return@withContext Result.failure(Exception("DEMO_ONLY: the direct Multiplier path accepts Demo accounts only."))
         }
-        if (!rewardToRisk.isFinite() || rewardToRisk < 2.0) {
-            return@withContext Result.failure(Exception("TRADE_PLAN_INVALID: Deriv multiplier execution requires a validated minimum 2.0R plan."))
-        }
-        if (symbol.isBlank()) {
-            return@withContext Result.failure(Exception("UNSUPPORTED_INSTRUMENT: Missing Deriv underlying symbol."))
-        }
+        val balance = _accountMetrics.value?.balance ?: account.balance
+        val validation = DerivMultiplierRules.validate(intent, balance, account.currency)
+        if (!validation.valid) return@withContext Result.failure(Exception(validation.reason ?: "Multiplier intent rejected"))
 
-        // Conservative multiplier size; this is NOT a conventional lot size.
-        val multiplier = 10
-        val rewardLimit = stake * rewardToRisk
-        if (!rewardLimit.isFinite() || rewardLimit <= 0.0) {
-            return@withContext Result.failure(Exception("TRADE_PLAN_INVALID: Monetary take-profit could not be calculated."))
+        val currentQuote = getQuote(intent.symbol)
+        if (currentQuote.isFailure) {
+            return@withContext Result.failure(currentQuote.exceptionOrNull() ?: Exception("DATA_UNAVAILABLE: current Deriv quote is required"))
+        }
+        if (currentQuote.getOrThrow().timestampMs <= 0L) {
+            return@withContext Result.failure(Exception("DATA_STALE: Deriv quote did not contain a valid broker timestamp"))
         }
 
         // 1. Request a proposal using the current API schema and cash-based protective limits.
         val propReqId = reqIdCounter.getAndIncrement()
         val propDeferred = CompletableDeferred<JSONObject>()
         pendingRequests[propReqId] = propDeferred
-        val propType = if (isBuy) "MULTUP" else "MULTDOWN"
         val propPayload = JSONObject().apply {
             put("proposal", 1)
-            put("amount", stake)
+            put("amount", intent.stake)
             put("basis", "stake")
-            put("contract_type", propType)
-            put("currency", _accountInfo.value?.currency ?: "USD")
+            put("contract_type", intent.product.contractType)
+            put("currency", intent.currency)
             put("duration_unit", "s")
-            put("multiplier", multiplier)
-            put("underlying_symbol", symbol)
+            put("multiplier", intent.multiplier)
+            put("underlying_symbol", intent.symbol)
             put("limit_order", JSONObject().apply {
-                put("stop_loss", stake)
-                put("take_profit", rewardLimit)
+                put("stop_loss", intent.stopLossAmount)
+                put("take_profit", intent.takeProfitAmount)
             })
             put("subscribe", 1)
             put("req_id", propReqId)
@@ -550,7 +548,7 @@ class DerivBrokerGateway(
             }
             subscribeOpenContract(contractId)
             fetchPortfolio()
-            Result.success(DerivBuyResult(contractId, txId, boughtPrice))
+            Result.success(DerivBuyResult(contractId, txId, boughtPrice, proposalId, buyReqId))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
