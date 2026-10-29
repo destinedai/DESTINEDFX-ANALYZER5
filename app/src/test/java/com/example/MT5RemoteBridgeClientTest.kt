@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.trade.MT5RemoteBridgeClient
+import java.time.Instant
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -116,6 +117,29 @@ class MT5RemoteBridgeClientTest {
         positions = emptyList(), activeOrders = orders, closedDeals = emptyList(), snapshotsValid = true,
         lastSignal = null, newsVerdict = null, raw = JSONObject()
     )
+
+    @Test fun recentClosedDealNetIncludesFeesAndRejectsUnknownFeeValues() {
+        val now = Instant.parse("2026-10-29T12:00:00Z").toEpochMilli()
+        val complete = JSONObject()
+            .put("closed_at", "2026-10-29T11:00:00.123456Z")
+            .put("profit", 10.0).put("commission", -2.0).put("swap", -1.0).put("fees", -0.5)
+        assertEquals(6.5, MT5RemoteBridgeClient.recentClosedDealNetPnl(listOf(complete), now)!!, 0.0)
+
+        val unknownFee = JSONObject()
+            .put("closed_at", "2026-10-29T11:00:00Z")
+            .put("profit", 10.0).put("commission", -2.0).put("swap", -1.0)
+        assertEquals(null, MT5RemoteBridgeClient.recentClosedDealNetPnl(listOf(unknownFee), now))
+        unknownFee.put("fees", JSONObject.NULL)
+        assertEquals(null, MT5RemoteBridgeClient.recentClosedDealNetPnl(listOf(unknownFee), now))
+    }
+
+    @Test fun recentClosedDealNetRejectsInvalidTimestampsAndIgnoresOldDeals() {
+        val now = Instant.parse("2026-10-29T12:00:00Z").toEpochMilli()
+        val old = JSONObject().put("closed_at", "2026-10-20T11:00:00Z").put("profit", 10.0)
+        assertEquals(0.0, MT5RemoteBridgeClient.recentClosedDealNetPnl(listOf(old), now)!!, 0.0)
+        val invalidTime = JSONObject().put("closed_at", "unknown").put("profit", 1.0)
+        assertEquals(null, MT5RemoteBridgeClient.recentClosedDealNetPnl(listOf(invalidTime), now))
+    }
 
     @Test fun runtimeBridgeUrlOverridesBuildDefaultOnlyWhenItIsValid() {
         assertEquals("https://bridge.realcop.com", MT5RemoteBridgeClient.resolveServiceOrigin(
