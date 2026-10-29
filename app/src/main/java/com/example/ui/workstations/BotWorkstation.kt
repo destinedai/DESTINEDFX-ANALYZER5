@@ -239,11 +239,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(DarkBackground)
-            .padding(16.dp),
+            .padding(16.dp)
+            .testTag("bot_workstation_root"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), modifier = Modifier.fillMaxWidth()) {
+            Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), modifier = Modifier.fillMaxWidth().testTag("mt5_remote_bridge_card")) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("REMOTE MT5 EA BRIDGE", modifier = Modifier.weight(1f), color = ElectricCyan, fontWeight = FontWeight.Bold)
@@ -332,16 +333,22 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     BridgeTelemetry(bridgeSnapshot)
                     val actionSnapshot = bridgeSnapshot
                     val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshot != null && !bridgeBusy && !bridgeCommandPending
+                    Text("SNAPSHOT-BOUND MANAGEMENT · $selectedAccountMode", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_snapshot_management_header"))
                     if (actionSnapshot != null && actionSnapshot.snapshotsValid) {
-                        Text("SNAPSHOT-BOUND MANAGEMENT (requires current verified $selectedAccountMode account)", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        actionSnapshot.activeOrders.orEmpty().forEach { order ->
+                        val verifiedOrders = actionSnapshot.activeOrders.orEmpty()
+                        Text("PENDING ORDERS (${verifiedOrders.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_pending_orders_section"))
+                        if (verifiedOrders.isEmpty()) Text("No pending orders confirmed for this account.", color = TextSecondary, fontSize = 10.sp)
+                        verifiedOrders.forEach { order ->
                             val orderTicket = MT5RemoteBridgeClient.exactIdentifier(order, "ticket")
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text("${order.optString("direction", "TYPE UNKNOWN")} ${order.optString("symbol", "?")} · ticket ${orderTicket ?: "unavailable"} · ${order.optString("state", "state unavailable")}", color = TextPrimary, fontSize = 10.sp)
                                     Text("Remaining ${order.optString("remaining_volume", "unavailable")} · SL ${order.optString("stop_loss", "unavailable")} · TP ${order.optString("take_profit", "unavailable")} · EA ownership ${if (order.opt("managed_by_ea") is Boolean) if (order.optBoolean("managed_by_ea")) "MANAGED" else "NOT MANAGED" else "UNVERIFIED"}", color = TextSecondary, fontSize = 9.sp)
                                 }
-                                OutlinedButton(enabled = actionsReady && orderTicket != null, onClick = {
+                                OutlinedButton(
+                                    enabled = actionsReady && orderTicket != null,
+                                    modifier = Modifier.testTag("mt5_cancel_order_${orderTicket ?: "unavailable"}"),
+                                    onClick = {
                                     if (bridgeBusy || bridgeCommandPending || orderTicket == null) return@OutlinedButton
                                     bridgeBusy = true
                                     coroutineScope.launch {
@@ -356,7 +363,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
                         if (MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot) != null) {
-                            OutlinedButton(enabled = actionsReady && MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot) != null, onClick = {
+                            OutlinedButton(
+                                enabled = actionsReady && MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot) != null,
+                                modifier = Modifier.testTag("mt5_cancel_ea_pending_orders"),
+                                onClick = {
                                 if (bridgeBusy || bridgeCommandPending) return@OutlinedButton
                                 bridgeBusy = true
                                 coroutineScope.launch {
@@ -370,7 +380,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }
                             }) { Text("CANCEL EA PENDING ORDERS") }
                         }
-                        actionSnapshot.positions.orEmpty().forEach { position ->
+                        val verifiedPositions = actionSnapshot.positions.orEmpty()
+                        Text("OPEN POSITIONS (${verifiedPositions.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_open_positions_section"))
+                        if (verifiedPositions.isEmpty()) Text("No open positions confirmed for this account.", color = TextSecondary, fontSize = 10.sp)
+                        verifiedPositions.forEach { position ->
                             val positionTicket = MT5RemoteBridgeClient.exactIdentifier(position, "ticket")
                             val positionId = MT5RemoteBridgeClient.exactIdentifier(position, "position_id")
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -378,7 +391,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     Text("${position.optString("direction", "TYPE UNKNOWN")} ${position.optString("symbol", "?")} · ticket ${positionTicket ?: "unavailable"}", color = TextPrimary, fontSize = 10.sp)
                                     Text("Volume ${position.optString("volume", "unavailable")} · P/L ${position.optString("floating_profit", "unavailable")} · SL ${position.optString("stop_loss", "unavailable")} · TP ${position.optString("take_profit", "unavailable")} · EA ownership ${if (position.opt("managed_by_ea") is Boolean) if (position.optBoolean("managed_by_ea")) "MANAGED" else "NOT MANAGED" else "UNVERIFIED"}", color = TextSecondary, fontSize = 9.sp)
                                 }
-                                OutlinedButton(enabled = actionsReady && positionId != null, onClick = {
+                                OutlinedButton(
+                                    enabled = actionsReady && positionId != null,
+                                    modifier = Modifier.testTag("mt5_close_position_${positionId ?: "unavailable"}"),
+                                    onClick = {
                                     if (bridgeBusy || bridgeCommandPending || positionId == null) return@OutlinedButton
                                     bridgeBusy = true
                                     coroutineScope.launch {
@@ -392,14 +408,34 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }) { Text("CLOSE", fontSize = 9.sp) }
                             }
                         }
-                        if (actionSnapshot.positions.orEmpty().isNotEmpty()) {
-                            Button(enabled = actionsReady && MT5RemoteBridgeClient.positionIdList(actionSnapshot) != null, onClick = { showCloseAllDialog = true }) { Text("CLOSE ALL POSITIONS…") }
+                        val currentPositionIds = MT5RemoteBridgeClient.positionIdList(actionSnapshot)
+                        Button(
+                            enabled = actionsReady && currentPositionIds?.isNotEmpty() == true,
+                            onClick = { if (actionsReady && currentPositionIds?.isNotEmpty() == true) showCloseAllDialog = true },
+                            modifier = Modifier.fillMaxWidth().testTag("mt5_close_all_positions")
+                        ) {
+                            Text(
+                                text = when {
+                                    currentPositionIds == null -> "CLOSE ALL POSITIONS — UNAVAILABLE"
+                                    currentPositionIds.isEmpty() -> "CLOSE ALL POSITIONS — NONE CONFIRMED"
+                                    else -> "CLOSE ALL POSITIONS (${currentPositionIds.size})…"
+                                },
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
+                    } else {
+                        Text("PENDING ORDERS · UNAVAILABLE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_pending_orders_section"))
+                        Text("Order actions require a fresh, verified terminal snapshot.", color = WarningAmber, fontSize = 10.sp)
+                        OutlinedButton(enabled = false, onClick = {}, modifier = Modifier.testTag("mt5_cancel_ea_pending_orders")) { Text("CANCEL EA PENDING ORDERS") }
+                        Text("OPEN POSITIONS · UNAVAILABLE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_open_positions_section"))
+                        Text("Position actions require a fresh, verified terminal snapshot.", color = WarningAmber, fontSize = 10.sp)
+                        Button(enabled = false, onClick = {}, modifier = Modifier.fillMaxWidth().testTag("mt5_close_all_positions")) { Text("CLOSE ALL POSITIONS — VERIFY CONNECTION", fontSize = 10.sp) }
                     }
                     if (showCloseAllDialog) AlertDialog(
                         onDismissRequest = { if (!bridgeBusy) showCloseAllDialog = false },
                         title = { Text("Close every current position?") },
-                        text = { Text("This sends a close command for every position in the fresh verified $selectedAccountMode account snapshot. Orders are not included. It is irreversible and is not a STOP/EMERGENCY_STOP action. A one-use server confirmation token is required; no success is shown until every result and fresh telemetry reconcile.") },
+                        text = { Text("Account ${actionSnapshot?.actualLogin?.takeIf { it.isNotBlank() } ?: "unverified"} @ ${actionSnapshot?.actualServer?.takeIf { it.isNotBlank() } ?: "unverified"} · profile $selectedAccountMode · positions ${actionSnapshot?.positions?.size ?: "unavailable"}. This closes every position in the fresh verified snapshot; pending orders are not included. It is irreversible and is not STOP/EMERGENCY STOP. A one-use server token is required, and no success is shown until every result and fresh telemetry reconcile.") },
                         confirmButton = { TextButton(enabled = !bridgeBusy && !bridgeCommandPending, onClick = {
                             showCloseAllDialog = false
                             if (bridgeBusy || bridgeCommandPending) return@TextButton
@@ -1378,7 +1414,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         // Open Demo / Real Helper Row
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Card(
-                                onClick = { brokerConnectionMessage = "Demo accounts must be opened directly with a broker; this app cannot create one." },
+                                onClick = { showOpenDemoDialog = true },
                                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.weight(1f).testTag("open_demo_account_card")
@@ -1393,7 +1429,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
 
                             Card(
-                                onClick = { brokerConnectionMessage = "Real accounts must be opened directly with a broker." },
+                                onClick = { showOpenRealDialog = true },
                                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.weight(1f).testTag("open_real_account_card")
