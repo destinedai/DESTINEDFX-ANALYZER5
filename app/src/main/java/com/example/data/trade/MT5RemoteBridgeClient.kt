@@ -190,7 +190,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         val reply = request("POST", "/v1/app/close-all-confirmation", JSONObject().put("confirm_close_all", true))
         val token = reply.optString("confirmation_token").ifBlank { reply.optString("token") }
         require(token.isNotBlank()) { "Bridge returned no close-all confirmation token." }
-        CloseAllConfirmation(token, reply.optString("expires_at"), ticketIds)
+        return CloseAllConfirmation(token, reply.optString("expires_at"), ticketIds)
     }
 
     private fun tradeActionFailure(snapshot: Snapshot, action: String, config: JSONObject): String? {
