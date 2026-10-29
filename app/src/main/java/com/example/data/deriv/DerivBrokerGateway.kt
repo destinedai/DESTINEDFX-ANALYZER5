@@ -104,9 +104,10 @@ class DerivBrokerGateway(
             _connectionState.value = DerivConnectionState.AUTH_FAILED
             return@withContext Result.failure(Exception("Secure Android Keystore storage is unavailable; Deriv connection is blocked."))
         }
-        if (secrets.getDerivAccountMode() != "demo") {
+        val requestedMode = secrets.getDerivAccountMode().lowercase()
+        if (requestedMode == "real" && !secrets.isDerivRealExecutionEnabled()) {
             _connectionState.value = DerivConnectionState.AUTH_FAILED
-            return@withContext Result.failure(Exception("DERIV API — DEMO MULTIPLIERS accepts Demo accounts only."))
+            return@withContext Result.failure(Exception("REAL execution is disabled by default; explicitly authorize the REAL profile after independent review."))
         }
         val token = (apiToken ?: secrets.getDerivApiToken()).trim()
         if (token.isBlank()) {
@@ -143,11 +144,9 @@ class DerivBrokerGateway(
             val accounts = accountJson.optJSONArray("data")
                 ?: throw IllegalStateException("Deriv account-list response did not contain a data array.")
 
-            // This connector is Demo-only even if a broker token can see both account classes.
-            val requestedMode = "demo"
             val activeAccounts = (0 until accounts.length()).mapNotNull { accounts.optJSONObject(it) }
                 .filter { it.optString("status").equals("active", ignoreCase = true) }
-            val account = selectDerivDemoOptionsAccount(accounts)
+            val account = selectDerivOptionsAccount(accounts, requestedMode)
             if (account == null) {
                 val available = activeAccounts.map { it.optString("account_type").ifBlank { "unknown" } }.distinct()
                 throw IllegalStateException(
@@ -177,8 +176,9 @@ class DerivBrokerGateway(
                 .build()
             val otpJson = executeRestJson(otpRequest)
             val authenticatedUrl = otpJson.optJSONObject("data")?.optString("url")?.trim().orEmpty()
-            if (!authenticatedUrl.startsWith(AUTHENTICATED_WS_PREFIX)) {
-                throw IllegalStateException("Deriv OTP response did not include a valid authenticated WebSocket URL.")
+            val expectedEndpoint = "/trading/v1/options/ws/$requestedMode"
+            if (!authenticatedUrl.startsWith(AUTHENTICATED_WS_PREFIX) || !authenticatedUrl.substringBefore('?').endsWith(expectedEndpoint)) {
+                throw IllegalStateException("Deriv OTP response did not select the requested ${requestedMode.uppercase()} authenticated endpoint.")
             }
 
             val wsDeferred = CompletableDeferred<Boolean>()
@@ -235,10 +235,12 @@ class DerivBrokerGateway(
                 balance = initialBalance,
                 email = "",
                 accountType = account.optString("account_type").lowercase(),
-                demoVerified = account.optString("account_type").equals("demo", ignoreCase = true)
+                demoVerified = account.optString("account_type").equals("demo", ignoreCase = true),
+                mode = requestedMode,
+                realExecutionAuthorized = requestedMode == "real" && secrets.isDerivRealExecutionEnabled()
             )
-            if (!info.demoVerified) {
-                throw IllegalStateException("Deriv did not verify this as a Demo account; connection was rejected.")
+            if (!account.optString("account_type").equals(requestedMode, ignoreCase = true)) {
+                throw IllegalStateException("Deriv returned an account-mode mismatch; requested $requestedMode but received ${account.optString("account_type") }.")
             }
             _accountInfo.value = info
             _accountMetrics.value = AccountMetrics(
@@ -445,18 +447,45 @@ class DerivBrokerGateway(
      * Product-specific purchase path. This is intentionally not part of BrokerGateway because
      * CanonicalTradePlan carries Forex/CFD semantics that cannot safely describe a multiplier.
      */
-    suspend fun executeMultiplier(intent: DerivMultiplierIntent): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
+    private suspend fun isBrokerSupportedSymbol(symbol: String, product: DerivMultiplierProduct): Boolean {
+        val reqId = reqIdCounter.getAndIncrement()
+        val deferred = CompletableDeferred<JSONObject>()
+        pendingRequests[reqId] = deferred
+        val payload = JSONObject().apply {
+            put("active_symbols", "brief")
+            put("contract_type", org.json.JSONArray().put(product.contractType))
+            put("req_id", reqId)
+        }
+        if (webSocket?.send(payload.toString()) != true) { pendingRequests.remove(reqId); return false }
+        return try {
+            val response = withTimeout(5_000) { deferred.await() }
+            val rows = response.optJSONArray("active_symbols") ?: return false
+            (0 until rows.length()).any { rows.optJSONObject(it)?.optString("symbol") == symbol }
+        } catch (_: Exception) { false } finally { pendingRequests.remove(reqId) }
+    }
+
+    suspend fun executeMultiplier(
+        intent: DerivMultiplierIntent,
+        onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit = { _, _, _ -> }
+    ): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.CONNECTED) {
             return@withContext Result.failure(Exception("Deriv broker is not connected. Please connect in the Bot tab."))
         }
         val account = _accountInfo.value
-            ?: return@withContext Result.failure(Exception("DEMO_ACCOUNT_UNVERIFIED: no verified Demo account snapshot is available."))
-        if (!account.demoVerified || account.accountType != "demo") {
-            return@withContext Result.failure(Exception("DEMO_ONLY: the direct Multiplier path accepts Demo accounts only."))
+            ?: return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "ACCOUNT_UNVERIFIED: no verified Deriv account snapshot is available."))
+        val mode = secrets.getDerivAccountMode().lowercase()
+        if (account.loginId.isBlank() || account.mode != mode || account.accountType != mode) {
+            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "ACCOUNT_MODE_MISMATCH: selected account does not match the requested profile."))
+        }
+        if (mode == "real" && !account.realExecutionAuthorized) {
+            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "REAL_EXECUTION_DISABLED: live order boundary is disabled."))
         }
         val balance = _accountMetrics.value?.balance ?: account.balance
         val validation = DerivMultiplierRules.validate(intent, balance, account.currency)
-        if (!validation.valid) return@withContext Result.failure(Exception(validation.reason ?: "Multiplier intent rejected"))
+        if (!validation.valid) return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, validation.reason ?: "Multiplier intent rejected"))
+        if (!isBrokerSupportedSymbol(intent.symbol, intent.product)) {
+            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "UNSUPPORTED_SYMBOL: broker did not validate ${intent.symbol} for ${intent.product.contractType}."))
+        }
 
         val currentQuote = getQuote(intent.symbol)
         if (currentQuote.isFailure) {
@@ -486,9 +515,10 @@ class DerivBrokerGateway(
             put("subscribe", 1)
             put("req_id", propReqId)
         }
+        onStage(propReqId, null, DerivSubmissionStage.PROPOSAL_SENT)
         if (webSocket?.send(propPayload.toString()) != true) {
             pendingRequests.remove(propReqId)
-            return@withContext Result.failure(Exception("BROKER_DISCONNECTED: Deriv WebSocket rejected the proposal request before it was sent."))
+            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PROPOSAL_TIMEOUT, "PROPOSAL_NOT_SENT: Deriv WebSocket rejected the proposal request before it was sent.", propReqId, submissionStage = DerivSubmissionStage.VALIDATED))
         }
 
         val proposalId: String
@@ -498,20 +528,22 @@ class DerivBrokerGateway(
             val err = propResp.optJSONObject("error")
             if (err != null) {
                 return@withContext Result.failure(
-                    Exception("Deriv proposal rejected (${err.optString("code")}): ${err.optString("message")}")
+                    DerivExecutionFailure(DerivExecutionFailureKind.PROPOSAL_REJECTED, "PROPOSAL_REJECTED: ${err.optString("code")}: ${err.optString("message")}", propReqId, submissionStage = DerivSubmissionStage.PROPOSAL_SENT)
                 )
             }
             val p = propResp.optJSONObject("proposal")
-                ?: return@withContext Result.failure(Exception("Deriv did not return a proposal object."))
+                ?: return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PROPOSAL_REJECTED, "PROPOSAL_REJECTED: Deriv did not return a proposal object.", propReqId, submissionStage = DerivSubmissionStage.PROPOSAL_SENT))
             proposalId = p.optString("id").trim()
             askPrice = p.optDouble("ask_price", Double.NaN)
             if (proposalId.isBlank() || !askPrice.isFinite() || askPrice <= 0.0) {
-                return@withContext Result.failure(Exception("Deriv proposal omitted a valid ID or ask_price; no order was sent."))
+                return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PROPOSAL_REJECTED, "PROPOSAL_REJECTED: Deriv omitted a valid ID or ask_price; no order was sent.", propReqId, submissionStage = DerivSubmissionStage.PROPOSAL_CONFIRMED))
             }
+            onStage(propReqId, proposalId, DerivSubmissionStage.PROPOSAL_CONFIRMED)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            return@withContext Result.failure(Exception("Deriv proposal request failed: ${error.message ?: error.javaClass.simpleName}"))
+            val kind = if (error is kotlinx.coroutines.TimeoutCancellationException) DerivExecutionFailureKind.PROPOSAL_TIMEOUT else DerivExecutionFailureKind.PROPOSAL_REJECTED
+            return@withContext Result.failure(DerivExecutionFailure(kind, "${kind.name}: ${error.message ?: error.javaClass.simpleName}", propReqId, submissionStage = DerivSubmissionStage.PROPOSAL_SENT))
         } finally {
             pendingRequests.remove(propReqId)
         }
@@ -525,9 +557,10 @@ class DerivBrokerGateway(
             put("price", askPrice)
             put("req_id", buyReqId)
         }
+        onStage(buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT)
         if (webSocket?.send(buyPayload.toString()) != true) {
             pendingRequests.remove(buyReqId)
-            return@withContext Result.failure(Exception("BROKER_DISCONNECTED: Deriv WebSocket rejected the buy request before it was sent."))
+            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_NOT_SENT, "PURCHASE_NOT_SENT: Deriv WebSocket rejected the buy request before transmission.", buyReqId, proposalId, DerivSubmissionStage.PROPOSAL_CONFIRMED))
         }
 
         try {
@@ -535,16 +568,16 @@ class DerivBrokerGateway(
             val buyErr = buyResp.optJSONObject("error")
             if (buyErr != null) {
                 return@withContext Result.failure(
-                    Exception("Deriv order rejected (${buyErr.optString("code")}): ${buyErr.optString("message")}")
+                    DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_REJECTED, "PURCHASE_REJECTED: ${buyErr.optString("code")}: ${buyErr.optString("message")}", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT)
                 )
             }
             val buyData = buyResp.optJSONObject("buy")
-                ?: return@withContext Result.failure(Exception("Deriv returned no buy confirmation object."))
+                ?: return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_REJECTED, "PURCHASE_REJECTED: Deriv returned no buy confirmation object.", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT))
             val contractId = buyData.optLong("contract_id", 0L)
             val txId = buyData.optLong("transaction_id", 0L)
             val boughtPrice = buyData.optDouble("buy_price", Double.NaN)
             if (contractId <= 0L || !boughtPrice.isFinite() || boughtPrice <= 0.0) {
-                return@withContext Result.failure(Exception("Deriv buy response did not confirm a valid contract ID and purchase price."))
+                return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_AMBIGUOUS, "PURCHASE_AMBIGUOUS: buy response lacked a valid contract ID and purchase price.", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT))
             }
             subscribeOpenContract(contractId)
             fetchPortfolio()
@@ -552,7 +585,8 @@ class DerivBrokerGateway(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            Result.failure(Exception("Deriv buy request failed: ${error.message ?: error.javaClass.simpleName}"))
+            val kind = if (error is kotlinx.coroutines.TimeoutCancellationException) DerivExecutionFailureKind.PURCHASE_AMBIGUOUS else DerivExecutionFailureKind.PURCHASE_AMBIGUOUS
+            Result.failure(DerivExecutionFailure(kind, "${kind.name}: ${error.message ?: error.javaClass.simpleName}; do not retry blindly.", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT))
         } finally {
             pendingRequests.remove(buyReqId)
         }
@@ -598,6 +632,34 @@ class DerivBrokerGateway(
         } finally {
             pendingRequests.remove(sellReqId)
         }
+    }
+
+    suspend fun lookupHistoricalContract(contractId: Long, sinceMs: Long): DerivContractInfo? = withContext(Dispatchers.IO) {
+        if (_connectionState.value != DerivConnectionState.CONNECTED || contractId <= 0L) return@withContext null
+        val reqId = reqIdCounter.getAndIncrement()
+        val deferred = CompletableDeferred<JSONObject>()
+        pendingRequests[reqId] = deferred
+        val payload = JSONObject().apply {
+            put("profit_table", 1)
+            put("description", 1)
+            put("date_from", (sinceMs / 1000L).coerceAtLeast(0L))
+            put("date_to", System.currentTimeMillis() / 1000L)
+            put("limit", 500)
+            put("req_id", reqId)
+        }
+        if (webSocket?.send(payload.toString()) != true) { pendingRequests.remove(reqId); return@withContext null }
+        try {
+            val response = withTimeout(8_000) { deferred.await() }
+            val rows = response.optJSONObject("profit_table")?.optJSONArray("transactions") ?: return@withContext null
+            for (i in 0 until rows.length()) {
+                val row = rows.optJSONObject(i) ?: continue
+                if (row.optLong("contract_id", 0L) != contractId) continue
+                val buy = row.optDouble("buy_price", 0.0)
+                val sell = row.optDouble("sell_price", row.optDouble("sell_for", buy))
+                return@withContext DerivContractInfo(contractId, row.optLong("transaction_id", 0L), row.optString("symbol"), row.optString("contract_type"), buy, sell, row.optDouble("profit", sell - buy), true, false, row.optString("status", "settled"), row.optLong("purchase_time", 0L) * 1000L, row.optLong("sell_time", 0L).takeIf { it > 0 }?.times(1000L))
+            }
+            null
+        } catch (_: Exception) { null } finally { pendingRequests.remove(reqId) }
     }
 
     fun disconnect() {

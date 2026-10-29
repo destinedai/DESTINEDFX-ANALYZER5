@@ -70,17 +70,17 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Default.AccountBalance, contentDescription = null, tint = ElectricCyan)
                 Column {
-                    Text("DERIV API — DEMO MULTIPLIERS", color = ElectricCyan, fontWeight = FontWeight.Black, fontSize = 12.sp)
-                    Text("Direct Deriv Options API · no MT5 terminal or Render bridge", color = TextSecondary, fontSize = 10.sp)
+                    Text("DERIV API — MULTIPLIER ACCOUNT", color = ElectricCyan, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                    Text("Direct Deriv Options API · account-specific authenticated endpoint", color = TextSecondary, fontSize = 10.sp)
                 }
             }
             Text(
-                "Account: ${account?.loginId ?: "NOT VERIFIED"} · ${if (account?.demoVerified == true) "DEMO VERIFIED" else "NOT CONNECTED"} · Connection: ${connection.name}",
-                color = if (account?.demoVerified == true && connection == DerivConnectionState.CONNECTED) ElectricCyan else WarningAmber,
+                "Account: ${account?.loginId ?: "NOT VERIFIED"} · ${if (account != null) "${account?.mode?.uppercase()} VERIFIED" else "NOT CONNECTED"} · Connection: ${connection.name}",
+                color = if (account != null && connection == DerivConnectionState.CONNECTED) ElectricCyan else WarningAmber,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold
             )
-            if (account?.demoVerified == true) {
+            if (account != null) {
                 Text("Broker-returned currency: ${account?.currency} · balance snapshot: ${account?.balance}", color = TextPrimary, fontSize = 10.sp)
             }
             if (!secrets.isSecureStorageAvailable) {
@@ -109,7 +109,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                         }
                     }
                 )
-                Text("Create a Deriv PAT for your registered app and grant only the scopes required to read the account and trade. Do not paste a password or use a REAL account token.", color = TextSecondary, fontSize = 9.sp)
+                Text("Create a Deriv PAT for your registered app and grant only the scopes required to read the account and trade. DEMO is the default. Do not paste a password or use a REAL account token here.", color = TextSecondary, fontSize = 9.sp)
             }
             if (connection != DerivConnectionState.CONNECTED) {
                 Button(
@@ -163,7 +163,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
             }
             if (message.isNotBlank()) Text(message, color = if (message.contains("failed", true) || message.contains("could not", true)) LossRed else TextSecondary, fontSize = 10.sp)
             Text(
-                "Safety status: this build verifies a DEMO account and supports only validated MULTUP/MULTDOWN contracts through the Bot foreground service. A connection does not mean the bot is running; unsupported Forex/CFD plans remain blocked.",
+                "Safety status: DEMO is the default and only enabled profile in this UI. The connector keeps account ID and mode separate and supports only validated MULTUP/MULTDOWN contracts. REAL execution remains disabled pending independent acceptance; unsupported Forex/CFD plans remain blocked.",
                 color = WarningAmber,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium

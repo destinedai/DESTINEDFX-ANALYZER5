@@ -37,6 +37,7 @@ class SecretsManager(private val ctx: Context) {
         private const val DERIV_API_TOKEN = "deriv_api_token"
         private const val DERIV_APP_ID = "deriv_app_id"
         private const val DERIV_ACCOUNT_MODE = "deriv_account_mode"
+        private const val DERIV_REAL_EXECUTION_ENABLED = "deriv_real_execution_enabled"
         private const val TG_STATUS = "telegram_connection_status"
         private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
         private const val MT5_BRIDGE_TOKEN = "mt5_remote_bridge_app_token"
@@ -108,10 +109,20 @@ class SecretsManager(private val ctx: Context) {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
         return prefs.edit().putString(DERIV_APP_ID, v.trim()).commit()
     }
-    /** Direct Deriv execution is deliberately fixed to DEMO; REAL is not an accepted mode. */
+    /** Mode is explicit; REAL stays disabled unless separately enabled after independent review. */
     fun saveDerivAccountMode(v: String): Boolean {
-        if (!isSecureStorageAvailable || !v.trim().equals("demo", ignoreCase = true)) return false
-        return prefs.edit().putString(DERIV_ACCOUNT_MODE, "demo").commit()
+        val mode = v.trim().lowercase()
+        if (!isSecureStorageAvailable || mode !in setOf("demo", "real")) return false
+        if (mode == "real" && !isDerivRealExecutionEnabled()) return false
+        return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).commit()
+    }
+    fun enableDerivRealExecution(explicitConfirmation: Boolean): Boolean {
+        if (!isSecureStorageAvailable || !explicitConfirmation) return false
+        return prefs.edit().putBoolean(DERIV_REAL_EXECUTION_ENABLED, true).commit()
+    }
+    fun disableDerivRealExecution(): Boolean {
+        if (!isSecureStorageAvailable) return false
+        return prefs.edit().putBoolean(DERIV_REAL_EXECUTION_ENABLED, false).putString(DERIV_ACCOUNT_MODE, "demo").commit()
     }
     fun clearDerivCredentials(): Boolean {
         if (!isSecureStorageAvailable) return false
@@ -222,7 +233,10 @@ class SecretsManager(private val ctx: Context) {
     fun getDerivAppId(): String = if (!isSecureStorageAvailable) "" else (prefs.getString(DERIV_APP_ID, "") ?: "")
         .trim()
         .takeUnless { it.isBlank() || it == "1089" } ?: ""
-    fun getDerivAccountMode(): String  = "demo"
+    fun isDerivRealExecutionEnabled(): Boolean = isSecureStorageAvailable && prefs.getBoolean(DERIV_REAL_EXECUTION_ENABLED, false)
+    fun getDerivAccountMode(): String = if (isSecureStorageAvailable) {
+        (prefs.getString(DERIV_ACCOUNT_MODE, "demo") ?: "demo").lowercase().takeIf { it == "demo" || it == "real" } ?: "demo"
+    } else "demo"
     fun getTelegramConnectionStatus(): String = prefs.getString(TG_STATUS, "Not configured") ?: "Not configured"
     fun getTelegramNotificationsEnabled(): Boolean = prefs.getBoolean(TG_NOTIF_ENABLED, false)
 

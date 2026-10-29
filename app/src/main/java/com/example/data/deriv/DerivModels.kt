@@ -32,7 +32,9 @@ data class DerivAccountInfo(
     val balance: Double,
     val email: String,
     val accountType: String = "demo",
-    val demoVerified: Boolean = false
+    val demoVerified: Boolean = false,
+    val mode: String = accountType.lowercase(),
+    val realExecutionAuthorized: Boolean = false
 )
 
 data class DerivProposalResult(

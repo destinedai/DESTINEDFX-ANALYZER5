@@ -64,7 +64,7 @@ class DerivDemoBotService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, notification("Starting — verifying Demo account"))
+        startForeground(NOTIFICATION_ID, notification("Starting — verifying selected Deriv account"))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -91,9 +91,9 @@ class DerivDemoBotService : Service() {
             return
         }
         if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.CONNECTED) {
-            update("Connecting — Demo account verification required")
+            update("Connecting — selected account verification required")
             if (gateway.connectAndAuthorize().isFailure) {
-                update("Stopped — Demo account verification failed")
+                update("Stopped — selected account verification failed")
                 stopSafely()
                 return
             }
@@ -109,8 +109,8 @@ class DerivDemoBotService : Service() {
             try {
                 val account = gateway.accountInfo.value
                 val balance = gateway.accountMetrics.value?.balance ?: account?.balance ?: 0.0
-                if (account == null || !account.demoVerified || balance <= 0.0) {
-                    update("Safety blocked — verified Demo account snapshot unavailable")
+                if (account == null || account.loginId.isBlank() || (account.mode == "demo" && !account.demoVerified) || balance <= 0.0) {
+                    update("Safety blocked — verified ${account?.mode?.uppercase() ?: "selected"} account snapshot unavailable")
                     delay(10_000)
                     continue
                 }
@@ -171,7 +171,7 @@ class DerivDemoBotService : Service() {
 
     private fun notification(text: String): Notification = NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_launcher_foreground)
-        .setContentTitle("DestinedFX · Deriv DEMO Multiplier")
+        .setContentTitle("DestinedFX · Deriv ${applicationContext.getSharedPreferences("destinedfx_service", 0).getString("account_mode", "selected")?.uppercase()} Multiplier")
         .setContentText(text)
         .setOngoing(true)
         .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -180,7 +180,7 @@ class DerivDemoBotService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Deriv DEMO bot", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(CHANNEL_ID, "Deriv account bot", NotificationManager.IMPORTANCE_LOW)
             )
         }
     }

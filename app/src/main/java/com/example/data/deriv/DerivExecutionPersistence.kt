@@ -8,9 +8,14 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
-@Entity(tableName = "deriv_execution_intents")
+@Entity(
+    tableName = "deriv_execution_intents",
+    primaryKeys = ["accountId", "accountMode", "signalId"]
+)
 data class DerivExecutionEntity(
-    @androidx.room.PrimaryKey val signalId: String,
+    val accountId: String,
+    val accountMode: String,
+    val signalId: String,
     val product: String,
     val symbol: String,
     val direction: String,
@@ -24,6 +29,7 @@ data class DerivExecutionEntity(
     val signalTimestampMs: Long,
     val requestId: Int? = null,
     val proposalId: String? = null,
+    val submissionStage: String = DerivSubmissionStage.VALIDATED.name,
     val contractId: Long? = null,
     val buyTransactionId: Long? = null,
     val sellTransactionId: Long? = null,
@@ -32,6 +38,7 @@ data class DerivExecutionEntity(
     val settlementProfit: Double? = null,
     val status: String,
     val lastError: String? = null,
+    val createdAtMs: Long = System.currentTimeMillis(),
     val updatedAtMs: Long = System.currentTimeMillis()
 )
 
@@ -43,22 +50,44 @@ interface DerivExecutionDao {
     @Update
     suspend fun update(entity: DerivExecutionEntity)
 
-    @Query("SELECT * FROM deriv_execution_intents WHERE signalId = :signalId LIMIT 1")
-    suspend fun findBySignalId(signalId: String): DerivExecutionEntity?
+    @Query("SELECT * FROM deriv_execution_intents WHERE accountId = :accountId AND accountMode = :accountMode AND signalId = :signalId LIMIT 1")
+    suspend fun findBySignalId(accountId: String, accountMode: String, signalId: String): DerivExecutionEntity?
 
-    @Query("SELECT * FROM deriv_execution_intents WHERE status IN ('EXECUTION_UNKNOWN','ORDER_PENDING','RECONCILIATION_REQUIRED') ORDER BY updatedAtMs ASC")
-    suspend fun unresolved(): List<DerivExecutionEntity>
+    @Query("SELECT * FROM deriv_execution_intents WHERE accountId = :accountId AND accountMode = :accountMode AND status IN ('ORDER_SUBMITTING','ORDER_PENDING','EXECUTION_UNKNOWN','RECONCILIATION_REQUIRED') ORDER BY updatedAtMs ASC")
+    suspend fun unresolved(accountId: String, accountMode: String): List<DerivExecutionEntity>
 
-    @Query("SELECT * FROM deriv_execution_intents WHERE status IN ('CONTRACT_CONFIRMED','CONTRACT_OPEN') ORDER BY updatedAtMs ASC")
-    suspend fun knownContracts(): List<DerivExecutionEntity>
+    @Query("SELECT * FROM deriv_execution_intents WHERE accountId = :accountId AND accountMode = :accountMode AND status IN ('CONTRACT_CONFIRMED','CONTRACT_OPEN') ORDER BY updatedAtMs ASC")
+    suspend fun knownContracts(accountId: String, accountMode: String): List<DerivExecutionEntity>
 
     @Query("SELECT * FROM deriv_execution_intents ORDER BY updatedAtMs DESC")
     fun observeAll(): Flow<List<DerivExecutionEntity>>
 }
 
+enum class DerivSubmissionStage {
+    VALIDATED, PROPOSAL_SENT, PROPOSAL_CONFIRMED, PURCHASE_SENT, CONTRACT_CONFIRMED
+}
+
+enum class DerivExecutionFailureKind {
+    VALIDATION_REJECTED,
+    PROPOSAL_REJECTED,
+    PROPOSAL_TIMEOUT,
+    PURCHASE_NOT_SENT,
+    PURCHASE_REJECTED,
+    PURCHASE_AMBIGUOUS,
+    RECONCILIATION_REQUIRED
+}
+
+class DerivExecutionFailure(
+    val kind: DerivExecutionFailureKind,
+    message: String,
+    val requestId: Int? = null,
+    val proposalId: String? = null,
+    val submissionStage: DerivSubmissionStage = DerivSubmissionStage.VALIDATED
+) : Exception(message)
+
 enum class DerivExecutionStatus {
-    IDLE, DEMO_READY, STARTING, RUNNING, STOPPING, STOPPED,
+    IDLE, DEMO_READY, REAL_READY, STARTING, RUNNING, STOPPING, STOPPED,
     ORDER_SUBMITTING, ORDER_PENDING, CONTRACT_CONFIRMED, CONTRACT_OPEN,
-    CONTRACT_SETTLED, ORDER_REJECTED, EXECUTION_UNKNOWN,
+    CONTRACT_SETTLED, ORDER_REJECTED, VALIDATION_REJECTED, EXECUTION_UNKNOWN,
     RECONCILIATION_REQUIRED, CONNECTION_LOST, SAFETY_BLOCKED
 }
