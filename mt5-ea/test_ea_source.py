@@ -87,8 +87,9 @@ def test_ea_source_contract_and_balanced_delimiters():
         "open-position fee unavailable": '\\"commission\\":null' in source,
         "pending and partial order evidence": "OrdersJson()" in source and "TRADE_RETCODE_PLACED" in source and "PARTIALLY_FILLED" in source and "executed_volume" in source,
         "commission history or verified cost is required for sizing": "ObservedCommissionPerLot" in source and "No verified broker commission cost" in source,
-        "explicit cost models are validated": all(x in source for x in ["OBSERVED_ROUND_TURN", "CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE", "CostConfigurationValid", "InpCostEvidence"]),
-        "cost uncertainty never assumes zero": "commissionLot<=0" in source and "assuming zero" in source,
+        "explicit cost models are validated": all(x in source for x in ["OBSERVED_ROUND_TURN", "CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE", "ZERO_COMMISSION_SPREAD_ONLY", "CostConfigurationValid", "InpCostEvidence"]),
+        "cost uncertainty never assumes zero": "commissionLot<0" in source and "ZERO_COMMISSION_SPREAD_ONLY" in source and "assuming zero" in source,
+        "spread-only mode still includes live computable spread costs": "spreadCostPerLot=MathAbs(spreadValue)" in source and "Unable to calculate live spread cost" in source,
         "representative observed history": "samples>=3" in source and "DEAL_ENTRY_IN" in source and "TimeCurrent()-86400*30" in source,
         "authoritative delayed-fill reconciliation": all(x in source for x in ["OnTradeTransaction", "ReconcileOrder", "HistoryOrderSelect", "DEAL_ORDER", "PARTIALLY_FILLED", "CANCELLED_OR_EXPIRED", "UNKNOWN_REQUIRES_RECONCILIATION"]),
         "restart-safe order identity": "PersistOrderState" in source and "LoadOrderState" in source and "DestinedFX_order_" in source,
@@ -122,7 +123,7 @@ def test_followup_safety_contracts():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     assert "requiredGrossReward=2.0*MathAbs(loss)+3.0*costPerLot" in source
     assert "netReward+0.01<2.0*netRisk" in source
-    assert "costPerLot=commissionLot+slippageAllowancePerLot" in source
+    assert "costPerLot=commissionLot+spreadCostPerLot+slippageAllowancePerLot" in source
     assert "InpSlippageAllowancePoints=20" in source
     assert "DEAL_FEE" in source and "DEAL_SWAP" in source
     assert "totalCharges/totalEntered" in source and "samples>=3" in source

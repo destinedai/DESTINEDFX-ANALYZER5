@@ -46,6 +46,8 @@ def db():
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
     managed_columns={r['name'] for r in c.execute('PRAGMA table_info(managed_accounts)').fetchall()}
     if 'account_mode' not in managed_columns: c.execute("ALTER TABLE managed_accounts ADD COLUMN account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED'")
+    for name, definition in (('cost_model',"TEXT NOT NULL DEFAULT 'OBSERVED_ROUND_TURN'"),('commission_per_lot','REAL NOT NULL DEFAULT 0.0'),('cost_evidence',"TEXT NOT NULL DEFAULT ''")):
+        if name not in managed_columns: c.execute(f'ALTER TABLE managed_accounts ADD COLUMN {name} {definition}')
     columns={r['name'] for r in c.execute('PRAGMA table_info(worker_jobs)').fetchall()}
     if 'lease_started' not in columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN lease_started REAL')
     if 'stale_since' not in columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN stale_since REAL')
@@ -88,6 +90,9 @@ class Pair(BaseModel): model_config=ConfigDict(extra='forbid')
 class ManagedAccount(BaseModel):
     model_config=ConfigDict(extra='forbid')
     login:str=Field(min_length=1,max_length=20); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; account_mode:str; consent:bool
+    cost_model:str=Field(default='OBSERVED_ROUND_TURN',min_length=1,max_length=40)
+    commission_per_lot:float=Field(default=0.0,ge=0,allow_inf_nan=False)
+    cost_evidence:str=Field(default='',max_length=512)
 class WorkerClaim(BaseModel): model_config=ConfigDict(extra='forbid'); worker_id:str=Field(min_length=1,max_length=128)
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -360,10 +365,19 @@ def heartbeat_news_clear(beat, symbols=None):
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); fernet,_=managed_config()
     if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
+    evidence=x.cost_evidence.strip()
+    if any(ord(ch)<32 or ord(ch)==127 for ch in evidence): raise HTTPException(422,'Cost evidence reference must not contain control characters')
+    if x.cost_model not in ('OBSERVED_ROUND_TURN','CONFIGURED_ROUND_TURN','CONFIGURED_PER_SIDE','ZERO_COMMISSION_SPREAD_ONLY'): raise HTTPException(422,'Invalid transaction cost model')
+    if x.cost_model=='OBSERVED_ROUND_TURN':
+        if x.commission_per_lot!=0 or evidence: raise HTTPException(422,'Observed round-turn mode must not include a configured commission or evidence reference')
+    elif x.cost_model=='ZERO_COMMISSION_SPREAD_ONLY':
+        if x.commission_per_lot!=0 or len(evidence)<8: raise HTTPException(422,'Zero-commission mode requires a zero commission value and an official broker pricing evidence reference')
+    elif x.commission_per_lot<=0 or len(evidence)<8:
+        raise HTTPException(422,'Configured commission models require a finite positive account-currency amount per standard lot and a broker evidence reference')
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
-        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode) VALUES(?,?,?,?,?,0,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode))
+        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode,x.cost_model,float(x.commission_per_lot),evidence))
         c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+86400,p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) VALUES(?,?,'PROVISION','QUEUED',?)",(job_id,p['id'],t))
     return {'job_id':job_id,'status':'QUEUED'}
@@ -385,6 +399,7 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
             c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_MODE_UNVERIFIED',error_message='Account mode must be re-verified before provisioning' WHERE id=?",(r['id'],))
             return {'job':None}
         account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']; account['account_mode']=m['account_mode']
+        account['cost_model']=m['cost_model']; account['commission_per_lot']=float(m['commission_per_lot']); account['cost_evidence']=m['cost_evidence']
         try:
             claimed_account=json.loads(p['account']) if p['account'] else {}
             for key in ('company','currency'):

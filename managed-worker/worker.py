@@ -447,7 +447,8 @@ def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
     cost_model = account.get("cost_model", "OBSERVED_ROUND_TURN")
     commission = account.get("commission_per_lot", 0.0)
     evidence = account.get("cost_evidence", "")
-    if cost_model not in {"OBSERVED_ROUND_TURN", "CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE"}:
+    allowed_models = {"OBSERVED_ROUND_TURN", "CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE", "ZERO_COMMISSION_SPREAD_ONLY"}
+    if cost_model not in allowed_models:
         raise ProvisionError("INVALID_COST_MODEL")
     try:
         commission = float(commission)
@@ -455,9 +456,16 @@ def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
         raise ProvisionError("INVALID_COST_VALUE")
     if not math.isfinite(commission) or commission < 0:
         raise ProvisionError("INVALID_COST_VALUE")
-    if cost_model == "OBSERVED_ROUND_TURN" and (commission != 0 or str(evidence).strip()):
-        raise ProvisionError("INVALID_OBSERVED_COST_CONFIGURATION")
-    if cost_model != "OBSERVED_ROUND_TURN" and (commission <= 0 or len(str(evidence).strip()) < 8):
+    if not isinstance(evidence, str) or len(evidence) > 512 or any(ord(ch) < 32 or ord(ch) == 127 for ch in evidence):
+        raise ProvisionError("INVALID_COST_EVIDENCE")
+    evidence = evidence.strip()
+    if cost_model == "OBSERVED_ROUND_TURN":
+        if commission != 0 or evidence:
+            raise ProvisionError("INVALID_OBSERVED_COST_CONFIGURATION")
+    elif cost_model == "ZERO_COMMISSION_SPREAD_ONLY":
+        if commission != 0 or len(evidence) < 8:
+            raise ProvisionError("INVALID_ZERO_COMMISSION_EVIDENCE")
+    elif commission <= 0 or len(evidence) < 8:
         raise ProvisionError("INVALID_CONFIGURED_COST_EVIDENCE")
     return (f"InpBridgeBaseURL={bridge_url}\nInpPairingCode={pairing_code}\n"
             f"InpExpectedLogin={account['login']}\nInpExpectedServer={account['server']}\n"

@@ -112,7 +112,7 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     assert client.post('/v1/worker/jobs/claim',json={'worker_id':'w1'}).status_code==401
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
-    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO'}
+    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','consent':True}).status_code==409
 
 def test_managed_tenant_auth_and_master_readiness_gate(monkeypatch):
@@ -608,3 +608,44 @@ def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(mon
         assert False, 'mismatched forwarded Host must fail closed'
     except app.HTTPException as exc:
         assert exc.status_code==400
+
+
+def test_configured_round_turn_cost_model_is_persisted_and_passed_to_worker(monkeypatch):
+    managed_env(monkeypatch); p,ah=managed_pair()
+    evidence='Official broker pricing schedule section 4'
+    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'77881','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True,'cost_model':'CONFIGURED_ROUND_TURN','commission_per_lot':7.5,'cost_evidence':evidence})
+    assert r.status_code==202, r.text
+    with app.tx() as c:
+        row=c.execute('SELECT cost_model,commission_per_lot,cost_evidence FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
+        assert tuple(row)==('CONFIGURED_ROUND_TURN',7.5,evidence)
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'cost-worker'}).json()
+    assert job['account']['cost_model']=='CONFIGURED_ROUND_TURN'
+    assert job['account']['commission_per_lot']==7.5
+    assert job['account']['cost_evidence']==evidence
+
+def test_zero_commission_spread_only_cost_model_is_explicit_and_passed_to_worker(monkeypatch):
+    managed_env(monkeypatch); p,ah=managed_pair()
+    evidence='Official broker schedule: zero commission for FX'
+    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'77882','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True,'cost_model':'ZERO_COMMISSION_SPREAD_ONLY','commission_per_lot':0.0,'cost_evidence':evidence})
+    assert r.status_code==202, r.text
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'spread-worker'}).json()
+    assert job['account']['cost_model']=='ZERO_COMMISSION_SPREAD_ONLY'
+    assert job['account']['commission_per_lot']==0.0
+    assert job['account']['cost_evidence']==evidence
+
+def test_invalid_managed_cost_configurations_are_rejected(monkeypatch):
+    managed_env(monkeypatch)
+    invalid_costs=[
+        {'cost_model':'CONFIGURED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':'Official broker pricing schedule'},
+        {'cost_model':'CONFIGURED_PER_SIDE','commission_per_lot':2.5,'cost_evidence':'short'},
+        {'cost_model':'ZERO_COMMISSION_SPREAD_ONLY','commission_per_lot':2.5,'cost_evidence':'Official broker pricing schedule'},
+        {'cost_model':'UNKNOWN','commission_per_lot':0.0,'cost_evidence':''},
+        {'cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':1.0,'cost_evidence':'Official broker pricing schedule'},
+        {'cost_model':'ZERO_COMMISSION_SPREAD_ONLY','commission_per_lot':0.0,'cost_evidence':'bad\nreference'}
+    ]
+    for cost in invalid_costs:
+        p,ah=managed_pair()
+        payload={'login':'77883','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True,**cost}
+        assert client.post('/v1/app/managed-account',headers=ah,json=payload).status_code==422, cost
