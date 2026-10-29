@@ -65,7 +65,7 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("InpCommissionPerLot=0.00000000", text)
         with self.assertRaises(worker.ProvisionError) as error:
             worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234",
-                                 {**account, "cost_evidence": "bad\\nreference"})
+                                 {**account, "cost_evidence": "bad\nreference"})
         self.assertEqual(error.exception.code, "INVALID_COST_EVIDENCE")
 
     def test_job_requires_explicit_valid_account_mode(self):
