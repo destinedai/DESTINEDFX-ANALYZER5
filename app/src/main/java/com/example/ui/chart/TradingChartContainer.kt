@@ -307,12 +307,8 @@ fun TradingViewWebView(
                     }
                     webViewClient = object : WebViewClient() {
                         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                            val host = error?.url?.let { runCatching { Uri.parse(it).host }.getOrNull() }
-                            if (isSupportedTradingViewHost(host) || error?.url?.startsWith("https://s3.tradingview.com") == true) {
-                                handler?.proceed()
-                            } else {
-                                handler?.cancel()
-                            }
+                            // A host allowlist cannot make an invalid certificate safe.
+                            handler?.cancel()
                         }
                         override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                             val description = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error?.description?.toString() else null
@@ -331,7 +327,7 @@ fun TradingViewWebView(
                         javaScriptCanOpenWindowsAutomatically = true
                         setSupportMultipleWindows(false)
                         cacheMode = WebSettings.LOAD_DEFAULT
-                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                         allowFileAccess = false
                         allowContentAccess = false
                         val defaultUa = WebSettings.getDefaultUserAgent(viewContext)
@@ -352,13 +348,6 @@ fun TradingViewWebView(
 
                     android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                     android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                    @Suppress("AddJavascriptInterface")
-                    addJavascriptInterface(
-                        TradingViewPriceBridge(symbol) { sym, p ->
-                            onPriceUpdate?.invoke(sym, p)
-                        },
-                        "DestinedFXBridge"
-                    )
                     onResume()
                     resumeTimers()
                     tag = currentKey
@@ -622,15 +611,6 @@ private fun redactChartDiagnostic(message: String): String = message
     .replace(Regex("(?i)(access[_-]?token|authorization|api[_-]?key|token)(\\s*[:=]\\s*)[^\\s,;]+"), "$1$2[redacted]")
     .replace(Regex("(?i)([?&](?:access[_-]?token|authorization|api[_-]?key|token)=)[^&\\s]+"), "$1[redacted]")
 
-internal class TradingViewPriceBridge(private val symbol: String, private val onPrice: (String, Double) -> Unit) {
-    @android.webkit.JavascriptInterface
-    fun onLivePrice(price: Double) {
-        if (price > 0.0) {
-            onPrice(symbol, price)
-        }
-    }
-}
-
 internal object TradingViewMapper {
     fun mapSymbol(symbol: String): String? {
         val raw = symbol.trim().uppercase()
@@ -775,18 +755,9 @@ internal object TradingViewMapper {
                 function isTradingViewChartUrl(url) {
                   return typeof url === 'string' && (url.indexOf('tradingview.com') !== -1 || url.indexOf('tradingview-widget.com') !== -1);
                 }
-                window.addEventListener('message', function(event) {
-                  try {
-                    var d = event.data;
-                    if (typeof d === 'string') { try { d = JSON.parse(d); } catch(_) {} }
-                    if (d && (d.price || d.last || d.close || (d.data && d.data.price))) {
-                      var val = Number(d.price || d.last || d.close || (d.data && d.data.price));
-                      if (val > 0 && window.DestinedFXBridge) {
-                        window.DestinedFXBridge.onLivePrice(val);
-                      }
-                    }
-                  } catch(_) {}
-                });
+                // TradingView postMessage data is display-only and is deliberately
+                // not promoted to an app quote. Execution uses an independently
+                // validated broker/provider feed.
                 window.addEventListener('load', function() {
                   document.body.setAttribute('data-tv-frame-loaded-at', Date.now());
                 });

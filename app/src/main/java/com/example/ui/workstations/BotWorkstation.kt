@@ -41,6 +41,7 @@ import com.example.ui.components.StatChip
 import androidx.compose.ui.platform.LocalContext
 import com.example.security.AppSecurityGuard
 import com.destinedfx.core.news.HighImpactNewsSentry
+import com.destinedfx.core.strategy.StrategyRegistry
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import com.example.data.trade.MT5RemoteBridgeClient
@@ -259,7 +260,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val provisioningError = bridgeSnapshot?.raw?.optJSONObject("managed_execution")?.optString("error_message").orEmpty()
                     if (provisioningError.isNotBlank()) Text("Provisioning error: $provisioningError", color = LossRed, fontSize = 10.sp)
                     val bridgeReady = bridgeTerminalReady
-                    val supportedStrategy = selectedStrategyId == "ict-silver-bullet"
+                    val supportedStrategy = selectedStrategyId in StrategyRegistry.managedStrategyIds
                     val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
                     if (selectedAccountMode == "LIVE") {
                         Text("LIVE authorization: ${if (bridgeSnapshot?.liveAuthorized == true) "ACTIVE (server-verified, short-lived)" else "NOT AUTHORIZED"}", color = if (bridgeSnapshot?.liveAuthorized == true) WarningAmber else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -277,7 +278,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             dismissButton = { TextButton(onClick = { showLiveAuthorizationDialog = false }) { Text("CANCEL") } }
                         )
                     }
-                    Text("EA SUPPORTED SUBSET: ICT Silver Bullet only. Other selected strategies cannot be started by this EA.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text("Managed EA strategy support is registry-validated; support does not imply profitability or real-broker testing.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     BridgeTelemetry(bridgeSnapshot)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("PAUSE", "RESUME", "STOP", "EMERGENCY_STOP").forEach { action ->
@@ -291,7 +292,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Text("POSITION SAFETY: STOP, PAUSE and EMERGENCY STOP block new entries only. They do not close existing positions or move broker SL/TP; manage open positions directly on the MT5 terminal.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     if (!viewModel.app.secretsManager.isSecureStorageAvailable) Text("Secure storage unavailable; pairing and app-token persistence are disabled.", color = LossRed, fontSize = 10.sp)
                     if (bridgeMode && !bridgeReady) Text("SETUP REQUIRED — START needs a verified account, connected/trading-ready terminal and fresh heartbeat.", color = LossRed, fontSize = 10.sp)
-                    if (bridgeMode && !supportedStrategy) Text("START BLOCKED — select ict-silver-bullet; this EA does not support the other app strategies.", color = LossRed, fontSize = 10.sp)
+                    if (bridgeMode && !supportedStrategy) Text("START BLOCKED — selected strategy is not in the managed EA registry.", color = LossRed, fontSize = 10.sp)
                     if (bridgeMode && !validBridgeRisk) Text("START BLOCKED — risk must be finite and greater than 0 and no more than 1%; no clamping is applied.", color = LossRed, fontSize = 10.sp)
                     if (bridgeCommandPending && bridgeMessage.contains("No confirmed response")) Text("UNKNOWN request $bridgePendingId — do not resend. Refresh/reconcile this ID with bridge last_command or recover manually; no duplicate was sent.", color = LossRed, fontSize = 10.sp)
                     Text(if (bridgeMode) "Bridge control operates on the remote terminal; the terminal must stay online independently." else "Bridge mode off; current broker mode unchanged.", color = TextSecondary, fontSize = 10.sp)
@@ -380,7 +381,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             val bridgeFresh = bridgeTerminalFresh
             val bridgeReady = bridgeTerminalReady
             val bridgeCanStart = bridgeReady && (bridgeSnapshot?.state == "READY" || bridgeSnapshot?.state == "STOPPED")
-            val supportedStrategy = selectedStrategyId == "ict-silver-bullet"
+            val supportedStrategy = selectedStrategyId in StrategyRegistry.managedStrategyIds
             val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
             val statusColor = if (bridgeMode) bridgeStatusColor else when (botSummary.state) {
                 BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
@@ -435,7 +436,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         .put("risk_percent", riskPercent)
                                         .put("max_daily_loss_percent", 2.0)
                                         .put("max_concurrent_positions", 2)
-                                    if (active && !supportedStrategy) { bridgeMessage = "Blocked: the EA supports ict-silver-bullet only."; bridgeBusy = false; return@launch }
+                                    if (active && !supportedStrategy) { bridgeMessage = "Blocked: selected strategy is not in the managed EA registry."; bridgeBusy = false; return@launch }
                                     if (active && (!MT5RemoteBridgeClient.isValidRiskPercent(riskPercent))) { bridgeMessage = "Blocked: risk must be finite and in (0, 1]%; no clamping applied."; bridgeBusy = false; return@launch }
                                     if (active && !bridgeCanStart) { bridgeMessage = "Blocked: verified account must be READY or STOPPED with a fresh, trade-authorized heartbeat."; bridgeBusy = false; return@launch }
                                     sendBridgeCommand(bridgeClient, action, config, bridgeSecrets, selectedAccountMode, { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgeExpectedState = it }, { bridgeMessage = it })

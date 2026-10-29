@@ -10,6 +10,10 @@ data class StrategyDefinition(
 )
 
 object StrategyRegistry {
+    /** IDs accepted by the managed EA; keep this list in parity with its validator. */
+    val managedStrategyIds: Set<String>
+        get() = allStrategies.filter { it.isImplemented }.mapTo(linkedSetOf()) { it.id }
+
     val SMC_CONFLUENCE = StrategyDefinition(
         id = "smc-confluence-1.0.0",
         name = "Smart Money Concepts (SMC)",

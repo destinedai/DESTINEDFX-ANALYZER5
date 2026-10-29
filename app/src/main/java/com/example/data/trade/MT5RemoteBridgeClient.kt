@@ -1,6 +1,7 @@
 package com.example.data.trade
 
 import com.example.security.SecretsManager
+import com.destinedfx.core.strategy.StrategyRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -128,7 +129,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             if (reason != null) return CommandResult(requestId, false, reason, rejected = true)
         }
         if (action == "START") {
-            if (config.optString("strategy") !in setOf("smc-confluence-1.0.0", "ict-silver-bullet", "wyckoff-schematics", "supply-and-demand", "breakout-momentum", "mean-reversion", "trend-following", "liquidity-stop-hunts")) return CommandResult(requestId, false, "START requires a registered managed strategy.", rejected = true)
+            if (config.optString("strategy") !in StrategyRegistry.managedStrategyIds) return CommandResult(requestId, false, "START requires a registered managed strategy.", rejected = true)
             val risk = config.optDouble("risk_percent", Double.NaN)
             if (!isValidRiskPercent(risk)) return CommandResult(requestId, false, "Risk must be finite and in (0, 1] percent.", rejected = true)
             val daily = config.optDouble("max_daily_loss_percent", 2.0)

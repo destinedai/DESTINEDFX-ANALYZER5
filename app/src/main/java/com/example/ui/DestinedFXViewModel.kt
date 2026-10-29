@@ -274,35 +274,9 @@ open class DestinedFXViewModel(
     }
 
     fun updatePriceFromChart(symbol: String, price: Double) {
-        if (price <= 0.0) return
-        if (!isPreview) {
-            app.marketDataRepository.updateLiveQuoteFromFeed(symbol, price)
-        }
-        val current = tickers.value[symbol]
-        val updated = (current ?: MarketTicker(
-            symbol = symbol,
-            price = price,
-            changePercent = 0.0,
-            high = price,
-            low = price,
-            spread = price * 0.0001,
-            bias = "BULLISH",
-            confidence = 90,
-            lastUpdateMillis = System.currentTimeMillis(),
-            isLive = true,
-            source = "TradingView chart widget quote",
-            kind = "STREAM"
-        )).copy(
-            price = price,
-            high = maxOf(current?.high ?: price, price),
-            low = minOf(current?.low ?: price, price),
-            lastUpdateMillis = System.currentTimeMillis(),
-            isLive = true,
-            source = "TradingView chart widget quote",
-            kind = "STREAM"
-        )
-        tickers.value = tickers.value + (symbol to updated)
-        _feedItems.value = tickers.value.values.toList()
+        // TradingView is an unverified display source. Its messages must never
+        // replace broker/provider quotes, candles, analysis inputs, or execution state.
+        // The chart remains visible; the canonical ticker flow remains feed-owned.
     }
 
     fun selectTimeframe(tf: String) {

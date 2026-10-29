@@ -46,6 +46,17 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("InpExpectedServer=Demo-Server", text)
         self.assertIn("InpExpectedAccountMode=DEMO", text)
 
+    def test_configured_cost_model_requires_positive_value_and_evidence(self):
+        account = {**self.job["account"], "cost_model": "CONFIGURED_ROUND_TURN",
+                   "commission_per_lot": 7.5, "cost_evidence": "broker tariff 2026-10"}
+        text = worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234", account)
+        self.assertIn("InpCostModel=CONFIGURED_ROUND_TURN", text)
+        self.assertIn("InpCommissionPerLot=7.50000000", text)
+        with self.assertRaises(worker.ProvisionError) as error:
+            worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234",
+                                 {**account, "commission_per_lot": 0})
+        self.assertEqual(error.exception.code, "INVALID_CONFIGURED_COST_EVIDENCE")
+
     def test_job_requires_explicit_valid_account_mode(self):
         missing = {**self.job, "account": {k: v for k, v in self.job["account"].items() if k != "account_mode"}}
         with self.assertRaises(worker.ProvisionError):

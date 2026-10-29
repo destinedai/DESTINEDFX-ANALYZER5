@@ -83,6 +83,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "mode comes from broker terminal enum": "AccountInfoInteger(ACCOUNT_TRADE_MODE)" in source and "ACCOUNT_TRADE_MODE_DEMO" in source and "ACCOUNT_TRADE_MODE_REAL" in source,
         "claim and heartbeat bind reported mode": 'InpExpectedAccountMode' in source and 'BrokerAccountMode()' in source and 'AccountIdentityMatches()' in source and '\\"account_mode\\":\\"%s\\"' in source,
         "actual identity checked before every order": 'bool Place(' in source and 'if(!AccountIdentityMatches())' in source and 'InpExpectedLogin' in source and 'InpExpectedServer' in source,
+        "LIVE lease checked before every order": "g_liveAuthorizedUntil" in source and "LIVE authorization is absent or expired at the order boundary" in source and 'live_authorized_until' in heartbeat,
         "open-position fee unavailable": '\\"commission\\":null' in source,
         "pending and partial order evidence": "OrdersJson()" in source and "TRADE_RETCODE_PLACED" in source and "PARTIALLY_FILLED" in source and "executed_volume" in source,
         "commission history or verified cost is required for sizing": "ObservedCommissionPerLot" in source and "No verified broker commission cost" in source,

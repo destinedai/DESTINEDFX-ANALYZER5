@@ -572,6 +572,21 @@ def test_showmytrades_adapter_fails_closed_on_provider_errors(monkeypatch):
     monkeypatch.setattr(app.urllib.request,'urlopen',broken)
     assert app.provider_news('EURUSD')['status']=='UNKNOWN'
 
+def test_news_cache_is_short_lived_and_symbol_specific(monkeypatch):
+    monkeypatch.setattr(app,'NEWS_PROVIDER_URL','https://calendar.example.test/verdict')
+    calls=[]
+    def response(request, timeout):
+        calls.append(request.full_url)
+        now_ms=int(time.time()*1000)
+        return _MockCalendarResponse({'status':'CLEAR','source':'fixture','retrieved_at_ms':now_ms,
+            'coverage_from_ms':now_ms-1000,'coverage_to_ms':now_ms+app.NEWS_BEFORE*1000+1000,
+            'affected_currencies':['EUR','USD']})
+    monkeypatch.setattr(app.urllib.request,'urlopen',response)
+    assert app.provider_news('EURUSD')['status']=='CLEAR'
+    assert app.provider_news('EURUSD')['status']=='CLEAR'
+    assert app.provider_news('USDJPY')['status']=='CLEAR'
+    assert len(calls)==2
+
 def test_render_external_url_fallback_can_make_bridge_ready(monkeypatch):
     monkeypatch.delenv('BRIDGE_BASE_URL',raising=False)
     monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')

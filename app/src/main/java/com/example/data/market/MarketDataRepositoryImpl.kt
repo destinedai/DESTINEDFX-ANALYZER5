@@ -270,27 +270,9 @@ class MarketDataRepositoryImpl(
     )
 
     override fun updateLiveQuoteFromFeed(symbol: String, price: Double) {
-        if (price <= 0.0) return
-        val now = clock()
-        val ticker = MarketTicker(
-            symbol = symbol,
-            price = price,
-            changePercent = 0.0,
-            high = price,
-            low = price,
-            spread = price * 0.0001,
-            bias = "NEUTRAL",
-            confidence = 0,
-            lastUpdateMillis = now,
-            isLive = true,
-            source = "TradingView chart widget quote",
-            bid = price,
-            ask = price,
-            hasRealSpread = false,
-            kind = "STREAM"
-        )
-        _tickers.update { current -> current + (symbol to ticker) }
-        _quoteDiagnostics.update { current -> current - symbol }
+        // Unverified chart values are display-only and cannot enter the canonical
+        // quote flow. Verified adapters must submit a fully formed provider quote
+        // through the normal arbiter path instead of this legacy scalar API.
     }
 
     private fun shouldUpdateTicker(symbol: String, newTicker: MarketTicker): Boolean {

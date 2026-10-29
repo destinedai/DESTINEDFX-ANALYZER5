@@ -18,8 +18,10 @@ RECOVERY_GRACE=int(os.getenv('HEARTBEAT_RECOVERY_GRACE_SECONDS','120'))
 NEWS_BEFORE=int(os.getenv('NEWS_BLACKOUT_BEFORE_SECONDS','1800'))
 NEWS_AFTER=int(os.getenv('NEWS_BLACKOUT_AFTER_SECONDS','1800'))
 NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
+NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
+_NEWS_CACHE={}
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
 
 def now(): return datetime.now(timezone.utc)
@@ -85,7 +87,7 @@ async def limits(request:Request, call_next):
 class Pair(BaseModel): model_config=ConfigDict(extra='forbid')
 class ManagedAccount(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; account_mode:str; consent:bool
+    login:str=Field(min_length=1,max_length=20); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; account_mode:str; consent:bool
 class WorkerClaim(BaseModel): model_config=ConfigDict(extra='forbid'); worker_id:str=Field(min_length=1,max_length=128)
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -240,23 +242,29 @@ def _showmytrades_news(symbol):
         return _unknown_news(source,'NEWS UNKNOWN: calendar provider unavailable or malformed ('+diagnostic+')')
 
 def provider_news(symbol):
+    symbol_key=(symbol or '').strip().upper()
+    key=(NEWS_PROVIDER_URL, symbol_key, id(urllib.request.urlopen))
+    cached=_NEWS_CACHE.get(key)
+    if cached and time.time()-cached[0] <= NEWS_CACHE_TTL:
+        return dict(cached[1])
     parsed=urlparse(NEWS_PROVIDER_URL)
     if not NEWS_PROVIDER_URL or parsed.scheme.lower()!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or NEWS_BEFORE<0 or NEWS_AFTER<0:
-        return _unknown_news('unconfigured','NEWS UNKNOWN: provider is not configured as a credential-free HTTPS endpoint')
+        verdict=_unknown_news('unconfigured','NEWS UNKNOWN: provider is not configured as a credential-free HTTPS endpoint')
+        _NEWS_CACHE[key]=(time.time(),verdict); return verdict
     if parsed.hostname.lower().rstrip('.') in {'showmytrades.com','www.showmytrades.com'} and parsed.path.rstrip('/')=='/api/public/calendar/v1':
-        return _showmytrades_news(symbol)
+        verdict=_showmytrades_news(symbol_key); _NEWS_CACHE[key]=(time.time(),dict(verdict)); return verdict
     try:
-        q=urllib.request.Request(NEWS_PROVIDER_URL+'?symbol='+quote(symbol),headers={'Accept':'application/json','Authorization':'Bearer '+NEWS_PROVIDER_TOKEN} if NEWS_PROVIDER_TOKEN else {'Accept':'application/json'})
+        q=urllib.request.Request(NEWS_PROVIDER_URL+'?symbol='+quote(symbol_key),headers={'Accept':'application/json','Authorization':'Bearer '+NEWS_PROVIDER_TOKEN} if NEWS_PROVIDER_TOKEN else {'Accept':'application/json'})
         with urllib.request.urlopen(q,timeout=5) as response:
             if response.headers.get_content_type()!='application/json': return _unknown_news('provider','NEWS UNKNOWN: provider returned a non-JSON content type')
             raw=response.read(256*1024+1)
         if len(raw)>256*1024: return _unknown_news('provider','NEWS UNKNOWN: provider response exceeded size limit')
         value=json.loads(raw.decode('utf-8'))
         if not isinstance(value,dict): return _unknown_news('provider','NEWS UNKNOWN: provider schema is invalid')
-        ok,detail=validate_news_verdict(value,symbol)
+        ok,detail=validate_news_verdict(value,symbol_key)
         if not ok and value.get('status')=='CLEAR': value['status']='UNKNOWN'
         value['detail']=detail; value['max_age_seconds']=NEWS_MAX_AGE; value['blackout_before_seconds']=NEWS_BEFORE; value['blackout_after_seconds']=NEWS_AFTER
-        return value
+        _NEWS_CACHE[key]=(time.time(),dict(value)); return value
     except Exception: return _unknown_news('unavailable','NEWS UNKNOWN: provider unavailable or malformed')
 
 def auth(header, kind):
@@ -351,7 +359,7 @@ def heartbeat_news_clear(beat, symbols=None):
 @app.post('/v1/app/managed-account',status_code=202)
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); fernet,_=managed_config()
-    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
+    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
@@ -386,7 +394,8 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
         code_row=c.execute('SELECT code_hash FROM pairings WHERE id=?',(r['pairing_id'],)).fetchone()
         # Existing plaintext code is intentionally not persisted; generate a fresh one for the worker and rotate hash.
         code=secrets.token_urlsafe(18); c.execute('UPDATE pairings SET code_hash=?,expires=? WHERE id=?',(digest(code),t+86400,r['pairing_id']))
-        return {'job_id':r['id'],'kind':'PROVISION','worker_id':x.worker_id,'pairing_id':r['pairing_id'],'pairing_code':code,'bridge_url':os.getenv('BRIDGE_BASE_URL',''),'account':account}
+        bridge_url=os.getenv('BRIDGE_BASE_URL','').strip() or os.getenv('RENDER_EXTERNAL_URL','').strip()
+        return {'job_id':r['id'],'kind':'PROVISION','worker_id':x.worker_id,'pairing_id':r['pairing_id'],'pairing_code':code,'bridge_url':bridge_url,'account':account}
 
 @app.patch('/v1/worker/jobs/{job_id}')
 def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(default=None)):
@@ -702,7 +711,11 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
         # otherwise mark a job reclaimed by another worker as READY.  Only the
         # lease-owning worker's authenticated status poll may perform that
         # transition (see worker_job_status above).
-    return {'accepted':True,'received_at':iso()}
+    with tx() as c:
+        row=c.execute('SELECT live_authorized_until,live_authorized_login,live_authorized_server FROM pairings WHERE id=?',(p['id'],)).fetchone()
+    live_until=row['live_authorized_until'] if row and x.account.account_mode=='LIVE' and row['live_authorized_login']==x.account.login and row['live_authorized_server']==x.account.server else None
+    if live_until is not None and live_until <= time.time(): live_until=None
+    return {'accepted':True,'received_at':iso(),'live_authorized_until':live_until}
 @app.delete('/v1/app/pairing')
 def revoke(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app')

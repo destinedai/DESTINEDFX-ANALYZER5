@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import math
 import json
 import logging
 import os
@@ -443,6 +444,21 @@ def write_private(path: Path, text: str) -> None:
 
 def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
     # MT5 .set values follow EA input order; all entries use standard text form.
+    cost_model = account.get("cost_model", "OBSERVED_ROUND_TURN")
+    commission = account.get("commission_per_lot", 0.0)
+    evidence = account.get("cost_evidence", "")
+    if cost_model not in {"OBSERVED_ROUND_TURN", "CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE"}:
+        raise ProvisionError("INVALID_COST_MODEL")
+    try:
+        commission = float(commission)
+    except (TypeError, ValueError):
+        raise ProvisionError("INVALID_COST_VALUE")
+    if not math.isfinite(commission) or commission < 0:
+        raise ProvisionError("INVALID_COST_VALUE")
+    if cost_model == "OBSERVED_ROUND_TURN" and (commission != 0 or str(evidence).strip()):
+        raise ProvisionError("INVALID_OBSERVED_COST_CONFIGURATION")
+    if cost_model != "OBSERVED_ROUND_TURN" and (commission <= 0 or len(str(evidence).strip()) < 8):
+        raise ProvisionError("INVALID_CONFIGURED_COST_EVIDENCE")
     return (f"InpBridgeBaseURL={bridge_url}\nInpPairingCode={pairing_code}\n"
             f"InpExpectedLogin={account['login']}\nInpExpectedServer={account['server']}\n"
             f"InpExpectedAccountMode={account['account_mode']}\n"
@@ -450,7 +466,8 @@ def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
             "InpMaxDailyLossPercent=2.0\nInpMaxConcurrentPositions=2\n"
             "InpPollSeconds=5\nInpScanSeconds=10\nInpHeartbeatSeconds=5\n"
             "InpMagic=5271026\nInpDeviationPoints=20\n"
-            "InpCostModel=OBSERVED_ROUND_TURN\nInpCommissionPerLot=0\nInpCostEvidence=\n")
+            f"InpCostModel={cost_model}\nInpCommissionPerLot={commission:.8f}\n"
+            f"InpCostEvidence={str(evidence).replace(chr(10), ' ').replace(chr(13), ' ')}\n")
 
 
 def ini_text(job: dict, access_type: str, symbol: str) -> str:
