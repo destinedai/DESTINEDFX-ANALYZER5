@@ -787,24 +787,10 @@ open class DestinedFXViewModel(
                 smcBiasConfidence.value = (sig.confidenceScore.coerceIn(0, 100))
                 structureAlignment.value = if (sig.mtfSummary.isNotBlank()) sig.mtfSummary else "${sig.direction} [${sig.signalState}]"
                 modelSentimentScores.value = sig.strategyScores.mapValues { (_, score) ->
-                    val bias = when (sig.direction) {
-                        com.example.domain.model.SignalDirection.LONG -> "BULLISH"
-                        com.example.domain.model.SignalDirection.SHORT -> "BEARISH"
-                        com.example.domain.model.SignalDirection.WAIT -> "WAIT"
-                    }
-                    Pair(bias, score.coerceIn(0, 100))
+                    Pair(signalBiasLabel(sig.direction), score.coerceIn(0, 100))
                 }
 
-                // Confidence alone does not make a signal actionable. Require the engine's
-                // full executable gate (live data, valid plan, risk/news/source checks, etc.).
-                if (sig.executable &&
-                    sig.confidenceScore >= 85 &&
-                    sig.direction in setOf(
-                        com.example.domain.model.SignalDirection.LONG,
-                        com.example.domain.model.SignalDirection.SHORT
-                    ) &&
-                    sig.entryPrice.isFinite() && sig.entryPrice > 0.0
-                ) {
+                if (shouldSendHighConfidenceAlert(sig)) {
                     sendRealTimeNotification(sig.symbol, sig.direction.name, sig.entryPrice)
                 }
                 triggerAlgorithmicAnalysisScan(symbol, timeframe, selectedStrategyId.value)
