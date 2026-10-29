@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.trade.MT5RemoteBridgeClient
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,6 +43,79 @@ class MT5RemoteBridgeClientTest {
         val id = "2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18"
         assertEquals(id, MT5RemoteBridgeClient.commandPayload(id, "STOP").getString("request_id"))
     }
+
+    @Test fun closeAllUsesOneUseConfirmationAndCanonicalStringTickets() {
+        val ticket = "18446744073709551615"
+        val config = JSONObject().put("account_login", "123456").put("account_server", "Broker-Demo")
+            .put("account_mode", "DEMO").put("tickets", JSONArray().put(ticket)).put("confirmation", "one-use-token")
+        val payload = MT5RemoteBridgeClient.commandPayload("2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18", "CLOSE_ALL", config)
+        assertEquals("CLOSE_ALL", payload.getString("action"))
+        assertEquals(ticket, payload.getJSONObject("config").getJSONArray("tickets").getString(0))
+        assertEquals("one-use-token", payload.getJSONObject("config").getString("confirmation"))
+        assertFalse(payload.getJSONObject("config").has("confirmation_token"))
+    }
+
+    @Test fun selectedOrderAndPositionActionsUseAgreedActionsAndTicketsArray() {
+        val id = "2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18"
+        val config = JSONObject().put("account_login", "123").put("account_server", "Broker-Demo")
+            .put("account_mode", "DEMO").put("tickets", JSONArray().put("9007199254740993"))
+        listOf("CANCEL_PENDING_SELECTED", "CLOSE_POSITION_SELECTED").forEach { action ->
+            val payload = MT5RemoteBridgeClient.commandPayload(id, action, config)
+            assertEquals(action, payload.getString("action"))
+            assertEquals("9007199254740993", payload.getJSONObject("config").getJSONArray("tickets").getString(0))
+        }
+        val bulk = MT5RemoteBridgeClient.commandPayload(id, "CANCEL_EA_PENDING", config = JSONObject()
+            .put("account_login", "123").put("account_server", "Broker-Demo").put("account_mode", "DEMO"))
+        assertFalse(bulk.getJSONObject("config").has("tickets"))
+    }
+
+    @Test fun identifiersAreLosslessAndOnlyCanonicalPositiveUint64ValuesAreAccepted() {
+        assertEquals("9007199254740993", MT5RemoteBridgeClient.canonicalTicket("9007199254740993"))
+        assertEquals("18446744073709551615", MT5RemoteBridgeClient.canonicalTicket("18446744073709551615"))
+        assertEquals("9007199254740993", MT5RemoteBridgeClient.exactIdentifier(JSONObject().put("ticket", 9007199254740993L), "ticket"))
+        assertEquals(null, MT5RemoteBridgeClient.canonicalTicket(9.007199254740993E15))
+        assertEquals(null, MT5RemoteBridgeClient.canonicalTicket("018"))
+        assertEquals(null, MT5RemoteBridgeClient.canonicalTicket("18446744073709551616"))
+        assertEquals(null, MT5RemoteBridgeClient.canonicalTicket("0"))
+    }
+
+    @Test fun commandPayloadRejectsNumericTicketValuesInsteadOfSerializingLossyIdentifiers() {
+        val config = JSONObject().put("account_login", "123").put("account_server", "Broker-Demo")
+            .put("account_mode", "DEMO").put("tickets", JSONArray().put(123456789L))
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.commandPayload("2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18", "CANCEL_PENDING_SELECTED", config)
+        }
+    }
+
+    @Test fun cancelEaPendingRequiresCompleteOwnershipMetadataAndTargetsOnlyEaOrders() {
+        val orders = listOf(
+            JSONObject().put("ticket", "1001").put("managed_by_ea", true),
+            JSONObject().put("ticket", "1002").put("managed_by_ea", false)
+        )
+        assertEquals(listOf("1001"), MT5RemoteBridgeClient.managedOrderTicketList(snapshot(orders)))
+        assertEquals(null, MT5RemoteBridgeClient.managedOrderTicketList(snapshot(listOf(JSONObject().put("ticket", "1001")))))
+        assertEquals(null, MT5RemoteBridgeClient.managedOrderTicketList(snapshot(listOf(JSONObject().put("ticket", "bad").put("managed_by_ea", true)))))
+    }
+
+    @Test fun positionActionsUseStablePositionIdRatherThanPositionTicket() {
+        val positionId = "9007199254740993"
+        val open = snapshot(emptyList()).copy(positions = listOf(
+            JSONObject().put("ticket", "9007199254740999").put("position_id", positionId)
+        ))
+        assertEquals(listOf(positionId), MT5RemoteBridgeClient.positionIdList(open))
+        assertFalse(MT5RemoteBridgeClient.effectConfirmed("CLOSE_POSITION_SELECTED", open, listOf(positionId)))
+        val closed = open.copy(positions = emptyList())
+        assertTrue(MT5RemoteBridgeClient.effectConfirmed("CLOSE_POSITION_SELECTED", closed, listOf(positionId)))
+    }
+
+    private fun snapshot(orders: List<JSONObject>) = MT5RemoteBridgeClient.Snapshot(
+        managedState = "READY", accessType = "MASTER", profileMode = "DEMO", connected = true, terminalOnline = true,
+        heartbeatFresh = true, state = "READY", account = "123 @ Broker-Demo", actualLogin = "123", actualServer = "Broker-Demo",
+        actualAccountMode = "DEMO", liveAuthorized = false, tradeAllowed = true, terminalConnected = true, accountVerified = true,
+        currency = "USD", balance = null, equity = null, margin = null, freeMargin = null, marginLevel = null, leverage = null,
+        positions = emptyList(), activeOrders = orders, closedDeals = emptyList(), snapshotsValid = true,
+        lastSignal = null, newsVerdict = null, raw = JSONObject()
+    )
 
     @Test fun runtimeBridgeUrlOverridesBuildDefaultOnlyWhenItIsValid() {
         assertEquals("https://bridge.realcop.com", MT5RemoteBridgeClient.resolveServiceOrigin(

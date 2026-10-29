@@ -70,9 +70,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgePendingId by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode)) }
     var bridgePendingAction by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandAction(selectedAccountMode)) }
     var bridgeCommandPending by remember(selectedAccountMode) { mutableStateOf(bridgePendingId.isNotBlank() && bridgePendingAction.isNotBlank()) }
+    var bridgePendingServerId by remember(selectedAccountMode) { mutableStateOf("") }
+    var bridgeTradePendingTickets by remember(selectedAccountMode) { mutableStateOf(emptyList<String>()) }
     var reportStatus by remember(selectedAccountMode) { mutableStateOf("Trade reports: waiting for authenticated broker ledger") }
     var bridgeExpectedState by remember(selectedAccountMode) { mutableStateOf(when (bridgePendingAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; "STOP", "EMERGENCY_STOP" -> "STOPPED"; else -> "" }) }
     var showLiveAuthorizationDialog by remember { mutableStateOf(false) }
+    var showCloseAllDialog by remember { mutableStateOf(false) }
     val bridgeToken = bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode)
     val bridgeTerminalFresh = bridgeSnapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected } == true
     val bridgeTerminalReady = bridgeSnapshot?.let { snapshot ->
@@ -90,6 +93,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             snapshot.state,
             snapshot.heartbeatFresh, snapshot.terminalConnected, snapshot.tradeAllowed, snapshot.accountVerified, true,
             snapshot.newsVerdict?.optString("status", "UNKNOWN") == "CLEAR")
+    } == true
+    val bridgeCanManagePositions = bridgeSnapshot?.let { snapshot ->
+        MT5RemoteBridgeClient.canManageSnapshot(selectedAccountMode, bridgeSecrets.getManagedMT5Login(selectedAccountMode),
+            bridgeSecrets.getManagedMT5Server(selectedAccountMode), snapshot)
     } == true
     fun selectBridgeProfile(profile: String) {
         selectedAccountMode = profile
@@ -162,23 +169,59 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         reportStatus = "Trade reports: ${result.generated} synchronized/generated, ${result.failed} failed"
                     }.onFailure { reportStatus = "Trade reports: sync unavailable; retrying (${it.javaClass.simpleName})" }
                     val cmd = fresh.raw.optJSONObject("last_command")
+                    val observedServerId = cmd?.let { MT5RemoteBridgeClient.serverCommandId(it) }.orEmpty()
                     if (bridgeCommandPending && cmd != null && cmd.optString("request_id") == bridgePendingId &&
-                        cmd.optString("action") == bridgePendingAction && cmd.optString("status") == "ACKNOWLEDGED") {
-                        when (cmd.optString("outcome")) {
+                        cmd.optString("action") == bridgePendingAction && (bridgePendingServerId.isBlank() || observedServerId == bridgePendingServerId) && cmd.optString("status") == "ACKNOWLEDGED") {
+                        if (bridgePendingAction in MT5RemoteBridgeClient.TRADE_ACTIONS) {
+                            val results = cmd.optJSONArray("results")
+                            val statuses = linkedMapOf<String, String>()
+                            val resultDetails = linkedMapOf<String, String>()
+                            for (i in 0 until (results?.length() ?: 0)) {
+                                val result = results?.optJSONObject(i) ?: continue
+                                MT5RemoteBridgeClient.exactIdentifier(result, "ticket")?.let { ticket ->
+                                    statuses[ticket] = result.optString("status", "UNKNOWN").uppercase().ifBlank { "UNKNOWN" }
+                                    val remaining = result.opt("remaining_volume")?.toString()?.takeIf { it.isNotBlank() && it != "null" }
+                                    resultDetails[ticket] = buildString {
+                                        append("$ticket: ${statuses[ticket]}")
+                                        if (remaining != null) append(" · remaining volume $remaining")
+                                        result.optString("message").takeIf { it.isNotBlank() }?.let { append(" · $it") }
+                                    }
+                                }
+                            }
+                            val resultTickets = if (bridgeTradePendingTickets.isNotEmpty()) bridgeTradePendingTickets else statuses.keys.toList()
+                            if (bridgeTradePendingTickets.isEmpty() && resultTickets.isNotEmpty()) bridgeTradePendingTickets = resultTickets
+                            val terminalResults = resultTickets.isNotEmpty() && resultTickets.all { statuses[it] in setOf("APPLIED", "REJECTED") }
+                            val applied = resultTickets.filter { statuses[it] == "APPLIED" }
+                            val rejected = resultTickets.filter { statuses[it] == "REJECTED" }
+                            val appliedGone = applied.isEmpty() || MT5RemoteBridgeClient.effectConfirmed(bridgePendingAction, fresh, applied)
+                            val perTicket = (if (resultTickets.isNotEmpty()) resultTickets else bridgeTradePendingTickets).joinToString("; ") { ticket ->
+                                resultDetails[ticket] ?: "$ticket: ${statuses[ticket] ?: "PENDING"}"
+                            }.ifBlank { "Waiting for server per-ticket results" }
+                            if (terminalResults && appliedGone && fresh.heartbeatFresh) {
+                                val action = bridgePendingAction
+                                bridgeSecrets.clearMT5BridgePendingCommand(selectedAccountMode)
+                                bridgeSecrets.clearMT5BridgeSafetyStop(selectedAccountMode)
+                                bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgePendingServerId = ""; bridgeTradePendingTickets = emptyList()
+                                bridgeMessage = "$action reconciled from server command $observedServerId and fresh account telemetry: ${applied.size} applied, ${rejected.size} rejected. $perTicket"
+                            } else {
+                                val partial = statuses.values.any { it == "PARTIAL" }
+                                bridgeMessage = "${bridgePendingAction} command $observedServerId ${if (partial) "partially applied; unresolved volume remains" else "acknowledged; awaiting terminal per-ticket results and fresh telemetry"}. $perTicket. Pending request is retained; no close success is assumed."
+                            }
+                        } else when (cmd.optString("outcome")) {
                             "REJECTED" -> {
                                 val action = bridgePendingAction
                                 val original = bridgeSecrets.getMT5BridgeSafetyOriginalId(selectedAccountMode)
                                 val originalAction = bridgeSecrets.getMT5BridgeSafetyOriginalAction(selectedAccountMode).takeIf { original.isNotBlank() }.orEmpty()
                                 bridgeSecrets.clearMT5BridgePendingCommand(selectedAccountMode)
-                                if (original.isNotBlank()) { bridgeSecrets.saveMT5BridgePendingCommand(original, originalAction, selectedAccountMode); bridgeSecrets.clearMT5BridgeSafetyStop(selectedAccountMode); bridgePendingId = original; bridgePendingAction = originalAction; bridgeExpectedState = when (originalAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; else -> "STOPPED" }; bridgeCommandPending = true; bridgeMessage = "Safety STOP was rejected; original $originalAction request $original remains unresolved. Terminal state is unknown." }
-                                else { bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeMessage = "$action rejected by EA: ${cmd.optString("message", "No reason supplied")}" }
+                                if (original.isNotBlank()) { bridgeSecrets.saveMT5BridgePendingCommand(original, originalAction, selectedAccountMode); bridgeSecrets.clearMT5BridgeSafetyStop(selectedAccountMode); bridgePendingId = original; bridgePendingAction = originalAction; bridgeExpectedState = when (originalAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; else -> "STOPPED" }; bridgePendingServerId = ""; bridgeTradePendingTickets = emptyList(); bridgeCommandPending = true; bridgeMessage = "Safety STOP was rejected; original $originalAction request $original remains unresolved. Terminal state is unknown." }
+                                else { bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgePendingServerId = ""; bridgeTradePendingTickets = emptyList(); bridgeMessage = "$action rejected by EA: ${cmd.optString("message", "No reason supplied")}" }
                             }
                             "APPLIED" -> if (fresh.heartbeatFresh) {
                                 val action = bridgePendingAction
                                 val expected = bridgeExpectedState
                                 val confirmed = fresh.state == expected && cmd.optString("state") == expected
                                 if (confirmed) {
-                                    bridgeSecrets.clearMT5BridgePendingCommand(selectedAccountMode); bridgeSecrets.clearMT5BridgeSafetyStop(selectedAccountMode); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""
+                                    bridgeSecrets.clearMT5BridgePendingCommand(selectedAccountMode); bridgeSecrets.clearMT5BridgeSafetyStop(selectedAccountMode); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgePendingServerId = ""; bridgeTradePendingTickets = emptyList()
                                     bridgeMessage = "$action applied; fresh EA heartbeat confirms ${fresh.state}."
                                 } else {
                                     bridgeMessage = "$action acknowledged as applied, but fresh EA heartbeat reports actual state ${fresh.state}; target state is not confirmed. Safety reconciliation remains pending."
@@ -287,6 +330,92 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                     Text("Managed EA strategy support is registry-validated; support does not imply profitability or real-broker testing.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     BridgeTelemetry(bridgeSnapshot)
+                    val actionSnapshot = bridgeSnapshot
+                    val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshot != null && !bridgeBusy && !bridgeCommandPending
+                    if (actionSnapshot != null && actionSnapshot.snapshotsValid) {
+                        Text("SNAPSHOT-BOUND MANAGEMENT (requires current verified $selectedAccountMode account)", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        actionSnapshot.activeOrders.orEmpty().forEach { order ->
+                            val orderTicket = MT5RemoteBridgeClient.exactIdentifier(order, "ticket")
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text("${order.optString("direction", "TYPE UNKNOWN")} ${order.optString("symbol", "?")} · ticket ${orderTicket ?: "unavailable"} · ${order.optString("state", "state unavailable")}", color = TextPrimary, fontSize = 10.sp)
+                                    Text("Remaining ${order.optString("remaining_volume", "unavailable")} · SL ${order.optString("stop_loss", "unavailable")} · TP ${order.optString("take_profit", "unavailable")} · EA ownership ${if (order.opt("managed_by_ea") is Boolean) if (order.optBoolean("managed_by_ea")) "MANAGED" else "NOT MANAGED" else "UNVERIFIED"}", color = TextSecondary, fontSize = 9.sp)
+                                }
+                                OutlinedButton(enabled = actionsReady && orderTicket != null, onClick = {
+                                    if (bridgeBusy || bridgeCommandPending || orderTicket == null) return@OutlinedButton
+                                    bridgeBusy = true
+                                    coroutineScope.launch {
+                                        try {
+                                            val fresh = bridgeClient.state(); bridgeSnapshot = fresh
+                                            val config = MT5RemoteBridgeClient.actionConfig(fresh, "CANCEL_PENDING_SELECTED", listOf(orderTicket))
+                                            sendBridgeTradeCommand(bridgeClient, "CANCEL_PENDING_SELECTED", config, listOf(orderTicket), bridgeSecrets, selectedAccountMode,
+                                                { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgePendingServerId = it }, { bridgeTradePendingTickets = it }, { bridgeMessage = it })
+                                        } catch (e: Exception) { bridgeMessage = e.message ?: "Order cancellation was not sent; snapshot is unverified."; bridgeBusy = false }
+                                    }
+                                }) { Text("CANCEL", fontSize = 9.sp) }
+                            }
+                        }
+                        if (MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot) != null) {
+                            OutlinedButton(enabled = actionsReady && MT5RemoteBridgeClient.managedOrderTicketList(actionSnapshot) != null, onClick = {
+                                if (bridgeBusy || bridgeCommandPending) return@OutlinedButton
+                                bridgeBusy = true
+                                coroutineScope.launch {
+                                    try {
+                                        val fresh = bridgeClient.state(); bridgeSnapshot = fresh
+                                        val tickets = MT5RemoteBridgeClient.managedOrderTicketList(fresh) ?: error("Fresh EA-owned pending-order identifiers are unavailable.")
+                                        val config = MT5RemoteBridgeClient.actionConfig(fresh, "CANCEL_EA_PENDING")
+                                        sendBridgeTradeCommand(bridgeClient, "CANCEL_EA_PENDING", config, tickets, bridgeSecrets, selectedAccountMode,
+                                            { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgePendingServerId = it }, { bridgeTradePendingTickets = it }, { bridgeMessage = it })
+                                    } catch (e: Exception) { bridgeMessage = e.message ?: "EA pending-order cancellation was not sent."; bridgeBusy = false }
+                                }
+                            }) { Text("CANCEL EA PENDING ORDERS") }
+                        }
+                        actionSnapshot.positions.orEmpty().forEach { position ->
+                            val positionTicket = MT5RemoteBridgeClient.exactIdentifier(position, "ticket")
+                            val positionId = MT5RemoteBridgeClient.exactIdentifier(position, "position_id")
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text("${position.optString("direction", "TYPE UNKNOWN")} ${position.optString("symbol", "?")} · ticket ${positionTicket ?: "unavailable"}", color = TextPrimary, fontSize = 10.sp)
+                                    Text("Volume ${position.optString("volume", "unavailable")} · P/L ${position.optString("floating_profit", "unavailable")} · SL ${position.optString("stop_loss", "unavailable")} · TP ${position.optString("take_profit", "unavailable")} · EA ownership ${if (position.opt("managed_by_ea") is Boolean) if (position.optBoolean("managed_by_ea")) "MANAGED" else "NOT MANAGED" else "UNVERIFIED"}", color = TextSecondary, fontSize = 9.sp)
+                                }
+                                OutlinedButton(enabled = actionsReady && positionId != null, onClick = {
+                                    if (bridgeBusy || bridgeCommandPending || positionId == null) return@OutlinedButton
+                                    bridgeBusy = true
+                                    coroutineScope.launch {
+                                        try {
+                                            val fresh = bridgeClient.state(); bridgeSnapshot = fresh
+                                            val config = MT5RemoteBridgeClient.actionConfig(fresh, "CLOSE_POSITION_SELECTED", listOf(positionId))
+                                            sendBridgeTradeCommand(bridgeClient, "CLOSE_POSITION_SELECTED", config, listOf(positionId), bridgeSecrets, selectedAccountMode,
+                                                { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgePendingServerId = it }, { bridgeTradePendingTickets = it }, { bridgeMessage = it })
+                                        } catch (e: Exception) { bridgeMessage = e.message ?: "Position close was not sent; snapshot is unverified."; bridgeBusy = false }
+                                    }
+                                }) { Text("CLOSE", fontSize = 9.sp) }
+                            }
+                        }
+                        if (actionSnapshot.positions.orEmpty().isNotEmpty()) {
+                            Button(enabled = actionsReady && MT5RemoteBridgeClient.positionIdList(actionSnapshot) != null, onClick = { showCloseAllDialog = true }) { Text("CLOSE ALL POSITIONS…") }
+                        }
+                    }
+                    if (showCloseAllDialog) AlertDialog(
+                        onDismissRequest = { if (!bridgeBusy) showCloseAllDialog = false },
+                        title = { Text("Close every current position?") },
+                        text = { Text("This sends a close command for every position in the fresh verified $selectedAccountMode account snapshot. Orders are not included. It is irreversible and is not a STOP/EMERGENCY_STOP action. A one-use server confirmation token is required; no success is shown until every result and fresh telemetry reconcile.") },
+                        confirmButton = { TextButton(enabled = !bridgeBusy && !bridgeCommandPending, onClick = {
+                            showCloseAllDialog = false
+                            if (bridgeBusy || bridgeCommandPending) return@TextButton
+                            bridgeBusy = true
+                            coroutineScope.launch {
+                                try {
+                                    val confirmation = bridgeClient.requestCloseAllConfirmation()
+                                    val fresh = bridgeClient.state(); bridgeSnapshot = fresh
+                                    val config = MT5RemoteBridgeClient.actionConfig(fresh, "CLOSE_ALL", confirmation.tickets, confirmation.token)
+                                    sendBridgeTradeCommand(bridgeClient, "CLOSE_ALL", config, confirmation.tickets, bridgeSecrets, selectedAccountMode,
+                                        { bridgeBusy = it }, { bridgeCommandPending = it }, { bridgePendingId = it }, { bridgePendingAction = it }, { bridgePendingServerId = it }, { bridgeTradePendingTickets = it }, { bridgeMessage = it })
+                                } catch (e: Exception) { bridgeMessage = e.message ?: "Close-all confirmation or command failed closed."; bridgeBusy = false }
+                            }
+                        }) { Text("CONFIRM CLOSE ALL") } },
+                        dismissButton = { TextButton(onClick = { showCloseAllDialog = false }) { Text("CANCEL") } }
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("PAUSE", "RESUME", "STOP", "EMERGENCY_STOP").forEach { action ->
                             val needsTradingReady = action == "PAUSE" || action == "RESUME"
@@ -2136,7 +2265,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
 
-                        Button(
+                        if (activeBrokerType == BrokerType.MT5) {
+                            Column(horizontalAlignment = Alignment.End) {
+                                Button(enabled = false, onClick = {}, colors = ButtonDefaults.buttonColors(containerColor = LossRed),
+                                    shape = RoundedCornerShape(4.dp), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.testTag("close_position_${pos.id}")) {
+                                    Text("Remote bridge only", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                }
+                                Text("Use matching verified snapshot action above; local MT5 close is disabled.", color = WarningAmber, fontSize = 8.sp)
+                            }
+                        } else Button(
                             onClick = {
                                 coroutineScope.launch {
                                     activeBrokerGateway.closePosition(pos.id)
@@ -2336,6 +2474,46 @@ private suspend fun sendBridgeCommand(
         message("Blocked: ${result.detail}")
     } else {
         message(if (result.queued) "$action queued (request ${result.requestId}); awaiting matching acknowledgement and fresh heartbeat; not confirmed." else "UNKNOWN request ${result.requestId}: ${result.detail}. Do not resend; reconcile this ID or recover manually.")
+    }
+    busy(false)
+}
+
+private suspend fun sendBridgeTradeCommand(
+    client: MT5RemoteBridgeClient, action: String, config: JSONObject, targetTickets: List<String>,
+    secrets: com.example.security.SecretsManager, profile: String,
+    busy: (Boolean) -> Unit, pending: (Boolean) -> Unit, requestId: (String) -> Unit,
+    pendingAction: (String) -> Unit, serverId: (String) -> Unit, pendingTickets: (List<String>) -> Unit,
+    message: (String) -> Unit
+) {
+    val unresolvedId = secrets.getMT5BridgePendingCommandId(profile)
+    if (unresolvedId.isNotBlank()) {
+        pending(true); requestId(unresolvedId); pendingAction(secrets.getMT5BridgePendingCommandAction(profile))
+        message("A bridge command is unresolved. Reconcile its request ID before sending any position/order action.")
+        busy(false)
+        return
+    }
+    val id = java.util.UUID.randomUUID().toString()
+    if (!secrets.saveMT5BridgePendingCommand(id, action, profile)) {
+        message("Secure pending-command storage failed; no position/order command was sent.")
+        busy(false)
+        return
+    }
+    requestId(id); pendingAction(action); serverId(""); pendingTickets(targetTickets); pending(true); busy(true)
+    val result = client.command(id, action, config)
+    when {
+        result.rejected -> {
+            secrets.clearMT5BridgePendingCommand(profile)
+            pending(false); requestId(""); pendingAction(""); serverId(""); pendingTickets(emptyList())
+            message("Blocked: ${result.detail}")
+        }
+        result.queued -> {
+            serverId(result.serverCommandId)
+            message("$action queued as server command ${result.serverCommandId} (request ${result.requestId}); awaiting matching per-ticket results and fresh telemetry. Not confirmed.")
+        }
+        else -> {
+            serverId(result.serverCommandId)
+            message("UNKNOWN request ${result.requestId}${result.serverCommandId.takeIf { it.isNotBlank() }?.let { " / server command $it" }.orEmpty()}: ${result.detail}. Do not resend; reconcile this same ID.")
+        }
     }
     busy(false)
 }

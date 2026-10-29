@@ -649,3 +649,169 @@ def test_invalid_managed_cost_configurations_are_rejected(monkeypatch):
         p,ah=managed_pair()
         payload={'login':'77883','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True,**cost}
         assert client.post('/v1/app/managed-account',headers=ah,json=payload).status_code==422, cost
+
+
+# Destructive command contract coverage.
+def destructive_position(ticket, position_id, symbol='EURUSD'):
+    return {'ticket':ticket,'position_id':position_id,'symbol':symbol,'direction':'BUY','volume':0.1,'open_price':1.1,'stop_loss':1.09,'take_profit':1.12,'floating_profit':1.0,'commission':0.0,'swap':0.0}
+
+def destructive_snapshot(ready, positions=None, orders=None):
+    p,ah,wh,job,th,actual=ready
+    hb=heartbeat_data(account={**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100},
+                      open_positions=positions or [],active_orders=orders or [])
+    assert client.post('/v1/terminal/heartbeat',headers=th,json=hb).status_code==200
+    return p,ah,th,actual
+
+def destructive_req(action,config,request_id=None):
+    return {'request_id':request_id or str(uuid.uuid4()),'action':action,'config':config}
+
+def test_destructive_actions_require_auth_master_and_matching_snapshot(monkeypatch):
+    ready=live_ready(monkeypatch)
+    p,ah,th,actual=destructive_snapshot(ready,[destructive_position('501','77')])
+    selected=destructive_req('CLOSE_POSITION_SELECTED',{'tickets':['77']})
+    assert client.post('/v1/app/commands',json=selected).status_code==401
+    investor=live_ready(monkeypatch,access_type='INVESTOR')
+    ip,iah,ith,iactual=destructive_snapshot(investor,[destructive_position('501','77')])
+    assert client.post('/v1/app/commands',headers=iah,json=selected).status_code==409
+    wrong=destructive_req('CLOSE_POSITION_SELECTED',{'tickets':['999']})
+    assert client.post('/v1/app/commands',headers=ah,json=wrong).status_code==409
+    with app.tx(True) as c:
+        c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(account={**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100},open_positions=[destructive_position('501','77')]),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
+    assert client.post('/v1/app/commands',headers=ah,json=selected).status_code==409
+
+def test_ticket_ids_are_canonical_positive_uint64_strings(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,[destructive_position('1','1')])
+    for invalid in (True,1,1.0,'0','00','01','+1','-1',' 1','1 ','1.0','18446744073709551616','9'*5000):
+        response=client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_POSITION_SELECTED',{'tickets':[invalid]}))
+        assert response.status_code==422, (invalid,response.status_code,response.text)
+    maximum=destructive_req('CLOSE_POSITION_SELECTED',{'tickets':['18446744073709551615']})
+    # A canonical maximum is accepted by syntax and rejected only because it is not in this snapshot.
+    assert client.post('/v1/app/commands',headers=ah,json=maximum).status_code==409
+
+def test_destructive_request_idempotency_and_payload_conflict(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,[destructive_position('501','77'),destructive_position('502','78')])
+    req=destructive_req('CLOSE_POSITION_SELECTED',{'tickets':['77']})
+    one=client.post('/v1/app/commands',headers=ah,json=req); two=client.post('/v1/app/commands',headers=ah,json=req)
+    assert one.status_code==202 and two.status_code==202 and one.json()['id']==two.json()['id']
+    changed={**req,'config':{'tickets':['78']}}
+    assert client.post('/v1/app/commands',headers=ah,json=changed).status_code==409
+    polled=client.get('/v1/terminal/commands?cursor=0',headers=th).json()['commands']
+    payload=next(x for x in polled if x['id']==one.json()['id'])
+    assert payload['config']['tickets']==['77'] and payload['expires_at']==payload['config']['expires_at']
+    assert payload['config']['account_id']==actual['login'] and payload['config']['account_login']==actual['login'] and payload['config']['account_server']==actual['server'] and payload['config']['account_mode']=='LIVE'
+
+def test_cancel_ea_pending_uses_only_explicitly_managed_orders(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,orders=[
+        {'ticket':'11','position_id':'0','symbol':'EURUSD','direction':'BUY','state':'PENDING','volume':0.1,'remaining_volume':0.1,'open_price':1.1,'stop_loss':0,'take_profit':0,'managed_by_ea':True},
+        {'ticket':'12','position_id':'0','symbol':'EURUSD','direction':'BUY','state':'PENDING','volume':0.1,'remaining_volume':0.1,'open_price':1.1,'stop_loss':0,'take_profit':0,'managed_by_ea':False}])
+    req=destructive_req('CANCEL_EA_PENDING',{'tickets':['999']})
+    result=client.post('/v1/app/commands',headers=ah,json=req)
+    assert result.status_code==202 and result.json()['config']['tickets']==['11']
+    unknown=destructive_snapshot(ready,orders=[{'ticket':'13','position_id':'0','symbol':'EURUSD','direction':'BUY','state':'PENDING','volume':0.1,'remaining_volume':0.1,'open_price':1.1,'stop_loss':0,'take_profit':0}])
+    assert client.post('/v1/app/commands',headers=unknown[1],json=destructive_req('CANCEL_EA_PENDING',{})).status_code==409
+    empty=destructive_snapshot(ready,orders=[])
+    assert client.post('/v1/app/commands',headers=empty[1],json=destructive_req('CANCEL_EA_PENDING',{})).status_code==409
+
+def test_close_all_confirmation_is_required_bound_one_use_and_expiring(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,[destructive_position('501','77'),destructive_position('502','78')])
+    assert client.post('/v1/app/close-all-confirmation',headers=ah,json={'confirm_close_all':False}).status_code==422
+    token=client.post('/v1/app/close-all-confirmation',headers=ah,json={'confirm_close_all':True}).json()['token']
+    config={'tickets':['77','78'],'account_login':actual['login'],'account_server':actual['server'],'account_mode':'LIVE','confirmation':token}
+    req=destructive_req('CLOSE_ALL',config)
+    result=client.post('/v1/app/commands',headers=ah,json=req)
+    assert result.status_code==202 and result.json()['config']['tickets']==['77','78']
+    # A new request cannot reuse a consumed token; a retry of the original immutable request is idempotent.
+    assert client.post('/v1/app/commands',headers=ah,json=req).json()['id']==result.json()['id']
+    assert client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_ALL',config)).status_code==409
+    token2=client.post('/v1/app/close-all-confirmation',headers=ah,json={'confirm_close_all':True}).json()['token']
+    with app.tx(True) as c: c.execute('UPDATE close_all_confirmations SET expires_at=? WHERE token_hash=?',(time.time()-1,app.digest(token2)))
+    expired={**config,'confirmation':token2}
+    assert client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_ALL',expired)).status_code==409
+
+def test_close_all_confirmation_is_pairing_and_account_bound(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,[destructive_position('501','77')])
+    token=client.post('/v1/app/close-all-confirmation',headers=ah,json={'confirm_close_all':True}).json()['token']
+    other=live_ready(monkeypatch,login='700002',server='Other-Broker')
+    op,oah,oth,oactual=destructive_snapshot(other,[destructive_position('601','88')])
+    cfg={'tickets':['88'],'account_login':oactual['login'],'account_server':oactual['server'],'account_mode':'LIVE','confirmation':token}
+    assert client.post('/v1/app/commands',headers=oah,json=destructive_req('CLOSE_ALL',cfg)).status_code==409
+    wrong_meta={'tickets':['77'],'account_login':'other','account_server':actual['server'],'account_mode':'LIVE','confirmation':token}
+    assert client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_ALL',wrong_meta)).status_code==409
+
+def test_destructive_ack_validates_ticket_results_and_requires_later_heartbeat(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,[destructive_position('501','77'),destructive_position('502','78')])
+    req=destructive_req('CLOSE_ALL',{'tickets':['77','78'],'account_login':actual['login'],'account_server':actual['server'],'account_mode':'LIVE',
+                                      'confirmation':client.post('/v1/app/close-all-confirmation',headers=ah,json={'confirm_close_all':True}).json()['token']})
+    issued=client.post('/v1/app/commands',headers=ah,json=req).json(); cid=issued['id']
+    assert client.get('/v1/terminal/commands?cursor=0',headers=th).json()['commands']
+    base={'outcome':'UNKNOWN','state':'READY','message':'partial','results':[{'ticket':'77','status':'APPLIED','message':'sent'}]}
+    for bad_results in ([{'ticket':'77','status':'APPLIED'},{'ticket':'77','status':'UNKNOWN'}],
+                        [{'ticket':'77','status':'APPLIED'},{'ticket':'99','status':'UNKNOWN'}],
+                        [{'ticket':'77','status':'MAYBE'}]):
+        assert client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json={**base,'results':bad_results}).status_code==422
+    ack=client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json=base)
+    assert ack.status_code==200
+    state=client.get('/v1/app/state',headers=ah).json()['last_command']
+    assert [x['status'] for x in state['results']]==['PENDING','UNKNOWN']
+    # A pre-ack snapshot cannot prove completion; subsequent matching snapshots do.
+    after=destructive_snapshot(ready,[destructive_position('501','77')])
+    current=client.get('/v1/app/state',headers=ah).json()['last_command']['results']
+    assert [x['status'] for x in current]==['PENDING','UNKNOWN']
+    destructive_snapshot(ready,[])
+    final=client.get('/v1/app/state',headers=ah).json()['last_command']['results']
+    assert [x['status'] for x in final]==['APPLIED','UNKNOWN']
+    evidence=heartbeat_data(account={**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100},open_positions=[],closed_deals=[{'ticket':'901','position_id':'78','symbol':'EURUSD','closed_at':app.iso(),'profit':1.0,'commission':0.0,'swap':0.0}])
+    assert client.post('/v1/terminal/heartbeat',headers=th,json=evidence).status_code==200
+    final=client.get('/v1/app/state',headers=ah).json()['last_command']['results']
+    assert [x['status'] for x in final]==['APPLIED','APPLIED']
+    with app.tx() as c:
+        statuses=c.execute('SELECT ticket,operational_status FROM command_items WHERE command_id=? ORDER BY ticket',(cid,)).fetchall()
+    assert [(r['ticket'],r['operational_status']) for r in statuses]==[('77','CONFIRMED'),('78','CONFIRMED')]
+
+def test_cancel_requires_explicit_fresh_history_evidence_and_duplicate_target_is_blocked(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,orders=[
+        {'ticket':'11','position_id':'0','symbol':'EURUSD','direction':'BUY','state':'PENDING','volume':0.1,'remaining_volume':0.1,'open_price':1.1,'stop_loss':0,'take_profit':0,'managed_by_ea':True}])
+    req=destructive_req('CANCEL_PENDING_SELECTED',{'tickets':['11']})
+    first=client.post('/v1/app/commands',headers=ah,json=req); assert first.status_code==202
+    duplicate=client.post('/v1/app/commands',headers=ah,json=destructive_req('CANCEL_PENDING_SELECTED',{'tickets':['11']}))
+    assert duplicate.status_code==409
+    cid=first.json()['id']
+    ack={'outcome':'UNKNOWN','state':'READY','results':[{'ticket':'11','status':'UNKNOWN','message':'Awaiting broker history'}]}
+    assert client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json=ack).status_code==200
+    # Disappearance alone is ambiguous (the order may have filled), so it remains unresolved.
+    destructive_snapshot(ready,orders=[])
+    pending=client.get('/v1/app/state',headers=ah).json()['last_command']['results']
+    assert pending[0]['status']=='UNKNOWN' and pending[0]['operational_status']=='PENDING'
+    # The EA later reports broker-history-confirmed cancellation; a subsequent heartbeat closes reconciliation.
+    upgraded={'outcome':'APPLIED','state':'READY','results':[{'ticket':'11','status':'APPLIED','message':'Broker history confirms cancellation'}]}
+    assert client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json=upgraded).status_code==200
+    destructive_snapshot(ready,orders=[])
+    confirmed=client.get('/v1/app/state',headers=ah).json()['last_command']['results']
+    assert confirmed[0]['status']=='APPLIED' and 'confirmed' in confirmed[0]['message'].lower()
+
+def test_partial_position_close_reports_remaining_volume_and_stays_unresolved(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,[destructive_position('501','77')])
+    req=destructive_req('CLOSE_POSITION_SELECTED',{'tickets':['77']})
+    issued=client.post('/v1/app/commands',headers=ah,json=req); assert issued.status_code==202
+    cid=issued.json()['id']
+    ack={'outcome':'UNKNOWN','state':'READY','results':[{'ticket':'77','status':'UNKNOWN','message':'Broker accepted partial close; reconciling'}]}
+    assert client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json=ack).status_code==200
+    partial={**destructive_position('501','77'),'volume':0.04}
+    destructive_snapshot(ready,[partial])
+    result=client.get('/v1/app/state',headers=ah).json()['last_command']['results'][0]
+    assert result['status']=='PARTIAL'
+    assert result['operational_status']=='PARTIAL'
+    assert result['target_volume']==0.1 and result['remaining_volume']==0.04
+    retry=client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_POSITION_SELECTED',{'tickets':['77']}))
+    assert retry.status_code==409
+
+def test_destructive_action_requires_trade_permission_and_close_all_nonempty(monkeypatch):
+    ready=live_ready(monkeypatch); p,ah,th,actual=destructive_snapshot(ready,[destructive_position('501','77')])
+    bad=heartbeat_data(account={**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100},open_positions=[destructive_position('501','77')],trade_allowed=False)
+    assert client.post('/v1/terminal/heartbeat',headers=th,json=bad).status_code==200
+    assert client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_POSITION_SELECTED',{'tickets':['77']})).status_code==409
+    good=heartbeat_data(account={**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100},open_positions=[])
+    assert client.post('/v1/terminal/heartbeat',headers=th,json=good).status_code==200
+    token=client.post('/v1/app/close-all-confirmation',headers=ah,json={'confirm_close_all':True}).json()['token']
+    cfg={'tickets':[],'account_login':actual['login'],'account_server':actual['server'],'account_mode':'LIVE','confirmation':token}
+    assert client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_ALL',cfg)).status_code==409

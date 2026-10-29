@@ -98,7 +98,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "news verdict is timestamped and fail closed": all(x in source for x in ["retrieved_at_ms", "coverage_from_ms", "coverage_to_ms", "g_newsStatus=\"UNKNOWN\"", "NEWS UNKNOWN"]),
         "pending news cancellation is EA-owned only": "CancelNewsBlockedPendingOrders" in source and "ORDER_MAGIC" in source and "trade.OrderDelete" in source and "HistoryOrderSelect" in source,
         "signal dedupe persisted before submission": "if(!Remember(key))" in source and "PersistSeen()" in source and 'FileOpen(SeenFile(),FILE_READ' in source and "AtomicWrite" in source,
-        "README discloses persisted dedupe": "persisted in an account-login-scoped" in readme,
+        "source persists signal dedupe": "PersistSeen()" in source and "SeenFile()" in source and "AtomicWrite" in source,
     }
 
     clean = _scrub(source)
@@ -141,7 +141,7 @@ def test_trade_report_fields_come_from_ea_owned_broker_history():
     assert r'\"entry_price\":%.10f' in source
     assert r'\"volume\":%.4f,\"price\":%.10f' in source
     assert "HistoryDealGetInteger(d,DEAL_MAGIC)!=(ulong)InpMagic" in source
-    assert 'PositionGetInteger(POSITION_MAGIC)!=(ulong)InpMagic' in source
+    assert 'PositionGetInteger(POSITION_MAGIC)==(ulong)InpMagic' in source
     assert 'OrderGetInteger(ORDER_MAGIC)!=(long)InpMagic' in source
     assert "conversionDistance=MathMin(1.0,entry*0.1)" in source
     assert "entryCommission*share" in source
@@ -149,3 +149,127 @@ def test_trade_report_fields_come_from_ea_owned_broker_history():
     assert "emitted<30" in source
     assert r'\"commission\":null' in source
     assert "closeSwap+entrySwap*share" in source
+
+
+def test_ticket_operation_safety_contracts():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    checks = {
+        "bridge operation actions": all(
+            action in source
+            for action in (
+                "CANCEL_PENDING_SELECTED",
+                "CANCEL_EA_PENDING",
+                "CLOSE_POSITION_SELECTED",
+                "CLOSE_ALL",
+            )
+        ),
+        "poll tickets strictly canonical uint64": all(
+            term in source
+            for term in (
+                'JArray(obj,"tickets")',
+                "TicketTextToUlong",
+                'StringGetCharacter(text,0)==\'0\'',
+                '18446744073709551615',
+                "ArraySize(ids)>0",
+            )
+        ),
+        "account identity permissions freshness expiration": all(
+            term in source
+            for term in (
+                "AccountIdentityMatches()",
+                "TERMINAL_CONNECTED",
+                "MQL_TRADE_ALLOWED",
+                "ACCOUNT_TRADE_ALLOWED",
+                'JStr(obj,"account_login",JStr(obj,"account_id",""))',
+                'JStr(obj,"expires_at","")',
+                "ValidIsoUtc(expiry)",
+                "g_lastHeartbeatAcceptedUtc",
+                "g_lastAuthenticatedBridgeUtc",
+                "StringCompare(issued,IsoUtc(TimeGMT()-HEARTBEAT_STALE_SECONDS))<0",
+            )
+        ),
+        "close all requires bridge confirmation token": 'JStr(obj,"confirmation","")==""' in source,
+        "exact selected membership and close-all snapshot": all(
+            term in source
+            for term in (
+                "ExactPendingSet(action,ids)",
+                "ExactPositionSet(ids,true)",
+                "CurrentPositionsWithinSnapshot(ids)",
+                "ExactPositionSet(ids,false)",
+                "HasPositionIdentifier(ids[j],ticket)",
+            )
+        ),
+        "EA pending cancellation magic scoped": 'OrderGetInteger(ORDER_MAGIC)!=(long)InpMagic' in source and "CANCEL_EA_PENDING" in source,
+        "position close uses current ticket from identifier": "POSITION_IDENTIFIER)==id" in source and "POSITION_TICKET" in source and "trade.PositionClose(actualTicket)" in source,
+        "trade result status checked, not HTTP success": all(
+            term in source
+            for term in (
+                "trade.ResultRetcode()",
+                "TRADE_RETCODE_DONE",
+                "TRADE_RETCODE_PLACED",
+                "TRADE_RETCODE_DONE_PARTIAL",
+                r'\"status\":\""+g_opStatus[i]',
+                'g_opStatus[i]="APPLIED"',
+                'g_opStatus[i]="REJECTED"',
+                'g_opStatus[oi]="UNKNOWN"',
+            )
+        ),
+        "durable operation journal before broker call and replay guarded": all(
+            term in source
+            for term in (
+                "PersistOperations()",
+                'g_opPhase[n]="IN_PROGRESS"',
+                'if(!created[t]){ReconcileOperation(oi);continue;}',
+                "LoadOperations()",
+                "OperationFile()",
+            )
+        ),
+        "ack includes per-ticket results and persisted outcomes": all(
+            term in source
+            for term in (
+                '\\"results\\":%s',
+                'resultJson="[]"',
+                'g_ackResults[n]=results',
+                '"ticket\\":\\"',
+                '"message\\":\\"',
+            )
+        ),
+        "fresh current positions plus authenticated history reconciliation": all(
+            term in source
+            for term in (
+                "RecentExitDeal(id)",
+                "g_lastHeartbeatAcceptedUtc>g_opStarted[i]",
+                "HistoryOrderSelect(id)",
+                "st==ORDER_STATE_FILLED",
+                "cancellation not applied",
+                "ReconcileOperations();",
+            )
+        ),
+        "stop does not liquidate or remove protection": 'g_state="STOPPED";msg="New entries stopped; open positions and broker SL/TP left untouched"' in source,
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    assert not failed, "Ticket operation source checks failed: " + ", ".join(failed)
+
+
+def test_heartbeat_trade_records_mark_ea_ownership():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    positions = source[source.index("string PositionsJson()") : source.index("string OrdersJson()") ]
+    orders = source[source.index("string OrdersJson()") : source.index("string DealsJson()") ]
+    assert '\\"managed_by_ea\\":%s' in positions
+    assert '\\"managed_by_ea\\":%s' in orders
+    assert 'POSITION_MAGIC)==(ulong)InpMagic' in positions
+    assert 'ORDER_MAGIC)==(long)InpMagic' in orders
+    assert '\\"ticket\\":\\"%I64u' in positions and '\\"position_id\\":\\"%I64u' in positions
+    assert '\\"ticket\\":\\"%I64u' in orders and '\\"position_id\\":\\"%I64d' in orders
+
+
+def test_reconciliation_publishes_monotonic_ack_updates():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    publish = source[source.index("void PublishReconciledOperationAcks()") : source.index("void ReconcileOperations()") ]
+    assert "OperationResults(request)" in publish
+    assert "oldOutcome=g_ackOutcomes[ai]" in publish
+    assert 'newOutcome=allApplied&&any?"APPLIED":(unknown?"UNKNOWN":"REJECTED")' in publish
+    assert "if(!PersistProcessed())" in publish
+    assert "Ack(request,newOutcome,newMessage,newResults)" in publish
+    assert "PublishReconciledOperationAcks();" in source[source.index("void ReconcileOperations()") :]
+    assert "if(!created[t]){ReconcileOperation(oi);continue;}" in source

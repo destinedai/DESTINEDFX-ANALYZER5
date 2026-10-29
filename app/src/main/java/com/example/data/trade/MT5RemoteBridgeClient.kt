@@ -11,6 +11,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URI
 import java.net.InetAddress
+import java.math.BigInteger
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -23,7 +24,11 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     data class Pairing(val code: String, val expiresAt: String)
-    data class CommandResult(val requestId: String, val queued: Boolean, val detail: String = "", val rejected: Boolean = false)
+    data class CommandResult(
+        val requestId: String, val queued: Boolean, val detail: String = "", val rejected: Boolean = false,
+        val serverCommandId: String = "", val status: String = ""
+    )
+    data class CloseAllConfirmation(val token: String, val expiresAt: String, val tickets: List<String>)
     data class Snapshot(
         val managedState: String, val accessType: String, val profileMode: String,
         val connected: Boolean, val terminalOnline: Boolean, val heartbeatFresh: Boolean,
@@ -139,9 +144,15 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
 
     /** Creates one profile-scoped idempotency key; UNKNOWN is retained for reconciliation, never retried here. */
     suspend fun command(requestId: String, action: String, config: JSONObject = JSONObject()): CommandResult {
-        require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP"))
+        require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP", "CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL"))
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
-        if (action in setOf("START", "RESUME", "PAUSE")) {
+        if (action in TRADE_ACTIONS) {
+            val fresh = try { state() } catch (e: Exception) {
+                return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
+            }
+            val reason = tradeActionFailure(fresh, action, config)
+            if (reason != null) return CommandResult(requestId, false, reason, rejected = true)
+        } else if (action in setOf("START", "RESUME", "PAUSE")) {
             val fresh = try { state() } catch (e: Exception) {
                 return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
             }
@@ -156,10 +167,82 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             if (!isValidDailyLossPercent(daily)) return CommandResult(requestId, false, "Daily loss must be finite, positive, and no greater than 2 percent.", rejected = true)
         }
         return try {
-            request("POST", "/v1/app/commands", commandPayload(requestId, action, config))
-            CommandResult(requestId, true)
+            val reply = request("POST", "/v1/app/commands", commandPayload(requestId, action, config))
+            val serverId = exactIdentifier(reply, "id").orEmpty()
+            val status = reply.optString("status").uppercase()
+            val accepted = serverId.isNotBlank() && status in setOf("QUEUED", "ACKNOWLEDGED")
+            CommandResult(requestId, accepted, if (accepted) "" else "No complete command acknowledgement; reconcile this request ID before recovery.",
+                rejected = false, serverCommandId = serverId, status = status)
         } catch (e: Exception) {
             CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
+        }
+    }
+
+    /** Obtain the server's short-lived, one-use token only after a fresh account/profile check. */
+    suspend fun requestCloseAllConfirmation(): CloseAllConfirmation {
+        val fresh = state()
+        val reason = gateFailure(fresh, requireLiveAuthorization = false)
+        require(reason == null) { reason ?: "Close-all is blocked until the verified snapshot is ready." }
+        require(fresh.snapshotsValid && fresh.positions?.isNotEmpty() == true && fresh.positions.all { exactIdentifier(it, "position_id") != null }) {
+            "A fresh complete position snapshot with exact identifiers is required before close-all confirmation."
+        }
+        val ticketIds = positionIdList(fresh) ?: throw IllegalStateException("Fresh position identifiers are incomplete or ambiguous.")
+        val reply = request("POST", "/v1/app/close-all-confirmation", JSONObject().put("confirm_close_all", true))
+        val token = reply.optString("confirmation_token").ifBlank { reply.optString("token") }
+        require(token.isNotBlank()) { "Bridge returned no close-all confirmation token." }
+        CloseAllConfirmation(token, reply.optString("expires_at"), ticketIds)
+    }
+
+    private fun tradeActionFailure(snapshot: Snapshot, action: String, config: JSONObject): String? {
+        val profileFailure = gateFailure(snapshot, requireLiveAuthorization = false)
+        if (profileFailure != null) return profileFailure
+        if (!snapshot.snapshotsValid || snapshot.positions == null || snapshot.activeOrders == null) return "Fresh, complete position and pending-order snapshots are required."
+        val login = config.optString("account_login")
+        val server = config.optString("account_server")
+        val mode = config.optString("account_mode").uppercase()
+        if (login != snapshot.actualLogin || server != snapshot.actualServer || mode != profile) return "Command account/environment does not match the verified selected profile."
+        val tickets = config.optJSONArray("tickets")
+        fun ticketsOrFailure(): List<String>? {
+            tickets ?: return null
+            val out = mutableListOf<String>()
+            for (i in 0 until tickets.length()) {
+                val raw = tickets.opt(i)
+                if (raw !is String) return null
+                val ticket = canonicalTicket(raw) ?: return null
+                out += ticket
+            }
+            return out.takeIf { it.isNotEmpty() && it.distinct().size == it.size }
+        }
+        return when (action) {
+            "CANCEL_PENDING_SELECTED" -> {
+                val selected = ticketsOrFailure()
+                when {
+                    selected == null || selected.size != 1 -> "Exactly one canonical pending-order ticket is required."
+                    snapshot.activeOrders.none { exactIdentifier(it, "ticket") == selected.single() } -> "Selected pending order is not present in the fresh broker snapshot."
+                    else -> null
+                }
+            }
+            "CANCEL_EA_PENDING" -> if (managedOrderTicketList(snapshot).isNullOrEmpty())
+                "No complete fresh EA pending-order snapshot is available." else null
+            "CLOSE_POSITION_SELECTED" -> {
+                val selected = ticketsOrFailure()
+                when {
+                    selected == null || selected.size != 1 -> "Exactly one canonical position identifier is required."
+                    snapshot.positions.none { exactIdentifier(it, "position_id") == selected.single() } -> "Selected position identifier is not present in the fresh broker snapshot."
+                    else -> null
+                }
+            }
+            "CLOSE_ALL" -> {
+                val selected = ticketsOrFailure()
+                val current = snapshot.positions.mapNotNull { exactIdentifier(it, "position_id") }
+                when {
+                    selected == null || selected.isEmpty() -> "Close-all requires exact position identifiers from a fresh snapshot."
+                    selected.toSet() != current.toSet() || current.size != snapshot.positions.size -> "Close-all position list no longer matches the fresh broker snapshot."
+                    config.optString("confirmation").isBlank() -> "A fresh one-use close-all confirmation token is required."
+                    else -> null
+                }
+            }
+            else -> "Unsupported trade action."
         }
     }
 
@@ -232,6 +315,82 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     class BridgeHttpException(val status: Int, val safeDescription: String) : Exception(safeDescription)
 
     companion object {
+        internal val TRADE_ACTIONS = setOf("CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")
+        private val MAX_UINT64 = BigInteger("18446744073709551615")
+
+        /** Only JSON strings or integral JSON integer objects are trusted; floating-point IDs are rejected. */
+        internal fun exactIdentifier(obj: JSONObject, key: String): String? = canonicalTicket(obj.opt(key))
+
+        internal fun canonicalTicket(value: Any?): String? {
+            val text = when (value) {
+                is String -> value
+                is Byte, is Short, is Int, is Long -> value.toString()
+                is BigInteger -> value.toString()
+                else -> return null
+            }
+            if (!text.matches(Regex("[1-9][0-9]{0,19}"))) return null
+            val integer = runCatching { BigInteger(text) }.getOrNull() ?: return null
+            return text.takeIf { integer.signum() > 0 && integer <= MAX_UINT64 }
+        }
+
+        internal fun serverCommandId(obj: JSONObject): String? = exactIdentifier(obj, "id")
+
+        internal fun actionConfig(snapshot: Snapshot, action: String, tickets: List<String> = emptyList(), confirmationToken: String = ""): JSONObject {
+            require(action in TRADE_ACTIONS)
+            val config = JSONObject()
+                .put("account_login", snapshot.actualLogin)
+                .put("account_server", snapshot.actualServer)
+                .put("account_mode", snapshot.actualAccountMode)
+            when (action) {
+                "CANCEL_PENDING_SELECTED", "CLOSE_POSITION_SELECTED", "CLOSE_ALL" -> {
+                    require(tickets.isNotEmpty() && tickets.all { canonicalTicket(it) == it } && tickets.distinct().size == tickets.size)
+                    config.put("tickets", org.json.JSONArray(tickets))
+                }
+                "CANCEL_EA_PENDING" -> Unit
+            }
+            if (action == "CLOSE_ALL") {
+                require(confirmationToken.isNotBlank()) { "A one-use close-all confirmation token is required." }
+                config.put("confirmation", confirmationToken)
+            }
+            return config
+        }
+
+        internal fun positionIdList(snapshot: Snapshot): List<String>? {
+            val positions = snapshot.positions ?: return null
+            val identifiers = positions.map { exactIdentifier(it, "position_id") ?: return null }
+            return identifiers.takeIf { it.distinct().size == it.size }
+        }
+
+        internal fun orderTicketList(snapshot: Snapshot): List<String>? {
+            val orders = snapshot.activeOrders ?: return null
+            val tickets = orders.map { exactIdentifier(it, "ticket") ?: return null }
+            return tickets.takeIf { it.distinct().size == it.size }
+        }
+
+        internal fun managedOrderTicketList(snapshot: Snapshot): List<String>? {
+            val orders = snapshot.activeOrders ?: return null
+            if (orders.isEmpty() || orders.any { !it.has("managed_by_ea") || it.opt("managed_by_ea") !is Boolean }) return null
+            val tickets = orders.filter { it.optBoolean("managed_by_ea") }.map { exactIdentifier(it, "ticket") ?: return null }
+            return tickets.takeIf { it.isNotEmpty() && it.distinct().size == it.size }
+        }
+
+        internal fun canManageSnapshot(selectedProfile: String, expectedLogin: String, expectedServer: String, snapshot: Snapshot): Boolean =
+            selectedProfile.uppercase() in setOf("DEMO", "LIVE") && snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh &&
+                snapshot.terminalConnected && snapshot.tradeAllowed && snapshot.accountVerified && snapshot.managedState == "READY" &&
+                snapshot.accessType == "MASTER" && snapshot.profileMode == selectedProfile.uppercase() &&
+                snapshot.actualAccountMode == selectedProfile.uppercase() && expectedLogin.isNotBlank() && snapshot.actualLogin == expectedLogin &&
+                expectedServer.isNotBlank() && snapshot.actualServer == expectedServer && snapshot.snapshotsValid &&
+                positionIdList(snapshot) != null && orderTicketList(snapshot) != null
+
+        internal fun effectConfirmed(action: String, snapshot: Snapshot, tickets: List<String>): Boolean {
+            if (!snapshot.snapshotsValid || !snapshot.heartbeatFresh) return false
+            return when (action) {
+                "CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING" -> snapshot.activeOrders?.none { exactIdentifier(it, "ticket")?.let { id -> id in tickets } == true } == true
+                "CLOSE_POSITION_SELECTED", "CLOSE_ALL" -> snapshot.positions?.none { exactIdentifier(it, "position_id")?.let { id -> id in tickets } == true } == true
+                else -> false
+            }
+        }
+
         internal fun resolveServiceOrigin(override: String, buildValue: String): String =
             validServiceOrigin(override).takeIf { override.isNotBlank() }
                 ?: validServiceOrigin(buildValue).orEmpty()
@@ -291,7 +450,17 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
 
         internal fun commandPayload(requestId: String, action: String, config: JSONObject = JSONObject()): JSONObject {
             require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
-            require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP"))
+            require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + TRADE_ACTIONS)
+            if (action in TRADE_ACTIONS) {
+                require(config.optString("account_login").isNotBlank() && config.optString("account_server").isNotBlank() && config.optString("account_mode") in setOf("DEMO", "LIVE"))
+                val tickets = config.optJSONArray("tickets")
+                when (action) {
+                    "CANCEL_PENDING_SELECTED", "CLOSE_POSITION_SELECTED" -> require(tickets != null && tickets.length() == 1 && tickets.opt(0) is String && canonicalTicket(tickets.opt(0)) != null) { "Exactly one canonical string ticket is required." }
+                    "CLOSE_ALL" -> require(tickets != null && tickets.length() > 0 && config.optString("confirmation").isNotBlank()) { "Close-all requires position tickets and a one-use confirmation token." }
+                    "CANCEL_EA_PENDING" -> require(tickets == null) { "EA pending cancellation uses the server's fresh heartbeat order snapshot." }
+                }
+                if (tickets != null) for (i in 0 until tickets.length()) require(tickets.opt(i) is String && canonicalTicket(tickets.opt(i)) != null) { "Tickets must be canonical positive uint64 decimal strings." }
+            }
             return JSONObject().put("request_id", requestId).put("action", action).put("config", config)
         }
     }
