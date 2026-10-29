@@ -2,6 +2,7 @@ package com.example.data.broker
 
 import com.destinedfx.core.instrument.InstrumentSpec
 import com.destinedfx.core.instrument.SpecRegistry
+import com.destinedfx.core.broker.DerivInstrumentResolver
 import com.destinedfx.core.marketdata.AssetClass
 import com.destinedfx.core.marketdata.MarketQuote
 import com.example.data.deriv.DerivBrokerGateway
