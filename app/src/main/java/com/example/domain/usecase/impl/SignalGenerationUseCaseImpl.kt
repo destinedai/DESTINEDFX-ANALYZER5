@@ -16,6 +16,8 @@ import com.destinedfx.core.news.NewsFilter
 import com.destinedfx.core.news.NewsStatus
 import com.destinedfx.core.session.SessionEngine as CoreSession
 import com.example.domain.model.MarketTicker
+import com.example.data.market.canMergeQuoteIntoCandle
+import com.example.data.market.candleSourceKey
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.domain.repository.MarketDataRepository
@@ -196,6 +198,14 @@ class SignalGenerationUseCaseImpl(
 
             val blockers = report.blockers.toMutableList()
             var state = report.state
+            val primaryCandleSource = market.candleSources[candleSourceKey(symbol, tf.label)].orEmpty()
+            if (ticker != null &&
+                (primaryCandleSource.isBlank() || !canMergeQuoteIntoCandle(primaryCandleSource, ticker.source))
+            ) {
+                val candleLabel = primaryCandleSource.ifBlank { "unknown OHLC provider" }
+                blockers += "QUOTE/CANDLE SOURCE MISMATCH: quote source '${ticker.source}', OHLC source '$candleLabel'; use a matching provider before execution."
+                state = SignalState.BLOCKED
+            }
             if (!report.mtfComplete) {
                 blockers += "MTF DATA INCOMPLETE"
                 // Do not change state to BLOCKED here; let it stay WEAK_BUY etc. for display,
