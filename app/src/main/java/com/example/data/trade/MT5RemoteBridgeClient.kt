@@ -44,15 +44,35 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     fun hasPairing(): Boolean = secrets.getMT5BridgeAppToken(profile).isNotBlank()
 
     /** Registers one mode-scoped pairing. The bridge stores broker credentials encrypted; this client never logs them. */
-    suspend fun registerManagedAccount(login: String, password: String, server: String, accessType: String, consent: Boolean, savePasswordLocally: Boolean = false): Snapshot {
+    suspend fun registerManagedAccount(
+        login: String,
+        password: String,
+        server: String,
+        accessType: String,
+        consent: Boolean,
+        savePasswordLocally: Boolean = false,
+        costModel: String = "OBSERVED_ROUND_TURN",
+        commissionPerLot: Double = 0.0,
+        costEvidence: String = ""
+    ): Snapshot {
         require(managedConfigured()) { "CONFIGURATION_REQUIRED" }
         require(accessType == "MASTER" || accessType == "INVESTOR")
         require(consent) { "Explicit consent is required before sending broker credentials." }
         require(login.trim().matches(Regex("[0-9]{1,20}"))) { "Account login must contain digits only." }
         require(server.isNotBlank() && password.isNotBlank()) { "Exact broker server and password are required." }
+        require(costModel in setOf("OBSERVED_ROUND_TURN", "CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE", "ZERO_COMMISSION_SPREAD_ONLY")) { "Invalid transaction cost model." }
+        require(commissionPerLot.isFinite() && commissionPerLot >= 0.0) { "Commission must be finite and non-negative." }
+        val evidence = costEvidence.trim()
+        require(evidence.length <= 512 && evidence.none { it.code < 32 || it.code == 127 }) { "Cost evidence reference contains invalid characters." }
+        when (costModel) {
+            "OBSERVED_ROUND_TURN" -> require(commissionPerLot == 0.0 && evidence.isEmpty()) { "Observed mode uses broker deal history and must not include a configured commission." }
+            "ZERO_COMMISSION_SPREAD_ONLY" -> require(commissionPerLot == 0.0 && evidence.length >= 8) { "Zero-commission mode requires a broker pricing reference; the EA will calculate spread and slippage costs live." }
+            else -> require(commissionPerLot > 0.0 && evidence.length >= 8) { "Configured commission requires a positive account-currency amount per standard lot and a broker pricing reference." }
+        }
         if (secrets.getMT5BridgeAppToken(profile).isBlank()) pair()
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
             .put("access_type", accessType).put("account_mode", profile).put("consent", consent)
+            .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
         secrets.saveManagedMT5Profile(profile, login.trim(), server, accessType, password, savePasswordLocally)
         return state()
