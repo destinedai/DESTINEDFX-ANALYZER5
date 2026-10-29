@@ -643,7 +643,7 @@ def test_invalid_managed_cost_configurations_are_rejected(monkeypatch):
         {'cost_model':'ZERO_COMMISSION_SPREAD_ONLY','commission_per_lot':2.5,'cost_evidence':'Official broker pricing schedule'},
         {'cost_model':'UNKNOWN','commission_per_lot':0.0,'cost_evidence':''},
         {'cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':1.0,'cost_evidence':'Official broker pricing schedule'},
-        {'cost_model':'ZERO_COMMISSION_SPREAD_ONLY','commission_per_lot':0.0,'cost_evidence':'bad\\nreference'}
+        {'cost_model':'ZERO_COMMISSION_SPREAD_ONLY','commission_per_lot':0.0,'cost_evidence':'bad\nreference'}
     ]
     for cost in invalid_costs:
         p,ah=managed_pair()
