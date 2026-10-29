@@ -1,5 +1,8 @@
 package com.example
 
+import com.destinedfx.core.marketdata.Decision
+import com.destinedfx.core.marketdata.QuoteArbiter
+import com.destinedfx.core.marketdata.QuoteView
 import com.example.data.market.QuoteFreshness
 import com.example.data.market.classifyQuoteFreshness
 import com.example.data.market.candleSourceKey
@@ -166,6 +169,58 @@ class MarketDataSafetyTest {
         assertFalse(canMergeQuoteIntoCandle("Deriv WebSocket", "TradingView scanner snapshot"))
         assertFalse(canMergeQuoteIntoCandle("OANDA", "Binance Spot (USDT pairs)"))
         assertFalse(canMergeQuoteIntoCandle("", "OANDA"))
+    }
+
+
+    private fun quote(
+        source: String,
+        kind: String,
+        timestamp: Long,
+        bid: Double? = 1.0999,
+        ask: Double? = 1.1001
+    ) = QuoteView(
+        symbol = "EUR/USD",
+        price = 1.1,
+        bid = bid,
+        ask = ask,
+        source = source,
+        kind = kind,
+        lastUpdateMillis = timestamp,
+        hasRealSpread = bid != null && ask != null
+    )
+
+    @Test
+    fun arbiterRejectsPolledQuoteWhenStreamIsFresh() {
+        val existing = quote("Deriv WebSocket", "STREAM", 99_000L)
+        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_001L)
+        val result = QuoteArbiter.accept(
+            existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+        )
+        assertTrue(result is Decision.Reject)
+    }
+
+    @Test
+    fun arbiterRejectsMalformedQuotesAndDoesNotSilentlyAcceptWrongSource() {
+        val existing = quote("Deriv WebSocket", "STREAM", 95_000L)
+        val invalid = quote("Deriv WebSocket", "STREAM", 100_001L, bid = -1.0, ask = 1.1)
+        assertTrue(QuoteArbiter.accept(existing, invalid, "Deriv WebSocket", 95_000L, 2_500L, 100_000L) is Decision.Reject)
+
+        val wrongSource = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_001L)
+        assertTrue(QuoteArbiter.accept(
+            existing, wrongSource, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+        ) is Decision.Reject)
+    }
+
+    @Test
+    fun arbiterAllowsSourceSwitchOnlyAfterActiveSourceIsSilent() {
+        val existing = quote("Deriv WebSocket", "POLLED_BIDASK", 95_000L)
+        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_001L)
+        assertTrue(QuoteArbiter.accept(
+            existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+        ) is Decision.Reject)
+        assertTrue(QuoteArbiter.accept(
+            existing, incoming, "Deriv WebSocket", 90_000L, 2_500L, 100_000L
+        ) is Decision.SwitchSource)
     }
 
 }
