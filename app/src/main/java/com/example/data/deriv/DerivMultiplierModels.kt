@@ -57,30 +57,6 @@ object DerivMultiplierRules {
             .toDouble()
     }
 
-    private fun timeframeMs(timeframe: String): Long? = when (timeframe.trim().uppercase()) {
-        "M1" -> 60_000L
-        "M5" -> 5 * 60_000L
-        "M15" -> 15 * 60_000L
-        "M30" -> 30 * 60_000L
-        "H1" -> 60 * 60_000L
-        "H4" -> 4 * 60 * 60_000L
-        "D1" -> 24 * 60 * 60_000L
-        "W1" -> 7 * 24 * 60 * 60_000L
-        else -> null
-    }
-
-    /**
-     * Stable duplicate-prevention key. The analyzer builds a new random ID on every scan, so the same
-     * setup must be keyed by what it is: symbol, strategy, timeframe, direction and the candle it formed in.
-     * Returns null when the timeframe is unknown, in which case the caller must not trade.
-     */
-    fun stableSignalKey(symbol: String, strategyId: String, timeframe: String, direction: SignalDirection, signalTimestampMs: Long): String? {
-        val frame = timeframeMs(timeframe) ?: return null
-        if (symbol.isBlank() || strategyId.isBlank() || signalTimestampMs <= 0L) return null
-        val bar = signalTimestampMs - (signalTimestampMs % frame)
-        return "DERIV|${symbol.trim().uppercase()}|${strategyId.trim()}|${timeframe.trim().uppercase()}|${direction.name}|$bar"
-    }
-
     /** The trade plan must be complete, on the correct side of entry, and at least 2R. No stop shrinking or inference. */
     fun planConsistencyError(direction: SignalDirection, entry: Double, stopLoss: Double, takeProfit: Double): String? {
         if (!entry.isFinite() || !stopLoss.isFinite() || !takeProfit.isFinite() || entry <= 0.0 || stopLoss <= 0.0 || takeProfit <= 0.0) {

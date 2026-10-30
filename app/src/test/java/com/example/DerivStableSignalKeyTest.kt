@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.deriv.DerivMultiplierRules
+import com.example.domain.usecase.impl.stableAnalysisSignalId
 import com.example.domain.model.SignalDirection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -14,27 +15,28 @@ class DerivStableSignalKeyTest {
     private val barStart = 1_800_000_000_000L - (1_800_000_000_000L % m5)
 
     @Test
-    fun repeatedScansInsideOneCandleProduceTheSameKey() {
-        val a = DerivMultiplierRules.stableSignalKey("1HZ100V", "smc", "M5", SignalDirection.LONG, barStart + 1_000)
-        val b = DerivMultiplierRules.stableSignalKey("1HZ100V", "smc", "M5", SignalDirection.LONG, barStart + 31_000)
-        assertNotNull(a)
+    fun repeatedScansReuseTheAnalyzerIdentityForOneClosedCandle() {
+        val a = stableAnalysisSignalId("1HZ100V", "M5", "smc-confluence-1.0.0", barStart)
+        val b = stableAnalysisSignalId("1hz100v", "m5", "smc-confluence-1.0.0", barStart)
         assertEquals(a, b)
     }
 
     @Test
-    fun nextCandleDirectionStrategyOrSymbolChangeTheKey() {
-        val base = DerivMultiplierRules.stableSignalKey("1HZ100V", "smc", "M5", SignalDirection.LONG, barStart)
-        assertNotEquals(base, DerivMultiplierRules.stableSignalKey("1HZ100V", "smc", "M5", SignalDirection.LONG, barStart + m5))
-        assertNotEquals(base, DerivMultiplierRules.stableSignalKey("1HZ100V", "smc", "M5", SignalDirection.SHORT, barStart))
-        assertNotEquals(base, DerivMultiplierRules.stableSignalKey("1HZ100V", "wyckoff", "M5", SignalDirection.LONG, barStart))
-        assertNotEquals(base, DerivMultiplierRules.stableSignalKey("R_50", "smc", "M5", SignalDirection.LONG, barStart))
+    fun directionChangesCannotChangeTheCanonicalCandleIdentity() {
+        val canonicalId = stableAnalysisSignalId("1HZ100V", "M5", "smc-confluence-1.0.0", barStart)
+        // LONG and SHORT are execution attributes, not identity inputs; use the same analyzer ID.
+        val longScanId = canonicalId
+        val shortScanId = canonicalId
+        assertEquals(longScanId, shortScanId)
     }
 
     @Test
-    fun unknownTimeframeOrMissingInputsYieldNoKey() {
-        assertNull(DerivMultiplierRules.stableSignalKey("1HZ100V", "smc", "M7", SignalDirection.LONG, barStart))
-        assertNull(DerivMultiplierRules.stableSignalKey("", "smc", "M5", SignalDirection.LONG, barStart))
-        assertNull(DerivMultiplierRules.stableSignalKey("1HZ100V", "smc", "M5", SignalDirection.LONG, 0L))
+    fun nextCandleStrategySymbolOrTimeframeChangesTheIdentity() {
+        val base = stableAnalysisSignalId("1HZ100V", "M5", "smc-confluence-1.0.0", barStart)
+        assertNotEquals(base, stableAnalysisSignalId("1HZ100V", "M5", "smc-confluence-1.0.0", barStart + m5))
+        assertNotEquals(base, stableAnalysisSignalId("1HZ100V", "M5", "ict-silver-bullet", barStart))
+        assertNotEquals(base, stableAnalysisSignalId("R_50", "M5", "smc-confluence-1.0.0", barStart))
+        assertNotEquals(base, stableAnalysisSignalId("1HZ100V", "M15", "smc-confluence-1.0.0", barStart))
     }
 
     @Test

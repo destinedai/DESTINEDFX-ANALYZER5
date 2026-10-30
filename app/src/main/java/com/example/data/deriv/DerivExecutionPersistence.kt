@@ -56,6 +56,9 @@ interface DerivExecutionDao {
     @Query("SELECT * FROM deriv_execution_intents WHERE accountId = :accountId AND accountMode = :accountMode AND status IN ('ORDER_SUBMITTING','ORDER_PENDING','EXECUTION_UNKNOWN','RECONCILIATION_REQUIRED') ORDER BY updatedAtMs ASC")
     suspend fun unresolved(accountId: String, accountMode: String): List<DerivExecutionEntity>
 
+    @Query("SELECT * FROM deriv_execution_intents WHERE accountId = 'LEGACY_UNKNOWN' ORDER BY updatedAtMs ASC")
+    suspend fun legacyUnknown(): List<DerivExecutionEntity>
+
     @Query("SELECT * FROM deriv_execution_intents WHERE accountId = :accountId AND accountMode = :accountMode AND status IN ('CONTRACT_CONFIRMED','CONTRACT_OPEN') ORDER BY updatedAtMs ASC")
     suspend fun knownContracts(accountId: String, accountMode: String): List<DerivExecutionEntity>
 

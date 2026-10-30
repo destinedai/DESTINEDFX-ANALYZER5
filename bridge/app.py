@@ -880,7 +880,7 @@ def acknowledge(command_id:int,x:Ack,authorization:str|None=Header(default=None)
             if not x.results: raise HTTPException(422,'At least one per-ticket result is required')
             try: result_tickets=[canonical_ticket(result.ticket) for result in x.results]
             except HTTPException: raise
-            if len(result_tickets)!=len(set(result_tickets)) or not set(result_tickets).issubset(set(requested)): raise HTTPException(422,'Acknowledgement results contain duplicate or unrequested tickets')
+            if len(result_tickets)!=len(set(result_tickets)) or set(result_tickets)!=set(requested): raise HTTPException(422,'Acknowledgement must contain exactly one result for every requested ticket')
             prior_ack=json.loads(r['ack']) if r['ack'] else None
             previous={item['ticket']:item for item in (prior_ack or {}).get('results',[])}
             incoming={result.ticket:result for result in x.results}

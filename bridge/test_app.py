@@ -749,7 +749,11 @@ def test_destructive_ack_validates_ticket_results_and_requires_later_heartbeat(m
                         [{'ticket':'77','status':'APPLIED'},{'ticket':'99','status':'UNKNOWN'}],
                         [{'ticket':'77','status':'MAYBE'}]):
         assert client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json={**base,'results':bad_results}).status_code==422
-    ack=client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json=base)
+    # Missing targets are not accepted as an implicit UNKNOWN: the terminal must enumerate
+    # every immutable command target in each acknowledgement.
+    assert client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json=base).status_code==422
+    complete={**base,'results':base['results']+[{'ticket':'78','status':'UNKNOWN','message':'Awaiting broker history'}]}
+    ack=client.post(f'/v1/terminal/commands/{cid}/ack',headers=th,json=complete)
     assert ack.status_code==200
     state=client.get('/v1/app/state',headers=ah).json()['last_command']
     assert [x['status'] for x in state['results']]==['PENDING','UNKNOWN']

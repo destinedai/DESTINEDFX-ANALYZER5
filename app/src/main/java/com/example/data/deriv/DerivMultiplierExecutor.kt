@@ -18,6 +18,9 @@ class DerivMultiplierExecutor(
 
     suspend fun reconcileBeforeNewEntries(): Boolean = withContext(Dispatchers.IO) {
         val current = account ?: return@withContext false
+        // v5 rows were migrated without an account identity. Never silently ignore a possible
+        // previously-open or ambiguous purchase while reconciling only the selected account.
+        if (dao.legacyUnknown().isNotEmpty()) return@withContext false
         if (gateway.connectionState.value != DerivConnectionState.CONNECTED) return@withContext false
         gateway.fetchPortfolio()
         val unresolved = dao.unresolved(current.loginId, current.mode.uppercase())
