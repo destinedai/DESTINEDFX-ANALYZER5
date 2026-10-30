@@ -389,6 +389,8 @@ class DerivBrokerGateway(
             _activeContracts.value = snapshotContracts.associateBy { it.contractId }
             _portfolioSnapshot.value = DerivPortfolioSnapshot(true, current.loginId, current.mode.uppercase(), System.currentTimeMillis(), snapshotContracts, currency = current.currency)
             list
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             _portfolioSnapshot.value = DerivPortfolioSnapshot(false, current.loginId, current.mode.uppercase(), System.currentTimeMillis(), error = e.message?.take(240) ?: "PORTFOLIO_FETCH_FAILED")
             emptyList()
