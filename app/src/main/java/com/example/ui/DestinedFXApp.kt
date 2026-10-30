@@ -394,6 +394,9 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
     var chartSymbolMenuExpanded by remember { mutableStateOf(false) }
     var chartTimeframeMenuExpanded by remember { mutableStateOf(false) }
     var strategyMenuExpanded by remember { mutableStateOf(false) }
+    // Keep chart mode owned by the Analyzer screen so TradingView failure fallback
+    // and the explicit chart-mode control always switch the actual rendered chart.
+    var useTradingViewChart by remember { mutableStateOf(true) }
 
     LaunchedEffect(selectedAssetCategory) {
         if (activeSymbol !in symbols) {
@@ -587,7 +590,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                     Row(modifier = Modifier.fillMaxWidth().background(DarkSurface).padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("TRADINGVIEW", fontSize = 11.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                            Text(if (useTradingViewChart) "TRADINGVIEW" else "NATIVE CANDLE CHART",
+                                fontSize = 11.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                                 Box {
@@ -627,6 +631,14 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             TextButton(
+                                onClick = { useTradingViewChart = !useTradingViewChart },
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("chart_mode_toggle")
+                            ) {
+                                Text(if (useTradingViewChart) "NATIVE" else "TRADINGVIEW",
+                                    color = ElectricCyan, fontSize = 8.sp, fontWeight = FontWeight.Black)
+                            }
+                            TextButton(
                                 onClick = { viewModel.refreshMarketData(activeSymbol, selectedTimeframe) },
                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                             ) {
@@ -647,8 +659,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = activeSymbol),
                         candles = viewModel.candlesForChart(activeSymbol, selectedTimeframe),
                         candleSource = viewModel.marketDataSource(activeSymbol, selectedTimeframe),
-                        isRealTradingViewEnabled = true,
-                        onToggleChartType = { },
+                        isRealTradingViewEnabled = useTradingViewChart,
+                        onToggleChartType = { enabled -> useTradingViewChart = enabled },
                         onPriceUpdate = { sym, price -> viewModel.updatePriceFromChart(sym, price) },
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
