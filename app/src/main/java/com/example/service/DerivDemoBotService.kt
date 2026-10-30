@@ -15,6 +15,7 @@ import com.example.data.deriv.DerivMultiplierExecutor
 import com.example.data.deriv.DerivMultiplierIntent
 import com.example.data.deriv.DerivMultiplierProduct
 import com.example.data.deriv.DerivMultiplierRules
+import com.example.data.deriv.DerivReconciliationStatus
 import com.example.domain.model.SignalDirection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -108,13 +109,14 @@ class DerivDemoBotService : Service() {
             }
         }
         val executor = DerivMultiplierExecutor(gateway, app.db.derivExecutionDao())
-        if (!executor.reconcileBeforeNewEntries()) {
-            stopSafely("Safety blocked — unresolved prior execution requires broker reconciliation")
-            return
-        }
+        if (!reconcileWithRecovery(executor, gateway)) return
         update("Running — scanning $symbol; no order is assumed confirmed")
         while (currentCoroutineContext().isActive && !stopRequested) {
             try {
+                // Reconcile the portfolio and all prior intents before every new scan.
+                // Retryable transport failures reconnect; ambiguous execution outcomes
+                // stop the bot for explicit manual review.
+                if (!reconcileWithRecovery(executor, gateway)) return
                 val account = gateway.accountInfo.value
                 if (account == null) {
                     stopSafely("Safety blocked — verified DEMO account snapshot is unavailable")
@@ -133,13 +135,8 @@ class DerivDemoBotService : Service() {
                     stopSafely("Safety blocked — 1% risk cap permits $stake, below broker minimum $minimumStake; no order was sent")
                     return
                 }
-                // Reconcile existing exposure on each scan. The mobile bot is deliberately
-                // single-contract-at-a-time so repeated candles cannot accumulate open risk.
-                if (!executor.reconcileBeforeNewEntries()) {
-                    stopSafely("Safety blocked — an earlier execution is unresolved; no new entry will be submitted")
-                    return
-                }
-                executor.syncKnownContracts()
+                // syncKnownContracts() is already performed by reconcileWithRecovery()
+                // against the same fresh, account-matched portfolio snapshot.
                 if (executor.hasActiveContracts()) {
                     update("Running — an existing contract is still active; waiting for broker settlement before another entry")
                     delay(10_000)
@@ -184,7 +181,6 @@ class DerivDemoBotService : Service() {
                 } else {
                     update("Running — no valid fresh Multiplier signal")
                 }
-                executor.syncKnownContracts()
                 delay(30_000)
             } catch (_: CancellationException) {
                 throw CancellationException()
@@ -196,6 +192,35 @@ class DerivDemoBotService : Service() {
                 }
             }
         }
+    }
+
+    private suspend fun reconcileWithRecovery(
+        executor: DerivMultiplierExecutor,
+        gateway: com.example.data.deriv.DerivBrokerGateway
+    ): Boolean {
+        repeat(3) { cycle ->
+            if (stopRequested || !currentCoroutineContext().isActive) return false
+            val result = executor.reconcileBeforeNewEntriesResult()
+            when (result.status) {
+                DerivReconciliationStatus.READY -> {
+                    if (executor.syncKnownContracts()) return true
+                    update("RECONNECTING — fresh portfolio refresh failed; purchases remain paused")
+                }
+                DerivReconciliationStatus.MANUAL_RECONCILIATION_REQUIRED -> {
+                    stopSafely("Safety blocked — ${result.reason}. Manual broker reconciliation is required; no new purchase will be sent.")
+                    return false
+                }
+                DerivReconciliationStatus.RETRYABLE_FAILURE -> {
+                    update("RECONNECTING — ${result.reason.take(140)}; purchases remain paused")
+                }
+            }
+            if (cycle < 2 && !connectWithBoundedRetry(gateway)) {
+                update("ERROR — bounded reconnect attempts exhausted; trading remains stopped pending reconciliation")
+                return false
+            }
+        }
+        update("ERROR — fresh portfolio could not be re-established; trading remains stopped")
+        return false
     }
 
     private suspend fun connectWithBoundedRetry(gateway: com.example.data.deriv.DerivBrokerGateway): Boolean {
