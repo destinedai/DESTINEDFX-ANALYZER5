@@ -34,7 +34,7 @@ data class DerivContractInfo(
     val isExecutionValid: Boolean
         get() = contractId > 0L && symbol.isNotBlank() &&
             contractType.uppercase() in setOf("MULTUP", "MULTDOWN") &&
-            buyPrice.isFinite() && buyPrice > 0.0 && profit.isFinite() && purchaseTime > 0L
+            buyPrice.isFinite() && buyPrice > 0.0 && purchaseTime > 0L
 }
 
 /** Selects only an active Options account matching the user's explicit demo/real choice. */
@@ -76,6 +76,8 @@ class DerivBrokerGateway(
 
     private val _accountMetrics = MutableStateFlow<AccountMetrics?>(null)
     val accountMetrics: StateFlow<AccountMetrics?> = _accountMetrics.asStateFlow()
+    private val _accountMetricsUpdatedAtMs = MutableStateFlow(0L)
+    val accountMetricsUpdatedAtMs: StateFlow<Long> = _accountMetricsUpdatedAtMs.asStateFlow()
 
     private val _accountInfo = MutableStateFlow<DerivAccountInfo?>(null)
     val accountInfo: StateFlow<DerivAccountInfo?> = _accountInfo.asStateFlow()
@@ -259,6 +261,7 @@ class DerivBrokerGateway(
                 marginLevel = 0.0,
                 currency = currency
             )
+            _accountMetricsUpdatedAtMs.value = System.currentTimeMillis()
             _connectionState.value = DerivConnectionState.CONNECTED
             // The authenticated WebSocket already carries the account scope; no legacy
             // "authorize" message is sent after the OTP handshake.
@@ -337,28 +340,34 @@ class DerivBrokerGateway(
             for (i in 0 until contracts.length()) {
                 val c = contracts.getJSONObject(i)
                 val contractId = c.optLong("contract_id", 0L)
-                val symbol = c.optString("symbol").ifBlank {
-                    c.optString("underlying_symbol").ifBlank {
-                        c.optString("underlying")
-                    }
-                }
-                val buyPrice = c.optDouble("buy_price", 0.0)
-                val contractType = c.optString("contract_type")
-                val currency = c.optString("currency").ifBlank { current.currency }
+                // Current Deriv portfolio responses use underlying_symbol; symbol is
+                // retained only for compatibility with the documented legacy response.
+                val symbol = c.optString("underlying_symbol").ifBlank {
+                    c.optString("symbol").ifBlank { c.optString("underlying") }
+                }.trim()
+                val buyPrice = c.optDouble("buy_price", Double.NaN)
+                val contractType = c.optString("contract_type").trim().uppercase()
+                val currency = c.optString("currency").trim()
+                val purchaseEpoch = c.optLong("purchase_time", 0L).takeIf { it > 0L }
+                    ?: c.optLong("date_start", 0L).takeIf { it > 0L }
                 if (contractId <= 0L || symbol.isBlank() ||
-                    contractType.uppercase() !in setOf("MULTUP", "MULTDOWN") ||
+                    !DerivMultiplierRules.isSupportedUnderlying(symbol) ||
+                    contractType !in setOf("MULTUP", "MULTDOWN") ||
                     currency.isBlank() || !currency.equals(current.currency, ignoreCase = true) ||
-                    !buyPrice.isFinite() || buyPrice <= 0.0) {
-                    throw IllegalStateException("PORTFOLIO_INVALID_CONTRACT: every open contract must have a positive ID, symbol, supported type, matching currency, and positive finite purchase price")
+                    !buyPrice.isFinite() || buyPrice <= 0.0 || purchaseEpoch == null ||
+                    purchaseEpoch > System.currentTimeMillis() / 1000L + 60L ||
+                    snapshotContracts.any { it.contractId == contractId }) {
+                    throw IllegalStateException("PORTFOLIO_INVALID_CONTRACT: every open contract must have a unique positive ID, supported underlying and type, explicit matching currency, positive finite purchase price, and valid broker timestamp")
                 }
-                val isLong = contractType.contains("CALL") || contractType.contains("UP")
-                val openTime = (c.optLong("purchase_time", 0L).takeIf { it > 0 }
-                    ?: c.optLong("date_start", System.currentTimeMillis() / 1000)) * 1000L
+                val isLong = contractType == "MULTUP"
+                val openTime = purchaseEpoch * 1000L
 
                 subscribeOpenContract(contractId)
+                // Portfolio provides open-position identity and buy price; live P/L is
+                // delivered separately by proposal_open_contract and is not required
+                // to calculate committed stake exposure.
                 val profit = c.optDouble("profit", Double.NaN)
-                if (!profit.isFinite()) throw IllegalStateException("PORTFOLIO_INVALID_CONTRACT: profit is not finite")
-                snapshotContracts += DerivContractInfo(contractId, 0L, symbol, contractType, buyPrice, 0.0, profit, false, false, "open", openTime / 1000L, null)
+                snapshotContracts += DerivContractInfo(contractId, c.optLong("transaction_id", 0L), symbol, contractType, buyPrice, 0.0, profit, false, false, "open", purchaseEpoch, c.optLong("expiry_time", 0L).takeIf { it > 0L })
 
                 list.add(
                     Position(
@@ -371,14 +380,14 @@ class DerivBrokerGateway(
                         takeProfit = 0.0,
                         lotSize = 1.0,
                         status = PositionStatus.OPEN,
-                        currentProfit = c.optDouble("profit", 0.0),
+                        currentProfit = c.optDouble("profit", Double.NaN),
                         openedAt = openTime
                     )
                 )
             }
             _openPositions.value = list
             _activeContracts.value = snapshotContracts.associateBy { it.contractId }
-            _portfolioSnapshot.value = DerivPortfolioSnapshot(true, current.loginId, current.mode.uppercase(), System.currentTimeMillis(), snapshotContracts)
+            _portfolioSnapshot.value = DerivPortfolioSnapshot(true, current.loginId, current.mode.uppercase(), System.currentTimeMillis(), snapshotContracts, currency = current.currency)
             list
         } catch (e: Exception) {
             _portfolioSnapshot.value = DerivPortfolioSnapshot(false, current.loginId, current.mode.uppercase(), System.currentTimeMillis(), error = e.message?.take(240) ?: "PORTFOLIO_FETCH_FAILED")
@@ -697,6 +706,7 @@ class DerivBrokerGateway(
         webSocket = null
         _connectionState.value = DerivConnectionState.DISCONNECTED
         _accountMetrics.value = null
+        _accountMetricsUpdatedAtMs.value = 0L
         _accountInfo.value = null
         _openPositions.value = emptyList()
         _activeContracts.value = emptyMap()
@@ -716,13 +726,21 @@ class DerivBrokerGateway(
             when (msgType) {
                 "balance" -> {
                     val balObj = json.optJSONObject("balance") ?: return
-                    val balance = balObj.optDouble("balance", 0.0)
-                    val currency = balObj.optString("currency", "USD")
+                    val balance = balObj.optDouble("balance", Double.NaN)
+                    val currency = balObj.optString("currency").trim()
+                    val selectedCurrency = _accountInfo.value?.currency.orEmpty()
+                    if (!balance.isFinite() || balance <= 0.0 || currency.isBlank() ||
+                        !currency.equals(selectedCurrency, ignoreCase = true)) {
+                        _accountMetricsUpdatedAtMs.value = 0L
+                        return
+                    }
                     _accountMetrics.value = _accountMetrics.value?.copy(
                         balance = balance,
                         equity = balance,
-                        freeMargin = balance
+                        freeMargin = balance,
+                        currency = currency
                     ) ?: AccountMetrics(balance, balance, 0.0, balance, 0.0, currency)
+                    _accountMetricsUpdatedAtMs.value = System.currentTimeMillis()
                 }
                 "proposal_open_contract" -> {
                     val poc = json.optJSONObject("proposal_open_contract") ?: return
