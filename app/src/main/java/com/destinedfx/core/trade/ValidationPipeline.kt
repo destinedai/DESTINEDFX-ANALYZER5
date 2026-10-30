@@ -38,20 +38,131 @@ data class TradeDecision(val approved: Boolean, val checks: List<CheckResult>, v
     val explanation: String get() = if (approved) "ALL CHECKS PASSED" else "NO TRADE: " + failures.joinToString("; ") { "${it.name} - ${it.detail}" }
 }
 
-private data class StrategyEvidenceRule(val required: List<Pair<String, Double>>, val requireVolume: Boolean = false)
+private data class StrategyEvidenceRule(
+    val required: List<Pair<Set<String>, Double>>,
+    val requireVolume: Boolean = false,
+    val requiresStrictMtf: Boolean = false
+)
 
 private object StrategyEvidenceRules {
+    private fun one(name: String, threshold: Double) = setOf(name) to threshold
     private val rules = mapOf(
-        "smc-confluence-1.0.0" to StrategyEvidenceRule(listOf("MTF" to 8.0, "Structure" to 8.0, "Liquidity" to 5.0, "Order Block / FVG" to 4.0)),
-        "ict-silver-bullet" to StrategyEvidenceRule(listOf("Killzone Timing" to 8.0, "Liquidity Sweep" to 10.0, "FVG Displacement" to 10.0, "Structure Shift" to 8.0)),
-        "wyckoff-schematics" to StrategyEvidenceRule(listOf("Trading Range Phase" to 8.0, "Volume Absorption" to 8.0, "Opposite Boundary Target" to 4.0)),
-        "supply-and-demand" to StrategyEvidenceRule(listOf("Zone Freshness" to 8.0, "Departure Imbalance" to 8.0, "Base Structure Quality" to 6.0)),
-        "breakout-momentum" to StrategyEvidenceRule(listOf("Donchian Breakout" to 8.0, "ATR Volatility Expansion" to 8.0, "Volume Surge" to 8.0), requireVolume = true),
-        "mean-reversion" to StrategyEvidenceRule(listOf("Bollinger Band 2.0σ Extreme" to 8.0, "RSI Exhaustion" to 8.0, "Reversal Candlestick" to 8.0)),
-        "trend-following" to StrategyEvidenceRule(listOf("Multi-EMA Trend Stack" to 8.0, "Value Zone Pullback" to 8.0, "Trend Continuation Signal" to 8.0)),
-        "liquidity-stop-hunts" to StrategyEvidenceRule(listOf("Liquidity Sweep Confirmation" to 8.0, "Equal Highs / Lows (EQH/EQL) Pool" to 8.0, "Wick Raid Rejection" to 8.0))
+        "smc-confluence-1.0.0" to StrategyEvidenceRule(
+            listOf(one("MTF", 8.0), one("Structure", 8.0), one("Liquidity", 5.0), one("Order Block / FVG", 4.0)),
+            requiresStrictMtf = true
+        ),
+        "ict-silver-bullet" to StrategyEvidenceRule(
+            listOf(
+                one("Killzone Timing", 25.0),
+                one("Liquidity Sweep", 25.0),
+                one("FVG Displacement", 15.0),
+                one("Structure Shift", 10.0),
+                one("Target Draw", 10.0)
+            )
+        ),
+        "wyckoff-schematics" to StrategyEvidenceRule(
+            listOf(
+                setOf("Spring Test (Phase C)", "UTAD Test (Phase C)") to 30.0,
+                one("Volume Absorption", 10.0),
+                one("Trading Range Phase", 14.0),
+                setOf("Sign of Strength (SOS)", "Sign of Weakness (SOW)") to 10.0,
+                one("Opposite Boundary Target", 10.0)
+            )
+        ),
+        "supply-and-demand" to StrategyEvidenceRule(
+            listOf(
+                one("Zone Freshness", 20.0),
+                one("Departure Imbalance", 18.0),
+                one("Base Structure Quality", 12.0),
+                one("HTF Flow Alignment", 10.0),
+                one("Path to Opposing Zone", 5.0)
+            )
+        ),
+        "breakout-momentum" to StrategyEvidenceRule(
+            listOf(
+                one("Donchian Breakout", 30.0),
+                one("ATR Volatility Expansion", 18.0),
+                one("Volume Surge", 8.0),
+                one("Momentum Velocity", 8.0),
+                one("Runway Extension", 10.0)
+            ),
+            requireVolume = true
+        ),
+        "mean-reversion" to StrategyEvidenceRule(
+            listOf(
+                one("Bollinger Band 2.0σ Extreme", 18.0),
+                one("RSI Exhaustion", 16.0),
+                one("Reversal Candlestick", 20.0),
+                one("Consolidation Regime", 12.0),
+                one("Reversion R:R to Mean", 10.0)
+            )
+        ),
+        "trend-following" to StrategyEvidenceRule(
+            listOf(
+                one("Multi-EMA Trend Stack", 20.0),
+                one("Value Zone Pullback", 15.0),
+                one("Trend Continuation Signal", 20.0),
+                one("Higher Timeframe Trend", 10.0),
+                one("Runway to Previous Swing", 5.0)
+            )
+        ),
+        "liquidity-stop-hunts" to StrategyEvidenceRule(
+            listOf(
+                one("Liquidity Sweep Confirmation", 30.0),
+                one("Equal Highs / Lows (EQH/EQL) Pool", 25.0),
+                one("Wick Raid Rejection", 20.0),
+                one("HTF Flow Alignment", 10.0),
+                one("Tight Invalidation Runway", 5.0)
+            )
+        )
     )
+
     fun forStrategy(id: String): StrategyEvidenceRule? = rules[id]
+}
+
+/** Shared final-boundary evidence checks; internal so behavioral tests exercise the same rules. */
+internal fun strategyEvidenceChecks(report: SignalReport): List<CheckResult> {
+    val rule = StrategyEvidenceRules.forStrategy(report.strategyVersion)
+        ?: return listOf(CheckResult("STRATEGY EVIDENCE", CheckStatus.FAIL,
+            "Unknown strategy '${report.strategyVersion}'; no final validation rules exist"))
+    val results = mutableListOf<CheckResult>()
+    rule.required.forEach { (names, threshold) ->
+        val component = report.components.firstOrNull { it.name in names }
+        val valid = component != null &&
+            component.available.isFinite() && component.available > 0.0 &&
+            component.earned.isFinite() && component.earned >= threshold &&
+            component.earned <= component.available
+        val label = names.joinToString(" / ")
+        results += CheckResult(
+            "EVIDENCE:$label",
+            if (valid) CheckStatus.PASS else CheckStatus.FAIL,
+            if (valid) "$label evidence ${component?.earned}" else "$label evidence missing, invalid, or below required threshold $threshold"
+        )
+    }
+    if (rule.requireVolume) {
+        val volume = report.components.firstOrNull { it.name == "Volume Surge" }
+        val type = report.volumeKind
+        val sourceBacked = type in setOf(VolumeType.REAL, VolumeType.TICK) &&
+            volume != null && volume.available.isFinite() && volume.available > 0.0 &&
+            volume.earned.isFinite() && volume.earned >= 8.0 && volume.earned <= volume.available &&
+            volume.notes.any { it.contains("source=$type") }
+        results += CheckResult(
+            "VOLUME SOURCE",
+            if (sourceBacked) CheckStatus.PASS else CheckStatus.FAIL,
+            if (sourceBacked) "Breakout volume is source-backed ($type)" else "Breakout requires at least 8 points of source-backed REAL or TICK volume evidence"
+        )
+    }
+    val directionConsistent = when (report.state) {
+        SignalState.STRONG_BUY, SignalState.BUY -> report.dir == Dir.BULL
+        SignalState.STRONG_SELL, SignalState.SELL -> report.dir == Dir.BEAR
+        else -> report.dir != null
+    }
+    results += CheckResult(
+        "STRATEGY DIRECTION",
+        if (directionConsistent) CheckStatus.PASS else CheckStatus.FAIL,
+        if (directionConsistent) "Signal state and direction agree" else "Signal state is missing or contradicts the report direction"
+    )
+    return results
 }
 
 /**
@@ -79,30 +190,28 @@ object TradeValidationPipeline {
         check("NEWS", x.news != null && !x.news.blocksAutomation(x.cfg.manualRiskMode), x.news?.detail ?: "", x.news?.detail ?: "NEWS STATUS UNKNOWN")
         val sessOk = (x.cfg.allowedSessions == null || x.session.active.any { it in x.cfg.allowedSessions }) && (!x.cfg.requireKillzone || x.session.killzones.isNotEmpty())
         check("SESSION", sessOk, "Session ${x.session.label}", "Outside allowed session (${x.session.label})")
-        // ICT Silver Bullet has its own killzone/sweep/FVG/structure gates. Do
-        // not apply the generic SMC full-alignment gate to it by proxy.
-        val requiresStrictMtf = rep.strategyVersion != "ict-silver-bullet"
-        gate("MTF", !requiresStrictMtf || (rep.mtfComplete && rep.mtf?.state in setOf(MtfState.FULL_BULLISH, MtfState.FULL_BEARISH) && rep.mtf?.dir == rep.dir), rep.mtf?.summary ?: "ICT-specific eligibility", if (requiresStrictMtf) "MTF DATA INCOMPLETE" else "ICT uses strategy-specific eligibility")
+        // Full MTF completeness is an SMC-specific execution gate. Other strategies
+        // must satisfy the explicit higher-timeframe evidence in their own score components.
         val evidenceRule = StrategyEvidenceRules.forStrategy(rep.strategyVersion)
-        if (evidenceRule == null) {
-            gate("STRATEGY EVIDENCE", false, "", "Unknown strategy '${rep.strategyVersion}'; no validation rules exist")
-        } else {
-            evidenceRule.required.forEach { (name, threshold) ->
-                val component = rep.components.firstOrNull { it.name == name }
-                gate("EVIDENCE:$name", component != null && component.isAvailable && component.earned >= threshold,
-                    "$name evidence ${component?.earned ?: 0.0}",
-                    "$name evidence missing or below required threshold $threshold")
-            }
-            if (evidenceRule.requireVolume) {
-                val volume = rep.components.firstOrNull { it.name == "Volume Surge" }
-                val sourceBacked = volume != null && volume.isAvailable && volume.earned.isFinite() &&
-                    volume.notes.any { it.contains("source=REAL") || it.contains("source=TICK") }
-                gate("VOLUME SOURCE", sourceBacked,
-                    "Breakout volume evidence is source-backed (${rep.volumeKind})", "Breakout strategy requires valid source-backed tick/real volume for the analyzed candles")
-            }
+        val requiresStrictMtf = evidenceRule?.requiresStrictMtf == true
+        gate(
+            "MTF",
+            !requiresStrictMtf || (
+                rep.mtfComplete &&
+                    rep.mtf?.state in setOf(MtfState.FULL_BULLISH, MtfState.FULL_BEARISH) &&
+                    rep.mtf?.dir == rep.dir
+                ),
+            rep.mtf?.summary ?: "No separate MTF state",
+            if (requiresStrictMtf) "SMC requires complete, direction-aligned MTF evidence" else "This strategy uses its own HTF/evidence rules"
+        )
+        strategyEvidenceChecks(rep).forEach { evidence ->
+            gate(evidence.name, evidence.status == CheckStatus.PASS, evidence.detail, evidence.detail)
         }
         gate("SIGNAL", rep.state in setOf(SignalState.STRONG_BUY, SignalState.BUY, SignalState.STRONG_SELL, SignalState.SELL) && rep.confluenceScore >= x.cfg.minConfluence,
             "${rep.state} ${rep.confluenceScore}/100", "State ${rep.state}, score ${rep.confluenceScore} (need >= ${x.cfg.minConfluence})")
+        check("DIRECTION / PLAN", plan != null && rep.dir != null && plan.isLong == (rep.dir == Dir.BULL),
+            "Trade plan direction matches the strategy signal",
+            "Trade plan direction is missing or does not match the strategy signal")
         check("SL", plan != null && plan.stopLoss > 0 && (spec == null || kotlin.math.abs(plan.entry - plan.stopLoss) >= spec.minStopDistance), "SL structural, %.1f ATR".format(plan?.slAtr ?: 0.0), "No valid stop loss")
         check("TP", plan != null && plan.targets.isNotEmpty(), "Targets: ${plan?.targets?.joinToString { it.label }}", "No structural target")
         val requiredRR = RiskEngine.requiredMinimumRewardToRisk(x.cfg.minRR)
