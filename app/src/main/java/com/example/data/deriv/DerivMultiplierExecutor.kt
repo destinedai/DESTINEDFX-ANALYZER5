@@ -17,7 +17,16 @@ class DerivMultiplierExecutor(
 
     suspend fun hasActiveContracts(): Boolean = withContext(Dispatchers.IO) {
         val current = account ?: return@withContext true
-        dao.knownContracts(current.loginId, current.mode.uppercase()).isNotEmpty()
+        val snapshot = gateway.portfolioSnapshot.value ?: return@withContext true
+        val age = System.currentTimeMillis() - snapshot.retrievedAtMs
+        if (!snapshot.successful || snapshot.accountId != current.loginId ||
+            snapshot.accountMode != current.mode.uppercase() ||
+            !snapshot.currency.equals(current.currency, ignoreCase = true) ||
+            age !in 0..PORTFOLIO_MAX_AGE_MS || !snapshot.exposure.isFinite()) {
+            return@withContext true
+        }
+        snapshot.contracts.isNotEmpty() ||
+            dao.knownContracts(current.loginId, current.mode.uppercase()).isNotEmpty()
     }
 
     suspend fun reconcileBeforeNewEntriesResult(): DerivReconciliationResult = withContext(Dispatchers.IO) {
@@ -137,10 +146,11 @@ class DerivMultiplierExecutor(
         if (!syncKnownContracts()) return@withContext Result.failure(Exception("PORTFOLIO_REQUIRED: fresh broker portfolio refresh failed; no purchase was sent"))
         val activeCount = dao.knownContracts(current.loginId, current.mode.uppercase()).size
         val unresolvedCount = dao.unresolved(current.loginId, current.mode.uppercase()).size
-        if (!DerivMultiplierRules.canOpenNewEntry(activeCount, unresolvedCount)) {
-            return@withContext Result.failure(Exception("ACTIVE_CONTRACT_LIMIT: an active contract or unresolved execution exists; no additional purchase was sent"))
-        }
         val snapshot = gateway.portfolioSnapshot.value
+        if (snapshot == null || snapshot.contracts.isNotEmpty() ||
+            !DerivMultiplierRules.canOpenNewEntry(activeCount, unresolvedCount)) {
+            return@withContext Result.failure(Exception("ACTIVE_CONTRACT_LIMIT: the broker reports an open contract or unresolved execution exists; no additional purchase was sent"))
+        }
         val now = System.currentTimeMillis()
         val snapshotAge = snapshot?.let { now - it.retrievedAtMs } ?: Long.MAX_VALUE
         if (snapshot == null || !snapshot.successful || snapshot.accountId != current.loginId ||
