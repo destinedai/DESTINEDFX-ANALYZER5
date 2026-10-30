@@ -348,8 +348,13 @@ object SignalEngine {
                     }
                     val sweepC = ScoreComponent("Liquidity Sweep Confirmation", sweepScore, 30.0, listOf(sweep?.let { "Swept ${it.level.side} @ ${it.level.price} (wick rejection confirmed)" } ?: "Awaiting liquidity sweep of swing highs/lows"), "30 confirmed sweep with wick rejection; 20 unconfirmed sweep; 5 no sweep")
 
-                    val eqLevels = bundle.levels.filter { (if (bull) it.price < price else it.price > price) }
-                    val eqScore = if (eqLevels.isNotEmpty()) 25.0 else 10.0
+                    // Only genuine equal-high/equal-low pools count for this component.
+                    // A generic swing level or trendline must not be labelled EQH/EQL evidence.
+                    val eqLevels = bundle.levels.filter {
+                        it.kind in setOf(LevelKind.EQUAL_HIGHS, LevelKind.EQUAL_LOWS) &&
+                            (if (bull) it.price < price else it.price > price)
+                    }
+                    val eqScore = if (eqLevels.isNotEmpty()) 25.0 else 0.0
                     val eqC = ScoreComponent("Equal Highs / Lows (EQH/EQL) Pool", eqScore, 25.0, listOf(if (eqLevels.isNotEmpty()) "${eqLevels.size} liquidity pool(s) identified (EQH/EQL/Trendline)" else "General swing liquidity"), "25 distinct EQH/EQL liquidity pool identified; 10 single swing level")
 
                     val wickRejection = i.candles.takeLast(3).any { c ->
@@ -440,9 +445,10 @@ object SignalEngine {
         var state = SignalState.WAIT
         val mtfFull = mtf.state == (if (dir == Dir.BULL) MtfState.FULL_BULLISH else MtfState.FULL_BEARISH)
         val mtfOpposed = mtf.state == MtfState.CONFLICT || mtf.dir == (if (dir == Dir.BULL) Dir.BEAR else Dir.BULL)
+        val strategyRequiresCompleteMtf = i.strategyId == "smc-confluence-1.0.0" || cfg.mtfPolicy == MtfPolicy.STRICT
         when {
             margin < cfg.minDirectionMargin -> reasons += "Bull $bs vs bear $rs: no clear edge -> WAIT"
-            mtfOpposed && i.strategyId != "mean-reversion" -> reasons += "Higher timeframes conflict/oppose -> WAIT"
+            mtfOpposed && i.strategyId !in setOf("mean-reversion", "ict-silver-bullet") -> reasons += "Higher timeframes conflict/oppose -> WAIT"
             cfg.mtfPolicy == MtfPolicy.STRICT && !mtfFull -> reasons += "STRICT policy: all required timeframes must align -> WAIT"
             best >= cfg.strongThreshold && mtfFull && !st.consolidation -> state = pick(dir, 3)
             best >= cfg.normalThreshold -> state = pick(dir, 2)
@@ -462,11 +468,13 @@ object SignalEngine {
 
         val mtfComplete = mtf.missing.isEmpty()
         if (!mtfComplete) {
-            reasons += "PARTIAL MTF: missing ${mtf.missing.joinToString { it.label }}; analysis only"
-            state = when (state) {
-                SignalState.STRONG_BUY, SignalState.BUY -> SignalState.WEAK_BUY
-                SignalState.STRONG_SELL, SignalState.SELL -> SignalState.WEAK_SELL
-                else -> SignalState.WAIT
+            reasons += "PARTIAL MTF: missing ${mtf.missing.joinToString { it.label }}; strategy-specific HTF evidence still applies"
+            if (strategyRequiresCompleteMtf) {
+                state = when (state) {
+                    SignalState.STRONG_BUY, SignalState.BUY -> SignalState.WEAK_BUY
+                    SignalState.STRONG_SELL, SignalState.SELL -> SignalState.WEAK_SELL
+                    else -> SignalState.WAIT
+                }
             }
         }
 
