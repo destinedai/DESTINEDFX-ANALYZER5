@@ -104,7 +104,7 @@ class DerivDemoBotService : Service() {
         }
         if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.CONNECTED) {
             if (!connectWithBoundedRetry(gateway)) {
-                update("ERROR — authentication or reconnect attempts exhausted; trading remains stopped")
+                stopSafely("ERROR — authentication or reconnect attempts exhausted; trading remains stopped")
                 return
             }
         }
@@ -182,7 +182,7 @@ class DerivDemoBotService : Service() {
                             reason.startsWith("PORTFOLIO_RETRYABLE") || reason.startsWith("PORTFOLIO_REQUIRED") || reason.startsWith("BALANCE_REQUIRED") -> {
                                 update("RECONNECTING — $reason; purchases paused")
                                 if (!connectWithBoundedRetry(gateway)) {
-                                    update("ERROR — reconnect exhausted after portfolio validation failure; trading remains stopped")
+                                    stopSafely("ERROR — reconnect exhausted after portfolio validation failure; trading remains stopped")
                                     return
                                 }
                             }
@@ -198,7 +198,7 @@ class DerivDemoBotService : Service() {
             } catch (error: Exception) {
                 update("RECONNECTING — purchases paused: ${error.message?.take(140)}")
                 if (!connectWithBoundedRetry(gateway)) {
-                    update("ERROR — bounded reconnect policy exhausted; reconciliation required")
+                    stopSafely("ERROR — bounded reconnect policy exhausted; reconciliation required")
                     return
                 }
             }
@@ -226,11 +226,11 @@ class DerivDemoBotService : Service() {
                 }
             }
             if (cycle < 2 && !connectWithBoundedRetry(gateway)) {
-                update("ERROR — bounded reconnect attempts exhausted; trading remains stopped pending reconciliation")
+                stopSafely("ERROR — bounded reconnect attempts exhausted; trading remains stopped pending reconciliation")
                 return false
             }
         }
-        update("ERROR — fresh portfolio could not be re-established; trading remains stopped")
+        stopSafely("ERROR — fresh portfolio could not be re-established; trading remains stopped")
         return false
     }
 
