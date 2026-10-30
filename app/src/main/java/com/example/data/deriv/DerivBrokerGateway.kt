@@ -32,7 +32,8 @@ data class DerivContractInfo(
     val expiryTime: Long?
 ) {
     val isExecutionValid: Boolean
-        get() = contractId > 0L && symbol.isNotBlank() &&
+        get() = contractId > 0L &&
+            DerivMultiplierRules.isSupportedUnderlying(symbol) &&
             contractType.uppercase() in setOf("MULTUP", "MULTDOWN") &&
             buyPrice.isFinite() && buyPrice > 0.0 && purchaseTime > 0L
 }
