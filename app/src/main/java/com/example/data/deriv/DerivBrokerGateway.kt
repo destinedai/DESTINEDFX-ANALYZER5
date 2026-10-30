@@ -695,9 +695,28 @@ class DerivBrokerGateway(
             for (i in 0 until rows.length()) {
                 val row = rows.optJSONObject(i) ?: continue
                 if (row.optLong("contract_id", 0L) != contractId) continue
-                val buy = row.optDouble("buy_price", 0.0)
-                val sell = row.optDouble("sell_price", row.optDouble("sell_for", buy))
-                return@withContext DerivContractInfo(contractId, row.optLong("transaction_id", 0L), row.optString("symbol"), row.optString("contract_type"), buy, sell, row.optDouble("profit", sell - buy), true, false, row.optString("status", "settled"), row.optLong("purchase_time", 0L) * 1000L, row.optLong("sell_time", 0L).takeIf { it > 0 }?.times(1000L))
+                // Profit-table transactions are closed-contract evidence. Never fill
+                // absent settlement fields with the buy price or a computed placeholder.
+                val transactionId = row.optLong("transaction_id", 0L)
+                val buy = row.optDouble("buy_price", Double.NaN)
+                val sell = row.optDouble("sell_price", Double.NaN)
+                val profit = row.optDouble("profit", Double.NaN)
+                val purchaseEpoch = row.optLong("purchase_time", 0L)
+                val sellEpoch = row.optLong("sell_time", 0L)
+                val symbol = row.optString("underlying_symbol").ifBlank { row.optString("symbol") }.trim()
+                val contractType = row.optString("contract_type").trim().uppercase()
+                if (transactionId <= 0L || !buy.isFinite() || buy <= 0.0 ||
+                    !sell.isFinite() || sell < 0.0 || !profit.isFinite() ||
+                    purchaseEpoch <= 0L || sellEpoch <= 0L || sellEpoch < purchaseEpoch ||
+                    !DerivMultiplierRules.isSupportedUnderlying(symbol) ||
+                    contractType !in setOf("MULTUP", "MULTDOWN")) {
+                    return@withContext null
+                }
+                return@withContext DerivContractInfo(
+                    contractId, transactionId, symbol, contractType, buy, sell, profit,
+                    true, false, row.optString("status").ifBlank { "settled" },
+                    purchaseEpoch * 1000L, null
+                )
             }
             null
         } catch (_: Exception) { null } finally { pendingRequests.remove(reqId) }
@@ -748,18 +767,30 @@ class DerivBrokerGateway(
                     val poc = json.optJSONObject("proposal_open_contract") ?: return
                     val contractId = poc.optLong("contract_id", 0L)
                     if (contractId <= 0L) return
-                    val underlying = poc.optString("underlying").ifBlank {
-                        poc.optString("underlying_symbol").ifBlank { poc.optString("symbol") }
-                    }
-                    val buyPrice = poc.optDouble("buy_price", 0.0)
-                    val bidPrice = poc.optDouble("bid_price", buyPrice)
-                    val profit = poc.optDouble("profit", 0.0)
+                    val underlying = poc.optString("underlying_symbol").ifBlank {
+                        poc.optString("underlying").ifBlank { poc.optString("symbol") }
+                    }.trim()
+                    val buyPrice = poc.optDouble("buy_price", Double.NaN)
+                    val bidPrice = poc.optDouble("bid_price", Double.NaN)
+                    val profit = poc.optDouble("profit", Double.NaN)
                     val isSold = poc.optInt("is_sold", 0) == 1
                     val isValidToSell = poc.optInt("is_valid_to_sell", 0) == 1
-                    val status = poc.optString("status", if (isSold) "sold" else "open")
-                    val purchaseTime = poc.optLong("date_start", System.currentTimeMillis() / 1000) * 1000L
+                    val status = poc.optString("status").ifBlank { if (isSold) "sold" else "open" }
+                    val purchaseEpoch = poc.optLong("date_start", 0L).takeIf { it > 0L }
+                        ?: poc.optLong("purchase_time", 0L).takeIf { it > 0L }
+                    if (underlying.isBlank() || !DerivMultiplierRules.isSupportedUnderlying(underlying) ||
+                        !buyPrice.isFinite() || buyPrice <= 0.0 || purchaseEpoch == null ||
+                        poc.optString("currency").isBlank() ||
+                        poc.optString("contract_type").trim().uppercase() !in setOf("MULTUP", "MULTDOWN")) {
+                        _portfolioSnapshot.value = DerivPortfolioSnapshot(
+                            false, _accountInfo.value?.loginId.orEmpty(), _accountInfo.value?.mode.orEmpty(),
+                            System.currentTimeMillis(), error = "OPEN_CONTRACT_STREAM_INVALID"
+                        )
+                        return
+                    }
+                    val purchaseTime = purchaseEpoch * 1000L
                     val expiryTime = poc.optLong("date_expiry", 0L).takeIf { it > 0 }?.times(1000L)
-                    val contractType = poc.optString("contract_type")
+                    val contractType = poc.optString("contract_type").trim().uppercase()
                     val txId = poc.optJSONObject("transaction_ids")?.optLong("buy", 0L)
                         ?: poc.optLong("transaction_id", 0L)
 
