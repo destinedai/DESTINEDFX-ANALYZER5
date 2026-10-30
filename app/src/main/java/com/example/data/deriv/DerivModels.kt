@@ -44,13 +44,27 @@ data class DerivPortfolioSnapshot(
     val accountMode: String,
     val retrievedAtMs: Long,
     val contracts: List<DerivContractInfo> = emptyList(),
-    val error: String? = null
+    val error: String? = null,
+    val currency: String = ""
 ) {
     /** Invalid or failed snapshots must never masquerade as zero exposure. */
     val exposure: Double get() = contracts.takeIf { successful && it.all(DerivContractInfo::isExecutionValid) }
         ?.sumOf { it.buyPrice }
         ?.takeIf { it.isFinite() && it >= 0.0 }
         ?: Double.NaN
+}
+
+enum class DerivReconciliationStatus {
+    READY,
+    RETRYABLE_FAILURE,
+    MANUAL_RECONCILIATION_REQUIRED
+}
+
+data class DerivReconciliationResult(
+    val status: DerivReconciliationStatus,
+    val reason: String
+) {
+    val ready: Boolean get() = status == DerivReconciliationStatus.READY
 }
 
 data class DerivProposalResult(
