@@ -56,9 +56,13 @@ class DerivMultiplierExecutor(
                 val currentContract = gateway.activeContracts.value[contractId]
                 val historical = if (currentContract == null) gateway.lookupHistoricalContract(contractId, record.createdAtMs) else null
                 when {
-                    currentContract != null && currentContract.isSold -> updateSettled(record, currentContract)
+                    currentContract != null && currentContract.isSold &&
+                        currentContract.profit.isFinite() && currentContract.bidPrice.isFinite() && currentContract.bidPrice >= 0.0 ->
+                        updateSettled(record, currentContract)
+                    currentContract != null && currentContract.isSold ->
+                        dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker contract is sold but settlement profit/value is missing or invalid.", updatedAtMs = now))
                     currentContract != null -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
-                    historical != null && historical.isSold && historical.profit.isFinite() && historical.bidPrice.isFinite() ->
+                    historical != null && historical.isSold && historical.profit.isFinite() && historical.bidPrice.isFinite() && historical.bidPrice >= 0.0 ->
                         updateSettled(record, historical)
                     historical != null && !historical.isSold ->
                         dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
