@@ -345,8 +345,11 @@ def managed_config():
         raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
     try: return Fernet(key.encode()), worker
     except Exception: raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
+def durable_execution_enabled():
+    return os.getenv('EXECUTION_STORAGE_DURABLE','true').lower() == 'true'
+
 def require_durable_execution():
-    if os.getenv('EXECUTION_STORAGE_DURABLE','true').lower() != 'true':
+    if not durable_execution_enabled():
         raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution-sensitive operations are disabled on non-durable storage'})
 def worker_auth(header):
     _, secret=managed_config()
@@ -851,8 +854,13 @@ def issue_destructive_command(x,p):
 
 @app.post('/v1/app/commands',status_code=202)
 def command(x:Command,authorization:str|None=Header(default=None)):
-    require_durable_execution()
     p=auth(authorization,'app'); check_json(x.config)
+    # A non-durable diagnostic deployment may still deliver a narrowly scoped
+    # safety stop to a terminal already paired in the current process. It must
+    # never create a new START/RESUME or a destructive trading command.
+    safety_actions = {'STOP','PAUSE','EMERGENCY_STOP'}
+    if not durable_execution_enabled() and x.action not in safety_actions:
+        raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Only STOP, PAUSE and EMERGENCY_STOP are available on non-durable storage'})
     try: uuid.UUID(x.request_id)
     except ValueError: raise HTTPException(422,'request_id must be a UUID')
     if x.action in DESTRUCTIVE_ACTIONS: return issue_destructive_command(x,p)
@@ -876,17 +884,24 @@ def command(x:Command,authorization:str|None=Header(default=None)):
 @app.get('/v1/terminal/commands')
 def poll(cursor:int=Query(default=0,ge=0),authorization:str|None=Header(default=None)):
     p=auth(authorization,'terminal')
-    with tx() as c: rows=c.execute('SELECT * FROM commands WHERE pairing_id=? AND (id>? OR ack IS NULL) AND (expires_at IS NULL OR expires_at>?) ORDER BY id',(p['id'],cursor,time.time())).fetchall()
+    with tx() as c:
+        if durable_execution_enabled():
+            rows=c.execute('SELECT * FROM commands WHERE pairing_id=? AND (id>? OR ack IS NULL) AND (expires_at IS NULL OR expires_at>?) ORDER BY id',(p['id'],cursor,time.time())).fetchall()
+        else:
+            # Never deliver a previously queued START/RESUME from an ephemeral
+            # database. Keep emergency stop controls available as a safe fallback.
+            rows=c.execute("SELECT * FROM commands WHERE pairing_id=? AND action IN ('STOP','PAUSE','EMERGENCY_STOP') AND (id>? OR ack IS NULL) AND (expires_at IS NULL OR expires_at>?) ORDER BY id",(p['id'],cursor,time.time())).fetchall()
     commands=[{'id':r['id'],'request_id':r['request_id'],'action':r['action'],'config':json.loads(r['config']),**({'expires_at':r['config'] and json.loads(r['config']).get('expires_at')} if r['expires_at'] is not None else {})} for r in rows]
     return {'cursor':max([cursor]+[r['id'] for r in rows]),'commands':commands}
 @app.post('/v1/terminal/commands/{command_id}/ack')
 def acknowledge(command_id:int,x:Ack,authorization:str|None=Header(default=None)):
-    require_durable_execution()
     p=auth(authorization,'terminal')
     if x.outcome not in ('APPLIED','REJECTED','UNKNOWN') or x.state not in ('READY','RUNNING','PAUSED','STOPPED','ERROR'): raise HTTPException(422,'Invalid acknowledgement')
     with tx(True) as c:
         r=c.execute('SELECT * FROM commands WHERE id=? AND pairing_id=?',(command_id,p['id'])).fetchone()
         if not r: raise HTTPException(404,'Command not found')
+        if not durable_execution_enabled() and r['action'] not in ('STOP','PAUSE','EMERGENCY_STOP'):
+            raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Only safety-stop acknowledgements are accepted on non-durable storage'})
         if r['expires_at'] is not None and r['expires_at']<=time.time() and not r['ack']: raise HTTPException(410,'Command expired')
         if r['action'] in DESTRUCTIVE_ACTIONS:
             items=c.execute('SELECT ticket FROM command_items WHERE command_id=? ORDER BY rowid',(command_id,)).fetchall()
@@ -968,7 +983,8 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     return {'accepted':True,'received_at':iso(),'live_authorized_until':live_until}
 @app.delete('/v1/app/pairing')
 def revoke_pairing(authorization:str|None=Header(default=None)):
-    require_durable_execution()
+    # Revocation is a safety-reducing permission change and must remain available
+    # even when the backing store is ephemeral.
     p=auth(authorization,'app')
     with tx(True) as c:
         c.execute('UPDATE managed_accounts SET revoked=1,login_enc=?,server_enc=?,password_enc=? WHERE pairing_id=?',('', '', '', p['id']))
