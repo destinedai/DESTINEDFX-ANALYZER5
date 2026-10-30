@@ -75,9 +75,16 @@ class DerivDemoBotService : Service() {
             ACTION_START -> {
                 stopRequested = false
                 loopJob?.cancel()
-                val symbol = intent.getStringExtra(EXTRA_SYMBOL).orEmpty()
-                val strategy = intent.getStringExtra(EXTRA_STRATEGY).orEmpty()
-                val timeframe = intent.getStringExtra(EXTRA_TIMEFRAME).orEmpty()
+                val symbol = intent.getStringExtra(EXTRA_SYMBOL)?.trim().orEmpty()
+                val strategy = intent.getStringExtra(EXTRA_STRATEGY)?.trim().orEmpty()
+                val timeframe = intent.getStringExtra(EXTRA_TIMEFRAME)?.trim().orEmpty()
+                if (symbol.isBlank() || strategy.isBlank() || timeframe.isBlank() ||
+                    !DerivMultiplierRules.isSupportedUnderlying(symbol)) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
+                    update("ERROR — incomplete or unsupported start intent; trading remains stopped")
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putString(EXTRA_SYMBOL, symbol).putString(EXTRA_STRATEGY, strategy)
                     .putString(EXTRA_TIMEFRAME, timeframe).putBoolean("enabled", true).apply()

@@ -345,6 +345,9 @@ def managed_config():
         raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
     try: return Fernet(key.encode()), worker
     except Exception: raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
+def require_durable_execution():
+    if os.getenv('EXECUTION_STORAGE_DURABLE','true').lower() != 'true':
+        raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution-sensitive operations are disabled on non-durable storage'})
 def worker_auth(header):
     _, secret=managed_config()
     if not header or not header.startswith('Bearer ') or not hmac.compare_digest(header[7:],secret): raise HTTPException(401,'Unauthorized')
@@ -429,6 +432,7 @@ def heartbeat_news_clear(beat, symbols=None):
 
 @app.post('/v1/app/managed-account',status_code=202)
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
+    require_durable_execution()
     p=auth(authorization,'app'); fernet,_=managed_config()
     if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
     evidence=x.cost_evidence.strip()
@@ -450,6 +454,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
 
 @app.post('/v1/worker/jobs/claim')
 def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
+    require_durable_execution()
     worker_auth(authorization); fernet,_=managed_config(); t=time.time()
     with tx(True) as c:
         r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
@@ -480,6 +485,7 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
 
 @app.patch('/v1/worker/jobs/{job_id}')
 def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(default=None)):
+    require_durable_execution()
     worker_auth(authorization)
     if x.status not in ('PROVISIONING','AUTHENTICATING','READY','FAILED','REVOKED'): raise HTTPException(422,'Invalid provisioning status')
     # Only expose constrained operational codes; never reflect arbitrary worker text.
@@ -501,6 +507,7 @@ def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(defaul
 
 @app.get('/v1/worker/jobs/{job_id}/status')
 def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128),authorization:str|None=Header(default=None)):
+    require_durable_execution()
     worker_auth(authorization)
     with tx(True) as c:
         job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
@@ -553,6 +560,7 @@ def readiness():
     return {'status':'ready','database':'ok','managed_execution':'configured'}
 @app.post('/v1/pairings',status_code=201)
 def create_pair(request:Request):
+    require_durable_execution()
     ip=request.client.host if request.client else 'unknown'; t=time.time()
     with tx(True) as c:
         row=c.execute('SELECT * FROM rate WHERE ip=?',(ip,)).fetchone()
@@ -564,6 +572,7 @@ def create_pair(request:Request):
     return {'pairing_id':pairing_id,'pairing_code':code,'app_token':app_token,'expires_at':iso(datetime.fromtimestamp(exp,timezone.utc))}
 @app.post('/v1/terminal/claim')
 def claim(x:Claim):
+    require_durable_execution()
     for k in ('login','server','company','currency','account_mode'):
         if k not in x.account or not x.account[k] or len(x.account[k])>128: raise HTTPException(422,'Invalid account identity')
     if x.account['account_mode'] not in ('DEMO','LIVE'): raise HTTPException(422,'Unverified account mode')
@@ -717,6 +726,7 @@ def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=
 
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
+    require_durable_execution()
     p=auth(authorization,'app')
     if not x.confirm_live_trading: raise HTTPException(422,'Explicit LIVE trading confirmation is required')
     with tx() as c:
@@ -739,6 +749,7 @@ def revoke_live_authorization(authorization:str|None=Header(default=None)):
 
 @app.post('/v1/app/close-all-confirmation')
 def close_all_confirmation(x:CloseAllConfirmation,authorization:str|None=Header(default=None)):
+    require_durable_execution()
     p=auth(authorization,'app')
     if x.confirm_close_all is not True: raise HTTPException(422,'Explicit close-all confirmation is required')
     m,beat=destructive_context(p)
@@ -840,6 +851,7 @@ def issue_destructive_command(x,p):
 
 @app.post('/v1/app/commands',status_code=202)
 def command(x:Command,authorization:str|None=Header(default=None)):
+    require_durable_execution()
     p=auth(authorization,'app'); check_json(x.config)
     try: uuid.UUID(x.request_id)
     except ValueError: raise HTTPException(422,'request_id must be a UUID')
@@ -869,6 +881,7 @@ def poll(cursor:int=Query(default=0,ge=0),authorization:str|None=Header(default=
     return {'cursor':max([cursor]+[r['id'] for r in rows]),'commands':commands}
 @app.post('/v1/terminal/commands/{command_id}/ack')
 def acknowledge(command_id:int,x:Ack,authorization:str|None=Header(default=None)):
+    require_durable_execution()
     p=auth(authorization,'terminal')
     if x.outcome not in ('APPLIED','REJECTED','UNKNOWN') or x.state not in ('READY','RUNNING','PAUSED','STOPPED','ERROR'): raise HTTPException(422,'Invalid acknowledgement')
     with tx(True) as c:
@@ -921,6 +934,7 @@ def acknowledge(command_id:int,x:Ack,authorization:str|None=Header(default=None)
     return {'id':command_id,'acknowledged':True}
 @app.post('/v1/terminal/heartbeat')
 def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
+    require_durable_execution()
     p=auth(authorization,'terminal'); check_json(x.model_dump())
     if x.state not in ('READY','RUNNING','PAUSED','STOPPED','ERROR'): raise HTTPException(422,'Invalid state')
     try: dt=datetime.fromisoformat(x.timestamp.replace('Z','+00:00'))
@@ -953,7 +967,8 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     if live_until is not None and live_until <= time.time(): live_until=None
     return {'accepted':True,'received_at':iso(),'live_authorized_until':live_until}
 @app.delete('/v1/app/pairing')
-def revoke(authorization:str|None=Header(default=None)):
+def revoke_pairing(authorization:str|None=Header(default=None)):
+    require_durable_execution()
     p=auth(authorization,'app')
     with tx(True) as c:
         c.execute('UPDATE managed_accounts SET revoked=1,login_enc=?,server_enc=?,password_enc=? WHERE pairing_id=?',('', '', '', p['id']))

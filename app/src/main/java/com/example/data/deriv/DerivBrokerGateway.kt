@@ -30,7 +30,12 @@ data class DerivContractInfo(
     val status: String,
     val purchaseTime: Long,
     val expiryTime: Long?
-)
+) {
+    val isExecutionValid: Boolean
+        get() = contractId > 0L && symbol.isNotBlank() &&
+            contractType.uppercase() in setOf("MULTUP", "MULTDOWN") &&
+            buyPrice.isFinite() && buyPrice > 0.0 && profit.isFinite() && purchaseTime > 0L
+}
 
 /** Selects only an active Options account matching the user's explicit demo/real choice. */
 internal fun selectDerivOptionsAccount(accounts: org.json.JSONArray, requestedMode: String): JSONObject? {
@@ -316,11 +321,16 @@ class DerivBrokerGateway(
             put("portfolio", 1)
             put("req_id", reqId)
         }
-        webSocket?.send(json.toString())
+        if (webSocket?.send(json.toString()) != true) {
+            pendingRequests.remove(reqId)
+            _portfolioSnapshot.value = DerivPortfolioSnapshot(false, current.loginId, current.mode.uppercase(), System.currentTimeMillis(), error = "PORTFOLIO_REQUEST_NOT_SENT")
+            return@withContext emptyList()
+        }
 
         try {
             val resp = withTimeout(8000) { deferred.await() }
-            val contracts = resp.optJSONObject("portfolio")?.optJSONArray("contracts")
+            val portfolio = resp.optJSONObject("portfolio")
+            val contracts = portfolio?.optJSONArray("contracts")
                 ?: throw IllegalStateException("Deriv portfolio response omitted contracts")
             val list = mutableListOf<Position>()
             val snapshotContracts = mutableListOf<DerivContractInfo>()
@@ -334,14 +344,21 @@ class DerivBrokerGateway(
                 }
                 val buyPrice = c.optDouble("buy_price", 0.0)
                 val contractType = c.optString("contract_type")
+                val currency = c.optString("currency").ifBlank { current.currency }
+                if (contractId <= 0L || symbol.isBlank() ||
+                    contractType.uppercase() !in setOf("MULTUP", "MULTDOWN") ||
+                    currency.isBlank() || !currency.equals(current.currency, ignoreCase = true) ||
+                    !buyPrice.isFinite() || buyPrice <= 0.0) {
+                    throw IllegalStateException("PORTFOLIO_INVALID_CONTRACT: every open contract must have a positive ID, symbol, supported type, matching currency, and positive finite purchase price")
+                }
                 val isLong = contractType.contains("CALL") || contractType.contains("UP")
                 val openTime = (c.optLong("purchase_time", 0L).takeIf { it > 0 }
                     ?: c.optLong("date_start", System.currentTimeMillis() / 1000)) * 1000L
 
-                if (contractId > 0) {
-                    subscribeOpenContract(contractId)
-                    snapshotContracts += DerivContractInfo(contractId, 0L, symbol, contractType, buyPrice, 0.0, c.optDouble("profit", 0.0), false, false, "open", openTime / 1000L, null)
-                }
+                subscribeOpenContract(contractId)
+                val profit = c.optDouble("profit", Double.NaN)
+                if (!profit.isFinite()) throw IllegalStateException("PORTFOLIO_INVALID_CONTRACT: profit is not finite")
+                snapshotContracts += DerivContractInfo(contractId, 0L, symbol, contractType, buyPrice, 0.0, profit, false, false, "open", openTime / 1000L, null)
 
                 list.add(
                     Position(

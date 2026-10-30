@@ -827,3 +827,15 @@ def test_destructive_action_requires_trade_permission_and_close_all_nonempty(mon
     token=client.post('/v1/app/close-all-confirmation',headers=ah,json={'confirm_close_all':True}).json()['token']
     cfg={'tickets':[],'account_login':actual['login'],'account_server':actual['server'],'account_mode':'LIVE','confirmation':token}
     assert client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_ALL',cfg)).status_code==409
+
+
+def test_non_durable_mode_blocks_execution_routes_but_keeps_liveness(monkeypatch):
+    monkeypatch.setenv('EXECUTION_STORAGE_DURABLE', 'false')
+    assert client.get('/health').status_code == 200
+    ready = client.get('/health/ready')
+    assert ready.status_code == 503
+    assert ready.json()['detail']['code'] == 'NON_DURABLE_STORAGE'
+    assert client.post('/v1/pairings').status_code == 503
+    assert client.post('/v1/terminal/claim', json={'pairing_code':'xxxxxxxx','terminal_instance_id':'x','account':ACCOUNT}).status_code == 503
+    assert client.post('/v1/app/commands', json=command_req('STOP'), headers={'Authorization':'Bearer invalid'}).status_code == 503
+    monkeypatch.setenv('EXECUTION_STORAGE_DURABLE', 'true')

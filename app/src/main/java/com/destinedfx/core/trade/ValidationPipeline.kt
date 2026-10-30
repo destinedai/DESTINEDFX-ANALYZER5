@@ -79,7 +79,10 @@ object TradeValidationPipeline {
         check("NEWS", x.news != null && !x.news.blocksAutomation(x.cfg.manualRiskMode), x.news?.detail ?: "", x.news?.detail ?: "NEWS STATUS UNKNOWN")
         val sessOk = (x.cfg.allowedSessions == null || x.session.active.any { it in x.cfg.allowedSessions }) && (!x.cfg.requireKillzone || x.session.killzones.isNotEmpty())
         check("SESSION", sessOk, "Session ${x.session.label}", "Outside allowed session (${x.session.label})")
-        gate("MTF", rep.mtfComplete && rep.mtf?.state in setOf(MtfState.FULL_BULLISH, MtfState.FULL_BEARISH) && rep.mtf?.dir == rep.dir, rep.mtf?.summary ?: "", "MTF DATA INCOMPLETE")
+        // ICT Silver Bullet has its own killzone/sweep/FVG/structure gates. Do
+        // not apply the generic SMC full-alignment gate to it by proxy.
+        val requiresStrictMtf = rep.strategyVersion != "ict-silver-bullet"
+        gate("MTF", !requiresStrictMtf || (rep.mtfComplete && rep.mtf?.state in setOf(MtfState.FULL_BULLISH, MtfState.FULL_BEARISH) && rep.mtf?.dir == rep.dir), rep.mtf?.summary ?: "ICT-specific eligibility", if (requiresStrictMtf) "MTF DATA INCOMPLETE" else "ICT uses strategy-specific eligibility")
         val evidenceRule = StrategyEvidenceRules.forStrategy(rep.strategyVersion)
         if (evidenceRule == null) {
             gate("STRATEGY EVIDENCE", false, "", "Unknown strategy '${rep.strategyVersion}'; no validation rules exist")
@@ -92,8 +95,10 @@ object TradeValidationPipeline {
             }
             if (evidenceRule.requireVolume) {
                 val volume = rep.components.firstOrNull { it.name == "Volume Surge" }
-                gate("VOLUME SOURCE", volume != null && volume.isAvailable,
-                    "Breakout volume evidence is available", "Breakout strategy requires actual broker tick/real volume; volume is unavailable")
+                val sourceBacked = volume != null && volume.isAvailable && volume.earned.isFinite() &&
+                    volume.notes.any { it.contains("source=REAL") || it.contains("source=TICK") }
+                gate("VOLUME SOURCE", sourceBacked,
+                    "Breakout volume evidence is source-backed (${rep.volumeKind})", "Breakout strategy requires valid source-backed tick/real volume for the analyzed candles")
             }
         }
         gate("SIGNAL", rep.state in setOf(SignalState.STRONG_BUY, SignalState.BUY, SignalState.STRONG_SELL, SignalState.SELL) && rep.confluenceScore >= x.cfg.minConfluence,

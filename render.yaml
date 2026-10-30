@@ -7,7 +7,8 @@ services:
     plan: free
     dockerfilePath: ./bridge/Dockerfile
     dockerContext: ./bridge
-    healthCheckPath: /health/ready
+    # Free hosting is liveness-only; execution readiness remains /health/ready.
+    healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: PORT

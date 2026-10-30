@@ -21,9 +21,9 @@ MetaQuotes documents a desktop-terminal startup INI that can contain login, serv
 
 ## Quick deployment
 
-1. Open the [DestinedFX Render Blueprint](https://render.com/deploy?repo=https://github.com/destinedai/DESTINEDFX-ANALYZER5) and authorize Render to access this repository.
-2. Select a paid web-service plan because the bridge needs persistent SQLite/WAL storage. The blueprint generates the Fernet key and worker token, attaches a disk, and configures ShowMyTrades economic calendar data.
-3. When deployed, open https://YOUR-SERVICE.onrender.com/health/ready. It must return {"status":"ready","database":"ok","managed_execution":"configured"}. If not, do not submit broker credentials.
+1. Do not use the repository Render Blueprint for execution. It is a Free, sleeping, non-durable diagnostics service; `/health` is liveness-only, `/health/ready` returns `503 NON_DURABLE_STORAGE`, and execution-sensitive routes are blocked. No paid Render resource is implied or created.
+2. For DEMO acceptance, deploy `bridge/` on separately authorized durable HTTPS infrastructure with persistent SQLite/WAL storage, backups, generated secrets, and the configured calendar provider.
+3. On that durable deployment, open the exact `/health/ready` URL. It must return `{"status":"ready","database":"ok","managed_execution":"configured"}`. If not, do not submit broker credentials.
 4. In DestinedFX → Bot → Remote MT5 EA Bridge, enter the public HTTPS origin in **Managed bridge HTTPS URL**, tap **SAVE BRIDGE URL**, then **CHECK CONNECTION**.
 5. Download DestinedFX-Windows-Worker-Kit from GitHub Actions, extract it on Windows with desktop MT5 and MetaEditor installed, run launch-worker.ps1, enter the generated worker token at the hidden prompt, and add the bridge origin to the managed MT5 terminal's WebRequest allowlist.
 

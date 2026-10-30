@@ -283,12 +283,14 @@ object SignalEngine {
 
                     val rv = (last - 2..last).mapNotNull { Indicators.relativeVolume(i.candles, it) }.maxOrNull()
                     val volScore = when {
+                        volKind == VolumeType.NONE -> 0.0
                         rv != null && rv >= 1.5 -> 20.0
                         rv != null && rv >= 1.1 -> 12.0
-                        volKind == VolumeType.NONE -> 10.0
                         else -> 5.0
                     }
-                    val volC = ScoreComponent("Volume Surge", volScore, 20.0, listOf(rv?.let { "Relative volume surge: %.2fx".format(it) } ?: "Average volume"), "20 volume surge >= 1.5x on breakout; 12 above 1.1x")
+                    val volNotes = if (volKind == VolumeType.NONE) listOf("No valid volume observations for the analyzed candle set")
+                    else listOf((rv?.let { "Relative volume surge: %.2fx".format(it) } ?: "Average volume") + "; source=${volKind.name}")
+                    val volC = ScoreComponent("Volume Surge", volScore, if (volKind == VolumeType.NONE) 0.0 else 20.0, volNotes, "20 surge on the analyzed candle set; source is explicit")
 
                     val momScore = when {
                         rsi != null && (if (bull) rsi >= 55.0 else rsi <= 45.0) -> 15.0

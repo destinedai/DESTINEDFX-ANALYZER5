@@ -46,7 +46,11 @@ data class DerivPortfolioSnapshot(
     val contracts: List<DerivContractInfo> = emptyList(),
     val error: String? = null
 ) {
-    val exposure: Double get() = contracts.sumOf { it.buyPrice.coerceAtLeast(0.0) }
+    /** Invalid or failed snapshots must never masquerade as zero exposure. */
+    val exposure: Double get() = contracts.takeIf { successful && it.all(DerivContractInfo::isExecutionValid) }
+        ?.sumOf { it.buyPrice }
+        ?.takeIf { it.isFinite() && it >= 0.0 }
+        ?: Double.NaN
 }
 
 data class DerivProposalResult(
