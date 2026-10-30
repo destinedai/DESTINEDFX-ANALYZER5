@@ -122,11 +122,22 @@ class DerivDemoBotService : Service() {
                     stopSafely("Safety blocked — verified DEMO account snapshot is unavailable")
                     return
                 }
-                val balance = gateway.accountMetrics.value?.balance ?: account.balance
-                if (!DerivMultiplierRules.isVerifiedDemoAccount(account) || !balance.isFinite() || balance <= 0.0) {
+                if (!DerivMultiplierRules.isVerifiedDemoAccount(account)) {
                     stopSafely("Safety blocked — this Android bot requires a verified DEMO account; LIVE execution is disabled")
                     return
                 }
+                val metrics = gateway.accountMetrics.value
+                val balanceAge = System.currentTimeMillis() - gateway.accountMetricsUpdatedAtMs.value
+                if (metrics == null || !metrics.balance.isFinite() || metrics.balance <= 0.0 ||
+                    !metrics.currency.equals(account.currency, ignoreCase = true) || balanceAge !in 0..8_000L) {
+                    update("RECONNECTING — fresh verified DEMO balance is unavailable; purchases paused")
+                    if (!connectWithBoundedRetry(gateway)) {
+                        stopSafely("ERROR — could not refresh the authenticated DEMO balance; trading remains stopped")
+                        return
+                    }
+                    continue
+                }
+                val balance = metrics.balance
                 val stake = DerivMultiplierRules.safeStakeForBalance(balance)
                 val minimumStake = com.destinedfx.core.broker.DerivContractLimits.getMinimumStake(
                     symbol, DerivMultiplierProduct.MULTUP.contractType
