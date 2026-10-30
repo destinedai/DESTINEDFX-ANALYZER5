@@ -57,6 +57,46 @@ object DerivMultiplierRules {
             .toDouble()
     }
 
+    private fun timeframeMs(timeframe: String): Long? = when (timeframe.trim().uppercase()) {
+        "M1" -> 60_000L
+        "M5" -> 5 * 60_000L
+        "M15" -> 15 * 60_000L
+        "M30" -> 30 * 60_000L
+        "H1" -> 60 * 60_000L
+        "H4" -> 4 * 60 * 60_000L
+        "D1" -> 24 * 60 * 60_000L
+        "W1" -> 7 * 24 * 60 * 60_000L
+        else -> null
+    }
+
+    /**
+     * Stable duplicate-prevention key. The analyzer builds a new random ID on every scan, so the same
+     * setup must be keyed by what it is: symbol, strategy, timeframe, direction and the candle it formed in.
+     * Returns null when the timeframe is unknown, in which case the caller must not trade.
+     */
+    fun stableSignalKey(symbol: String, strategyId: String, timeframe: String, direction: SignalDirection, signalTimestampMs: Long): String? {
+        val frame = timeframeMs(timeframe) ?: return null
+        if (symbol.isBlank() || strategyId.isBlank() || signalTimestampMs <= 0L) return null
+        val bar = signalTimestampMs - (signalTimestampMs % frame)
+        return "DERIV|${symbol.trim().uppercase()}|${strategyId.trim()}|${timeframe.trim().uppercase()}|${direction.name}|$bar"
+    }
+
+    /** The trade plan must be complete, on the correct side of entry, and at least 2R. No stop shrinking or inference. */
+    fun planConsistencyError(direction: SignalDirection, entry: Double, stopLoss: Double, takeProfit: Double): String? {
+        if (!entry.isFinite() || !stopLoss.isFinite() || !takeProfit.isFinite() || entry <= 0.0 || stopLoss <= 0.0 || takeProfit <= 0.0) {
+            return "PLAN_INCOMPLETE: entry, stop loss and take profit must all be valid prices"
+        }
+        val risk: Double
+        val reward: Double
+        when (direction) {
+            SignalDirection.LONG -> { if (!(stopLoss < entry && takeProfit > entry)) return "PLAN_INVALID: LONG needs stop below entry and target above"; risk = entry - stopLoss; reward = takeProfit - entry }
+            SignalDirection.SHORT -> { if (!(stopLoss > entry && takeProfit < entry)) return "PLAN_INVALID: SHORT needs stop above entry and target below"; risk = stopLoss - entry; reward = entry - takeProfit }
+            else -> return "SIGNAL_INVALID: WAIT is not executable"
+        }
+        if (reward / risk + 1e-9 < 2.0) return "RR_TOO_LOW: reward/risk is below the 2.0R minimum"
+        return null
+    }
+
     /** These are synthetic-index families, never Forex/CFD symbols. */
     fun isSupportedUnderlying(symbol: String): Boolean {
         val normalized = symbol.trim().uppercase()

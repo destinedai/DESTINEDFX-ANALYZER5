@@ -135,9 +135,16 @@ class DerivDemoBotService : Service() {
                     continue
                 }
                 val signal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategyId)
-                if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT)) {
+                val planError = if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT))
+                    DerivMultiplierRules.planConsistencyError(signal.direction, signal.entryPrice, signal.stopLoss, signal.takeProfit) else null
+                val stableId = DerivMultiplierRules.stableSignalKey(symbol, strategyId, timeframe, signal.direction, signal.timestamp)
+                if (planError != null) {
+                    update("Running — signal rejected: ${planError.take(120)}")
+                } else if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT) && stableId == null) {
+                    update("Running — signal rejected: unsupported timeframe $timeframe")
+                } else if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT)) {
                     val intent = DerivMultiplierIntent(
-                        signalId = signal.id,
+                        signalId = stableId!!,
                         symbol = symbol,
                         strategyId = strategyId,
                         strategyVersion = signal.strategyVersion.ifBlank { "unknown" },
@@ -153,7 +160,13 @@ class DerivDemoBotService : Service() {
                     update("Submitting — broker proposal required for ${intent.product.contractType}")
                     val result = executor.submit(intent)
                     if (result.isSuccess) update("Contract confirmed — ${result.getOrThrow().contractId}; monitoring broker state")
-                    else update(result.exceptionOrNull()?.message?.take(180) ?: "Execution blocked")
+                    else {
+                        val reason = result.exceptionOrNull()?.message?.take(180) ?: "Execution blocked"
+                        // An unresolved outcome must stop new entries; an ordinary skip (duplicate, open position,
+                        // rejected proposal) is not a connection problem and the bot keeps scanning.
+                        if (reason.startsWith("EXECUTION_UNKNOWN") || reason.startsWith("RECONCILIATION_REQUIRED")) update("Safety blocked — $reason")
+                        else update("Running — entry skipped: $reason")
+                    }
                 } else {
                     update("Running — no valid fresh Multiplier signal")
                 }

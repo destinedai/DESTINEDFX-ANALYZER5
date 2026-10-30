@@ -135,6 +135,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
     val botActive by viewModel.botActive.collectAsStateWithLifecycle()
     val derivServiceState by DerivDemoBotService.state.collectAsStateWithLifecycle()
+    // Android 13+ hides the foreground-service notification (the bot's visible status and STOP surface) until granted.
+    val notificationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { /* the bot starts regardless; the in-app status card is the primary indicator */ }
     val derivAccount by viewModel.app.derivBrokerGateway.accountInfo.collectAsStateWithLifecycle()
     val activeBrokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
     val activeBrokerGateway by viewModel.activeBrokerGateway.collectAsStateWithLifecycle()
@@ -675,6 +679,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             derivAccount?.demoVerified != true -> statusMessage = "START BLOCKED — verify an active DEMO account first."
                                             !derivSymbolSupported -> statusMessage = "START BLOCKED — $activeSymbol is a Forex/CFD symbol, not a supported Deriv Multiplier underlying. Select an available synthetic index."
                                             else -> {
+                                                if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                                                    androidx.core.content.ContextCompat.checkSelfPermission(reportContext, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                                                ) {
+                                                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                                }
                                                 DerivDemoBotService.start(reportContext, activeSymbol, selectedStrategyId, selectedTimeframe)
                                                 statusMessage = "START REQUESTED — waiting for the foreground service to verify the Demo account and broker state."
                                             }
