@@ -209,7 +209,7 @@ object TradeValidationPipeline {
         }
         gate("SIGNAL", rep.state in setOf(SignalState.STRONG_BUY, SignalState.BUY, SignalState.STRONG_SELL, SignalState.SELL) && rep.confluenceScore >= x.cfg.minConfluence,
             "${rep.state} ${rep.confluenceScore}/100", "State ${rep.state}, score ${rep.confluenceScore} (need >= ${x.cfg.minConfluence})")
-        check("DIRECTION / PLAN", plan != null && rep.dir != null && plan.isLong == (rep.dir == Dir.BULL),
+        check("DIRECTION / PLAN", !gates || (plan != null && rep.dir != null && plan.isLong == (rep.dir == Dir.BULL)),
             "Trade plan direction matches the strategy signal",
             "Trade plan direction is missing or does not match the strategy signal")
         check("SL", plan != null && plan.stopLoss > 0 && (spec == null || kotlin.math.abs(plan.entry - plan.stopLoss) >= spec.minStopDistance), "SL structural, %.1f ATR".format(plan?.slAtr ?: 0.0), "No valid stop loss")
