@@ -173,10 +173,21 @@ class DerivDemoBotService : Service() {
                     if (result.isSuccess) update("Contract confirmed — ${result.getOrThrow().contractId}; monitoring broker state")
                     else {
                         val reason = result.exceptionOrNull()?.message?.take(180) ?: "Execution blocked"
-                        // An unresolved outcome must stop new entries; an ordinary skip (duplicate, open position,
-                        // rejected proposal) is not a connection problem and the bot keeps scanning.
-                        if (reason.startsWith("EXECUTION_UNKNOWN") || reason.startsWith("RECONCILIATION_REQUIRED")) update("Safety blocked — $reason")
-                        else update("Running — entry skipped: $reason")
+                        // An ambiguous purchase or unresolved ledger record requires manual review.
+                        // A transient broker/portfolio/balance failure must reconnect and reconcile
+                        // before another scan; it must never be presented as a normal skipped entry.
+                        when {
+                            reason.startsWith("EXECUTION_UNKNOWN") || reason.startsWith("RECONCILIATION_REQUIRED") ->
+                                stopSafely("Safety blocked — $reason. Manual reconciliation is required.")
+                            reason.startsWith("PORTFOLIO_RETRYABLE") || reason.startsWith("PORTFOLIO_REQUIRED") || reason.startsWith("BALANCE_REQUIRED") -> {
+                                update("RECONNECTING — $reason; purchases paused")
+                                if (!connectWithBoundedRetry(gateway)) {
+                                    update("ERROR — reconnect exhausted after portfolio validation failure; trading remains stopped")
+                                    return
+                                }
+                            }
+                            else -> update("Running — entry skipped: $reason")
+                        }
                     }
                 } else {
                     update("Running — no valid fresh Multiplier signal")
