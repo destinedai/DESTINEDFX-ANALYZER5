@@ -829,7 +829,16 @@ def test_destructive_action_requires_trade_permission_and_close_all_nonempty(mon
     assert client.post('/v1/app/commands',headers=ah,json=destructive_req('CLOSE_ALL',cfg)).status_code==409
 
 
-def test_non_durable_mode_blocks_execution_routes_but_keeps_liveness(monkeypatch):
+def test_non_durable_mode_blocks_new_execution_but_preserves_emergency_stop_and_revocation(monkeypatch):
+    monkeypatch.setenv('EXECUTION_STORAGE_DURABLE', 'true')
+    p=pair(); t=claimed(p)
+    ah={'Authorization':'Bearer '+p['app_token']}
+    th={'Authorization':'Bearer '+t['terminal_token']}
+    # Simulate a command persisted before storage was switched to non-durable.
+    with app.tx(True) as c:
+        c.execute('INSERT INTO commands(pairing_id,request_id,action,config) VALUES(?,?,?,?)',
+                  (p['pairing_id'],str(uuid.uuid4()),'START','{}'))
+
     monkeypatch.setenv('EXECUTION_STORAGE_DURABLE', 'false')
     assert client.get('/health').status_code == 200
     ready = client.get('/health/ready')
@@ -837,5 +846,18 @@ def test_non_durable_mode_blocks_execution_routes_but_keeps_liveness(monkeypatch
     assert ready.json()['detail']['code'] == 'NON_DURABLE_STORAGE'
     assert client.post('/v1/pairings').status_code == 503
     assert client.post('/v1/terminal/claim', json={'pairing_code':'xxxxxxxx','terminal_instance_id':'x','account':ACCOUNT}).status_code == 503
-    assert client.post('/v1/app/commands', json=command_req('STOP'), headers={'Authorization':'Bearer invalid'}).status_code == 503
+    assert client.post('/v1/worker/jobs/claim', json={'worker_id':'worker-nondurable'}).status_code == 503
+    assert client.post('/v1/app/commands', json=command_req('START'), headers=ah).status_code == 503
+    # A stale queued START must not be delivered from ephemeral storage.
+    assert client.get('/v1/terminal/commands?cursor=0',headers=th).json()['commands'] == []
+    # Safety stops remain deliverable and acknowledgeable.
+    stop=client.post('/v1/app/commands',json=command_req('STOP'),headers=ah)
+    assert stop.status_code == 202
+    delivered=client.get('/v1/terminal/commands?cursor=0',headers=th).json()['commands']
+    assert [item['action'] for item in delivered] == ['STOP']
+    ack={'outcome':'APPLIED','state':'STOPPED','message':'Safety stop applied'}
+    assert client.post(f"/v1/terminal/commands/{stop.json()['id']}/ack",headers=th,json=ack).status_code == 200
+    # Permission revocation must not be blocked by ephemeral-storage mode.
+    assert client.delete('/v1/app/live-authorization',headers=ah).status_code == 200
+    assert client.delete('/v1/app/pairing',headers=ah).status_code == 200
     monkeypatch.setenv('EXECUTION_STORAGE_DURABLE', 'true')
