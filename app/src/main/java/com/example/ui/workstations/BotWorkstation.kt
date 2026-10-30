@@ -2373,19 +2373,30 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             items(openPositions) { pos ->
                 val ticker = viewModel.tickers.collectAsStateWithLifecycle().value[pos.symbol]
                 val freshCmp = ticker?.price?.takeIf { it.isFinite() && it > 0.0 && viewModel.isDataFresh(pos.symbol) }
-                val cmp = freshCmp ?: 0.0
                 val isLong = pos.direction == com.example.domain.model.SignalDirection.LONG
-                val mult = if (isLong) 1.0 else -1.0
-                val spec = com.destinedfx.core.instrument.SpecRegistry.get(pos.symbol)
-                val contractSize = spec?.contractSize
-                val liveFloatingPnl = if (freshCmp != null && pos.entryPrice > 0.0 && contractSize != null && contractSize.isFinite() && contractSize > 0.0) {
-                    (freshCmp - pos.entryPrice) * mult * contractSize * pos.lotSize
-                } else pos.currentProfit
-                val isProfitable = liveFloatingPnl >= 0.0
+                val liveFloatingPnl = if (activeBrokerType != BrokerType.DERIV && freshCmp != null && pos.entryPrice > 0.0) {
+                    val mult = if (isLong) 1.0 else -1.0
+                    val spec = com.destinedfx.core.instrument.SpecRegistry.get(pos.symbol)
+                    val contractSize = spec?.contractSize
+                    if (contractSize != null && contractSize.isFinite() && contractSize > 0.0) {
+                        ((freshCmp - pos.entryPrice) * mult * contractSize * pos.lotSize).takeIf { it.isFinite() }
+                    } else pos.currentProfit.takeIf { it.isFinite() }
+                } else pos.currentProfit.takeIf { it.isFinite() }
+                val isProfitable = liveFloatingPnl?.let { it >= 0.0 }
+                val pnlCurrency = accountMetrics?.currency?.takeIf { it.isNotBlank() } ?: "CCY UNKNOWN"
+                val positionLabel = if (activeBrokerType == BrokerType.DERIV) {
+                    "${if (isLong) "MULTUP" else "MULTDOWN"} ${pos.symbol}"
+                } else {
+                    "${if (isLong) "BUY" else "SELL"} ${pos.lotSize} ${pos.symbol}"
+                }
 
                 Card(
                     colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    border = BorderStroke(1.dp, if (isProfitable) ProfitGreen.copy(alpha = 0.5f) else LossRed.copy(alpha = 0.5f)),
+                    border = BorderStroke(1.dp, when (isProfitable) {
+                        true -> ProfitGreen.copy(alpha = 0.5f)
+                        false -> LossRed.copy(alpha = 0.5f)
+                        null -> WarningAmber.copy(alpha = 0.5f)
+                    }),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth().testTag("position_card_${pos.id}")
                 ) {
@@ -2397,16 +2408,22 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(
-                                    text = "${if (isLong) "BUY" else "SELL"} ${pos.lotSize} ${pos.symbol}",
+                                    text = positionLabel,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.sp,
                                     color = if (isLong) ProfitGreen else LossRed
                                 )
                                 Text(
-                                    text = "${if (isProfitable) "+" else ""}${String.format(java.util.Locale.US, "%.2f", liveFloatingPnl)} USD",
+                                    text = liveFloatingPnl?.let {
+                                        "${if (it >= 0.0) "+" else ""}${String.format(java.util.Locale.US, "%.2f", it)} $pnlCurrency"
+                                    } ?: "P/L UNAVAILABLE",
                                     fontWeight = FontWeight.Black,
                                     fontSize = 12.sp,
-                                    color = if (isProfitable) ProfitGreen else LossRed,
+                                    color = when (isProfitable) {
+                                        true -> ProfitGreen
+                                        false -> LossRed
+                                        null -> WarningAmber
+                                    },
                                     fontFamily = FontFamily.Monospace
                                 )
                             }
