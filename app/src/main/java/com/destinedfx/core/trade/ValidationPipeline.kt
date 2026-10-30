@@ -7,6 +7,7 @@ import com.destinedfx.core.marketdata.AssetClass
 import com.destinedfx.core.marketdata.MarketDataHealth
 import com.destinedfx.core.marketdata.MarketDataHealthEvaluator
 import com.destinedfx.core.marketdata.MarketQuote
+import com.destinedfx.core.marketdata.VolumeType
 import com.destinedfx.core.marketdata.PriceConflictGuard
 import com.destinedfx.core.news.NewsStatus
 import com.destinedfx.core.news.NewsVerdict
