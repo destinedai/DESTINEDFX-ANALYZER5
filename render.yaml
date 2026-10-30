@@ -2,7 +2,9 @@ services:
   - type: web
     name: destinedfx-managed-bridge
     runtime: docker
-    plan: starter
+    # Free is intentionally non-durable and may sleep. It is not execution-ready;
+    # use the operator-owned durable HTTPS bridge described in the docs.
+    plan: free
     dockerfilePath: ./bridge/Dockerfile
     dockerContext: ./bridge
     healthCheckPath: /health/ready
@@ -11,7 +13,9 @@ services:
       - key: PORT
         value: "10000"
       - key: BRIDGE_DB_PATH
-        value: /data/bridge.sqlite3
+        value: /tmp/bridge.sqlite3
+      - key: EXECUTION_STORAGE_DURABLE
+        value: "false"
       - key: ALLOW_LOOPBACK_HTTP
         value: "false"
       - key: CREDENTIALS_FERNET_KEY
@@ -26,7 +30,3 @@ services:
         value: "1800"
       - key: NEWS_MAX_AGE_SECONDS
         value: "120"
-    disk:
-      name: destinedfx-bridge-data
-      mountPath: /data
-      sizeGB: 1

@@ -38,6 +38,22 @@ data class TradeDecision(val approved: Boolean, val checks: List<CheckResult>, v
     val explanation: String get() = if (approved) "ALL CHECKS PASSED" else "NO TRADE: " + failures.joinToString("; ") { "${it.name} - ${it.detail}" }
 }
 
+private data class StrategyEvidenceRule(val required: List<Pair<String, Double>>, val requireVolume: Boolean = false)
+
+private object StrategyEvidenceRules {
+    private val rules = mapOf(
+        "smc-confluence-1.0.0" to StrategyEvidenceRule(listOf("MTF" to 8.0, "Structure" to 8.0, "Liquidity" to 5.0, "Order Block / FVG" to 4.0)),
+        "ict-silver-bullet" to StrategyEvidenceRule(listOf("Killzone Timing" to 8.0, "Liquidity Sweep" to 10.0, "FVG Displacement" to 10.0, "Structure Shift" to 8.0)),
+        "wyckoff-schematics" to StrategyEvidenceRule(listOf("Trading Range Phase" to 8.0, "Volume Absorption" to 8.0, "Opposite Boundary Target" to 4.0)),
+        "supply-and-demand" to StrategyEvidenceRule(listOf("Zone Freshness" to 8.0, "Departure Imbalance" to 8.0, "Base Structure Quality" to 6.0)),
+        "breakout-momentum" to StrategyEvidenceRule(listOf("Donchian Breakout" to 8.0, "ATR Volatility Expansion" to 8.0, "Volume Surge" to 8.0), requireVolume = true),
+        "mean-reversion" to StrategyEvidenceRule(listOf("Bollinger Band 2.0σ Extreme" to 8.0, "RSI Exhaustion" to 8.0, "Reversal Candlestick" to 8.0)),
+        "trend-following" to StrategyEvidenceRule(listOf("Multi-EMA Trend Stack" to 8.0, "Value Zone Pullback" to 8.0, "Trend Continuation Signal" to 8.0)),
+        "liquidity-stop-hunts" to StrategyEvidenceRule(listOf("Liquidity Sweep Confirmation" to 8.0, "Equal Highs / Lows (EQH/EQL) Pool" to 8.0, "Wick Raid Rejection" to 8.0))
+    )
+    fun forStrategy(id: String): StrategyEvidenceRule? = rules[id]
+}
+
 /**
  * The ONLY path to execution. Every gate runs (so the user sees ALL reasons) and any failure => NO TRADE.
  * AI output is not an input here; the deterministic engines have final authority.
@@ -64,11 +80,22 @@ object TradeValidationPipeline {
         val sessOk = (x.cfg.allowedSessions == null || x.session.active.any { it in x.cfg.allowedSessions }) && (!x.cfg.requireKillzone || x.session.killzones.isNotEmpty())
         check("SESSION", sessOk, "Session ${x.session.label}", "Outside allowed session (${x.session.label})")
         gate("MTF", rep.mtfComplete && rep.mtf?.state in setOf(MtfState.FULL_BULLISH, MtfState.FULL_BEARISH) && rep.mtf?.dir == rep.dir, rep.mtf?.summary ?: "", "MTF DATA INCOMPLETE")
-        gate("STRUCTURE", (rep.components.firstOrNull { it.name == "Structure" }?.earned ?: 0.0) >= 8.0, "Structure supports ${rep.dir}", "Structure does not support a trade")
-        gate("LIQUIDITY", (rep.components.firstOrNull { it.name == "Liquidity" }?.earned ?: 0.0) >= 5.0, "Liquidity context present", "No liquidity target/sweep context")
-        val vol = rep.components.firstOrNull { it.name == "Volume" }
-        gate("VOLUME", vol == null || !vol.isAvailable || vol.earned >= 3.0, if (vol?.isAvailable == true) "Volume confirms" else "Volume unavailable (not required)", "Volume does not confirm")
-        gate("MOMENTUM", (rep.components.firstOrNull { it.name == "Momentum" }?.earned ?: 0.0) >= 2.0, "Momentum confirms", "Momentum does not confirm")
+        val evidenceRule = StrategyEvidenceRules.forStrategy(rep.strategyVersion)
+        if (evidenceRule == null) {
+            gate("STRATEGY EVIDENCE", false, "", "Unknown strategy '${rep.strategyVersion}'; no validation rules exist")
+        } else {
+            evidenceRule.required.forEach { (name, threshold) ->
+                val component = rep.components.firstOrNull { it.name == name }
+                gate("EVIDENCE:$name", component != null && component.isAvailable && component.earned >= threshold,
+                    "$name evidence ${component?.earned ?: 0.0}",
+                    "$name evidence missing or below required threshold $threshold")
+            }
+            if (evidenceRule.requireVolume) {
+                val volume = rep.components.firstOrNull { it.name == "Volume Surge" }
+                gate("VOLUME SOURCE", volume != null && volume.isAvailable,
+                    "Breakout volume evidence is available", "Breakout strategy requires actual broker tick/real volume; volume is unavailable")
+            }
+        }
         gate("SIGNAL", rep.state in setOf(SignalState.STRONG_BUY, SignalState.BUY, SignalState.STRONG_SELL, SignalState.SELL) && rep.confluenceScore >= x.cfg.minConfluence,
             "${rep.state} ${rep.confluenceScore}/100", "State ${rep.state}, score ${rep.confluenceScore} (need >= ${x.cfg.minConfluence})")
         check("SL", plan != null && plan.stopLoss > 0 && (spec == null || kotlin.math.abs(plan.entry - plan.stopLoss) >= spec.minStopDistance), "SL structural, %.1f ATR".format(plan?.slAtr ?: 0.0), "No valid stop loss")

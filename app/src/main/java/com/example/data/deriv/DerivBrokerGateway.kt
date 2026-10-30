@@ -81,6 +81,9 @@ class DerivBrokerGateway(
     private val _activeContracts = MutableStateFlow<Map<Long, DerivContractInfo>>(emptyMap())
     val activeContracts: StateFlow<Map<Long, DerivContractInfo>> = _activeContracts.asStateFlow()
 
+    private val _portfolioSnapshot = MutableStateFlow<DerivPortfolioSnapshot?>(null)
+    val portfolioSnapshot: StateFlow<DerivPortfolioSnapshot?> = _portfolioSnapshot.asStateFlow()
+
     private val cachedQuotes = ConcurrentHashMap<String, MarketQuote>()
     @Volatile private var lastConnectionError: String? = null
 
@@ -300,7 +303,11 @@ class DerivBrokerGateway(
     }
 
     suspend fun fetchPortfolio(): List<Position> = withContext(Dispatchers.IO) {
-        if (_connectionState.value != DerivConnectionState.CONNECTED) return@withContext emptyList()
+        val current = _accountInfo.value
+        if (_connectionState.value != DerivConnectionState.CONNECTED || current == null) {
+            _portfolioSnapshot.value = DerivPortfolioSnapshot(false, current?.loginId.orEmpty(), current?.mode.orEmpty(), System.currentTimeMillis(), error = "BROKER_DISCONNECTED")
+            return@withContext emptyList()
+        }
         val reqId = reqIdCounter.getAndIncrement()
         val deferred = CompletableDeferred<JSONObject>()
         pendingRequests[reqId] = deferred
@@ -313,8 +320,10 @@ class DerivBrokerGateway(
 
         try {
             val resp = withTimeout(8000) { deferred.await() }
-            val contracts = resp.optJSONObject("portfolio")?.optJSONArray("contracts") ?: return@withContext emptyList()
+            val contracts = resp.optJSONObject("portfolio")?.optJSONArray("contracts")
+                ?: throw IllegalStateException("Deriv portfolio response omitted contracts")
             val list = mutableListOf<Position>()
+            val snapshotContracts = mutableListOf<DerivContractInfo>()
             for (i in 0 until contracts.length()) {
                 val c = contracts.getJSONObject(i)
                 val contractId = c.optLong("contract_id", 0L)
@@ -331,6 +340,7 @@ class DerivBrokerGateway(
 
                 if (contractId > 0) {
                     subscribeOpenContract(contractId)
+                    snapshotContracts += DerivContractInfo(contractId, 0L, symbol, contractType, buyPrice, 0.0, c.optDouble("profit", 0.0), false, false, "open", openTime / 1000L, null)
                 }
 
                 list.add(
@@ -350,8 +360,11 @@ class DerivBrokerGateway(
                 )
             }
             _openPositions.value = list
+            _activeContracts.value = snapshotContracts.associateBy { it.contractId }
+            _portfolioSnapshot.value = DerivPortfolioSnapshot(true, current.loginId, current.mode.uppercase(), System.currentTimeMillis(), snapshotContracts)
             list
         } catch (e: Exception) {
+            _portfolioSnapshot.value = DerivPortfolioSnapshot(false, current.loginId, current.mode.uppercase(), System.currentTimeMillis(), error = e.message?.take(240) ?: "PORTFOLIO_FETCH_FAILED")
             emptyList()
         } finally {
             pendingRequests.remove(reqId)

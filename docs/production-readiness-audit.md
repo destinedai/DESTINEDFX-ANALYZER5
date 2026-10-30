@@ -53,3 +53,13 @@ Use the existing [`demo-acceptance-runbook.md`](demo-acceptance-runbook.md) and 
 - Dedicated, secured Windows host, genuine MT5 terminal and MetaEditor; compile the EA and verify worker/terminal identity and storage ACLs.
 - Broker DEMO credentials entered through the app's consent flow, verified account/server/mode/currency/balance, terminal WebRequest allowlist, and controlled DEMO acceptance evidence.
 - Obtain the PR-head APK from the `DestinedFX-debug-apk` artifact and the Windows kit from `DestinedFX-Windows-Worker-Kit` on the linked successful Actions run; these artifacts are code-built but do not constitute broker acceptance.
+
+## Follow-up repairs on `repair/production-readiness-audit`
+
+The follow-up implementation adds a fail-closed `DerivPortfolioSnapshot` containing success, account identity, mode, retrieval time, active contracts, and exposure. Deriv execution now requires a fresh account-matched snapshot before every purchase and rejects aggregate open risk above the conservative 1% ceiling. Portfolio API failure is no longer equivalent to an empty portfolio.
+
+The Deriv foreground service now uses `START_REDELIVER_INTENT`, persists only non-secret bot configuration, applies five bounded reconnect attempts with exponential backoff, reauthenticates through a new broker session, and exposes `AUTHENTICATING`, `RECONNECTING`, `RECONCILING`, `RUNNING`, `PAUSED`, `ERROR`, and `STOPPED` lifecycle states. Android force-stop and OS restart behavior remain platform/operator acceptance items; no uninterrupted-operation promise is made.
+
+The final validation pipeline now maps all eight registered strategy IDs to explicit evidence names and thresholds. An unknown strategy or missing strategy-specific evidence fails closed; breakout validation additionally requires actual volume evidence. Existing market-data, plan, 2R, and risk gates remain in force.
+
+The Render blueprint is now explicitly free-plan and non-durable. Its readiness endpoint returns `503 NON_DURABLE_STORAGE`, so it cannot be mistaken for an execution-ready bridge. A durable operator-owned HTTPS bridge remains required for DEMO acceptance.

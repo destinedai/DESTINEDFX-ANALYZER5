@@ -7,6 +7,10 @@ class DerivMultiplierExecutor(
     private val gateway: DerivBrokerGateway,
     private val dao: DerivExecutionDao
 ) {
+    companion object {
+        private const val PORTFOLIO_MAX_AGE_MS = 8_000L
+        private const val MAX_OPEN_RISK_PERCENT = 1.0
+    }
     private val account get() = gateway.accountInfo.value
     private val accountId get() = account?.loginId.orEmpty()
     private val accountMode get() = account?.mode?.uppercase().orEmpty()
@@ -23,6 +27,10 @@ class DerivMultiplierExecutor(
         if (dao.legacyUnknown().isNotEmpty()) return@withContext false
         if (gateway.connectionState.value != DerivConnectionState.CONNECTED) return@withContext false
         gateway.fetchPortfolio()
+        val snapshot = gateway.portfolioSnapshot.value
+        if (snapshot == null || !snapshot.successful || snapshot.accountId != current.loginId ||
+            snapshot.accountMode != current.mode.uppercase() ||
+            System.currentTimeMillis() - snapshot.retrievedAtMs > PORTFOLIO_MAX_AGE_MS) return@withContext false
         val unresolved = dao.unresolved(current.loginId, current.mode.uppercase())
         unresolved.forEach { record ->
             val contractId = record.contractId
@@ -83,7 +91,18 @@ class DerivMultiplierExecutor(
         if (!DerivMultiplierRules.canOpenNewEntry(activeCount, unresolvedCount)) {
             return@withContext Result.failure(Exception("ACTIVE_CONTRACT_LIMIT: an active contract or unresolved execution exists; no additional purchase was sent"))
         }
+        val snapshot = gateway.portfolioSnapshot.value
+        if (snapshot == null || !snapshot.successful || snapshot.accountId != current.loginId ||
+            snapshot.accountMode != current.mode.uppercase() ||
+            System.currentTimeMillis() - snapshot.retrievedAtMs > PORTFOLIO_MAX_AGE_MS) {
+            return@withContext Result.failure(Exception("PORTFOLIO_REQUIRED: fresh broker portfolio snapshot is required; no purchase was sent"))
+        }
         val balance = gateway.accountMetrics.value?.balance ?: current.balance
+        val currentExposure = if (balance.isFinite() && balance > 0.0) snapshot.exposure / balance * 100.0 else Double.POSITIVE_INFINITY
+        val candidateExposure = if (balance.isFinite() && balance > 0.0) intent.stake / balance * 100.0 else Double.POSITIVE_INFINITY
+        if (!currentExposure.isFinite() || !candidateExposure.isFinite() || currentExposure + candidateExposure > MAX_OPEN_RISK_PERCENT + 1e-9) {
+            return@withContext Result.failure(Exception("PORTFOLIO_RISK_LIMIT: aggregate open risk would exceed ${MAX_OPEN_RISK_PERCENT}% of the verified account balance; no purchase was sent"))
+        }
         val validation = DerivMultiplierRules.validate(intent, balance, current.currency)
         if (!validation.valid) return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, validation.reason ?: "Multiplier intent rejected"))
 

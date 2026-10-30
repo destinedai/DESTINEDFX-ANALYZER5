@@ -39,6 +39,8 @@ class DerivDemoBotService : Service() {
         const val EXTRA_TIMEFRAME = "timeframe"
         private const val CHANNEL_ID = "deriv_demo_bot"
         private const val NOTIFICATION_ID = 1701
+        private const val PREFS = "deriv_bot_config"
+        private const val MAX_RECONNECT_ATTEMPTS = 5
         private val _state = MutableStateFlow("STOPPED")
         val state: StateFlow<String> = _state.asStateFlow()
 
@@ -76,10 +78,13 @@ class DerivDemoBotService : Service() {
                 val symbol = intent.getStringExtra(EXTRA_SYMBOL).orEmpty()
                 val strategy = intent.getStringExtra(EXTRA_STRATEGY).orEmpty()
                 val timeframe = intent.getStringExtra(EXTRA_TIMEFRAME).orEmpty()
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(EXTRA_SYMBOL, symbol).putString(EXTRA_STRATEGY, strategy)
+                    .putString(EXTRA_TIMEFRAME, timeframe).putBoolean("enabled", true).apply()
                 loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
             }
         }
-        return START_NOT_STICKY
+        return START_REDELIVER_INTENT
     }
 
     private suspend fun runBot(symbol: String, strategyId: String, timeframe: String) {
@@ -90,9 +95,8 @@ class DerivDemoBotService : Service() {
             return
         }
         if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.CONNECTED) {
-            update("Connecting — selected account verification required")
-            if (gateway.connectAndAuthorize().isFailure) {
-                stopSafely("Safety blocked — selected account verification failed")
+            if (!connectWithBoundedRetry(gateway)) {
+                update("ERROR — authentication or reconnect attempts exhausted; trading remains stopped")
                 return
             }
         }
@@ -178,14 +182,33 @@ class DerivDemoBotService : Service() {
             } catch (_: CancellationException) {
                 throw CancellationException()
             } catch (error: Exception) {
-                update("Connection or execution error — additional purchases paused: ${error.message?.take(140)}")
-                delay(10_000)
+                update("RECONNECTING — purchases paused: ${error.message?.take(140)}")
+                if (!connectWithBoundedRetry(gateway)) {
+                    update("ERROR — bounded reconnect policy exhausted; reconciliation required")
+                    return
+                }
             }
         }
     }
 
+    private suspend fun connectWithBoundedRetry(gateway: com.example.data.deriv.DerivBrokerGateway): Boolean {
+        var delayMs = 2_000L
+        repeat(MAX_RECONNECT_ATTEMPTS) { attempt ->
+            if (stopRequested || !currentCoroutineContext().isActive) return false
+            update(if (attempt == 0) "CONNECTING — verifying selected DEMO account" else "RECONNECTING — attempt ${attempt + 1}/$MAX_RECONNECT_ATTEMPTS")
+            if (gateway.connectAndAuthorize().isSuccess) {
+                update("RECONCILING — fresh authenticated broker session established")
+                return true
+            }
+            delay(delayMs)
+            delayMs = (delayMs * 2).coerceAtMost(30_000L)
+        }
+        return false
+    }
+
     private fun stopSafely(message: String = "Stopped — no new entry requests") {
         stopRequested = true
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
         loopJob?.cancel()
         loopJob = null
         update(message)
@@ -196,10 +219,13 @@ class DerivDemoBotService : Service() {
     private fun update(text: String) {
         _state.value = when {
             text.startsWith("Running") || text.startsWith("Submitting") || text.startsWith("Contract") -> "RUNNING"
-            text.startsWith("Connecting") -> "STARTING"
+            text.startsWith("CONNECTING") || text.startsWith("Connecting") -> "AUTHENTICATING"
+            text.startsWith("RECONCILING") -> "RECONCILING"
+            text.startsWith("RECONNECTING") -> "RECONNECTING"
+            text.startsWith("ERROR") -> "ERROR"
             text.startsWith("Stopped") -> "STOPPED"
-            text.startsWith("Safety blocked") -> "SAFETY_BLOCKED"
-            else -> "CONNECTION_LOST"
+            text.startsWith("Safety blocked") -> "PAUSED"
+            else -> "PAUSED"
         }
         runCatching { getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification(text)) }
     }

@@ -540,6 +540,8 @@ def health(): return {'status':'ok'}
 @app.get('/health/ready')
 def readiness():
     """Report whether the bridge can safely accept managed-execution work."""
+    if os.getenv('EXECUTION_STORAGE_DURABLE', 'true').lower() != 'true':
+        raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution readiness is disabled because this deployment uses ephemeral storage'})
     try:
         managed_config()
         with tx() as c:

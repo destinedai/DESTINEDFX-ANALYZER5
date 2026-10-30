@@ -399,6 +399,14 @@ def test_readiness_requires_valid_managed_configuration_and_storage(monkeypatch)
     response=client.get('/health/ready')
     assert response.status_code==200
     assert response.json()=={'status':'ready','database':'ok','managed_execution':'configured'}
+
+def test_non_durable_storage_is_not_execution_ready(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setenv('EXECUTION_STORAGE_DURABLE','false')
+    response=client.get('/health/ready')
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='NON_DURABLE_STORAGE'
+
 def test_documented_health_paths_are_implemented(monkeypatch):
     assert client.get('/health').status_code==200
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())

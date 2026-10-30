@@ -37,6 +37,18 @@ data class DerivAccountInfo(
     val realExecutionAuthorized: Boolean = false
 )
 
+/** Broker snapshot used by the execution authority; failure is never an empty portfolio. */
+data class DerivPortfolioSnapshot(
+    val successful: Boolean,
+    val accountId: String,
+    val accountMode: String,
+    val retrievedAtMs: Long,
+    val contracts: List<DerivContractInfo> = emptyList(),
+    val error: String? = null
+) {
+    val exposure: Double get() = contracts.sumOf { it.buyPrice.coerceAtLeast(0.0) }
+}
+
 data class DerivProposalResult(
     val proposalId: String,
     val askPrice: Double,
