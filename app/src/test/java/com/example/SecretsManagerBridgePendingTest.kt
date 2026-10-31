@@ -23,7 +23,7 @@ class SecretsManagerBridgePendingTest {
         assertFalse(manager.saveBotRiskPercent(1.01))
 
         val restored = SecretsManager(ApplicationProvider.getApplicationContext())
-        assertEquals("ict-silver-bullet", restored.getSelectedStrategy())
+        assertEquals("ict-silver-bullet", manager.getSelectedStrategy())
         assertEquals("R_100", restored.getBotSymbol())
         assertEquals("smc-confluence-1.0.0", restored.getBotStrategy())
         assertEquals("H1", restored.getBotTimeframe())
