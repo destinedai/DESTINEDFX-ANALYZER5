@@ -166,4 +166,40 @@ class ExampleRobolectricTest {
     assertEquals("H1", vm.selectedTimeframe.value)
     assertFalse("M5" in vm.selectedMtfTimeframes.value)
   }
+
+  @Test
+  fun `Analyzer and Bot selections remain independent without activating the Bot`() {
+    val context = ApplicationProvider.getApplicationContext<MyApplication>()
+    context.secretsManager.saveSelectedStrategy("smc-confluence-1.0.0")
+    context.secretsManager.saveBotSymbol("R_100")
+    context.secretsManager.saveBotStrategy("ict-silver-bullet")
+    context.secretsManager.saveBotTimeframe("M15")
+    assertTrue(context.secretsManager.saveBotRiskPercent(0.25))
+    val vm = DestinedFXViewModel(context)
+
+    assertEquals("EUR/USD", vm.selectedTicker.value)
+    assertEquals("M15", vm.selectedTimeframe.value)
+    assertEquals("smc-confluence-1.0.0", vm.selectedStrategyId.value)
+    assertFalse(vm.botActive.value)
+    assertFalse(vm.botStatusSummary.value.isRunning)
+
+    vm.selectBotTicker("R_75")
+    vm.selectBotStrategy("trend-following")
+    vm.selectBotTimeframe("H4")
+    assertEquals("EUR/USD", vm.selectedTicker.value)
+    assertEquals("M15", vm.selectedTimeframe.value)
+    assertEquals("smc-confluence-1.0.0", vm.selectedStrategyId.value)
+    assertNull(vm.currentTradeSignal.value)
+    assertFalse(vm.botStatusSummary.value.isRunning)
+
+    vm.selectTicker("GBP/USD")
+    vm.selectStrategy("ict-silver-bullet")
+    vm.selectTimeframe("H1")
+    assertEquals("R_75", vm.botSelectedTicker.value)
+    assertEquals("trend-following", vm.botSelectedStrategyId.value)
+    assertEquals("H4", vm.botSelectedTimeframe.value)
+    assertEquals(0.25, vm.botRiskPercent.value, 0.0)
+    assertFalse(vm.botActive.value)
+    assertFalse(vm.botStatusSummary.value.isRunning)
+  }
 }
