@@ -58,6 +58,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
     val gateway = viewModel.app.derivBrokerGateway
     val connection by gateway.connectionState.collectAsStateWithLifecycle()
     val account by gateway.accountInfo.collectAsStateWithLifecycle()
+    val accountSnapshot = account
     val accountMetrics by gateway.accountMetrics.collectAsStateWithLifecycle()
     val availableAccounts by gateway.availableAccounts.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -78,12 +79,12 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
     val unresolvedStatuses = setOf("ORDER_SUBMITTING", "ORDER_PENDING", "EXECUTION_UNKNOWN", "RECONCILIATION_REQUIRED")
     val unresolvedExecutionCount = executionRecords?.count { record ->
             record.accountId == "LEGACY_UNKNOWN" ||
-                (account != null && record.accountId == account.loginId &&
-                    record.accountMode.equals(account.mode, ignoreCase = true) && record.status in unresolvedStatuses)
+                (accountSnapshot != null && record.accountId == accountSnapshot.loginId &&
+                    record.accountMode.equals(accountSnapshot.mode, ignoreCase = true) && record.status in unresolvedStatuses)
         } ?: 1
     val gatewayReady = connection == DerivConnectionState.READY
-    LaunchedEffect(account?.loginId, connection) {
-        if (account != null) {
+    LaunchedEffect(accountSnapshot?.loginId, connection) {
+        if (accountSnapshot != null) {
             while (true) {
                 readinessNowMs = System.currentTimeMillis()
                 if (connection == DerivConnectionState.READY) {
@@ -100,9 +101,9 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
             }
         }
     }
-    val accountReady = gateway.isAccountReadyForTrading(account, unresolvedExecutionCount, readinessNowMs)
-    val realArmed = remember(account, readinessNowMs, armStatusRevision) {
-        account?.takeIf { it.mode == "real" }?.let {
+    val accountReady = gateway.isAccountReadyForTrading(accountSnapshot, unresolvedExecutionCount, readinessNowMs)
+    val realArmed = remember(accountSnapshot, readinessNowMs, armStatusRevision) {
+        accountSnapshot?.takeIf { it.mode == "real" }?.let {
             secrets.isDerivRealExecutionAuthorized(
                 it.loginId, it.accountType, it.currency, it.authenticatedSessionId, it.credentialGeneration,
                 nowMs = readinessNowMs
@@ -110,8 +111,8 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
         } == true
     }
     val accountStatus = when {
-        account == null -> "NOT VERIFIED"
-        accountReady -> "${account.mode.uppercase()} VERIFIED"
+        accountSnapshot == null -> "NOT VERIFIED"
+        accountSnapshot != null && accountReady -> "${accountSnapshot.mode.uppercase()} VERIFIED"
         connection in setOf(DerivConnectionState.ERROR, DerivConnectionState.AUTH_FAILED, DerivConnectionState.DISCONNECTED) -> "NOT READY"
         else -> "SYNCHRONIZING"
     }
@@ -131,20 +132,20 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                 }
             }
             Text(
-                "Account: ${account?.loginId ?: "NOT VERIFIED"} · $accountStatus · Connection: ${connection.name}",
+                "Account: ${accountSnapshot?.loginId ?: "NOT VERIFIED"} · $accountStatus · Connection: ${connection.name}",
                 color = if (accountReady) ElectricCyan else WarningAmber,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold
             )
-            if (account != null) {
+            if (accountSnapshot != null) {
                 Text(
-                    "Broker-returned currency: ${account.currency} · ${if (accountReady) "fresh balance ${accountMetrics?.balance}" else "initial balance ${account.balance}"} · ${if (accountReady) "portfolio READY" else "not yet ready for trading"}",
+                    "Broker-returned currency: ${accountSnapshot.currency} · ${if (accountReady) "fresh balance ${accountMetrics?.balance}" else "initial balance ${accountSnapshot.balance}"} · ${if (accountReady) "portfolio READY" else "not yet ready for trading"}",
                     color = TextPrimary,
                     fontSize = 10.sp
                 )
-                if (account?.mode == "real") {
+                if (accountSnapshot.mode == "real") {
                     Text(
-                        if (realArmed) "LIVE ARM: ARMED for ${account?.loginId} · 60-MINUTE LEASE" else "LIVE ARM: DISARMED — connection alone cannot place REAL orders",
+                        if (realArmed) "LIVE ARM: ARMED for ${accountSnapshot.loginId} · 60-MINUTE LEASE" else "LIVE ARM: DISARMED — connection alone cannot place REAL orders",
                         color = if (realArmed) LossRed else WarningAmber,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
@@ -152,7 +153,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                     Button(
                         enabled = !busy && accountReady && !realArmed,
                         onClick = {
-                            val currentAccount = account
+                            val currentAccount = accountSnapshot
                             val isStillReady = gateway.isAccountReadyForTrading(
                                 currentAccount, unresolvedExecutionCount, System.currentTimeMillis()
                             )
@@ -172,7 +173,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                             }
                         },
                         modifier = Modifier.fillMaxWidth().testTag("deriv_arm_live")
-                    ) { Text(if (realArmed) "LIVE TRADING ARMED" else "ARM LIVE TRADING FOR ${account?.loginId}") }
+                    ) { Text(if (realArmed) "LIVE TRADING ARMED" else "ARM LIVE TRADING FOR ${accountSnapshot.loginId}") }
                     if (!accountReady) {
                         Text(
                             if (unresolvedExecutionCount > 0) "SYNCHRONIZING — resolve the pending or uncertain execution before live arming."
