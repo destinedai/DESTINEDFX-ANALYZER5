@@ -38,6 +38,7 @@ class DerivBotRecoveryPolicyTest {
         assertFalse(shouldRecover(Intent.ACTION_BOOT_COMPLETED, "demo", true, true, "not-a-deriv-symbol", strategy, "M5"))
         assertFalse(shouldRecover(Intent.ACTION_BOOT_COMPLETED, "demo", true, true, "R_100", "invalid-strategy", "M5"))
         assertFalse(shouldRecover(Intent.ACTION_BOOT_COMPLETED, "demo", true, true, "R_100", strategy, ""))
+        assertFalse(shouldRecover(Intent.ACTION_BOOT_COMPLETED, "demo", true, true, "R_100", strategy, "not-a-timeframe"))
     }
 
     private fun shouldRecover(

@@ -1,7 +1,8 @@
 package com.example.service
 
 import android.content.Intent
-import com.destinedfx.core.broker.DerivInstrumentResolver
+import com.example.data.deriv.DerivMultiplierRules
+import com.destinedfx.core.marketdata.Timeframe
 import com.destinedfx.core.strategy.StrategyRegistry
 
 /** Pure policy used by the receiver and tests; it never reads or writes secrets. */
@@ -17,9 +18,9 @@ internal object DerivBotRecoveryPolicy {
     ): Boolean = action == Intent.ACTION_BOOT_COMPLETED &&
         accountMode.equals("demo", ignoreCase = true) &&
         enabled && hasCredentials &&
-        DerivInstrumentResolver.resolve(symbol) != null &&
+        DerivMultiplierRules.isSupportedUnderlying(symbol) &&
         strategy in StrategyRegistry.managedStrategyIds &&
-        timeframe.isNotBlank()
+        Timeframe.parse(timeframe) != null
 }
 
 internal object DerivBotServiceStatePolicy {

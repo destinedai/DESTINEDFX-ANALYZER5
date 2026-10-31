@@ -18,6 +18,7 @@ import com.example.data.deriv.DerivMultiplierRules
 import com.example.data.deriv.DerivReconciliationStatus
 import com.example.domain.model.SignalDirection
 import com.destinedfx.core.strategy.StrategyRegistry
+import com.destinedfx.core.marketdata.Timeframe
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,7 +83,8 @@ class DerivDemoBotService : Service() {
                 val timeframe = intent.getStringExtra(EXTRA_TIMEFRAME)?.trim().orEmpty()
                 if (symbol.isBlank() || strategy.isBlank() || timeframe.isBlank() ||
                     !DerivMultiplierRules.isSupportedUnderlying(symbol) ||
-                    strategy !in StrategyRegistry.managedStrategyIds) {
+                    strategy !in StrategyRegistry.managedStrategyIds ||
+                    Timeframe.parse(timeframe) == null) {
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
                     update("ERROR — incomplete or unsupported start intent; trading remains stopped")
                     stopSelf(startId)
@@ -105,7 +107,8 @@ class DerivDemoBotService : Service() {
                 if (mode == "demo" && prefs.getBoolean("enabled", false) &&
                     symbol.isNotBlank() && strategy.isNotBlank() && timeframe.isNotBlank() &&
                     DerivMultiplierRules.isSupportedUnderlying(symbol) &&
-                    strategy in StrategyRegistry.managedStrategyIds) {
+                    strategy in StrategyRegistry.managedStrategyIds &&
+                    Timeframe.parse(timeframe) != null) {
                     stopRequested = false
                     loopJob?.cancel()
                     loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }

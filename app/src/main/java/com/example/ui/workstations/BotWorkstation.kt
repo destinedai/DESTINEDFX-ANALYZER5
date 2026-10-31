@@ -594,7 +594,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             ) {
                 StatChip(
                     label = "BOT STATE",
-                    value = if (bridgeMode) bridgeDisplayState else botSummary.state.name.replace('_', ' '),
+                    value = if (bridgeMode) bridgeDisplayState else if (activeBrokerType == BrokerType.DERIV) derivServiceState else botSummary.state.name.replace('_', ' '),
                     modifier = Modifier.weight(1f),
                     color = if (bridgeMode) bridgeStatusColor else if (botSummary.isRunning || botActive) ProfitGreen else WarningAmber
                 )
@@ -654,7 +654,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     .background(statusColor)
                             )
                             Text(
-                                text = "BOT STATUS: ${if (bridgeMode) bridgeDisplayState else botSummary.state.name}",
+                                text = "BOT STATUS: ${if (bridgeMode) bridgeDisplayState else if (activeBrokerType == BrokerType.DERIV) derivServiceState else botSummary.state.name}",
                                 fontWeight = FontWeight.Black,
                                 fontSize = 12.sp,
                                 fontFamily = FontFamily.Monospace,
@@ -664,7 +664,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         Switch(
                             checked = isRunning,
-                            enabled = if (bridgeMode) (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)) else if (derivExecutionMode) DerivBotServiceStatePolicy.canStart(derivServiceState) || DerivBotServiceStatePolicy.canStop(derivServiceState) else true,
+                            enabled = if (bridgeMode) (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)) else if (derivExecutionMode) {
+                                if (isRunning) DerivBotServiceStatePolicy.canStop(derivServiceState)
+                                else DerivBotServiceStatePolicy.canStart(derivServiceState)
+                            } else true,
                             onCheckedChange = { active ->
                                 if (bridgeMode) coroutineScope.launch {
                                     bridgeBusy = true
