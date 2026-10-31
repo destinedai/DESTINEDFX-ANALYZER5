@@ -185,7 +185,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                 horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Text(
-                                    text = "TRADINGVIEW",
+                                    text = "DATA FEED",
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = FontFamily.Monospace,
@@ -218,7 +218,37 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                         }
                     }
 
-                    // Row 2: Selected symbol and price under it
+                    // Workspace context keeps the six tabs understandable without opening a menu.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = selectedScreen.title,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = selectedScreen.purpose,
+                                fontSize = 10.sp,
+                                color = TextSecondary,
+                                maxLines = 1
+                            )
+                        }
+                        if (headerPrice != null) {
+                            PriceText(
+                                value = headerPrice,
+                                change = priceChange,
+                                symbol = activeSymbol
+                            )
+                        }
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -242,13 +272,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                 color = TextSecondary
                             )
                         }
-                        if (headerPrice != null) {
-                            PriceText(
-                                value = headerPrice,
-                                change = priceChange,
-                                symbol = activeSymbol
-                            )
-                        } else {
+                        if (headerPrice == null) {
                             Text(
                                 text = "PRICE —",
                                 fontSize = 10.sp,
@@ -298,7 +322,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                             Text(
                                 text = screen.title,
                                 maxLines = 1,
-                                fontSize = 9.sp,
+                                fontSize = 10.sp,
                                 fontWeight = if (isSelected) FontWeight.Black else FontWeight.Medium,
                                 color = if (isSelected) ElectricCyan else TextSecondary
                             )
