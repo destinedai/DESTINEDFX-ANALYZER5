@@ -38,7 +38,7 @@ data class DerivContractInfo(
             buyPrice.isFinite() && buyPrice > 0.0 && purchaseTime > 0L
 }
 
-/** Selects only an active Options account matching the user's explicit demo/real choice. */
+/** Selects only an active Options account matching the user's explicit DEMO/REAL choice. */
 internal fun selectDerivOptionsAccount(accounts: org.json.JSONArray, requestedMode: String): JSONObject? {
     val mode = requestedMode.trim().lowercase().takeIf { it == "real" || it == "demo" } ?: "demo"
     for (index in 0 until accounts.length()) {
@@ -49,14 +49,14 @@ internal fun selectDerivOptionsAccount(accounts: org.json.JSONArray, requestedMo
     return null
 }
 
-/** The direct phone connector deliberately has no REAL-account selection path. */
+/** Compatibility helper for callers that explicitly request a DEMO account. */
 internal fun selectDerivDemoOptionsAccount(accounts: org.json.JSONArray): JSONObject? =
     selectDerivOptionsAccount(accounts, "demo")
 
 /**
  * Real Broker Gateway for Deriv.
- * Performs Deriv Demo authorization, balance queries, and open-contract monitoring.
- * Order submission remains blocked until a product-specific risk and recovery path is verified.
+ * Performs Deriv DEMO/REAL authorization, balance queries, and open-contract monitoring.
+ * REAL connection is separate from the process-memory live-trading arming decision.
  */
 class DerivBrokerGateway(
     private val secrets: SecretsManager,
@@ -116,10 +116,6 @@ class DerivBrokerGateway(
             return@withContext Result.failure(Exception("Secure Android Keystore storage is unavailable; Deriv connection is blocked."))
         }
         val requestedMode = secrets.getDerivAccountMode().lowercase()
-        if (requestedMode == "real" && !secrets.isDerivRealExecutionEnabled()) {
-            _connectionState.value = DerivConnectionState.AUTH_FAILED
-            return@withContext Result.failure(Exception("REAL execution is disabled by default; explicitly authorize the REAL profile after independent review."))
-        }
         val token = (apiToken ?: secrets.getDerivApiToken()).trim()
         if (token.isBlank()) {
             _connectionState.value = DerivConnectionState.AUTH_FAILED
@@ -172,10 +168,10 @@ class DerivBrokerGateway(
             val initialBalance = account.optDouble("balance", 0.0)
             if (accountId.isBlank()) throw IllegalStateException("Deriv returned an account with no account_id.")
             if (currency.isBlank() || !currency.matches(Regex("[A-Za-z0-9]{2,20}"))) {
-                throw IllegalStateException("Deriv Demo account response omitted a valid account currency.")
+                throw IllegalStateException("Deriv $requestedMode account response omitted a valid account currency.")
             }
             if (!initialBalance.isFinite() || initialBalance < 0.0) {
-                throw IllegalStateException("Deriv Demo account response contained an invalid balance.")
+                throw IllegalStateException("Deriv $requestedMode account response contained an invalid balance.")
             }
 
             val otpRequest = Request.Builder()
@@ -519,8 +515,8 @@ class DerivBrokerGateway(
         if (account.loginId.isBlank() || account.mode != mode || account.accountType != mode) {
             return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "ACCOUNT_MODE_MISMATCH: selected account does not match the requested profile."))
         }
-        if (mode == "real" && !account.realExecutionAuthorized) {
-            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "REAL_EXECUTION_DISABLED: live order boundary is disabled."))
+        if (mode == "real" && !secrets.isDerivRealExecutionEnabled()) {
+            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "REAL_EXECUTION_DISABLED: explicitly arm the exact verified REAL account before starting."))
         }
         val balance = _accountMetrics.value?.balance ?: account.balance
         val validation = DerivMultiplierRules.validate(intent, balance, account.currency)

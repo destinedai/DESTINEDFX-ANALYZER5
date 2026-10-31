@@ -55,10 +55,12 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
     val account by gateway.accountInfo.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var appId by remember { mutableStateOf(secrets.getDerivAppId()) }
+    var selectedMode by remember { mutableStateOf(secrets.getDerivAccountMode()) }
     var token by remember { mutableStateOf("") }
     var showToken by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var realArmed by remember { mutableStateOf(secrets.isDerivRealExecutionEnabled()) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -82,10 +84,39 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
             )
             if (account != null) {
                 Text("Broker-returned currency: ${account?.currency} · balance snapshot: ${account?.balance}", color = TextPrimary, fontSize = 10.sp)
+                if (account?.mode == "real") {
+                    Text(
+                        if (realArmed) "LIVE ARM: ARMED for ${account?.loginId}" else "LIVE ARM: DISARMED — connection alone cannot place REAL orders",
+                        color = if (realArmed) LossRed else WarningAmber,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Button(
+                        enabled = !busy && !realArmed,
+                        onClick = {
+                            realArmed = secrets.enableDerivRealExecution(true)
+                            message = if (realArmed) "LIVE TRADING ARMED for ${account?.loginId}. Start still requires the verified account shown above." else "Live arming failed; no REAL order can be sent."
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("deriv_arm_live")
+                    ) { Text(if (realArmed) "LIVE TRADING ARMED" else "ARM LIVE TRADING FOR ${account?.loginId}") }
+                }
             }
             if (!secrets.isSecureStorageAvailable) {
                 Text("CONNECT BLOCKED — Android encrypted storage is unavailable. Credentials will not be saved or sent.", color = LossRed, fontWeight = FontWeight.Bold, fontSize = 10.sp)
             } else if (connection != DerivConnectionState.CONNECTED) {
+                Text("ACCOUNT PROFILE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = !busy,
+                        onClick = { selectedMode = "demo"; realArmed = false; secrets.disableDerivRealExecution() },
+                        modifier = Modifier.weight(1f).testTag("deriv_select_demo")
+                    ) { Text("DEMO") }
+                    OutlinedButton(
+                        enabled = !busy,
+                        onClick = { selectedMode = "real" },
+                        modifier = Modifier.weight(1f).testTag("deriv_select_real")
+                    ) { Text("REAL") }
+                }
                 OutlinedTextField(
                     value = appId,
                     onValueChange = { appId = it.filter(Char::isDigit).take(20) },
@@ -98,7 +129,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                     value = token,
                     onValueChange = { token = it },
                     label = { Text("Deriv API key / Personal Access Token") },
-                    placeholder = { Text("Trade scope; use Demo account only") },
+                    placeholder = { Text("Trade scope for the selected account profile") },
                     visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
@@ -109,7 +140,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                         }
                     }
                 )
-                Text("Create a Deriv PAT for your registered app and grant only the scopes required to read the account and trade. DEMO is the default. Do not paste a password or use a REAL account token here.", color = TextSecondary, fontSize = 9.sp)
+                Text("Create a Deriv PAT for your registered app and grant only the scopes required to read the account and trade. Selecting REAL connects only; live orders remain blocked until you explicitly arm the exact broker account.", color = TextSecondary, fontSize = 9.sp)
             }
             if (connection != DerivConnectionState.CONNECTED) {
                 Button(
@@ -119,18 +150,22 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                         message = ""
                         scope.launch {
                             try {
-                                if (!secrets.saveDerivApiToken(token) || !secrets.saveDerivAppId(appId) || !secrets.saveDerivAccountMode("demo")) {
+                                if (!secrets.saveDerivApiToken(token) || !secrets.saveDerivAppId(appId) || !secrets.saveDerivAccountMode(selectedMode)) {
                                     message = "Credentials could not be saved securely; no connection was attempted."
                                 } else {
+                                    if (selectedMode == "demo") {
+                                        secrets.disableDerivRealExecution()
+                                        realArmed = false
+                                    }
                                     viewModel.selectBroker(BrokerType.DERIV)
                                     val result = gateway.connectAndAuthorize()
                                     message = result.fold(
-                                        onSuccess = { "Deriv returned an active Demo account. Account connection is separate from bot state." },
+                                        onSuccess = { info -> "Deriv returned the active ${info.mode.uppercase()} account ${info.loginId}. Connection is separate from live arming and bot state." },
                                         onFailure = { error ->
                                             val safe = (error.message ?: "Deriv verification failed")
                                                 .replace(token, "[redacted]")
                                                 .take(240)
-                                            "Demo verification failed: $safe"
+                                            "${selectedMode.uppercase()} verification failed: $safe"
                                         }
                                     )
                                 }
@@ -141,12 +176,14 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                         }
                     },
                     modifier = Modifier.fillMaxWidth().testTag("deriv_demo_connect")
-                ) { Text(if (busy) "VERIFYING DEMO ACCOUNT…" else "VERIFY DEMO ACCOUNT") }
+                ) { Text(if (busy) "VERIFYING ${selectedMode.uppercase()} ACCOUNT…" else "VERIFY ${selectedMode.uppercase()} ACCOUNT") }
             } else {
                 OutlinedButton(
                     enabled = !busy,
                     onClick = {
                         gateway.disconnect()
+                        realArmed = false
+                        secrets.disableDerivRealExecution()
                         message = "Deriv connection closed. Stored credentials remain encrypted on this device."
                     },
                     modifier = Modifier.fillMaxWidth().testTag("deriv_demo_disconnect")
@@ -155,6 +192,8 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                     enabled = !busy,
                     onClick = {
                         gateway.disconnect()
+                        realArmed = false
+                        secrets.disableDerivRealExecution()
                         val cleared = secrets.clearDerivCredentials()
                         message = if (cleared) "Deriv disconnected and local API credentials deleted." else "Disconnected, but encrypted credential deletion could not be confirmed."
                     },
@@ -163,7 +202,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
             }
             if (message.isNotBlank()) Text(message, color = if (message.contains("failed", true) || message.contains("could not", true)) LossRed else TextSecondary, fontSize = 10.sp)
             Text(
-                "Safety status: DEMO is the default and only enabled profile in this UI. The connector keeps account ID and mode separate and supports only validated MULTUP/MULTDOWN contracts. REAL execution remains disabled pending independent acceptance; unsupported Forex/CFD plans remain blocked.",
+                "Safety status: DEMO is the default profile. REAL connection and REAL live arming are separate. The connector keeps broker account ID/type/mode separate and supports only validated MULTUP/MULTDOWN contracts; unsupported Forex/CFD plans remain blocked.",
                 color = WarningAmber,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium

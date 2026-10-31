@@ -40,13 +40,16 @@ object DerivMultiplierRules {
     fun canOpenNewEntry(activeContractCount: Int, unresolvedExecutionCount: Int): Boolean =
         activeContractCount == 0 && unresolvedExecutionCount == 0
 
-    /** The Android foreground bot is DEMO-only until a separate live-execution acceptance is completed. */
+    /** The broker-reported account identity and type must both be valid before execution. */
+    fun isVerifiedAccount(account: DerivAccountInfo?): Boolean {
+        if (account == null || account.loginId.isBlank()) return false
+        if (account.mode !in setOf("demo", "real") || account.accountType != account.mode) return false
+        return account.mode == "real" || account.demoVerified
+    }
+
+    /** Compatibility predicate for callers/tests that specifically require a DEMO account. */
     fun isVerifiedDemoAccount(account: DerivAccountInfo?): Boolean =
-        account != null &&
-            account.loginId.isNotBlank() &&
-            account.mode.equals("demo", ignoreCase = true) &&
-            account.accountType.equals("demo", ignoreCase = true) &&
-            account.demoVerified
+        isVerifiedAccount(account) && account?.mode == "demo"
 
     /** Floor monetary stake to cents so rounding can never push worst-case loss over the 1% cap. */
     fun safeStakeForBalance(balance: Double): Double {

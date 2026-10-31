@@ -51,6 +51,8 @@ class SecretsManager(private val ctx: Context) {
 
     val isSecureStorageAvailable: Boolean
     private val prefs: android.content.SharedPreferences
+    /** Live trading arming is deliberately process-memory-only and never restored after restart. */
+    @Volatile private var derivRealArmed = false
 
     init {
         var tempSecure = false
@@ -109,23 +111,25 @@ class SecretsManager(private val ctx: Context) {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
         return prefs.edit().putString(DERIV_APP_ID, v.trim()).commit()
     }
-    /** Mode is explicit; REAL stays disabled unless separately enabled after independent review. */
+    /** Mode is explicit; selecting REAL is separate from arming live trading. */
     fun saveDerivAccountMode(v: String): Boolean {
         val mode = v.trim().lowercase()
         if (!isSecureStorageAvailable || mode !in setOf("demo", "real")) return false
-        if (mode == "real" && !isDerivRealExecutionEnabled()) return false
         return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).commit()
     }
     fun enableDerivRealExecution(explicitConfirmation: Boolean): Boolean {
         if (!isSecureStorageAvailable || !explicitConfirmation) return false
-        return prefs.edit().putBoolean(DERIV_REAL_EXECUTION_ENABLED, true).commit()
+        derivRealArmed = true
+        return true
     }
     fun disableDerivRealExecution(): Boolean {
         if (!isSecureStorageAvailable) return false
-        return prefs.edit().putBoolean(DERIV_REAL_EXECUTION_ENABLED, false).putString(DERIV_ACCOUNT_MODE, "demo").commit()
+        derivRealArmed = false
+        return prefs.edit().remove(DERIV_REAL_EXECUTION_ENABLED).putString(DERIV_ACCOUNT_MODE, "demo").commit()
     }
     fun clearDerivCredentials(): Boolean {
         if (!isSecureStorageAvailable) return false
+        derivRealArmed = false
         return prefs.edit().remove(DERIV_API_TOKEN).remove(DERIV_APP_ID)
             .remove(DERIV_ACCOUNT_MODE).commit()
     }
@@ -233,7 +237,7 @@ class SecretsManager(private val ctx: Context) {
     fun getDerivAppId(): String = if (!isSecureStorageAvailable) "" else (prefs.getString(DERIV_APP_ID, "") ?: "")
         .trim()
         .takeUnless { it.isBlank() || it == "1089" } ?: ""
-    fun isDerivRealExecutionEnabled(): Boolean = isSecureStorageAvailable && prefs.getBoolean(DERIV_REAL_EXECUTION_ENABLED, false)
+    fun isDerivRealExecutionEnabled(): Boolean = isSecureStorageAvailable && derivRealArmed
     fun getDerivAccountMode(): String = if (isSecureStorageAvailable) {
         (prefs.getString(DERIV_ACCOUNT_MODE, "demo") ?: "demo").lowercase().takeIf { it == "demo" || it == "real" } ?: "demo"
     } else "demo"

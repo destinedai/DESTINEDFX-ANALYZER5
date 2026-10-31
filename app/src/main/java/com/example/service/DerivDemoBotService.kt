@@ -119,20 +119,24 @@ class DerivDemoBotService : Service() {
                 if (!reconcileWithRecovery(executor, gateway)) return
                 val account = gateway.accountInfo.value
                 if (account == null) {
-                    stopSafely("Safety blocked — verified DEMO account snapshot is unavailable")
+                    stopSafely("Safety blocked — verified Deriv account snapshot is unavailable")
                     return
                 }
-                if (!DerivMultiplierRules.isVerifiedDemoAccount(account)) {
-                    stopSafely("Safety blocked — this Android bot requires a verified DEMO account; LIVE execution is disabled")
+                if (!DerivMultiplierRules.isVerifiedAccount(account)) {
+                    stopSafely("Safety blocked — broker account identity/type is not verified; execution is disabled")
+                    return
+                }
+                if (account.mode == "real" && !app.secretsManager.isDerivRealExecutionEnabled()) {
+                    stopSafely("Safety blocked — explicitly ARM LIVE TRADING for ${account.loginId} before starting")
                     return
                 }
                 val metrics = gateway.accountMetrics.value
                 val balanceAge = System.currentTimeMillis() - gateway.accountMetricsUpdatedAtMs.value
                 if (metrics == null || !metrics.balance.isFinite() || metrics.balance <= 0.0 ||
                     !metrics.currency.equals(account.currency, ignoreCase = true) || balanceAge !in 0..8_000L) {
-                    update("RECONNECTING — fresh verified DEMO balance is unavailable; purchases paused")
+                    update("RECONNECTING — fresh verified ${account.mode.uppercase()} balance is unavailable; purchases paused")
                     if (!connectWithBoundedRetry(gateway)) {
-                        stopSafely("ERROR — could not refresh the authenticated DEMO balance; trading remains stopped")
+                        stopSafely("ERROR — could not refresh the authenticated ${account.mode.uppercase()} balance; trading remains stopped")
                         return
                     }
                     continue
@@ -249,7 +253,7 @@ class DerivDemoBotService : Service() {
         var delayMs = 2_000L
         repeat(MAX_RECONNECT_ATTEMPTS) { attempt ->
             if (stopRequested || !currentCoroutineContext().isActive) return false
-            update(if (attempt == 0) "CONNECTING — verifying selected DEMO account" else "RECONNECTING — attempt ${attempt + 1}/$MAX_RECONNECT_ATTEMPTS")
+            update(if (attempt == 0) "CONNECTING — verifying selected Deriv account" else "RECONNECTING — attempt ${attempt + 1}/$MAX_RECONNECT_ATTEMPTS")
             if (gateway.connectAndAuthorize().isSuccess) {
                 update("RECONCILING — fresh authenticated broker session established")
                 return true

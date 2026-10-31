@@ -676,7 +676,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 } else if (derivExecutionMode) {
                                     if (active) {
                                         when {
-                                            derivAccount?.demoVerified != true -> statusMessage = "START BLOCKED — verify an active DEMO account first."
+                                            derivAccount == null || !DerivMultiplierRules.isVerifiedAccount(derivAccount) -> statusMessage = "START BLOCKED — verify the selected active Deriv account first."
+                                            derivAccount?.mode == "real" && !bridgeSecrets.isDerivRealExecutionEnabled() -> statusMessage = "START BLOCKED — ARM LIVE TRADING for ${derivAccount?.loginId} first."
                                             !derivSymbolSupported -> statusMessage = "START BLOCKED — $activeSymbol is a Forex/CFD symbol, not a supported Deriv Multiplier underlying. Select an available synthetic index."
                                             else -> {
                                                 if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -685,7 +686,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                     notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                                                 }
                                                 DerivDemoBotService.start(reportContext, activeSymbol, selectedStrategyId, selectedTimeframe)
-                                                statusMessage = "START REQUESTED — waiting for the foreground service to verify the Demo account and broker state."
+                                                statusMessage = "START REQUESTED — waiting for the foreground service to verify the selected ${derivAccount?.mode?.uppercase()} account and broker state."
                                             }
                                         }
                                     } else {
@@ -709,7 +710,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     HorizontalDivider(color = TabBorder)
                     if (derivExecutionMode) {
                         Text(
-                            "DERIV DEMO MULTIPLIER: $derivServiceState · supports only MULTUP/MULTDOWN on verified synthetic underlyings. Forex/CFD plans and MT5 execution remain blocked.",
+                            "DERIV MULTIPLIER: $derivServiceState · supports only MULTUP/MULTDOWN on a verified DEMO or explicitly armed REAL synthetic account. Forex/CFD plans and MT5 execution remain blocked.",
                             color = WarningAmber,
                             fontWeight = FontWeight.Bold,
                             fontSize = 10.sp
