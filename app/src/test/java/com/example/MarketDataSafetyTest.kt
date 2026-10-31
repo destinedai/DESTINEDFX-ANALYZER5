@@ -7,6 +7,7 @@ import com.example.data.market.QuoteFreshness
 import com.example.data.market.classifyQuoteFreshness
 import com.example.data.market.candleSourceKey
 import com.example.data.market.canMergeQuoteIntoCandle
+import com.example.data.market.canonicalTickerAfterRefresh
 import com.example.data.market.scannerQuoteFromRow
 import com.example.data.market.processPollingItemsIndependently
 import com.example.data.market.resilientPollingLoop
@@ -55,6 +56,19 @@ class MarketDataSafetyTest {
         ))
         assertEquals(QuoteFreshness.UNAVAILABLE, classifyQuoteFreshness(null, 100_000L))
         assertEquals(QuoteFreshness.CONNECTING, classifyQuoteFreshness(null, 100_000L, connecting = true))
+    }
+
+    @Test
+    fun rejectedRefreshReturnsExistingCanonicalQuoteInsteadOfFetchedQuote() {
+        val existing = MarketTicker(
+            symbol = "EUR/USD", price = 1.1, changePercent = 0.0, high = 0.0, low = 0.0,
+            spread = 0.0002, bias = "NEUTRAL", confidence = 0, lastUpdateMillis = 99_000L,
+            isLive = true, source = "Deriv WebSocket", kind = "STREAM",
+            bid = 1.0999, ask = 1.1001, hasRealSpread = true
+        )
+        val rejected = existing.copy(price = 1.2, source = "TradingView scanner snapshot", lastUpdateMillis = 100_000L)
+        assertEquals(existing, canonicalTickerAfterRefresh(existing, rejected, accepted = false))
+        assertEquals(rejected, canonicalTickerAfterRefresh(existing, rejected, accepted = true))
     }
 
     @Test

@@ -331,6 +331,13 @@ class MarketDataRepositoryImpl(
         }
     }
 
+    /** Returns the quote that is authoritative for analysis after source arbitration. */
+    internal fun canonicalTickerAfterRefresh(
+        existing: MarketTicker?,
+        fetched: MarketTicker?,
+        accepted: Boolean
+    ): MarketTicker? = if (accepted) fetched else existing
+
     private val lastSourceUpdate = ConcurrentHashMap<String, Long>()
 
     private fun startLiveStreams() {
@@ -487,8 +494,8 @@ class MarketDataRepositoryImpl(
 
     override suspend fun refreshSymbol(symbol: String): MarketTicker? {
         val ticker = fetchLiveQuoteForSymbol(symbol)
-        
-        if (ticker != null && shouldUpdateTicker(symbol, ticker)) {
+        val accepted = ticker != null && shouldUpdateTicker(symbol, ticker)
+        if (accepted && ticker != null) {
             _tickers.update { current ->
                 current + (symbol to ticker)
             }
@@ -498,7 +505,7 @@ class MarketDataRepositoryImpl(
                 current + (symbol to "NO FRESH QUOTE • no supported provider returned a current valid price")
             }
         }
-        return ticker
+        return canonicalTickerAfterRefresh(_tickers.value[symbol], ticker, accepted)
     }
 
     private fun startLivePolling() {
