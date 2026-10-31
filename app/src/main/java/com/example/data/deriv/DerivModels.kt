@@ -16,10 +16,21 @@ data class DerivCandle(
     val close: Double
 )
 
+data class DerivAccountOption(
+    val accountId: String,
+    val accountType: String,
+    val currency: String,
+    val balance: Double
+)
+
 enum class DerivConnectionState {
     DISCONNECTED,
     CONNECTING,
     AUTHENTICATING,
+    ACCOUNT_VERIFICATION,
+    SYNCHRONIZING,
+    READY,
+    /** Legacy non-executable state retained for source compatibility. */
     CONNECTED,
     AUTH_FAILED,
     ERROR,
@@ -34,8 +45,40 @@ data class DerivAccountInfo(
     val accountType: String = "demo",
     val demoVerified: Boolean = false,
     val mode: String = accountType.lowercase(),
-    val realExecutionAuthorized: Boolean = false
+    val realExecutionAuthorized: Boolean = false,
+    val authenticatedSessionId: String = "",
+    val credentialGeneration: String = ""
 )
+
+/** Broker snapshot used by the execution authority; failure is never an empty portfolio. */
+data class DerivPortfolioSnapshot(
+    val successful: Boolean,
+    val accountId: String,
+    val accountMode: String,
+    val retrievedAtMs: Long,
+    val contracts: List<DerivContractInfo> = emptyList(),
+    val error: String? = null,
+    val currency: String = ""
+) {
+    /** Invalid or failed snapshots must never masquerade as zero exposure. */
+    val exposure: Double get() = contracts.takeIf { successful && it.all(DerivContractInfo::isExecutionValid) }
+        ?.sumOf { it.buyPrice }
+        ?.takeIf { it.isFinite() && it >= 0.0 }
+        ?: Double.NaN
+}
+
+enum class DerivReconciliationStatus {
+    READY,
+    RETRYABLE_FAILURE,
+    MANUAL_RECONCILIATION_REQUIRED
+}
+
+data class DerivReconciliationResult(
+    val status: DerivReconciliationStatus,
+    val reason: String
+) {
+    val ready: Boolean get() = status == DerivReconciliationStatus.READY
+}
 
 data class DerivProposalResult(
     val proposalId: String,

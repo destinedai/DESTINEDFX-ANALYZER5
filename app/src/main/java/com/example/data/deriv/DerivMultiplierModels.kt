@@ -40,13 +40,16 @@ object DerivMultiplierRules {
     fun canOpenNewEntry(activeContractCount: Int, unresolvedExecutionCount: Int): Boolean =
         activeContractCount == 0 && unresolvedExecutionCount == 0
 
-    /** The Android foreground bot is DEMO-only until a separate live-execution acceptance is completed. */
+    /** The broker-reported account identity and type must both be valid before execution. */
+    fun isVerifiedAccount(account: DerivAccountInfo?): Boolean {
+        if (account == null || account.loginId.isBlank()) return false
+        if (account.mode !in setOf("demo", "real") || account.accountType != account.mode) return false
+        return account.mode == "real" || account.demoVerified
+    }
+
+    /** Compatibility predicate for callers/tests that specifically require a DEMO account. */
     fun isVerifiedDemoAccount(account: DerivAccountInfo?): Boolean =
-        account != null &&
-            account.loginId.isNotBlank() &&
-            account.mode.equals("demo", ignoreCase = true) &&
-            account.accountType.equals("demo", ignoreCase = true) &&
-            account.demoVerified
+        isVerifiedAccount(account) && account?.mode == "demo"
 
     /** Floor monetary stake to cents so rounding can never push worst-case loss over the 1% cap. */
     fun safeStakeForBalance(balance: Double): Double {
@@ -55,30 +58,6 @@ object DerivMultiplierRules {
             .multiply(java.math.BigDecimal.valueOf(MAX_RISK_PERCENT / 100.0))
             .setScale(2, java.math.RoundingMode.DOWN)
             .toDouble()
-    }
-
-    private fun timeframeMs(timeframe: String): Long? = when (timeframe.trim().uppercase()) {
-        "M1" -> 60_000L
-        "M5" -> 5 * 60_000L
-        "M15" -> 15 * 60_000L
-        "M30" -> 30 * 60_000L
-        "H1" -> 60 * 60_000L
-        "H4" -> 4 * 60 * 60_000L
-        "D1" -> 24 * 60 * 60_000L
-        "W1" -> 7 * 24 * 60 * 60_000L
-        else -> null
-    }
-
-    /**
-     * Stable duplicate-prevention key. The analyzer builds a new random ID on every scan, so the same
-     * setup must be keyed by what it is: symbol, strategy, timeframe, direction and the candle it formed in.
-     * Returns null when the timeframe is unknown, in which case the caller must not trade.
-     */
-    fun stableSignalKey(symbol: String, strategyId: String, timeframe: String, direction: SignalDirection, signalTimestampMs: Long): String? {
-        val frame = timeframeMs(timeframe) ?: return null
-        if (symbol.isBlank() || strategyId.isBlank() || signalTimestampMs <= 0L) return null
-        val bar = signalTimestampMs - (signalTimestampMs % frame)
-        return "DERIV|${symbol.trim().uppercase()}|${strategyId.trim()}|${timeframe.trim().uppercase()}|${direction.name}|$bar"
     }
 
     /** The trade plan must be complete, on the correct side of entry, and at least 2R. No stop shrinking or inference. */

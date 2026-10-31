@@ -30,14 +30,30 @@ class DerivAccountModeAndExecutionStateTest {
     }
 
     @Test
-    fun realProfileCannotBeSelectedWithoutSeparateExplicitAuthorization() {
+    fun multipleAccountsRequireExplicitAccountId() {
+        val accounts = JSONArray("""
+            [{"account_id":"D123","status":"active","account_type":"demo","currency":"USD","balance":10},
+             {"account_id":"D456","status":"active","account_type":"demo","currency":"EUR","balance":20},
+             {"account_id":"R456","status":"active","account_type":"real","currency":"USD","balance":30}]
+        """.trimIndent())
+        assertEquals(null, selectDerivOptionsAccount(accounts, "demo"))
+        assertEquals("D456", selectDerivOptionsAccount(accounts, "demo", "D456")?.optString("account_id"))
+        assertEquals(null, selectDerivOptionsAccount(accounts, "demo", "R456"))
+    }
+
+    @Test
+    fun realProfileCanConnectButRequiresSeparateExplicitAuthorizationForOrders() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         assertFalse(manager.isDerivRealExecutionEnabled())
-        assertFalse(manager.saveDerivAccountMode("real"))
-        assertEquals("demo", manager.getDerivAccountMode())
         if (!manager.isSecureStorageAvailable) return
-        assertTrue(manager.enableDerivRealExecution(true))
         assertTrue(manager.saveDerivAccountMode("real"))
+        assertEquals("real", manager.getDerivAccountMode())
+        assertFalse(manager.enableDerivRealExecution(true))
+        assertTrue(manager.enableDerivRealExecution(true, "R456", "real", "USD", "session-a", "credential-a"))
+        assertTrue(manager.isDerivRealExecutionAuthorized("R456", "real", "USD", "session-a", "credential-a"))
+        assertFalse(manager.isDerivRealExecutionAuthorized("R999", "real", "USD", "session-a", "credential-a"))
+        assertFalse(manager.isDerivRealExecutionAuthorized("R456", "real", "USD", "session-b", "credential-a"))
+        assertFalse(manager.isDerivRealExecutionAuthorized("R456", "real", "USD", "session-a", "credential-b"))
         assertEquals("real", manager.getDerivAccountMode())
         manager.disableDerivRealExecution()
         assertEquals("demo", manager.getDerivAccountMode())

@@ -46,13 +46,6 @@ Heartbeat timestamps must be timezone-aware UTC within the freshness window; ver
 
 ## Hosted deployment via Render Blueprint
 
-The repository-root render.yaml defines the HTTPS bridge, persistent SQLite/WAL disk, generated encryption key and worker token, and ShowMyTrades economic-calendar adapter. Use the deployment URL in the operator guide. A paid web service is required for persistent disk storage; do not store the trade ledger on an ephemeral filesystem.
+The repository-root `render.yaml` is deliberately Free and non-durable: it uses ephemeral storage, reports liveness only at `/health`, returns `503 NON_DURABLE_STORAGE` from `/health/ready`, and blocks execution-sensitive routes. It is suitable for diagnostics only, never for pairing, credential storage, worker provisioning, or trading. A separate operator-owned durable HTTPS bridge with backups is required for DEMO acceptance; no paid Render resource is implied or created by this repository.
 
-After deployment, check GET /health/ready. Healthy bridge status is not proof of a connected Windows worker or broker terminal. ShowMyTrades documentation: https://showmytrades.com/docs/api/economic-calendar
-
-
-## Hosted deployment via Render Blueprint
-
-The repository-root render.yaml defines the HTTPS bridge, persistent SQLite/WAL disk, generated encryption key and worker token, and the ShowMyTrades economic-calendar adapter. Use the deployment URL in the operator guide. A paid web service is required for persistent disk storage; do not store trade ledger state on ephemeral storage.
-
-After deployment, check GET /health/ready. Healthy bridge status is not proof of a connected Windows worker or broker terminal. ShowMyTrades documentation: https://showmytrades.com/docs/api/economic-calendar
+ShowMyTrades documentation: https://showmytrades.com/docs/api/economic-calendar

@@ -98,6 +98,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "news verdict is timestamped and fail closed": all(x in source for x in ["retrieved_at_ms", "coverage_from_ms", "coverage_to_ms", "g_newsStatus=\"UNKNOWN\"", "NEWS UNKNOWN"]),
         "pending news cancellation is EA-owned only": "CancelNewsBlockedPendingOrders" in source and "ORDER_MAGIC" in source and "trade.OrderDelete" in source and "HistoryOrderSelect" in source,
         "signal dedupe persisted before submission": "if(!Remember(key))" in source and "PersistSeen()" in source and 'FileOpen(SeenFile(),FILE_READ' in source and "AtomicWrite" in source,
+        "signal identity excludes direction": 'string SignalKey(string sym,ENUM_TIMEFRAMES tf,datetime bar){return g_strategy+"|"+sym+"|"+TFLabel(tf)+"|"+IntegerToString((int)bar);}' in source and "SignalKey(sym,tf,bt);" in source,
         "source persists signal dedupe": "PersistSeen()" in source and "SeenFile()" in source and "AtomicWrite" in source,
     }
 

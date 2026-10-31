@@ -7,53 +7,117 @@ class DerivMultiplierExecutor(
     private val gateway: DerivBrokerGateway,
     private val dao: DerivExecutionDao
 ) {
+    companion object {
+        private const val PORTFOLIO_MAX_AGE_MS = 8_000L
+        private const val MAX_OPEN_RISK_PERCENT = 1.0
+    }
     private val account get() = gateway.accountInfo.value
     private val accountId get() = account?.loginId.orEmpty()
     private val accountMode get() = account?.mode?.uppercase().orEmpty()
 
     suspend fun hasActiveContracts(): Boolean = withContext(Dispatchers.IO) {
         val current = account ?: return@withContext true
-        dao.knownContracts(current.loginId, current.mode.uppercase()).isNotEmpty()
+        val snapshot = gateway.portfolioSnapshot.value ?: return@withContext true
+        val age = System.currentTimeMillis() - snapshot.retrievedAtMs
+        if (!snapshot.successful || snapshot.accountId != current.loginId ||
+            snapshot.accountMode != current.mode.uppercase() ||
+            !snapshot.currency.equals(current.currency, ignoreCase = true) ||
+            age !in 0..PORTFOLIO_MAX_AGE_MS || !snapshot.exposure.isFinite()) {
+            return@withContext true
+        }
+        snapshot.contracts.isNotEmpty() ||
+            dao.knownContracts(current.loginId, current.mode.uppercase()).isNotEmpty()
     }
 
-    suspend fun reconcileBeforeNewEntries(): Boolean = withContext(Dispatchers.IO) {
-        val current = account ?: return@withContext false
-        if (gateway.connectionState.value != DerivConnectionState.CONNECTED) return@withContext false
+    suspend fun reconcileBeforeNewEntriesResult(): DerivReconciliationResult = withContext(Dispatchers.IO) {
+        val current = account
+            ?: return@withContext DerivReconciliationResult(DerivReconciliationStatus.RETRYABLE_FAILURE, "Selected Deriv account is not authenticated")
+        // v5 rows were migrated without an account identity. Never silently ignore a possible
+        // previously-open or ambiguous purchase while reconciling only the selected account.
+        if (dao.legacyUnknown().isNotEmpty()) {
+            return@withContext DerivReconciliationResult(
+                DerivReconciliationStatus.MANUAL_RECONCILIATION_REQUIRED,
+                "A migrated execution has no verified account identity"
+            )
+        }
+        if (gateway.connectionState.value != DerivConnectionState.READY) {
+            return@withContext DerivReconciliationResult(DerivReconciliationStatus.RETRYABLE_FAILURE, "Deriv WebSocket is disconnected")
+        }
         gateway.fetchPortfolio()
+        val now = System.currentTimeMillis()
+        val snapshot = gateway.portfolioSnapshot.value
+        val snapshotAge = snapshot?.let { now - it.retrievedAtMs } ?: Long.MAX_VALUE
+        if (snapshot == null || !snapshot.successful || snapshot.accountId != current.loginId ||
+            snapshot.accountMode != current.mode.uppercase() ||
+            !snapshot.currency.equals(current.currency, ignoreCase = true) ||
+            snapshotAge !in 0..PORTFOLIO_MAX_AGE_MS || !snapshot.exposure.isFinite()) {
+            return@withContext DerivReconciliationResult(
+                DerivReconciliationStatus.RETRYABLE_FAILURE,
+                snapshot?.error ?: "A fresh, valid portfolio for the selected account and currency is unavailable"
+            )
+        }
         val unresolved = dao.unresolved(current.loginId, current.mode.uppercase())
         unresolved.forEach { record ->
             val contractId = record.contractId
             if (contractId == null) {
-                dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "No broker contract ID; manual reconciliation is required.", updatedAtMs = System.currentTimeMillis()))
+                dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "No broker contract ID; manual reconciliation is required.", updatedAtMs = now))
             } else {
                 val currentContract = gateway.activeContracts.value[contractId]
                 val historical = if (currentContract == null) gateway.lookupHistoricalContract(contractId, record.createdAtMs) else null
                 when {
-                    currentContract != null && currentContract.isSold -> updateSettled(record, currentContract)
-                    currentContract != null -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = System.currentTimeMillis()))
-                    historical != null && historical.isSold -> updateSettled(record, historical)
-                    historical != null -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = System.currentTimeMillis()))
-                    else -> dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker history did not establish the contract outcome; manual reconciliation is required.", updatedAtMs = System.currentTimeMillis()))
+                    currentContract != null && currentContract.isSold &&
+                        currentContract.profit.isFinite() && currentContract.bidPrice.isFinite() && currentContract.bidPrice >= 0.0 ->
+                        updateSettled(record, currentContract)
+                    currentContract != null && currentContract.isSold ->
+                        dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker contract is sold but settlement profit/value is missing or invalid.", updatedAtMs = now))
+                    currentContract != null -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
+                    historical != null && historical.isSold && historical.profit.isFinite() && historical.bidPrice.isFinite() && historical.bidPrice >= 0.0 ->
+                        updateSettled(record, historical)
+                    historical != null && !historical.isSold ->
+                        dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
+                    else -> dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker history did not establish the contract outcome; manual reconciliation is required.", updatedAtMs = now))
                 }
             }
         }
-        dao.unresolved(current.loginId, current.mode.uppercase()).isEmpty()
+        val stillUnresolved = dao.unresolved(current.loginId, current.mode.uppercase())
+        if (stillUnresolved.isNotEmpty()) {
+            DerivReconciliationResult(
+                DerivReconciliationStatus.MANUAL_RECONCILIATION_REQUIRED,
+                "One or more previous execution outcomes remain unconfirmed"
+            )
+        } else {
+            DerivReconciliationResult(DerivReconciliationStatus.READY, "Fresh portfolio and all previous execution outcomes reconciled")
+        }
     }
 
-    suspend fun syncKnownContracts() = withContext(Dispatchers.IO) {
-        val current = account ?: return@withContext
+    /** Compatibility adapter for callers that only need a fail-closed yes/no decision. */
+    suspend fun reconcileBeforeNewEntries(): Boolean = reconcileBeforeNewEntriesResult().ready
+
+    suspend fun syncKnownContracts(): Boolean = withContext(Dispatchers.IO) {
+        val current = account ?: return@withContext false
         gateway.fetchPortfolio()
+        val now = System.currentTimeMillis()
+        val snapshot = gateway.portfolioSnapshot.value
+        val age = snapshot?.let { now - it.retrievedAtMs } ?: Long.MAX_VALUE
+        if (snapshot == null || !snapshot.successful || snapshot.accountId != current.loginId ||
+            snapshot.accountMode != current.mode.uppercase() ||
+            !snapshot.currency.equals(current.currency, ignoreCase = true) ||
+            age !in 0..PORTFOLIO_MAX_AGE_MS || !snapshot.exposure.isFinite()) {
+            return@withContext false
+        }
         dao.knownContracts(current.loginId, current.mode.uppercase()).forEach { record ->
             val id = record.contractId ?: return@forEach
             val contract = gateway.activeContracts.value[id] ?: gateway.lookupHistoricalContract(id, record.createdAtMs)
             if (contract == null) {
-                dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Contract is not open and supported broker history has not established its outcome.", updatedAtMs = System.currentTimeMillis()))
+                dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Contract is not open and supported broker history has not established its outcome.", updatedAtMs = now))
             } else if (contract.isSold || contract.status.lowercase() in setOf("sold", "won", "lost", "expired")) {
-                updateSettled(record, contract)
+                if (contract.profit.isFinite() && contract.bidPrice.isFinite()) updateSettled(record, contract)
+                else dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker settlement response omitted a valid profit or settlement value.", updatedAtMs = now))
             } else {
-                dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = System.currentTimeMillis()))
+                dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
             }
         }
+        true
     }
 
     private suspend fun updateSettled(record: DerivExecutionEntity, contract: DerivContractInfo) {
@@ -71,16 +135,43 @@ class DerivMultiplierExecutor(
         if (current.loginId.isBlank() || current.mode !in setOf("demo", "real")) return@withContext Result.failure(Exception("ACCOUNT_INVALID: broker account identity is unavailable"))
         val existing = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId)
         if (existing != null) return@withContext Result.failure(Exception("DUPLICATE_SIGNAL: ${intent.signalId} already exists for ${current.mode.uppercase()} account ${current.loginId} in ${existing.status}"))
-        if (!reconcileBeforeNewEntries()) return@withContext Result.failure(Exception("RECONCILIATION_REQUIRED: prior Deriv execution outcome is unresolved; no purchase was sent"))
+        val reconciliation = reconcileBeforeNewEntriesResult()
+        if (!reconciliation.ready) {
+            val prefix = if (reconciliation.status == DerivReconciliationStatus.MANUAL_RECONCILIATION_REQUIRED)
+                "RECONCILIATION_REQUIRED" else "PORTFOLIO_RETRYABLE"
+            return@withContext Result.failure(Exception("$prefix: ${reconciliation.reason}; no purchase was sent"))
+        }
         // Refresh active-contract state, then enforce single-contract exposure at the
         // executor boundary so a future UI/service caller cannot bypass this guard.
-        syncKnownContracts()
+        if (!syncKnownContracts()) return@withContext Result.failure(Exception("PORTFOLIO_REQUIRED: fresh broker portfolio refresh failed; no purchase was sent"))
         val activeCount = dao.knownContracts(current.loginId, current.mode.uppercase()).size
         val unresolvedCount = dao.unresolved(current.loginId, current.mode.uppercase()).size
-        if (!DerivMultiplierRules.canOpenNewEntry(activeCount, unresolvedCount)) {
-            return@withContext Result.failure(Exception("ACTIVE_CONTRACT_LIMIT: an active contract or unresolved execution exists; no additional purchase was sent"))
+        val snapshot = gateway.portfolioSnapshot.value
+        if (snapshot == null || snapshot.contracts.isNotEmpty() ||
+            !DerivMultiplierRules.canOpenNewEntry(activeCount, unresolvedCount)) {
+            return@withContext Result.failure(Exception("ACTIVE_CONTRACT_LIMIT: the broker reports an open contract or unresolved execution exists; no additional purchase was sent"))
         }
-        val balance = gateway.accountMetrics.value?.balance ?: current.balance
+        val now = System.currentTimeMillis()
+        val snapshotAge = snapshot?.let { now - it.retrievedAtMs } ?: Long.MAX_VALUE
+        if (snapshot == null || !snapshot.successful || snapshot.accountId != current.loginId ||
+            snapshot.accountMode != current.mode.uppercase() ||
+            !snapshot.currency.equals(current.currency, ignoreCase = true) ||
+            snapshotAge !in 0..PORTFOLIO_MAX_AGE_MS || !snapshot.exposure.isFinite()) {
+            return@withContext Result.failure(Exception("PORTFOLIO_REQUIRED: fresh account-, currency- and contract-validated broker portfolio is required; no purchase was sent"))
+        }
+        val metrics = gateway.accountMetrics.value
+        val balanceAge = now - gateway.accountMetricsUpdatedAtMs.value
+        if (metrics == null || !metrics.balance.isFinite() || metrics.balance <= 0.0 ||
+            !metrics.currency.equals(current.currency, ignoreCase = true) ||
+            balanceAge !in 0..PORTFOLIO_MAX_AGE_MS) {
+            return@withContext Result.failure(Exception("BALANCE_REQUIRED: fresh positive broker balance in the verified account currency is required; no purchase was sent"))
+        }
+        val balance = metrics.balance
+        val currentExposure = if (balance.isFinite() && balance > 0.0) snapshot.exposure / balance * 100.0 else Double.POSITIVE_INFINITY
+        val candidateExposure = if (balance.isFinite() && balance > 0.0) intent.stake / balance * 100.0 else Double.POSITIVE_INFINITY
+        if (!currentExposure.isFinite() || !candidateExposure.isFinite() || currentExposure + candidateExposure > MAX_OPEN_RISK_PERCENT + 1e-9) {
+            return@withContext Result.failure(Exception("PORTFOLIO_RISK_LIMIT: aggregate open risk would exceed ${MAX_OPEN_RISK_PERCENT}% of the verified account balance; no purchase was sent"))
+        }
         val validation = DerivMultiplierRules.validate(intent, balance, current.currency)
         if (!validation.valid) return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, validation.reason ?: "Multiplier intent rejected"))
 

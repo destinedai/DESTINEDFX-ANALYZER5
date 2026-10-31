@@ -206,10 +206,10 @@ class SignalGenerationUseCaseImpl(
                 blockers += "QUOTE/CANDLE SOURCE MISMATCH: quote source '${ticker.source}', OHLC source '$candleLabel'; use a matching provider before execution."
                 state = SignalState.BLOCKED
             }
-            if (!report.mtfComplete) {
-                blockers += "MTF DATA INCOMPLETE"
-                // Do not change state to BLOCKED here; let it stay WEAK_BUY etc. for display,
-                // but the blocker ensures executable = false.
+            val requiresCompleteMtf = strategyId == "smc-confluence-1.0.0" ||
+                dynamicCfg.mtfPolicy == MtfPolicy.STRICT
+            if (!report.mtfComplete && requiresCompleteMtf) {
+                blockers += "MTF DATA INCOMPLETE: this strategy's configured strict MTF policy is not satisfied"
             }
             val spread = quote?.spread; val atr = report.structure?.atr
             if (spread != null && atr != null && spread > 0.15 * atr) { blockers += "SPREAD TOO WIDE: %.5f > 15%% of ATR".format(spread); state = SignalState.BLOCKED }

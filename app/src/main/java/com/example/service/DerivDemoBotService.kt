@@ -15,6 +15,7 @@ import com.example.data.deriv.DerivMultiplierExecutor
 import com.example.data.deriv.DerivMultiplierIntent
 import com.example.data.deriv.DerivMultiplierProduct
 import com.example.data.deriv.DerivMultiplierRules
+import com.example.data.deriv.DerivReconciliationStatus
 import com.example.domain.model.SignalDirection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -39,6 +40,8 @@ class DerivDemoBotService : Service() {
         const val EXTRA_TIMEFRAME = "timeframe"
         private const val CHANNEL_ID = "deriv_demo_bot"
         private const val NOTIFICATION_ID = 1701
+        private const val PREFS = "deriv_bot_config"
+        private const val MAX_RECONNECT_ATTEMPTS = 5
         private val _state = MutableStateFlow("STOPPED")
         val state: StateFlow<String> = _state.asStateFlow()
 
@@ -73,13 +76,23 @@ class DerivDemoBotService : Service() {
             ACTION_START -> {
                 stopRequested = false
                 loopJob?.cancel()
-                val symbol = intent.getStringExtra(EXTRA_SYMBOL).orEmpty()
-                val strategy = intent.getStringExtra(EXTRA_STRATEGY).orEmpty()
-                val timeframe = intent.getStringExtra(EXTRA_TIMEFRAME).orEmpty()
+                val symbol = intent.getStringExtra(EXTRA_SYMBOL)?.trim().orEmpty()
+                val strategy = intent.getStringExtra(EXTRA_STRATEGY)?.trim().orEmpty()
+                val timeframe = intent.getStringExtra(EXTRA_TIMEFRAME)?.trim().orEmpty()
+                if (symbol.isBlank() || strategy.isBlank() || timeframe.isBlank() ||
+                    !DerivMultiplierRules.isSupportedUnderlying(symbol)) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
+                    update("ERROR — incomplete or unsupported start intent; trading remains stopped")
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(EXTRA_SYMBOL, symbol).putString(EXTRA_STRATEGY, strategy)
+                    .putString(EXTRA_TIMEFRAME, timeframe).putBoolean("enabled", true).apply()
                 loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
             }
         }
-        return START_NOT_STICKY
+        return START_REDELIVER_INTENT
     }
 
     private suspend fun runBot(symbol: String, strategyId: String, timeframe: String) {
@@ -89,31 +102,46 @@ class DerivDemoBotService : Service() {
             stopSafely("Safety blocked — $symbol is not a supported Deriv Multiplier underlying")
             return
         }
-        if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.CONNECTED) {
-            update("Connecting — selected account verification required")
-            if (gateway.connectAndAuthorize().isFailure) {
-                stopSafely("Safety blocked — selected account verification failed")
+        if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY) {
+            if (!connectWithBoundedRetry(gateway)) {
+                stopSafely("ERROR — authentication or reconnect attempts exhausted; trading remains stopped")
                 return
             }
         }
         val executor = DerivMultiplierExecutor(gateway, app.db.derivExecutionDao())
-        if (!executor.reconcileBeforeNewEntries()) {
-            stopSafely("Safety blocked — unresolved prior execution requires broker reconciliation")
-            return
-        }
+        if (!reconcileWithRecovery(executor, gateway)) return
         update("Running — scanning $symbol; no order is assumed confirmed")
         while (currentCoroutineContext().isActive && !stopRequested) {
             try {
+                // Reconcile the portfolio and all prior intents before every new scan.
+                // Retryable transport failures reconnect; ambiguous execution outcomes
+                // stop the bot for explicit manual review.
+                if (!reconcileWithRecovery(executor, gateway)) return
                 val account = gateway.accountInfo.value
                 if (account == null) {
-                    stopSafely("Safety blocked — verified DEMO account snapshot is unavailable")
+                    stopSafely("Safety blocked — verified Deriv account snapshot is unavailable")
                     return
                 }
-                val balance = gateway.accountMetrics.value?.balance ?: account.balance
-                if (!DerivMultiplierRules.isVerifiedDemoAccount(account) || !balance.isFinite() || balance <= 0.0) {
-                    stopSafely("Safety blocked — this Android bot requires a verified DEMO account; LIVE execution is disabled")
+                if (!DerivMultiplierRules.isVerifiedAccount(account)) {
+                    stopSafely("Safety blocked — broker account identity/type is not verified; execution is disabled")
                     return
                 }
+                if (account.mode == "real" && !app.secretsManager.isDerivRealExecutionEnabled()) {
+                    stopSafely("Safety blocked — explicitly ARM LIVE TRADING for ${account.loginId} before starting")
+                    return
+                }
+                val metrics = gateway.accountMetrics.value
+                val balanceAge = System.currentTimeMillis() - gateway.accountMetricsUpdatedAtMs.value
+                if (metrics == null || !metrics.balance.isFinite() || metrics.balance <= 0.0 ||
+                    !metrics.currency.equals(account.currency, ignoreCase = true) || balanceAge !in 0..8_000L) {
+                    update("RECONNECTING — fresh verified ${account.mode.uppercase()} balance is unavailable; purchases paused")
+                    if (!connectWithBoundedRetry(gateway)) {
+                        stopSafely("ERROR — could not refresh the authenticated ${account.mode.uppercase()} balance; trading remains stopped")
+                        return
+                    }
+                    continue
+                }
+                val balance = metrics.balance
                 val stake = DerivMultiplierRules.safeStakeForBalance(balance)
                 val minimumStake = com.destinedfx.core.broker.DerivContractLimits.getMinimumStake(
                     symbol, DerivMultiplierProduct.MULTUP.contractType
@@ -122,13 +150,8 @@ class DerivDemoBotService : Service() {
                     stopSafely("Safety blocked — 1% risk cap permits $stake, below broker minimum $minimumStake; no order was sent")
                     return
                 }
-                // Reconcile existing exposure on each scan. The mobile bot is deliberately
-                // single-contract-at-a-time so repeated candles cannot accumulate open risk.
-                if (!executor.reconcileBeforeNewEntries()) {
-                    stopSafely("Safety blocked — an earlier execution is unresolved; no new entry will be submitted")
-                    return
-                }
-                executor.syncKnownContracts()
+                // syncKnownContracts() is already performed by reconcileWithRecovery()
+                // against the same fresh, account-matched portfolio snapshot.
                 if (executor.hasActiveContracts()) {
                     update("Running — an existing contract is still active; waiting for broker settlement before another entry")
                     delay(10_000)
@@ -137,14 +160,17 @@ class DerivDemoBotService : Service() {
                 val signal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategyId)
                 val planError = if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT))
                     DerivMultiplierRules.planConsistencyError(signal.direction, signal.entryPrice, signal.stopLoss, signal.takeProfit) else null
-                val stableId = DerivMultiplierRules.stableSignalKey(symbol, strategyId, timeframe, signal.direction, signal.timestamp)
                 if (planError != null) {
                     update("Running — signal rejected: ${planError.take(120)}")
-                } else if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT) && stableId == null) {
-                    update("Running — signal rejected: unsupported timeframe $timeframe")
                 } else if (signal.executable && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT)) {
+                    val stableId = signal.id.takeIf { it.isNotBlank() }
+                    if (stableId == null) {
+                        update("Running — signal rejected: analyzer did not supply a stable identity")
+                        delay(10_000)
+                        continue
+                    }
                     val intent = DerivMultiplierIntent(
-                        signalId = stableId!!,
+                        signalId = stableId,
                         symbol = symbol,
                         strategyId = strategyId,
                         strategyVersion = signal.strategyVersion.ifBlank { "unknown" },
@@ -162,27 +188,85 @@ class DerivDemoBotService : Service() {
                     if (result.isSuccess) update("Contract confirmed — ${result.getOrThrow().contractId}; monitoring broker state")
                     else {
                         val reason = result.exceptionOrNull()?.message?.take(180) ?: "Execution blocked"
-                        // An unresolved outcome must stop new entries; an ordinary skip (duplicate, open position,
-                        // rejected proposal) is not a connection problem and the bot keeps scanning.
-                        if (reason.startsWith("EXECUTION_UNKNOWN") || reason.startsWith("RECONCILIATION_REQUIRED")) update("Safety blocked — $reason")
-                        else update("Running — entry skipped: $reason")
+                        // An ambiguous purchase or unresolved ledger record requires manual review.
+                        // A transient broker/portfolio/balance failure must reconnect and reconcile
+                        // before another scan; it must never be presented as a normal skipped entry.
+                        when {
+                            reason.startsWith("EXECUTION_UNKNOWN") || reason.startsWith("RECONCILIATION_REQUIRED") ->
+                                stopSafely("Safety blocked — $reason. Manual reconciliation is required.")
+                            reason.startsWith("PORTFOLIO_RETRYABLE") || reason.startsWith("PORTFOLIO_REQUIRED") || reason.startsWith("BALANCE_REQUIRED") -> {
+                                update("RECONNECTING — $reason; purchases paused")
+                                if (!connectWithBoundedRetry(gateway)) {
+                                    stopSafely("ERROR — reconnect exhausted after portfolio validation failure; trading remains stopped")
+                                    return
+                                }
+                            }
+                            else -> update("Running — entry skipped: $reason")
+                        }
                     }
                 } else {
                     update("Running — no valid fresh Multiplier signal")
                 }
-                executor.syncKnownContracts()
                 delay(30_000)
             } catch (_: CancellationException) {
                 throw CancellationException()
             } catch (error: Exception) {
-                update("Connection or execution error — additional purchases paused: ${error.message?.take(140)}")
-                delay(10_000)
+                update("RECONNECTING — purchases paused: ${error.message?.take(140)}")
+                if (!connectWithBoundedRetry(gateway)) {
+                    stopSafely("ERROR — bounded reconnect policy exhausted; reconciliation required")
+                    return
+                }
             }
         }
     }
 
+    private suspend fun reconcileWithRecovery(
+        executor: DerivMultiplierExecutor,
+        gateway: com.example.data.deriv.DerivBrokerGateway
+    ): Boolean {
+        repeat(3) { cycle ->
+            if (stopRequested || !currentCoroutineContext().isActive) return false
+            val result = executor.reconcileBeforeNewEntriesResult()
+            when (result.status) {
+                DerivReconciliationStatus.READY -> {
+                    if (executor.syncKnownContracts()) return true
+                    update("RECONNECTING — fresh portfolio refresh failed; purchases remain paused")
+                }
+                DerivReconciliationStatus.MANUAL_RECONCILIATION_REQUIRED -> {
+                    stopSafely("Safety blocked — ${result.reason}. Manual broker reconciliation is required; no new purchase will be sent.")
+                    return false
+                }
+                DerivReconciliationStatus.RETRYABLE_FAILURE -> {
+                    update("RECONNECTING — ${result.reason.take(140)}; purchases remain paused")
+                }
+            }
+            if (cycle < 2 && !connectWithBoundedRetry(gateway)) {
+                stopSafely("ERROR — bounded reconnect attempts exhausted; trading remains stopped pending reconciliation")
+                return false
+            }
+        }
+        stopSafely("ERROR — fresh portfolio could not be re-established; trading remains stopped")
+        return false
+    }
+
+    private suspend fun connectWithBoundedRetry(gateway: com.example.data.deriv.DerivBrokerGateway): Boolean {
+        var delayMs = 2_000L
+        repeat(MAX_RECONNECT_ATTEMPTS) { attempt ->
+            if (stopRequested || !currentCoroutineContext().isActive) return false
+            update(if (attempt == 0) "CONNECTING — verifying selected Deriv account" else "RECONNECTING — attempt ${attempt + 1}/$MAX_RECONNECT_ATTEMPTS")
+            if (gateway.connectAndAuthorize().isSuccess) {
+                update("RECONCILING — fresh authenticated broker session established")
+                return true
+            }
+            delay(delayMs)
+            delayMs = (delayMs * 2).coerceAtMost(30_000L)
+        }
+        return false
+    }
+
     private fun stopSafely(message: String = "Stopped — no new entry requests") {
         stopRequested = true
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
         loopJob?.cancel()
         loopJob = null
         update(message)
@@ -193,10 +277,13 @@ class DerivDemoBotService : Service() {
     private fun update(text: String) {
         _state.value = when {
             text.startsWith("Running") || text.startsWith("Submitting") || text.startsWith("Contract") -> "RUNNING"
-            text.startsWith("Connecting") -> "STARTING"
+            text.startsWith("CONNECTING") || text.startsWith("Connecting") -> "AUTHENTICATING"
+            text.startsWith("RECONCILING") -> "RECONCILING"
+            text.startsWith("RECONNECTING") -> "RECONNECTING"
+            text.startsWith("ERROR") -> "ERROR"
             text.startsWith("Stopped") -> "STOPPED"
-            text.startsWith("Safety blocked") -> "SAFETY_BLOCKED"
-            else -> "CONNECTION_LOST"
+            text.startsWith("Safety blocked") -> "PAUSED"
+            else -> "PAUSED"
         }
         runCatching { getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification(text)) }
     }

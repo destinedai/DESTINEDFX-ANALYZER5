@@ -3,6 +3,8 @@ package com.example.security
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.example.data.deriv.DerivRealAuthorizationLease
+import java.security.MessageDigest
 
 /**
  * Institutional Keystore-backed secrets manager.
@@ -51,6 +53,8 @@ class SecretsManager(private val ctx: Context) {
 
     val isSecureStorageAvailable: Boolean
     private val prefs: android.content.SharedPreferences
+    /** Live trading authorization is deliberately process-memory-only and never restored after restart. */
+    @Volatile private var derivRealLease: DerivRealAuthorizationLease? = null
 
     init {
         var tempSecure = false
@@ -103,29 +107,73 @@ class SecretsManager(private val ctx: Context) {
     /** Deriv credentials must never be persisted to the in-memory fallback as if save succeeded. */
     fun saveDerivApiToken(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank()) return false
+        invalidateDerivRealAuthorization()
         return prefs.edit().putString(DERIV_API_TOKEN, v.trim()).commit()
     }
     fun saveDerivAppId(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
+        invalidateDerivRealAuthorization()
         return prefs.edit().putString(DERIV_APP_ID, v.trim()).commit()
     }
-    /** Mode is explicit; REAL stays disabled unless separately enabled after independent review. */
+    /** Mode is explicit; selecting REAL is separate from arming live trading. */
     fun saveDerivAccountMode(v: String): Boolean {
         val mode = v.trim().lowercase()
         if (!isSecureStorageAvailable || mode !in setOf("demo", "real")) return false
-        if (mode == "real" && !isDerivRealExecutionEnabled()) return false
+        invalidateDerivRealAuthorization()
         return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).commit()
     }
-    fun enableDerivRealExecution(explicitConfirmation: Boolean): Boolean {
-        if (!isSecureStorageAvailable || !explicitConfirmation) return false
-        return prefs.edit().putBoolean(DERIV_REAL_EXECUTION_ENABLED, true).commit()
+    fun enableDerivRealExecution(
+        explicitConfirmation: Boolean,
+        accountId: String,
+        accountType: String,
+        currency: String,
+        authenticatedSessionId: String,
+        credentialGeneration: String
+    ): Boolean {
+        if (!isSecureStorageAvailable || !explicitConfirmation ||
+            accountId.isBlank() || !accountType.equals("real", ignoreCase = true) ||
+            currency.isBlank() || authenticatedSessionId.isBlank() || credentialGeneration.isBlank()
+        ) return false
+        derivRealLease = DerivRealAuthorizationLease(
+            brokerIdentity = "DERIV_OPTIONS",
+            accountId = accountId.trim(),
+            accountType = accountType.trim().lowercase(),
+            currency = currency.trim().uppercase(),
+            authenticatedSessionId = authenticatedSessionId,
+            credentialGeneration = credentialGeneration,
+            armedAtMs = System.currentTimeMillis()
+        )
+        return true
+    }
+    /** Legacy arming has no account/session identity and is intentionally rejected. */
+    @Deprecated("Use the account- and session-bound overload")
+    fun enableDerivRealExecution(explicitConfirmation: Boolean): Boolean = false
+    fun getDerivRealAuthorizationLease(): DerivRealAuthorizationLease? = derivRealLease
+    fun isDerivRealExecutionAuthorized(
+        accountId: String,
+        accountType: String,
+        currency: String,
+        authenticatedSessionId: String,
+        credentialGeneration: String
+    ): Boolean = isSecureStorageAvailable && derivRealLease?.matches(
+        broker = "DERIV_OPTIONS",
+        currentAccountId = accountId,
+        currentAccountType = accountType,
+        currentCurrency = currency,
+        currentSessionId = authenticatedSessionId,
+        currentCredentialGeneration = credentialGeneration
+    ) == true
+    fun invalidateDerivRealAuthorization() {
+        derivRealLease = derivRealLease?.copy(state = DerivRealAuthorizationLease.State.INVALIDATED)
     }
     fun disableDerivRealExecution(): Boolean {
         if (!isSecureStorageAvailable) return false
-        return prefs.edit().putBoolean(DERIV_REAL_EXECUTION_ENABLED, false).putString(DERIV_ACCOUNT_MODE, "demo").commit()
+        invalidateDerivRealAuthorization()
+        return prefs.edit().remove(DERIV_REAL_EXECUTION_ENABLED).putString(DERIV_ACCOUNT_MODE, "demo").commit()
     }
     fun clearDerivCredentials(): Boolean {
         if (!isSecureStorageAvailable) return false
+        invalidateDerivRealAuthorization()
         return prefs.edit().remove(DERIV_API_TOKEN).remove(DERIV_APP_ID)
             .remove(DERIV_ACCOUNT_MODE).commit()
     }
@@ -233,7 +281,15 @@ class SecretsManager(private val ctx: Context) {
     fun getDerivAppId(): String = if (!isSecureStorageAvailable) "" else (prefs.getString(DERIV_APP_ID, "") ?: "")
         .trim()
         .takeUnless { it.isBlank() || it == "1089" } ?: ""
-    fun isDerivRealExecutionEnabled(): Boolean = isSecureStorageAvailable && prefs.getBoolean(DERIV_REAL_EXECUTION_ENABLED, false)
+    fun isDerivRealExecutionEnabled(): Boolean = isSecureStorageAvailable && derivRealLease?.state == DerivRealAuthorizationLease.State.ARMED
+    /** A non-secret fingerprint changes whenever the PAT changes, without logging or persisting the PAT. */
+    fun getDerivCredentialGeneration(): String {
+        val token = getDerivApiToken()
+        if (token.isBlank()) return ""
+        return MessageDigest.getInstance("SHA-256")
+            .digest(token.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+    }
     fun getDerivAccountMode(): String = if (isSecureStorageAvailable) {
         (prefs.getString(DERIV_ACCOUNT_MODE, "demo") ?: "demo").lowercase().takeIf { it == "demo" || it == "real" } ?: "demo"
     } else "demo"
@@ -262,7 +318,7 @@ class SecretsManager(private val ctx: Context) {
 
 
     fun hasCredentials() = getMT5AccountNumber().isNotBlank()
-    fun clearAll()       = prefs.edit().clear().apply()
+    fun clearAll()       { invalidateDerivRealAuthorization(); prefs.edit().clear().apply() }
 
     fun getBrokerSymbolOverrides(): Map<String, String> {
         val jsonStr = prefs.getString(BROKER_SYMBOL_OVERRIDES, "") ?: ""
