@@ -130,7 +130,7 @@ class SecretsManager(private val ctx: Context) {
         authenticatedSessionId: String,
         credentialGeneration: String
     ): Boolean {
-        if (!isSecureStorageAvailable || !explicitConfirmation ||
+        if (!isSecureStorageAvailable || !explicitConfirmation || !getDerivAccountMode().equals("real", ignoreCase = true) ||
             accountId.isBlank() || !accountType.equals("real", ignoreCase = true) ||
             currency.isBlank() || authenticatedSessionId.isBlank() || credentialGeneration.isBlank()
         ) return false
@@ -148,21 +148,38 @@ class SecretsManager(private val ctx: Context) {
     /** Legacy arming has no account/session identity and is intentionally rejected. */
     @Deprecated("Use the account- and session-bound overload")
     fun enableDerivRealExecution(explicitConfirmation: Boolean): Boolean = false
-    fun getDerivRealAuthorizationLease(): DerivRealAuthorizationLease? = derivRealLease
+    fun getDerivRealAuthorizationLease(nowMs: Long = System.currentTimeMillis()): DerivRealAuthorizationLease? {
+        activeDerivRealLease(nowMs)
+        return derivRealLease
+    }
     fun isDerivRealExecutionAuthorized(
         accountId: String,
         accountType: String,
         currency: String,
         authenticatedSessionId: String,
-        credentialGeneration: String
-    ): Boolean = isSecureStorageAvailable && derivRealLease?.matches(
-        broker = "DERIV_OPTIONS",
-        currentAccountId = accountId,
-        currentAccountType = accountType,
-        currentCurrency = currency,
-        currentSessionId = authenticatedSessionId,
-        currentCredentialGeneration = credentialGeneration
-    ) == true
+        credentialGeneration: String,
+        nowMs: Long = System.currentTimeMillis()
+    ): Boolean {
+        if (!isSecureStorageAvailable) return false
+        return activeDerivRealLease(nowMs)?.matches(
+            broker = "DERIV_OPTIONS",
+            currentAccountId = accountId,
+            currentAccountType = accountType,
+            currentCurrency = currency,
+            currentSessionId = authenticatedSessionId,
+            currentCredentialGeneration = credentialGeneration,
+            nowMs = nowMs
+        ) == true
+    }
+    private fun activeDerivRealLease(nowMs: Long): DerivRealAuthorizationLease? {
+        val lease = derivRealLease ?: return null
+        if (lease.state != DerivRealAuthorizationLease.State.ARMED) return null
+        if (!lease.isValidAt(nowMs)) {
+            derivRealLease = lease.copy(state = DerivRealAuthorizationLease.State.INVALIDATED)
+            return null
+        }
+        return lease
+    }
     fun invalidateDerivRealAuthorization() {
         derivRealLease = derivRealLease?.copy(state = DerivRealAuthorizationLease.State.INVALIDATED)
     }
@@ -281,13 +298,15 @@ class SecretsManager(private val ctx: Context) {
     fun getDerivAppId(): String = if (!isSecureStorageAvailable) "" else (prefs.getString(DERIV_APP_ID, "") ?: "")
         .trim()
         .takeUnless { it.isBlank() || it == "1089" } ?: ""
-    fun isDerivRealExecutionEnabled(): Boolean = isSecureStorageAvailable && derivRealLease?.state == DerivRealAuthorizationLease.State.ARMED
-    /** A non-secret fingerprint changes whenever the PAT changes, without logging or persisting the PAT. */
+    fun isDerivRealExecutionEnabled(nowMs: Long = System.currentTimeMillis()): Boolean =
+        isSecureStorageAvailable && activeDerivRealLease(nowMs) != null
+    /** A non-secret fingerprint changes when either the PAT or registered app ID changes. */
     fun getDerivCredentialGeneration(): String {
         val token = getDerivApiToken()
-        if (token.isBlank()) return ""
+        val appId = getDerivAppId()
+        if (token.isBlank() || appId.isBlank()) return ""
         return MessageDigest.getInstance("SHA-256")
-            .digest(token.toByteArray(Charsets.UTF_8))
+            .digest("$appId\u0000$token".toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
     }
     fun getDerivAccountMode(): String = if (isSecureStorageAvailable) {

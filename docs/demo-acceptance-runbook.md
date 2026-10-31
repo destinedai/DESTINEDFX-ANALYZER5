@@ -2,6 +2,8 @@
 
 This procedure is for one authorized broker DEMO account only. It must be executed on the real Windows host with the genuine MT5 terminal, MetaEditor, the deployed HTTPS bridge, and a broker DEMO account. It must never be run against a LIVE account and must never be reported as complete from fake terminal tests.
 
+This file covers managed MT5 only. Direct Android Deriv acceptance, including its account-readiness gate and finite REAL authorization lease, is documented separately in [`deriv-acceptance-runbook.md`](deriv-acceptance-runbook.md).
+
 ## Preconditions
 
 Record the bridge base URL, worker ID, MT5 terminal build, EA source/compiled build hash, broker company, exact server, login, currency, and account mode. Confirm that no broker password, worker token, Fernet key, or hosting secret is written into this record. Configure the MT5 terminal WebRequest allowlist manually with the exact bridge origin; the worker marker records this as an operator-required condition because MT5 does not reliably configure the allowlist through the startup INI.
@@ -29,7 +31,7 @@ Before START, configure `NEWS_PROVIDER_URL` to an authorized HTTPS provider that
 
 For the genuine DEMO run, record a fresh `NEWS CLEAR` verdict for the exact symbol immediately before entry, including source, UTC retrieval time, coverage interval, affected base and quote currencies, and blackout start/end. Repeat with a relevant high-impact event and verify `HIGH-IMPACT NEWS — TRADING BLOCKED` before and after the 30-minute boundaries. Verify an unrelated-currency event does not block a mapped FX pair, while an unmapped instrument remains blocked. Verify an EA-owned pending entry is cancelled and confirmed in broker order history, while a manually placed order and existing position remain untouched.
 
-After the first broker-confirmed fill, wait for the Android Bot screen to synchronize `/v1/app/trades` and verify an `OPEN_TRADE_DEMO_...pdf` appears under `Downloads/DestinedFX/TradeReports/DEMO/`. Confirm requested versus cumulative executed volume, order/deal/position identifiers, floating P/L, actual SL/TP verification, news evidence, and unavailable values are labelled `UNAVAILABLE`. After all closing deals reconcile, verify one stable `FINAL_TRADE_REPORT_DEMO_...pdf` aggregates every closing deal, gross P/L, commission, swap, fees and net P/L. Repeat the same heartbeat and reconnect to prove no duplicate PDF or double-counted money. Run the same evidence sequence for LIVE only after the existing explicit LIVE authorization succeeds.
+After the first broker-confirmed fill, wait for the Android Bot screen to synchronize `/v1/app/trades` and verify an `OPEN_TRADE_DEMO_...pdf` appears under `Downloads/DestinedFX/TradeReports/DEMO/`. Confirm requested versus cumulative executed volume, order/deal/position identifiers, floating P/L, actual SL/TP verification, news evidence, and unavailable values are labelled `UNAVAILABLE`. After all closing deals reconcile, verify one stable `FINAL_TRADE_REPORT_DEMO_...pdf` aggregates every closing deal, gross P/L, commission, swap, fees and net P/L. Repeat the same heartbeat and reconnect to prove no duplicate PDF or double-counted money. This runbook's acceptance scope remains DEMO; any LIVE use requires separate explicit authorization and a distinct approved procedure.
 
 ## Evidence to retain
 
@@ -55,11 +57,9 @@ The repository audit found that the Android registry and deterministic Kotlin en
 
 Still unavailable in this repository environment are Windows MetaEditor compilation, a genuine broker news provider, MT5 WebRequest configuration, broker DEMO credentials, real fills/partial fills, and broker-confirmed report reconciliation. These are acceptance gates, not claims of completion.
 
-## Android Deriv lifecycle acceptance gates
+## Direct Android Deriv acceptance
 
-For the direct Android Deriv DEMO path, record the foreground notification and state transitions `AUTHENTICATING` → `RECONCILING` → `RUNNING`. Disconnect the authenticated WebSocket and confirm the service never submits while disconnected, creates a fresh authenticated session rather than reusing the old socket, verifies the same account ID and DEMO mode, and completes portfolio reconciliation before scanning resumes. Induce five consecutive recoverable failures and confirm reconnect attempts use bounded backoff and finish in `ERROR` without a rapid infinite loop. Send STOP during reconnect and confirm the retry job is cancelled, the enabled flag is cleared, no purchase is sent, and any uncertain prior intent remains blocked pending reconciliation. Restart the app process with an enabled configuration and confirm the service redelivers configuration but does not enter `RUNNING` or submit until fresh authentication and reconciliation succeed. Android force-stop and OS-imposed service termination are not guaranteed to restart automatically and must be reported as platform limitations.
-
-Before every Deriv purchase, retain the successful broker portfolio snapshot showing account ID, DEMO mode, retrieval timestamp, open-contract list, and calculated exposure. A timeout, malformed response, account mismatch, stale snapshot, or unknown contract outcome is a blocking condition; it must never be recorded as an empty portfolio. Confirm aggregate open risk, including the candidate stake, remains within the configured 1% ceiling.
+Follow [`deriv-acceptance-runbook.md`](deriv-acceptance-runbook.md) for the direct Deriv path. It covers the exact authenticated account/session, fresh balance and portfolio, unresolved-execution gate, the 60-minute process-memory REAL lease, pre-purchase revalidation, and DEMO-only broker acceptance. Do not infer Deriv acceptance from the MT5 checks in this file.
 
 ## Free Render safety gate
 

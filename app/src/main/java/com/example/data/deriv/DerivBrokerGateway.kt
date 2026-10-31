@@ -95,6 +95,44 @@ class DerivBrokerGateway(
     private val _portfolioSnapshot = MutableStateFlow<DerivPortfolioSnapshot?>(null)
     val portfolioSnapshot: StateFlow<DerivPortfolioSnapshot?> = _portfolioSnapshot.asStateFlow()
 
+    fun isAccountReadyForTrading(
+        account: DerivAccountInfo?,
+        unresolvedExecutionCount: Int,
+        nowMs: Long = System.currentTimeMillis()
+    ): Boolean {
+        if (!secrets.isSecureStorageAvailable || account == null || _accountInfo.value != account ||
+            !secrets.getDerivAccountMode().equals(account.mode, ignoreCase = true)) return false
+        val metrics = _accountMetrics.value
+        return DerivAccountReadiness.isReadyForTrading(
+            connectionState = _connectionState.value,
+            account = account,
+            currentSessionId = authenticatedSessionId,
+            currentCredentialGeneration = secrets.getDerivCredentialGeneration(),
+            balance = metrics?.balance,
+            balanceCurrency = metrics?.currency,
+            balanceUpdatedAtMs = _accountMetricsUpdatedAtMs.value,
+            portfolio = _portfolioSnapshot.value,
+            unresolvedExecutionCount = unresolvedExecutionCount,
+            nowMs = nowMs
+        )
+    }
+
+    private fun isCurrentAccountSynchronized(account: DerivAccountInfo, nowMs: Long): Boolean {
+        if (_accountInfo.value != account || !secrets.getDerivAccountMode().equals(account.mode, ignoreCase = true)) return false
+        val metrics = _accountMetrics.value
+        return DerivAccountReadiness.isSynchronized(
+            connectionState = _connectionState.value,
+            account = account,
+            currentSessionId = authenticatedSessionId,
+            currentCredentialGeneration = secrets.getDerivCredentialGeneration(),
+            balance = metrics?.balance,
+            balanceCurrency = metrics?.currency,
+            balanceUpdatedAtMs = _accountMetricsUpdatedAtMs.value,
+            portfolio = _portfolioSnapshot.value,
+            nowMs = nowMs
+        )
+    }
+
     private val cachedQuotes = ConcurrentHashMap<String, MarketQuote>()
     @Volatile private var lastConnectionError: String? = null
 
@@ -689,6 +727,33 @@ class DerivBrokerGateway(
             put("req_id", buyReqId)
         }
         onStage(buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT)
+        val purchaseBoundaryNow = System.currentTimeMillis()
+        val accountAndSessionStillCurrent = sessionId != null &&
+            authenticatedSessionId == sessionId &&
+            secrets.getDerivCredentialGeneration() == credentialGeneration &&
+            isCurrentAccountSynchronized(account, purchaseBoundaryNow)
+        val realLeaseStillValid = mode != "real" || secrets.isDerivRealExecutionAuthorized(
+            account.loginId, account.accountType, account.currency, sessionId.orEmpty(), credentialGeneration,
+            nowMs = purchaseBoundaryNow
+        )
+        if (!accountAndSessionStillCurrent || !realLeaseStillValid) {
+            onStage(propReqId, proposalId, DerivSubmissionStage.PROPOSAL_CONFIRMED)
+            pendingRequests.remove(buyReqId)
+            val blockReason = if (mode == "real" && !realLeaseStillValid) {
+                "REAL_EXECUTION_DISABLED: REAL authorization expired or no longer matches after proposal; no purchase was sent."
+            } else {
+                "PURCHASE_NOT_SENT: account readiness or authenticated session changed after proposal; no purchase was sent."
+            }
+            return@withContext Result.failure(
+                DerivExecutionFailure(
+                    DerivExecutionFailureKind.PURCHASE_NOT_SENT,
+                    blockReason,
+                    buyReqId,
+                    proposalId,
+                    DerivSubmissionStage.PROPOSAL_CONFIRMED
+                )
+            )
+        }
         if (webSocket?.send(buyPayload.toString()) != true) {
             pendingRequests.remove(buyReqId)
             return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_NOT_SENT, "PURCHASE_NOT_SENT: Deriv WebSocket rejected the buy request before transmission.", buyReqId, proposalId, DerivSubmissionStage.PROPOSAL_CONFIRMED))

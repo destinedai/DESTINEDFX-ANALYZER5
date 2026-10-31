@@ -194,6 +194,8 @@ class DerivDemoBotService : Service() {
                         when {
                             reason.startsWith("EXECUTION_UNKNOWN") || reason.startsWith("RECONCILIATION_REQUIRED") ->
                                 stopSafely("Safety blocked — $reason. Manual reconciliation is required.")
+                            reason.contains("REAL_EXECUTION_DISABLED") ->
+                                stopSafely("Safety blocked — REAL authorization expired or changed. Re-verify readiness and explicitly arm this account again.")
                             reason.startsWith("PORTFOLIO_RETRYABLE") || reason.startsWith("PORTFOLIO_REQUIRED") || reason.startsWith("BALANCE_REQUIRED") -> {
                                 update("RECONNECTING — $reason; purchases paused")
                                 if (!connectWithBoundedRetry(gateway)) {

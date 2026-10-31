@@ -21,6 +21,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.broker.BrokerType
 import com.example.data.deriv.DerivConnectionState
+import com.example.data.deriv.DerivExecutionEntity
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.theme.DarkSurface
 import com.example.ui.theme.ElectricCyan
@@ -45,7 +47,10 @@ import com.example.ui.theme.LossRed
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmber
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 
 @Composable
 fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
@@ -53,6 +58,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
     val gateway = viewModel.app.derivBrokerGateway
     val connection by gateway.connectionState.collectAsStateWithLifecycle()
     val account by gateway.accountInfo.collectAsStateWithLifecycle()
+    val accountMetrics by gateway.accountMetrics.collectAsStateWithLifecycle()
     val availableAccounts by gateway.availableAccounts.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var appId by remember { mutableStateOf(secrets.getDerivAppId()) }
@@ -61,9 +67,54 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
     var showToken by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
-    var realArmed by remember { mutableStateOf(secrets.isDerivRealExecutionEnabled()) }
     var selectedAccountId by remember { mutableStateOf("") }
+    var readinessNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var armStatusRevision by remember { mutableStateOf(0) }
+    val executionRecordsFlow = remember(viewModel.app.db) {
+        viewModel.app.db.derivExecutionDao().observeAll()
+            .map<List<DerivExecutionEntity>, List<DerivExecutionEntity>?> { it }
+    }
+    val executionRecords by executionRecordsFlow.collectAsStateWithLifecycle(initialValue = null)
+    val unresolvedStatuses = setOf("ORDER_SUBMITTING", "ORDER_PENDING", "EXECUTION_UNKNOWN", "RECONCILIATION_REQUIRED")
+    val unresolvedExecutionCount = executionRecords?.count { record ->
+            record.accountId == "LEGACY_UNKNOWN" ||
+                (account != null && record.accountId == account.loginId &&
+                    record.accountMode.equals(account.mode, ignoreCase = true) && record.status in unresolvedStatuses)
+        } ?: 1
     val gatewayReady = connection == DerivConnectionState.READY
+    LaunchedEffect(account?.loginId, connection) {
+        if (account != null) {
+            while (true) {
+                readinessNowMs = System.currentTimeMillis()
+                if (connection == DerivConnectionState.READY) {
+                    try {
+                        gateway.fetchPortfolio()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // The readiness predicate remains false until a successful fresh snapshot arrives.
+                    }
+                }
+                readinessNowMs = System.currentTimeMillis()
+                delay(5_000L)
+            }
+        }
+    }
+    val accountReady = gateway.isAccountReadyForTrading(account, unresolvedExecutionCount, readinessNowMs)
+    val realArmed = remember(account, readinessNowMs, armStatusRevision) {
+        account?.takeIf { it.mode == "real" }?.let {
+            secrets.isDerivRealExecutionAuthorized(
+                it.loginId, it.accountType, it.currency, it.authenticatedSessionId, it.credentialGeneration,
+                nowMs = readinessNowMs
+            )
+        } == true
+    }
+    val accountStatus = when {
+        account == null -> "NOT VERIFIED"
+        accountReady -> "${account.mode.uppercase()} VERIFIED"
+        connection in setOf(DerivConnectionState.ERROR, DerivConnectionState.AUTH_FAILED, DerivConnectionState.DISCONNECTED) -> "NOT READY"
+        else -> "SYNCHRONIZING"
+    }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -80,37 +131,56 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                 }
             }
             Text(
-                "Account: ${account?.loginId ?: "NOT VERIFIED"} · ${if (account != null) "${account?.mode?.uppercase()} VERIFIED" else "NOT CONNECTED"} · Connection: ${connection.name}",
-                color = if (account != null && gatewayReady) ElectricCyan else WarningAmber,
+                "Account: ${account?.loginId ?: "NOT VERIFIED"} · $accountStatus · Connection: ${connection.name}",
+                color = if (accountReady) ElectricCyan else WarningAmber,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold
             )
             if (account != null) {
-                Text("Broker-returned currency: ${account?.currency} · balance snapshot: ${account?.balance}", color = TextPrimary, fontSize = 10.sp)
+                Text(
+                    "Broker-returned currency: ${account.currency} · ${if (accountReady) "fresh balance ${accountMetrics?.balance}" else "initial balance ${account.balance}"} · ${if (accountReady) "portfolio READY" else "not yet ready for trading"}",
+                    color = TextPrimary,
+                    fontSize = 10.sp
+                )
                 if (account?.mode == "real") {
                     Text(
-                        if (realArmed) "LIVE ARM: ARMED for ${account?.loginId}" else "LIVE ARM: DISARMED — connection alone cannot place REAL orders",
+                        if (realArmed) "LIVE ARM: ARMED for ${account?.loginId} · 60-MINUTE LEASE" else "LIVE ARM: DISARMED — connection alone cannot place REAL orders",
                         color = if (realArmed) LossRed else WarningAmber,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Button(
-                        enabled = !busy && !realArmed,
+                        enabled = !busy && accountReady && !realArmed,
                         onClick = {
-                            realArmed = account?.let {
-                                secrets.enableDerivRealExecution(
-                                    explicitConfirmation = true,
-                                    accountId = it.loginId,
-                                    accountType = it.accountType,
-                                    currency = it.currency,
-                                    authenticatedSessionId = it.authenticatedSessionId,
-                                    credentialGeneration = it.credentialGeneration
-                                )
-                            } == true
-                            message = if (realArmed) "LIVE TRADING ARMED for ${account?.loginId}. Start still requires the verified account shown above." else "Live arming failed; no REAL order can be sent."
+                            val currentAccount = account
+                            val isStillReady = gateway.isAccountReadyForTrading(
+                                currentAccount, unresolvedExecutionCount, System.currentTimeMillis()
+                            )
+                            val armed = currentAccount != null && isStillReady && secrets.enableDerivRealExecution(
+                                explicitConfirmation = true,
+                                accountId = currentAccount.loginId,
+                                accountType = currentAccount.accountType,
+                                currency = currentAccount.currency,
+                                authenticatedSessionId = currentAccount.authenticatedSessionId,
+                                credentialGeneration = currentAccount.credentialGeneration
+                            )
+                            armStatusRevision++
+                            message = when {
+                                armed -> "LIVE TRADING ARMED for ${currentAccount?.loginId}. Authorization expires after 60 minutes; re-arm explicitly."
+                                !isStillReady -> "Live arming blocked — wait for fresh authenticated balance/portfolio readiness and resolve any pending execution."
+                                else -> "Live arming failed; no REAL order can be sent."
+                            }
                         },
                         modifier = Modifier.fillMaxWidth().testTag("deriv_arm_live")
                     ) { Text(if (realArmed) "LIVE TRADING ARMED" else "ARM LIVE TRADING FOR ${account?.loginId}") }
+                    if (!accountReady) {
+                        Text(
+                            if (unresolvedExecutionCount > 0) "SYNCHRONIZING — resolve the pending or uncertain execution before live arming."
+                            else "SYNCHRONIZING — arming waits for a current authenticated session, fresh matching balance, successful fresh portfolio and READY state.",
+                            color = WarningAmber,
+                            fontSize = 9.sp
+                        )
+                    }
                 }
             }
             if (!secrets.isSecureStorageAvailable) {
@@ -120,7 +190,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         enabled = !busy,
-                        onClick = { selectedMode = "demo"; realArmed = false; secrets.disableDerivRealExecution() },
+                        onClick = { selectedMode = "demo"; secrets.disableDerivRealExecution(); armStatusRevision++ },
                         modifier = Modifier.weight(1f).testTag("deriv_select_demo")
                     ) { Text("DEMO") }
                     OutlinedButton(
@@ -182,7 +252,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                                 } else {
                                     if (selectedMode == "demo") {
                                         secrets.disableDerivRealExecution()
-                                        realArmed = false
+                                        armStatusRevision++
                                     }
                                     viewModel.selectBroker(BrokerType.DERIV)
                                     val result = gateway.connectAndAuthorize(selectedAccountId = selectedAccountId.ifBlank { null })
@@ -209,8 +279,8 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                     enabled = !busy,
                     onClick = {
                         gateway.disconnect()
-                        realArmed = false
                         secrets.disableDerivRealExecution()
+                        armStatusRevision++
                         message = "Deriv connection closed. Stored credentials remain encrypted on this device."
                     },
                     modifier = Modifier.fillMaxWidth().testTag("deriv_demo_disconnect")
@@ -219,8 +289,8 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                     enabled = !busy,
                     onClick = {
                         gateway.disconnect()
-                        realArmed = false
                         secrets.disableDerivRealExecution()
+                        armStatusRevision++
                         val cleared = secrets.clearDerivCredentials()
                         message = if (cleared) "Deriv disconnected and local API credentials deleted." else "Disconnected, but encrypted credential deletion could not be confirmed."
                     },
