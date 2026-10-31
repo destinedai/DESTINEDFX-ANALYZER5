@@ -91,8 +91,29 @@ class DerivDemoBotService : Service() {
                     .putString(EXTRA_TIMEFRAME, timeframe).putBoolean("enabled", true).apply()
                 loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
             }
+            null -> {
+                // Recovery is deliberately DEMO-only. A process restart must never turn a
+                // persisted REAL configuration into a new live session.
+                val app = application as? MyApplication
+                val mode = app?.secretsManager?.getDerivAccountMode()?.lowercase()
+                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                val symbol = prefs.getString(EXTRA_SYMBOL, null)?.trim().orEmpty()
+                val strategy = prefs.getString(EXTRA_STRATEGY, null)?.trim().orEmpty()
+                val timeframe = prefs.getString(EXTRA_TIMEFRAME, null)?.trim().orEmpty()
+                if (mode == "demo" && prefs.getBoolean("enabled", false) &&
+                    symbol.isNotBlank() && strategy.isNotBlank() && timeframe.isNotBlank() &&
+                    DerivMultiplierRules.isSupportedUnderlying(symbol)) {
+                    stopRequested = false
+                    loopJob?.cancel()
+                    loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
+                } else {
+                    update(if (mode == "real") "PAUSED — REAL trading requires an explicit user start and authorization" else "STOPPED")
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
+            }
         }
-        return START_REDELIVER_INTENT
+        return START_STICKY
     }
 
     private suspend fun runBot(symbol: String, strategyId: String, timeframe: String) {
@@ -279,9 +300,8 @@ class DerivDemoBotService : Service() {
     private fun update(text: String) {
         _state.value = when {
             text.startsWith("Running") || text.startsWith("Submitting") || text.startsWith("Contract") -> "RUNNING"
-            text.startsWith("CONNECTING") || text.startsWith("Connecting") -> "AUTHENTICATING"
+            text.startsWith("CONNECTING") || text.startsWith("Connecting") || text.startsWith("RECONNECTING") -> "CONNECTING"
             text.startsWith("RECONCILING") -> "RECONCILING"
-            text.startsWith("RECONNECTING") -> "RECONNECTING"
             text.startsWith("ERROR") -> "ERROR"
             text.startsWith("Stopped") -> "STOPPED"
             text.startsWith("Safety blocked") -> "PAUSED"
