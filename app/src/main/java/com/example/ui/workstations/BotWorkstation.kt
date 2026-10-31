@@ -38,6 +38,7 @@ import com.example.ui.InsightLine
 import com.example.ui.theme.*
 import com.example.ui.components.TerminalPageHeader
 import com.example.ui.components.StatChip
+import com.example.service.DerivBotServiceStatePolicy
 import androidx.compose.ui.platform.LocalContext
 import com.example.security.AppSecurityGuard
 import com.destinedfx.core.news.HighImpactNewsSentry
@@ -608,7 +609,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
         // Master Bot Control Card
         item {
-            val isRunning = if (bridgeMode) bridgeDisplayState in setOf("RUNNING", "PAUSED") else if (activeBrokerType == BrokerType.DERIV) derivServiceState == "RUNNING" else botSummary.isRunning || botActive
+            val derivServiceActive = DerivBotServiceStatePolicy.isSwitchChecked(derivServiceState)
+            val isRunning = if (bridgeMode) bridgeDisplayState in setOf("RUNNING", "PAUSED") else if (activeBrokerType == BrokerType.DERIV) derivServiceActive else botSummary.isRunning || botActive
             val bridgeFresh = bridgeTerminalFresh
             val bridgeReady = bridgeTerminalReady
             val bridgeCanStart = bridgeReady && (bridgeSnapshot?.state == "READY" || bridgeSnapshot?.state == "STOPPED")
@@ -616,7 +618,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
             val derivExecutionMode = activeBrokerType == BrokerType.DERIV
             val derivSymbolSupported = DerivMultiplierRules.isSupportedUnderlying(activeSymbol)
-            val statusColor = if (bridgeMode) bridgeStatusColor else when (botSummary.state) {
+            val statusColor = if (bridgeMode) bridgeStatusColor else if (activeBrokerType == BrokerType.DERIV) when (derivServiceState) {
+                "RUNNING" -> ProfitGreen
+                "CONNECTING", "RECONCILING", "PAUSED" -> OrangeAccent
+                "ERROR" -> LossRed
+                else -> TextSecondary
+            } else when (botSummary.state) {
                 BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
                 BotLifecycleState.EXECUTING -> CyanPrimary
                 BotLifecycleState.CONNECTING_BROKER -> OrangeAccent
@@ -657,7 +664,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         Switch(
                             checked = isRunning,
-                            enabled = if (bridgeMode) (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)) else if (derivExecutionMode) derivServiceState !in setOf("STARTING", "STOPPING") else true,
+                            enabled = if (bridgeMode) (!bridgeBusy && !bridgeCommandPending && (if (isRunning) bridgeFresh else bridgeCanStart && supportedStrategy && validBridgeRisk)) else if (derivExecutionMode) DerivBotServiceStatePolicy.canStart(derivServiceState) || DerivBotServiceStatePolicy.canStop(derivServiceState) else true,
                             onCheckedChange = { active ->
                                 if (bridgeMode) coroutineScope.launch {
                                     bridgeBusy = true

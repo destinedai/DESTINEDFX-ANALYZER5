@@ -45,13 +45,24 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # debug.keystore is gitignored, but the debug signing config needs it.
-      - name: Create debug keystore
+      # Keep the debug certificate stable across builds when the protected repository secret
+      # is configured. The fallback is intentionally fresh-install-only and is reported.
+      - name: Prepare stable debug keystore
+        env:
+          DESTINEDFX_DEBUG_KEYSTORE_B64: ${{ secrets.DESTINEDFX_DEBUG_KEYSTORE_B64 }}
         run: |
-          keytool -genkeypair -v -keystore debug.keystore \
-            -storepass android -keypass android -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ -n "$DESTINEDFX_DEBUG_KEYSTORE_B64" ]; then
+            printf '%s' "$DESTINEDFX_DEBUG_KEYSTORE_B64" | base64 --decode > debug.keystore
+            chmod 600 debug.keystore
+            echo "Stable protected debug keystore loaded; APK updates retain the same signing certificate." >> "$GITHUB_STEP_SUMMARY"
+          else
+            keytool -genkeypair -v -keystore debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "::warning title=Fresh-install-only APK::DESTINEDFX_DEBUG_KEYSTORE_B64 is not configured; this build uses a new debug certificate and is not guaranteed to update an earlier APK."
+            echo "Fresh debug keystore generated; configure the protected DESTINEDFX_DEBUG_KEYSTORE_B64 secret for upgrade-compatible builds." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
@@ -120,6 +131,15 @@ jobs:
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
+
+      - name: Verify APK signature and package metadata
+        run: |
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -n "$apksigner_path"
+          "$apksigner_path" verify --verbose --print-certs "$apk"
+          aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
+          "$aapt_path" dump badging "$apk" | grep -E "package:|sdkVersion:|native-code:"
 
       - uses: actions/upload-artifact@v4
         with:

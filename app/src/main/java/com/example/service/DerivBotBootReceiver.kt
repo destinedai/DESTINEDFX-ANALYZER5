@@ -12,20 +12,22 @@ import com.example.security.SecretsManager
  */
 class DerivBotBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != Intent.ACTION_BOOT_COMPLETED &&
-            intent?.action != Intent.ACTION_LOCKED_BOOT_COMPLETED) return
-
         val prefs = context.getSharedPreferences("deriv_bot_config", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("enabled", false)) return
-        // A stale preference must not be enough to restart a live account after reboot.
-        val isDemo = runCatching { SecretsManager(context).getDerivAccountMode().equals("demo", ignoreCase = true) }
-            .getOrDefault(false)
-        if (!isDemo) return
-
         val symbol = prefs.getString(DerivDemoBotService.EXTRA_SYMBOL, null)?.trim().orEmpty()
         val strategy = prefs.getString(DerivDemoBotService.EXTRA_STRATEGY, null)?.trim().orEmpty()
         val timeframe = prefs.getString(DerivDemoBotService.EXTRA_TIMEFRAME, null)?.trim().orEmpty()
-        if (symbol.isBlank() || strategy.isBlank() || timeframe.isBlank()) return
+        val secure = runCatching { SecretsManager(context) }.getOrNull() ?: return
+        val hasCredentials = secure.isSecureStorageAvailable &&
+            secure.getDerivApiToken().isNotBlank() && secure.getDerivAppId().isNotBlank()
+        if (!DerivBotRecoveryPolicy.shouldRecover(
+                intent?.action,
+                secure.getDerivAccountMode(),
+                prefs.getBoolean("enabled", false),
+                hasCredentials,
+                symbol,
+                strategy,
+                timeframe
+            )) return
 
         val serviceIntent = Intent(context, DerivDemoBotService::class.java).apply {
             action = DerivDemoBotService.ACTION_START
