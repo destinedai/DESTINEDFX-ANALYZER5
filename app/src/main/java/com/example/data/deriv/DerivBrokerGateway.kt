@@ -16,6 +16,7 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.UUID
 
 data class DerivContractInfo(
     val contractId: Long,
@@ -33,20 +34,20 @@ data class DerivContractInfo(
 ) {
     val isExecutionValid: Boolean
         get() = contractId > 0L &&
+            transactionId > 0L &&
             DerivMultiplierRules.isSupportedUnderlying(symbol) &&
             contractType.uppercase() in setOf("MULTUP", "MULTDOWN") &&
             buyPrice.isFinite() && buyPrice > 0.0 && purchaseTime > 0L
 }
 
-/** Selects only an active Options account matching the user's explicit DEMO/REAL choice. */
-internal fun selectDerivOptionsAccount(accounts: org.json.JSONArray, requestedMode: String): JSONObject? {
+/** Selects an exact active Options account; multiple matches require an explicit ID. */
+internal fun selectDerivOptionsAccount(accounts: org.json.JSONArray, requestedMode: String, selectedAccountId: String? = null): JSONObject? {
     val mode = requestedMode.trim().lowercase().takeIf { it == "real" || it == "demo" } ?: "demo"
-    for (index in 0 until accounts.length()) {
-        val account = accounts.optJSONObject(index) ?: continue
-        if (account.optString("status").equals("active", ignoreCase = true) &&
-            account.optString("account_type").equals(mode, ignoreCase = true)) return account
-    }
-    return null
+    val matches = (0 until accounts.length()).mapNotNull { accounts.optJSONObject(it) }
+        .filter { it.optString("status").equals("active", ignoreCase = true) && it.optString("account_type").equals(mode, ignoreCase = true) }
+    val requestedId = selectedAccountId?.trim().orEmpty()
+    if (requestedId.isNotBlank()) return matches.singleOrNull { it.optString("account_id").trim() == requestedId }
+    return matches.singleOrNull()
 }
 
 /** Compatibility helper for callers that explicitly request a DEMO account. */
@@ -82,6 +83,8 @@ class DerivBrokerGateway(
 
     private val _accountInfo = MutableStateFlow<DerivAccountInfo?>(null)
     val accountInfo: StateFlow<DerivAccountInfo?> = _accountInfo.asStateFlow()
+    private val _availableAccounts = MutableStateFlow<List<DerivAccountOption>>(emptyList())
+    val availableAccounts: StateFlow<List<DerivAccountOption>> = _availableAccounts.asStateFlow()
 
     private val _openPositions = MutableStateFlow<List<Position>>(emptyList())
     val openPositions: StateFlow<List<Position>> = _openPositions.asStateFlow()
@@ -99,6 +102,8 @@ class DerivBrokerGateway(
     private val reqIdCounter = AtomicInteger(100)
     private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    @Volatile private var authenticatedSessionId: String? = null
+    @Volatile private var selectedAccountIdForSession: String? = null
 
     /**
      * Connects directly to the current Deriv Options API without MetaAPI:
@@ -110,7 +115,7 @@ class DerivBrokerGateway(
      * Personal Access Tokens. If the token is legacy or missing the trade scope, the REST error
      * is surfaced so the user can create the correct token.
      */
-    suspend fun connectAndAuthorize(apiToken: String? = null): Result<DerivAccountInfo> = withContext(Dispatchers.IO) {
+    suspend fun connectAndAuthorize(apiToken: String? = null, selectedAccountId: String? = null): Result<DerivAccountInfo> = withContext(Dispatchers.IO) {
         if (!secrets.isSecureStorageAvailable) {
             _connectionState.value = DerivConnectionState.AUTH_FAILED
             return@withContext Result.failure(Exception("Secure Android Keystore storage is unavailable; Deriv connection is blocked."))
@@ -131,6 +136,10 @@ class DerivBrokerGateway(
         }
 
         lastConnectionError = null
+        secrets.invalidateDerivRealAuthorization()
+        val sessionId = UUID.randomUUID().toString()
+        authenticatedSessionId = sessionId
+        val credentialGeneration = secrets.getDerivCredentialGeneration()
         _connectionState.value = DerivConnectionState.CONNECTING
         // Ensure a retry never leaves old request waiters attached to the previous socket.
         webSocket?.close(1000, "Replacing old Deriv session")
@@ -153,17 +162,28 @@ class DerivBrokerGateway(
 
             val activeAccounts = (0 until accounts.length()).mapNotNull { accounts.optJSONObject(it) }
                 .filter { it.optString("status").equals("active", ignoreCase = true) }
-            val account = selectDerivOptionsAccount(accounts, requestedMode)
+            _availableAccounts.value = activeAccounts.mapNotNull { row ->
+                val id = row.optString("account_id").trim()
+                val type = row.optString("account_type").trim().lowercase()
+                val currency = row.optString("currency").trim()
+                val balance = row.optDouble("balance", Double.NaN)
+                if (id.isBlank() || type !in setOf("demo", "real") || currency.isBlank() || !balance.isFinite() || balance < 0.0) null
+                else DerivAccountOption(id, type, currency, balance)
+            }
+            _connectionState.value = DerivConnectionState.ACCOUNT_VERIFICATION
+            val requestedAccountId = selectedAccountId ?: selectedAccountIdForSession
+            val account = selectDerivOptionsAccount(accounts, requestedMode, requestedAccountId)
             if (account == null) {
                 val available = activeAccounts.map { it.optString("account_type").ifBlank { "unknown" } }.distinct()
                 throw IllegalStateException(
-                    "No active ${requestedMode.uppercase()} Options account was returned for this token" +
+                    "No unique active ${requestedMode.uppercase()} Options account was selected for this token" +
                         (if (available.isEmpty()) "." else ". Available account types: " + available.joinToString() + ".") +
                         " Check that the token has the required account-read and trading permissions."
                 )
             }
 
             val accountId = account.optString("account_id").trim()
+            selectedAccountIdForSession = accountId
             val currency = account.optString("currency").trim()
             val initialBalance = account.optDouble("balance", 0.0)
             if (accountId.isBlank()) throw IllegalStateException("Deriv returned an account with no account_id.")
@@ -184,7 +204,14 @@ class DerivBrokerGateway(
             val otpJson = executeRestJson(otpRequest)
             val authenticatedUrl = otpJson.optJSONObject("data")?.optString("url")?.trim().orEmpty()
             val expectedEndpoint = "/trading/v1/options/ws/$requestedMode"
-            if (!authenticatedUrl.startsWith(AUTHENTICATED_WS_PREFIX) || !authenticatedUrl.substringBefore('?').endsWith(expectedEndpoint)) {
+            val otpUri = runCatching { java.net.URI(authenticatedUrl) }.getOrNull()
+            val otpQuery = otpUri?.rawQuery.orEmpty().split('&').mapNotNull {
+                it.split('=', limit = 2).takeIf { parts -> parts.size == 2 }?.let { parts -> parts[0] to parts[1] }
+            }.toMap()
+            if (!authenticatedUrl.startsWith(AUTHENTICATED_WS_PREFIX) ||
+                otpUri?.scheme != "wss" || otpUri.host != "api.derivws.com" ||
+                otpUri.path != expectedEndpoint || otpQuery["otp"].isNullOrBlank()
+            ) {
                 throw IllegalStateException("Deriv OTP response did not select the requested ${requestedMode.uppercase()} authenticated endpoint.")
             }
 
@@ -207,6 +234,8 @@ class DerivBrokerGateway(
                     }
                     val ownsCurrentSession = webSocket === ws
                     if (ownsCurrentSession) {
+                        secrets.invalidateDerivRealAuthorization()
+                        authenticatedSessionId = null
                         lastConnectionError = "Deriv authenticated WebSocket failed: $detail"
                         Log.e(TAG, lastConnectionError ?: "Deriv authenticated WebSocket failure")
                         _connectionState.value = DerivConnectionState.ERROR
@@ -218,6 +247,8 @@ class DerivBrokerGateway(
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                     val ownsCurrentSession = webSocket === ws
                     if (ownsCurrentSession) {
+                        secrets.invalidateDerivRealAuthorization()
+                        authenticatedSessionId = null
                         if (code != 1000) {
                             lastConnectionError = "Deriv closed the authenticated WebSocket (code $code" +
                                 (reason.takeIf { it.isNotBlank() }?.let { ", $it" } ?: "") + ")."
@@ -244,7 +275,11 @@ class DerivBrokerGateway(
                 accountType = account.optString("account_type").lowercase(),
                 demoVerified = account.optString("account_type").equals("demo", ignoreCase = true),
                 mode = requestedMode,
-                realExecutionAuthorized = requestedMode == "real" && secrets.isDerivRealExecutionEnabled()
+                realExecutionAuthorized = requestedMode == "real" && secrets.isDerivRealExecutionAuthorized(
+                    accountId, "real", currency, sessionId, credentialGeneration
+                ),
+                authenticatedSessionId = sessionId,
+                credentialGeneration = credentialGeneration
             )
             if (!account.optString("account_type").equals(requestedMode, ignoreCase = true)) {
                 throw IllegalStateException("Deriv returned an account-mode mismatch; requested $requestedMode but received ${account.optString("account_type") }.")
@@ -258,22 +293,57 @@ class DerivBrokerGateway(
                 marginLevel = 0.0,
                 currency = currency
             )
-            _accountMetricsUpdatedAtMs.value = System.currentTimeMillis()
-            _connectionState.value = DerivConnectionState.CONNECTED
+            // The REST account balance is only a pre-auth snapshot. Readiness requires a
+            // fresh balance message from the authenticated WebSocket session.
+            _accountMetricsUpdatedAtMs.value = 0L
+            _connectionState.value = DerivConnectionState.SYNCHRONIZING
             // The authenticated WebSocket already carries the account scope; no legacy
             // "authorize" message is sent after the OTP handshake.
             sendBalanceSubscription()
             fetchPortfolio()
+            awaitFreshAccountSynchronization(accountId, requestedMode, currency, sessionId)
+            _connectionState.value = DerivConnectionState.READY
             Result.success(info)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            secrets.invalidateDerivRealAuthorization()
+            authenticatedSessionId = null
+            _accountInfo.value = null
+            _accountMetrics.value = null
+            _portfolioSnapshot.value = null
             _connectionState.value = DerivConnectionState.ERROR
             val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
             lastConnectionError = detail
             Log.e(TAG, "Deriv direct-API connection failed: $detail")
             Result.failure(Exception("Deriv connection failed: $detail"))
         }
+    }
+
+    private suspend fun awaitFreshAccountSynchronization(
+        accountId: String,
+        mode: String,
+        currency: String,
+        sessionId: String
+    ) {
+        val deadline = System.currentTimeMillis() + 8_000L
+        while (System.currentTimeMillis() < deadline) {
+            val metrics = _accountMetrics.value
+            val portfolio = _portfolioSnapshot.value
+            val balanceFresh = _accountMetricsUpdatedAtMs.value > 0L &&
+                System.currentTimeMillis() - _accountMetricsUpdatedAtMs.value in 0..8_000L
+            val portfolioFresh = portfolio != null && portfolio.successful &&
+                portfolio.accountId == accountId && portfolio.accountMode == mode.uppercase() &&
+                portfolio.currency.equals(currency, ignoreCase = true) &&
+                System.currentTimeMillis() - portfolio.retrievedAtMs in 0..8_000L
+            if (authenticatedSessionId == sessionId && _connectionState.value != DerivConnectionState.DISCONNECTED &&
+                balanceFresh && metrics?.currency.equals(currency, ignoreCase = true) &&
+                metrics?.balance?.let { it.isFinite() && it >= 0.0 } == true && portfolioFresh &&
+                portfolio?.exposure?.isFinite() == true
+            ) return
+            delay(100L)
+        }
+        throw IllegalStateException("Deriv account synchronization did not produce a fresh balance and portfolio for the authenticated account.")
     }
 
     private fun executeRestJson(request: Request): JSONObject =
@@ -309,7 +379,7 @@ class DerivBrokerGateway(
 
     suspend fun fetchPortfolio(): List<Position> = withContext(Dispatchers.IO) {
         val current = _accountInfo.value
-        if (_connectionState.value != DerivConnectionState.CONNECTED || current == null) {
+        if (_connectionState.value !in setOf(DerivConnectionState.SYNCHRONIZING, DerivConnectionState.READY) || current == null) {
             _portfolioSnapshot.value = DerivPortfolioSnapshot(false, current?.loginId.orEmpty(), current?.mode.orEmpty(), System.currentTimeMillis(), error = "BROKER_DISCONNECTED")
             return@withContext emptyList()
         }
@@ -337,6 +407,8 @@ class DerivBrokerGateway(
             for (i in 0 until contracts.length()) {
                 val c = contracts.getJSONObject(i)
                 val contractId = c.optLong("contract_id", 0L)
+                val transactionId = c.optJSONObject("transaction_ids")?.optLong("buy", 0L)
+                    ?.takeIf { it > 0L } ?: c.optLong("transaction_id", 0L)
                 // Current Deriv portfolio responses use underlying_symbol; symbol is
                 // retained only for compatibility with the documented legacy response.
                 val symbol = c.optString("underlying_symbol").ifBlank {
@@ -349,7 +421,7 @@ class DerivBrokerGateway(
                     ?: c.optLong("date_start", 0L).takeIf { it > 0L }
                 if (contractId <= 0L || symbol.isBlank() ||
                     !DerivMultiplierRules.isSupportedUnderlying(symbol) ||
-                    contractType !in setOf("MULTUP", "MULTDOWN") ||
+                    contractType !in setOf("MULTUP", "MULTDOWN") || transactionId <= 0L ||
                     currency.isBlank() || !currency.equals(current.currency, ignoreCase = true) ||
                     !buyPrice.isFinite() || buyPrice <= 0.0 || purchaseEpoch == null ||
                     purchaseEpoch > System.currentTimeMillis() / 1000L + 60L ||
@@ -364,7 +436,7 @@ class DerivBrokerGateway(
                 // delivered separately by proposal_open_contract and is not required
                 // to calculate committed stake exposure.
                 val profit = c.optDouble("profit", Double.NaN)
-                snapshotContracts += DerivContractInfo(contractId, c.optLong("transaction_id", 0L), symbol, contractType, buyPrice, 0.0, profit, false, false, "open", purchaseEpoch, c.optLong("expiry_time", 0L).takeIf { it > 0L })
+                snapshotContracts += DerivContractInfo(contractId, transactionId, symbol, contractType, buyPrice, 0.0, profit, false, false, "open", purchaseEpoch, c.optLong("expiry_time", 0L).takeIf { it > 0L })
 
                 list.add(
                     Position(
@@ -409,7 +481,7 @@ class DerivBrokerGateway(
     }
 
     suspend fun getQuote(symbol: String): Result<MarketQuote> = withContext(Dispatchers.IO) {
-        if (_connectionState.value != DerivConnectionState.CONNECTED) {
+        if (_connectionState.value != DerivConnectionState.READY) {
             return@withContext Result.failure(Exception("BROKER_DISCONNECTED: Deriv broker is not connected."))
         }
 
@@ -506,7 +578,7 @@ class DerivBrokerGateway(
         intent: DerivMultiplierIntent,
         onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit = { _, _, _ -> }
     ): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
-        if (_connectionState.value != DerivConnectionState.CONNECTED) {
+        if (_connectionState.value != DerivConnectionState.READY) {
             return@withContext Result.failure(Exception("Deriv broker is not connected. Please connect in the Bot tab."))
         }
         val account = _accountInfo.value
@@ -515,8 +587,12 @@ class DerivBrokerGateway(
         if (account.loginId.isBlank() || account.mode != mode || account.accountType != mode) {
             return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "ACCOUNT_MODE_MISMATCH: selected account does not match the requested profile."))
         }
-        if (mode == "real" && !secrets.isDerivRealExecutionEnabled()) {
-            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "REAL_EXECUTION_DISABLED: explicitly arm the exact verified REAL account before starting."))
+        val sessionId = authenticatedSessionId
+        val credentialGeneration = secrets.getDerivCredentialGeneration()
+        if (mode == "real" && (sessionId.isNullOrBlank() || !secrets.isDerivRealExecutionAuthorized(
+                account.loginId, account.accountType, account.currency, sessionId, credentialGeneration
+            ))) {
+            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.VALIDATION_REJECTED, "REAL_EXECUTION_DISABLED: arm the exact verified account for this live session before starting."))
         }
         val balance = _accountMetrics.value?.balance ?: account.balance
         val validation = DerivMultiplierRules.validate(intent, balance, account.currency)
@@ -571,9 +647,26 @@ class DerivBrokerGateway(
             }
             val p = propResp.optJSONObject("proposal")
                 ?: return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PROPOSAL_REJECTED, "PROPOSAL_REJECTED: Deriv did not return a proposal object.", propReqId, submissionStage = DerivSubmissionStage.PROPOSAL_SENT))
+            val proposalResponseReqId = propResp.optInt("req_id", -1)
+            val proposalEchoReqId = propResp.optJSONObject("echo_req")?.optInt("req_id", -1) ?: -1
+            if (proposalResponseReqId != propReqId && proposalEchoReqId != propReqId) {
+                return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PROPOSAL_REJECTED, "PROPOSAL_REJECTED: response correlation did not match the proposal request.", propReqId, submissionStage = DerivSubmissionStage.PROPOSAL_SENT))
+            }
             proposalId = p.optString("id").trim()
             askPrice = p.optDouble("ask_price", Double.NaN)
-            if (proposalId.isBlank() || !askPrice.isFinite() || askPrice <= 0.0) {
+            val payout = p.optDouble("payout", Double.NaN)
+            val spot = p.optDouble("spot", Double.NaN)
+            val returnedCurrency = p.optString("currency").trim()
+            val returnedSymbol = p.optString("underlying_symbol").trim()
+            val returnedContractType = p.optString("contract_type").trim().uppercase()
+            val returnedMultiplier = p.optDouble("multiplier", Double.NaN)
+            val echoesMismatch = (returnedCurrency.isNotBlank() && !returnedCurrency.equals(intent.currency, ignoreCase = true)) ||
+                (returnedSymbol.isNotBlank() && returnedSymbol != intent.symbol) ||
+                (returnedContractType.isNotBlank() && returnedContractType != intent.product.contractType) ||
+                (returnedMultiplier.isFinite() && returnedMultiplier != intent.multiplier.toDouble()) ||
+                (payout.isNaN().not() && (!payout.isFinite() || payout <= 0.0)) ||
+                (spot.isNaN().not() && (!spot.isFinite() || spot <= 0.0))
+            if (proposalId.isBlank() || !askPrice.isFinite() || askPrice <= 0.0 || echoesMismatch) {
                 return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PROPOSAL_REJECTED, "PROPOSAL_REJECTED: Deriv omitted a valid ID or ask_price; no order was sent.", propReqId, submissionStage = DerivSubmissionStage.PROPOSAL_CONFIRMED))
             }
             onStage(propReqId, proposalId, DerivSubmissionStage.PROPOSAL_CONFIRMED)
@@ -611,11 +704,18 @@ class DerivBrokerGateway(
             }
             val buyData = buyResp.optJSONObject("buy")
                 ?: return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_REJECTED, "PURCHASE_REJECTED: Deriv returned no buy confirmation object.", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT))
+            val buyResponseReqId = buyResp.optInt("req_id", -1)
+            val buyEchoReqId = buyResp.optJSONObject("echo_req")?.optInt("req_id", -1) ?: -1
+            if (buyResponseReqId != buyReqId && buyEchoReqId != buyReqId) {
+                return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_AMBIGUOUS, "PURCHASE_AMBIGUOUS: buy response correlation did not match the request; do not retry.", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT))
+            }
             val contractId = buyData.optLong("contract_id", 0L)
             val txId = buyData.optLong("transaction_id", 0L)
             val boughtPrice = buyData.optDouble("buy_price", Double.NaN)
-            if (contractId <= 0L || !boughtPrice.isFinite() || boughtPrice <= 0.0) {
-                return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_AMBIGUOUS, "PURCHASE_AMBIGUOUS: buy response lacked a valid contract ID and purchase price.", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT))
+            val returnedProposalId = buyData.optString("proposal_id").trim()
+            if (contractId <= 0L || txId <= 0L || !boughtPrice.isFinite() || boughtPrice <= 0.0 ||
+                (returnedProposalId.isNotBlank() && returnedProposalId != proposalId)) {
+                return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_AMBIGUOUS, "PURCHASE_AMBIGUOUS: buy response lacked valid contract, transaction, price, or proposal identity.", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT))
             }
             subscribeOpenContract(contractId)
             fetchPortfolio()
@@ -631,7 +731,7 @@ class DerivBrokerGateway(
     }
 
     suspend fun sellContract(contractId: Long): Result<DerivSellResult> = withContext(Dispatchers.IO) {
-        if (_connectionState.value != DerivConnectionState.CONNECTED) {
+        if (_connectionState.value != DerivConnectionState.READY || contractId <= 0L) {
             return@withContext Result.failure(Exception("Deriv broker is not connected."))
         }
         val sellReqId = reqIdCounter.getAndIncrement()
@@ -643,7 +743,10 @@ class DerivBrokerGateway(
             put("price", 0) // sell at market price
             put("req_id", sellReqId)
         }
-        webSocket?.send(sellPayload.toString())
+        if (webSocket?.send(sellPayload.toString()) != true) {
+            pendingRequests.remove(sellReqId)
+            return@withContext Result.failure(Exception("CLOSE_FAILED: Deriv WebSocket rejected the sell request before transmission."))
+        }
 
         try {
             val sellResp = withTimeout(10_000) { sellDeferred.await() }
@@ -655,15 +758,27 @@ class DerivBrokerGateway(
             }
             val sellData = sellResp.optJSONObject("sell")
                 ?: return@withContext Result.failure(Exception("CLOSE_FAILED: Invalid sell response from Deriv"))
-            val soldFor = sellData.optDouble("sold_for", 0.0)
+            val responseReqId = sellResp.optInt("req_id", -1)
+            val echoReqId = sellResp.optJSONObject("echo_req")?.optInt("req_id", -1) ?: -1
+            if (responseReqId != sellReqId && echoReqId != sellReqId) {
+                return@withContext Result.failure(Exception("CLOSE_FAILED: Sell response correlation did not match the request."))
+            }
+            val soldFor = sellData.optDouble("sold_for", Double.NaN)
             val txId = sellData.optLong("transaction_id", 0L)
-            val cId = sellData.optLong("contract_id", contractId)
+            val cId = sellData.optLong("contract_id", 0L)
+            if (cId != contractId || txId <= 0L || !soldFor.isFinite() || soldFor < 0.0) {
+                return@withContext Result.failure(Exception("CLOSE_FAILED: Deriv sell response omitted a valid matching contract ID, transaction ID, or sold value."))
+            }
 
             _activeContracts.update { it - contractId }
             _openPositions.update { list -> list.filterNot { it.id == contractId.toString() } }
 
             // Refresh portfolio to ensure closed state is persisted and visible
             fetchPortfolio()
+            val snapshot = _portfolioSnapshot.value
+            if (snapshot == null || !snapshot.successful || snapshot.accountId != _accountInfo.value?.loginId || snapshot.contracts.any { it.contractId == contractId }) {
+                return@withContext Result.failure(Exception("CLOSE_FAILED: broker portfolio did not confirm that contract $contractId is closed."))
+            }
             Result.success(DerivSellResult(cId, txId, soldFor))
         } catch (e: Exception) {
             Result.failure(Exception("CLOSE_FAILED: Deriv sell error: ${e.message}"))
@@ -673,7 +788,7 @@ class DerivBrokerGateway(
     }
 
     suspend fun lookupHistoricalContract(contractId: Long, sinceMs: Long): DerivContractInfo? = withContext(Dispatchers.IO) {
-        if (_connectionState.value != DerivConnectionState.CONNECTED || contractId <= 0L) return@withContext null
+        if (_connectionState.value != DerivConnectionState.READY || contractId <= 0L) return@withContext null
         val reqId = reqIdCounter.getAndIncrement()
         val deferred = CompletableDeferred<JSONObject>()
         pendingRequests[reqId] = deferred
@@ -720,12 +835,16 @@ class DerivBrokerGateway(
     }
 
     fun disconnect() {
+        secrets.invalidateDerivRealAuthorization()
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
+        authenticatedSessionId = null
+        selectedAccountIdForSession = null
         _connectionState.value = DerivConnectionState.DISCONNECTED
         _accountMetrics.value = null
         _accountMetricsUpdatedAtMs.value = 0L
         _accountInfo.value = null
+        _availableAccounts.value = emptyList()
         _openPositions.value = emptyList()
         _activeContracts.value = emptyMap()
         cachedQuotes.clear()
@@ -747,7 +866,7 @@ class DerivBrokerGateway(
                     val balance = balObj.optDouble("balance", Double.NaN)
                     val currency = balObj.optString("currency").trim()
                     val selectedCurrency = _accountInfo.value?.currency.orEmpty()
-                    if (!balance.isFinite() || balance <= 0.0 || currency.isBlank() ||
+                    if (!balance.isFinite() || balance < 0.0 || currency.isBlank() ||
                         !currency.equals(selectedCurrency, ignoreCase = true)) {
                         _accountMetricsUpdatedAtMs.value = 0L
                         return
@@ -775,9 +894,10 @@ class DerivBrokerGateway(
                     val status = poc.optString("status").ifBlank { if (isSold) "sold" else "open" }
                     val purchaseEpoch = poc.optLong("date_start", 0L).takeIf { it > 0L }
                         ?: poc.optLong("purchase_time", 0L).takeIf { it > 0L }
+                    val streamCurrency = poc.optString("currency").trim()
                     if (underlying.isBlank() || !DerivMultiplierRules.isSupportedUnderlying(underlying) ||
                         !buyPrice.isFinite() || buyPrice <= 0.0 || purchaseEpoch == null ||
-                        poc.optString("currency").isBlank() ||
+                        streamCurrency.isBlank() || !streamCurrency.equals(_accountInfo.value?.currency.orEmpty(), ignoreCase = true) ||
                         poc.optString("contract_type").trim().uppercase() !in setOf("MULTUP", "MULTDOWN")) {
                         _portfolioSnapshot.value = DerivPortfolioSnapshot(
                             false, _accountInfo.value?.loginId.orEmpty(), _accountInfo.value?.mode.orEmpty(),
@@ -790,6 +910,7 @@ class DerivBrokerGateway(
                     val contractType = poc.optString("contract_type").trim().uppercase()
                     val txId = poc.optJSONObject("transaction_ids")?.optLong("buy", 0L)
                         ?: poc.optLong("transaction_id", 0L)
+                    if (txId <= 0L) return
 
                     val info = DerivContractInfo(
                         contractId = contractId,

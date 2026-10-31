@@ -40,7 +40,7 @@ class DerivMultiplierExecutor(
                 "A migrated execution has no verified account identity"
             )
         }
-        if (gateway.connectionState.value != DerivConnectionState.CONNECTED) {
+        if (gateway.connectionState.value != DerivConnectionState.READY) {
             return@withContext DerivReconciliationResult(DerivReconciliationStatus.RETRYABLE_FAILURE, "Deriv WebSocket is disconnected")
         }
         gateway.fetchPortfolio()

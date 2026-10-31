@@ -102,7 +102,7 @@ class DerivDemoBotService : Service() {
             stopSafely("Safety blocked — $symbol is not a supported Deriv Multiplier underlying")
             return
         }
-        if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.CONNECTED) {
+        if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY) {
             if (!connectWithBoundedRetry(gateway)) {
                 stopSafely("ERROR — authentication or reconnect attempts exhausted; trading remains stopped")
                 return

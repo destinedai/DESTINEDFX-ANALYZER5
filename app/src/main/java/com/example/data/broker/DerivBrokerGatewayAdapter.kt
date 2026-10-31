@@ -32,9 +32,12 @@ class DerivBrokerGatewayAdapter(
         CoroutineScope(Dispatchers.IO).launch {
             derivGateway.connectionState.collect { s ->
                 _connectionStatus.value = when (s) {
-                    DerivConnectionState.CONNECTED -> BrokerConnectionStatus.CONNECTED
+                    DerivConnectionState.READY -> BrokerConnectionStatus.CONNECTED
+                    DerivConnectionState.CONNECTED -> BrokerConnectionStatus.AUTHENTICATING
                     DerivConnectionState.CONNECTING -> BrokerConnectionStatus.CONNECTING
                     DerivConnectionState.AUTHENTICATING -> BrokerConnectionStatus.AUTHENTICATING
+                    DerivConnectionState.ACCOUNT_VERIFICATION -> BrokerConnectionStatus.AUTHENTICATING
+                    DerivConnectionState.SYNCHRONIZING -> BrokerConnectionStatus.CONNECTING
                     DerivConnectionState.AUTH_FAILED -> BrokerConnectionStatus.AUTH_FAILED
                     DerivConnectionState.ERROR -> BrokerConnectionStatus.ERROR
                     DerivConnectionState.RECONNECTING -> BrokerConnectionStatus.RECONNECTING
