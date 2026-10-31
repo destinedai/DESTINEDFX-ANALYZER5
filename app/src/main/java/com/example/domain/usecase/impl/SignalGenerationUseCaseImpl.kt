@@ -210,13 +210,20 @@ class SignalGenerationUseCaseImpl(
                 dynamicCfg.mtfPolicy == MtfPolicy.STRICT
             if (!report.mtfComplete && requiresCompleteMtf) {
                 blockers += "MTF DATA INCOMPLETE: this strategy's configured strict MTF policy is not satisfied"
+                state = SignalState.BLOCKED
             }
             val spread = quote?.spread; val atr = report.structure?.atr
             if (spread != null && atr != null && spread > 0.15 * atr) { blockers += "SPREAD TOO WIDE: %.5f > 15%% of ATR".format(spread); state = SignalState.BLOCKED }
             if (newsVerdict.status == NewsStatus.HIGH_IMPACT_WINDOW) { blockers += newsVerdict.detail; state = SignalState.BLOCKED }
             if (newsVerdict.status == NewsStatus.UNKNOWN) { blockers += newsVerdict.detail; state = SignalState.BLOCKED }
-            if (health != MarketDataHealth.LIVE) blockers += "Market data is " + health.name + " (historical/delayed): analysis only, not executable"
-            if (spread == null) blockers += "Spread unknown (source provides no bid/ask): not executable"
+            if (health != MarketDataHealth.LIVE) {
+                blockers += "Market data is " + health.name + " (historical/delayed): analysis only, not executable"
+                state = SignalState.BLOCKED
+            }
+            if (spread == null) {
+                blockers += "Spread unknown (source provides no bid/ask): not executable"
+                state = SignalState.BLOCKED
+            }
             // Only a plan produced by SignalEngine may be used. Never synthesize entry/SL/TP
             // values to turn a WAIT or an incomplete analysis into an apparent trade setup.
             val candidatePlan = report.plan
@@ -246,6 +253,9 @@ class SignalGenerationUseCaseImpl(
                     }
                 }
             }
+            // A WAIT or BLOCKED result is analysis, not a trade plan; never surface entry/SL/TP
+            // alongside a non-actionable state where a UI could mistake them for an instruction.
+            if (finalState !in buyStates && finalState !in sellStates) finalPlan = null
 
             val finalReport = report.copy(state = finalState, plan = finalPlan)
             val closedCandleTimestamp = chk.cleanClosed.lastOrNull()?.timeMs
@@ -353,4 +363,3 @@ internal fun signalDirectionFor(
         else -> SignalDirection.WAIT
     }
 }
-

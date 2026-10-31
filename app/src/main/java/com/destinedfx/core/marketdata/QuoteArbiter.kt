@@ -15,15 +15,21 @@ object QuoteArbiter {
         pollIntervalMs: Long,
         nowMs: Long
     ): Decision {
-        // (5) an invalid quote (bid <= 0, ask < bid, price <= 0) is Reject.
-        if (incoming.price <= 0.0) {
-            return Decision.Reject("Invalid price <= 0: ${incoming.price}")
+        // Non-finite, non-positive, or future-dated feed values are never canonical.
+        if (!incoming.price.isFinite() || incoming.price <= 0.0) {
+            return Decision.Reject("Invalid price: ${incoming.price}")
         }
-        if (incoming.bid != null && incoming.bid <= 0.0) {
-            return Decision.Reject("Invalid bid <= 0: ${incoming.bid}")
+        if (incoming.bid != null && (!incoming.bid.isFinite() || incoming.bid <= 0.0)) {
+            return Decision.Reject("Invalid bid: ${incoming.bid}")
+        }
+        if (incoming.ask != null && (!incoming.ask.isFinite() || incoming.ask <= 0.0)) {
+            return Decision.Reject("Invalid ask: ${incoming.ask}")
         }
         if (incoming.bid != null && incoming.ask != null && incoming.ask < incoming.bid) {
             return Decision.Reject("Invalid ask < bid: bid ${incoming.bid} ask ${incoming.ask}")
+        }
+        if (incoming.lastUpdateMillis <= 0L || nowMs <= 0L || incoming.lastUpdateMillis > nowMs) {
+            return Decision.Reject("Invalid or future quote timestamp: ${incoming.lastUpdateMillis} (now $nowMs)")
         }
 
         // (4) a DAILY_REFERENCE quote is never accepted

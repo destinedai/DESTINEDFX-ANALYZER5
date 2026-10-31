@@ -115,14 +115,14 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
     // Engine outputs for EngineInsightsPanel & Safeguards
     vm.smcBiasConfidence.value = 88
     vm.structureAlignment.value = "FULL BULLISH ALIGNMENT (H4/H1/M15)"
-    vm.multiAIConsensusStatus.value = "ANALYSIS COMPLETE (3 Models In Agreement)"
+    vm.multiTimeframeAnalysisStatus.value = "DETERMINISTIC MTF ANALYSIS PREVIEW"
     vm.accountCapital.value = 10.0
     vm.activeStrategy.value = "SMC Order Blocks"
     vm.nfpProtectionArmed.value = true
     vm.showHaltNotification.value = false
     vm.brokerConnected.value = false
     vm.isAnalyzing.value = false
-    vm.isMultiAIScanning.value = false
+    vm.isMultiTimeframeAnalysisScanning.value = false
 
     vm.currentTradeSignal.value = com.example.domain.model.TradeSignal(
         id = "preview-sig-01",
@@ -140,15 +140,15 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
         strategyScores = mapOf("SMC Order Block" to 92, "Liquidity Sweep" to 88, "MTF Alignment" to 95)
     )
 
-    vm.modelSentimentScores.value = mapOf(
+    vm.deterministicStrategyScores.value = mapOf(
         "SMC Core" to Pair("BULLISH", 92),
         "MTF Flow" to Pair("BULLISH", 85),
         "Liquidity" to Pair("BULLISH", 88)
     )
 
-    vm.aiBotOpinions.value = mapOf(
-        "SMC_H1" to AIBotOpinion(
-            botName = "SMC Core (H1)",
+    vm.strategyAnalysisOpinions.value = mapOf(
+        "SMC_H1" to StrategyAnalysisOpinion(
+            analysisName = "SMC Core (H1)",
             signal = "LONG",
             entry = 1.08750,
             sl = 1.08500,
@@ -156,8 +156,8 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
             confidence = 90,
             coreRationale = "H1 Bullish Order Block respected at discount"
         ),
-        "SMC_M15" to AIBotOpinion(
-            botName = "SMC Core (M15)",
+        "SMC_M15" to StrategyAnalysisOpinion(
+            analysisName = "SMC Core (M15)",
             signal = "LONG",
             entry = 1.08750,
             sl = 1.08500,
@@ -165,8 +165,8 @@ fun createPreviewViewModel(app: Application): DestinedFXViewModel {
             confidence = 88,
             coreRationale = "M15 Fair Value Gap confluence"
         ),
-        "SMC_H4" to AIBotOpinion(
-            botName = "SMC Core (H4)",
+        "SMC_H4" to StrategyAnalysisOpinion(
+            analysisName = "SMC Core (H4)",
             signal = "LONG",
             entry = 1.08700,
             sl = 1.08450,

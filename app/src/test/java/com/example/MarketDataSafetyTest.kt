@@ -69,6 +69,11 @@ class MarketDataSafetyTest {
         val rejected = existing.copy(price = 1.2, source = "TradingView scanner snapshot", lastUpdateMillis = 100_000L)
         assertEquals(existing, canonicalTickerAfterRefresh(existing, rejected, accepted = false))
         assertEquals(rejected, canonicalTickerAfterRefresh(existing, rejected, accepted = true))
+        val staleCanonical = existing.copy(lastUpdateMillis = 80_000L)
+        assertEquals(staleCanonical, canonicalTickerAfterRefresh(staleCanonical, rejected, accepted = false))
+        assertEquals(QuoteFreshness.STALE, classifyQuoteFreshness(staleCanonical, 100_000L))
+        assertEquals("Deriv WebSocket", canonicalTickerAfterRefresh(existing, rejected, accepted = false)?.source)
+        assertEquals(99_000L, canonicalTickerAfterRefresh(existing, rejected, accepted = false)?.lastUpdateMillis)
     }
 
     @Test
@@ -206,7 +211,7 @@ class MarketDataSafetyTest {
     @Test
     fun arbiterRejectsPolledQuoteWhenStreamIsFresh() {
         val existing = quote("Deriv WebSocket", "STREAM", 99_000L)
-        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_001L)
+        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
         val result = QuoteArbiter.accept(
             existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
         )
@@ -216,10 +221,10 @@ class MarketDataSafetyTest {
     @Test
     fun arbiterRejectsMalformedQuotesAndDoesNotSilentlyAcceptWrongSource() {
         val existing = quote("Deriv WebSocket", "STREAM", 95_000L)
-        val invalid = quote("Deriv WebSocket", "STREAM", 100_001L, bid = -1.0, ask = 1.1)
+        val invalid = quote("Deriv WebSocket", "STREAM", 100_000L, bid = -1.0, ask = 1.1)
         assertTrue(QuoteArbiter.accept(existing, invalid, "Deriv WebSocket", 95_000L, 2_500L, 100_000L) is Decision.Reject)
 
-        val wrongSource = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_001L)
+        val wrongSource = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
         assertTrue(QuoteArbiter.accept(
             existing, wrongSource, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
@@ -228,7 +233,7 @@ class MarketDataSafetyTest {
     @Test
     fun arbiterAllowsSourceSwitchOnlyAfterActiveSourceIsSilent() {
         val existing = quote("Deriv WebSocket", "POLLED_BIDASK", 95_000L)
-        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_001L)
+        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
         assertTrue(QuoteArbiter.accept(
             existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
@@ -241,7 +246,7 @@ class MarketDataSafetyTest {
     @Test
     fun freshStreamingProviderCannotBeReplacedByAnotherStream() {
         val active = quote("Deriv WebSocket", "STREAM", 99_000L)
-        val competing = quote("OANDA Pricing stream", "STREAM", 100_001L)
+        val competing = quote("OANDA Pricing stream", "STREAM", 100_000L)
         assertTrue(QuoteArbiter.accept(
             active, competing, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
@@ -250,6 +255,15 @@ class MarketDataSafetyTest {
         assertTrue(QuoteArbiter.accept(
             staleActive, competing, "Deriv WebSocket", 90_000L, 2_500L, 100_000L
         ) is Decision.Accept)
+    }
+
+    @Test
+    fun arbiterRejectsFutureAndNonFiniteQuotesBeforeCanonicalization() {
+        val existing = quote("Deriv WebSocket", "STREAM", 99_000L)
+        val future = quote("Deriv WebSocket", "STREAM", 100_001L)
+        val nanPrice = future.copy(price = Double.NaN, lastUpdateMillis = 100_000L)
+        assertTrue(QuoteArbiter.accept(existing, future, "Deriv WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
+        assertTrue(QuoteArbiter.accept(existing, nanPrice, "Deriv WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
     }
 
 }

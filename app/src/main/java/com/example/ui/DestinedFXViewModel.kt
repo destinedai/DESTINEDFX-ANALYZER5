@@ -77,8 +77,8 @@ data class BacktestReport(
     val trades: List<BacktestTrade>
 )
 
-data class AIBotOpinion(
-    val botName: String,
+data class StrategyAnalysisOpinion(
+    val analysisName: String,
     val signal: String, // "BULLISH", "BEARISH", "NEUTRAL"
     val entry: Double,
     val sl: Double,
@@ -252,6 +252,11 @@ open class DestinedFXViewModel(
     val selectedTicker = MutableStateFlow("EUR/USD")
     val selectedTimeframe = MutableStateFlow("M15")
     val selectedMtfTimeframes = MutableStateFlow(setOf("M5", "M15", "M30", "H1", "H4", "D1", "W1"))
+    // Bot configuration is persisted independently and never mirrors Analyzer selections.
+    val botSelectedTicker = MutableStateFlow(if (isPreview) "EUR/USD" else app.secretsManager.getBotSymbol())
+    val botSelectedTimeframe = MutableStateFlow(if (isPreview) "M15" else app.secretsManager.getBotTimeframe())
+    val botSelectedStrategyId = MutableStateFlow(if (isPreview) "smc-confluence-1.0.0" else app.secretsManager.getBotStrategy())
+    val botRiskPercent = MutableStateFlow(if (isPreview) 0.25 else app.secretsManager.getBotRiskPercent())
     val scanProgressStage = MutableStateFlow("")
     val riskPercent = MutableStateFlow(0.25)
     val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
@@ -271,6 +276,33 @@ open class DestinedFXViewModel(
             app.marketDataRepository.refreshSymbol(sym)
         }
         runSignalScan(sym, selectedTimeframe.value, selectedMtfTimeframes.value)
+    }
+
+    fun selectBotTicker(symbol: String) {
+        val clean = symbol.trim()
+        if (clean.isBlank()) return
+        botSelectedTicker.value = clean
+        if (!isPreview) app.secretsManager.saveBotSymbol(clean)
+    }
+
+    fun selectBotTimeframe(timeframe: String) {
+        if (com.destinedfx.core.marketdata.Timeframe.parse(timeframe) == null) return
+        botSelectedTimeframe.value = timeframe
+        if (!isPreview) app.secretsManager.saveBotTimeframe(timeframe)
+    }
+
+    fun selectBotStrategy(strategyId: String) {
+        val definition = com.destinedfx.core.strategy.StrategyRegistry.allStrategies
+            .firstOrNull { it.id == strategyId && it.isImplemented } ?: return
+        botSelectedStrategyId.value = definition.id
+        if (!isPreview) app.secretsManager.saveBotStrategy(definition.id)
+    }
+
+    fun setBotRiskPercent(value: Double): Boolean {
+        if (!com.destinedfx.core.risk.RiskEngine.isValidRiskPercent(value)) return false
+        botRiskPercent.value = value
+        if (!isPreview && !app.secretsManager.saveBotRiskPercent(value)) return false
+        return true
     }
 
     fun updatePriceFromChart(symbol: String, price: Double) {
@@ -497,10 +529,10 @@ open class DestinedFXViewModel(
         return app.mt5GatewayRepository.resolveSymbol(symbol)
     }
 
-    // Consensus states - derived from deterministic multi-model evaluation
+    // Analysis states - derived from deterministic multi-timeframe evaluation
     val smcBiasConfidence = MutableStateFlow(0)
     val structureAlignment = MutableStateFlow("ANALYZING MARKET STRUCTURE")
-    val modelSentimentScores = MutableStateFlow<Map<String, Pair<String, Int>>>(emptyMap())
+    val deterministicStrategyScores = MutableStateFlow<Map<String, Pair<String, Int>>>(emptyMap())
 
     // Algorithmic execution variables
     val aiAnalysisResult = MutableStateFlow<String?>(null)
@@ -786,7 +818,7 @@ open class DestinedFXViewModel(
                 // rather than arbitrary thresholds.
                 smcBiasConfidence.value = (sig.confidenceScore.coerceIn(0, 100))
                 structureAlignment.value = if (sig.mtfSummary.isNotBlank()) sig.mtfSummary else "${sig.direction} [${sig.signalState}]"
-                modelSentimentScores.value = sig.strategyScores.mapValues { (_, score) ->
+                deterministicStrategyScores.value = sig.strategyScores.mapValues { (_, score) ->
                     Pair(signalBiasLabel(sig.direction), score.coerceIn(0, 100))
                 }
 
@@ -940,9 +972,9 @@ open class DestinedFXViewModel(
     }
 
     // --- ALGORITHMIC MAP OUTPUT MATRIX ---
-    val aiBotOpinions = MutableStateFlow<Map<String, AIBotOpinion>>(emptyMap())
-    val isMultiAIScanning = MutableStateFlow(false)
-    val multiAIConsensusStatus = MutableStateFlow("Consensus Idle")
+    val strategyAnalysisOpinions = MutableStateFlow<Map<String, StrategyAnalysisOpinion>>(emptyMap())
+    val isMultiTimeframeAnalysisScanning = MutableStateFlow(false)
+    val multiTimeframeAnalysisStatus = MutableStateFlow("Analysis Idle")
 
     fun runDeepStrategyAnalysis(symbol: String, timeframe: String, strategy: String) {
         viewModelScope.launch {
@@ -1014,8 +1046,8 @@ open class DestinedFXViewModel(
         strategyId: String = selectedStrategyId.value
     ) {
         viewModelScope.launch {
-            isMultiAIScanning.value = true
-            multiAIConsensusStatus.value = "Executing multi-timeframe algorithmic analysis for $symbol ($timeframe)..."
+            isMultiTimeframeAnalysisScanning.value = true
+            multiTimeframeAnalysisStatus.value = "Executing multi-timeframe algorithmic analysis for $symbol ($timeframe)..."
 
             val app = getApplication<com.example.MyApplication>()
             val primarySignal = app.signalGenerationUseCase.generateSignal(symbol, timeframe, strategyId)
@@ -1023,9 +1055,9 @@ open class DestinedFXViewModel(
             val signalM15 = if (timeframe == "M15") primarySignal else app.signalGenerationUseCase.generateSignal(symbol, "M15")
             val signalH4 = if (timeframe == "H4") primarySignal else app.signalGenerationUseCase.generateSignal(symbol, "H4")
 
-            val newOpinions = mutableMapOf<String, AIBotOpinion>()
-            newOpinions["PRIMARY"] = AIBotOpinion(
-                botName = "Active Engine ($strategyId • $timeframe)",
+            val newOpinions = mutableMapOf<String, StrategyAnalysisOpinion>()
+            newOpinions["PRIMARY"] = StrategyAnalysisOpinion(
+                analysisName = "Active Engine ($strategyId • $timeframe)",
                 signal = primarySignal.direction.name,
                 entry = primarySignal.entryPrice,
                 sl = primarySignal.stopLoss,
@@ -1033,8 +1065,8 @@ open class DestinedFXViewModel(
                 confidence = primarySignal.confidenceScore,
                 coreRationale = primarySignal.rationale
             )
-            newOpinions["SMC_H1"] = AIBotOpinion(
-                botName = "SMC Core (H1)",
+            newOpinions["SMC_H1"] = StrategyAnalysisOpinion(
+                analysisName = "SMC Core (H1)",
                 signal = signalH1.direction.name,
                 entry = signalH1.entryPrice,
                 sl = signalH1.stopLoss,
@@ -1042,8 +1074,8 @@ open class DestinedFXViewModel(
                 confidence = signalH1.confidenceScore,
                 coreRationale = signalH1.rationale
             )
-            newOpinions["SMC_M15"] = AIBotOpinion(
-                botName = "SMC Core (M15)",
+            newOpinions["SMC_M15"] = StrategyAnalysisOpinion(
+                analysisName = "SMC Core (M15)",
                 signal = signalM15.direction.name,
                 entry = signalM15.entryPrice,
                 sl = signalM15.stopLoss,
@@ -1051,8 +1083,8 @@ open class DestinedFXViewModel(
                 confidence = signalM15.confidenceScore,
                 coreRationale = signalM15.rationale
             )
-            newOpinions["SMC_H4"] = AIBotOpinion(
-                botName = "SMC Core (H4)",
+            newOpinions["SMC_H4"] = StrategyAnalysisOpinion(
+                analysisName = "SMC Core (H4)",
                 signal = signalH4.direction.name,
                 entry = signalH4.entryPrice,
                 sl = signalH4.stopLoss,
@@ -1061,15 +1093,15 @@ open class DestinedFXViewModel(
                 coreRationale = signalH4.rationale
             )
 
-            aiBotOpinions.value = newOpinions
-            modelSentimentScores.value = mapOf(
+            strategyAnalysisOpinions.value = newOpinions
+            deterministicStrategyScores.value = mapOf(
                 "Primary ($timeframe)" to Pair(primarySignal.direction.name, primarySignal.confidenceScore),
                 "SMC H1" to Pair(signalH1.direction.name, signalH1.confidenceScore),
                 "SMC M15" to Pair(signalM15.direction.name, signalM15.confidenceScore),
                 "SMC H4" to Pair(signalH4.direction.name, signalH4.confidenceScore)
             )
-            multiAIConsensusStatus.value = "ANALYSIS COMPLETE • $symbol $timeframe"
-            isMultiAIScanning.value = false
+            multiTimeframeAnalysisStatus.value = "ANALYSIS COMPLETE • $symbol $timeframe"
+            isMultiTimeframeAnalysisScanning.value = false
         }
     }
 
@@ -1287,10 +1319,10 @@ open class DestinedFXViewModel(
                         throw IllegalStateException("Bot activation blocked: a verified authenticated account snapshot is required.")
                     }
                     val startResult = app.autonomousBotEngine.startBot(
-                        symbol = selectedTicker.value,
-                        strategyId = selectedStrategyId.value,
-                        timeframe = selectedTimeframe.value,
-                        riskPercent = riskPercent.value
+                        symbol = botSelectedTicker.value,
+                        strategyId = botSelectedStrategyId.value,
+                        timeframe = botSelectedTimeframe.value,
+                        riskPercent = botRiskPercent.value
                     )
                     startResult.getOrElse { error ->
                         throw error

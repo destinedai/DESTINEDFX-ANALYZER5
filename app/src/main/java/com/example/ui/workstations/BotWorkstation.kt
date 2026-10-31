@@ -147,10 +147,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val accountMetrics by activeBrokerGateway.accountMetrics.collectAsStateWithLifecycle()
     val openPositions by activeBrokerGateway.openPositions.collectAsStateWithLifecycle()
 
-    val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
-    val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
-    val selectedTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
-    val riskPercent by viewModel.riskPercent.collectAsStateWithLifecycle()
+    val activeSymbol by viewModel.botSelectedTicker.collectAsStateWithLifecycle()
+    val selectedStrategyId by viewModel.botSelectedStrategyId.collectAsStateWithLifecycle()
+    val selectedTimeframe by viewModel.botSelectedTimeframe.collectAsStateWithLifecycle()
+    val riskPercent by viewModel.botRiskPercent.collectAsStateWithLifecycle()
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var brokerConnectionMessage by remember { mutableStateOf<String?>(null) }
@@ -857,7 +857,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             val isSelected = pair == activeSymbol
                             FilterChip(
                                 selected = isSelected,
-                                onClick = { viewModel.selectTicker(pair) },
+                                onClick = { viewModel.selectBotTicker(pair) },
                                 label = {
                                     Text(
                                         text = pair,
@@ -877,10 +877,49 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
 
+                    Text("2. BOT STRATEGY • changes apply on the next explicit start", fontSize = 9.sp,
+                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextSecondary)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(StrategyRegistry.allStrategies.filter { it.isImplemented }) { strategy ->
+                            FilterChip(
+                                selected = selectedStrategyId == strategy.id,
+                                onClick = { viewModel.selectBotStrategy(strategy.id) },
+                                label = { Text(strategy.name, fontSize = 9.sp, fontWeight = FontWeight.Bold) },
+                                modifier = Modifier.testTag("bot_strategy_chip_${strategy.id}")
+                            )
+                        }
+                    }
+
+                    Text("3. BOT PRIMARY TIMEFRAME • running Bot keeps its captured timeframe", fontSize = 9.sp,
+                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextSecondary)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(listOf("M15", "M30", "H1", "H4", "D1", "W1")) { timeframe ->
+                            FilterChip(
+                                selected = selectedTimeframe == timeframe,
+                                onClick = { viewModel.selectBotTimeframe(timeframe) },
+                                label = { Text(timeframe, fontSize = 9.sp, fontWeight = FontWeight.Bold) },
+                                modifier = Modifier.testTag("bot_timeframe_chip_$timeframe")
+                            )
+                        }
+                    }
+
+                    Text("4. BOT RISK PER TRADE • hard maximum 1%", fontSize = 9.sp,
+                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextSecondary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(0.25, 0.5, 1.0).forEach { risk ->
+                            FilterChip(
+                                selected = riskPercent == risk,
+                                onClick = { viewModel.setBotRiskPercent(risk) },
+                                label = { Text("$risk%", fontSize = 9.sp, fontWeight = FontWeight.Bold) },
+                                modifier = Modifier.testTag("bot_risk_chip_$risk")
+                            )
+                        }
+                    }
+
                     HorizontalDivider(color = CardBorder)
 
                     Text(
-                        text = "2. ACCOUNT BALANCE, EQUITY & AUTO LOT AUDIT",
+                        text = "5. ACCOUNT BALANCE, EQUITY & AUTO LOT AUDIT",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace,
@@ -1078,8 +1117,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             val strat by viewModel.activeStrategy.collectAsStateWithLifecycle()
             val nfpArmed by viewModel.nfpProtectionArmed.collectAsStateWithLifecycle()
             val isHalted by viewModel.showHaltNotification.collectAsStateWithLifecycle()
-            val isMultiScanning by viewModel.isMultiAIScanning.collectAsStateWithLifecycle()
-            val consensusStatus by viewModel.multiAIConsensusStatus.collectAsStateWithLifecycle()
+            val isMultiScanning by viewModel.isMultiTimeframeAnalysisScanning.collectAsStateWithLifecycle()
+            val consensusStatus by viewModel.multiTimeframeAnalysisStatus.collectAsStateWithLifecycle()
 
             InsightCard("ENGINE SAFEGUARDS & QUANT CONTROLS") {
                 InsightLine("Active Strategy", strat)
@@ -2544,7 +2583,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         items(selectPairs) { (pair, category) ->
                             Card(
                                 onClick = {
-                                    viewModel.selectTicker(pair)
+                                    viewModel.selectBotTicker(pair)
                                     showPostLoginPairSelectorModal = false
                                     statusMessage = "Bot configured for $pair. Verified account metrics are used when available; live execution requires all safety checks."
                                 },

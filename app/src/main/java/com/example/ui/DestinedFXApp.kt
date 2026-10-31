@@ -725,7 +725,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     CircularProgressIndicator(modifier = Modifier.size(16.dp), color = ElectricCyan, strokeWidth = 2.dp)
-                                    Text("AI MARKET VERIFICATION IN PROGRESS", fontSize = 10.sp, fontWeight = FontWeight.Black, color = ElectricCyan, fontFamily = FontFamily.Monospace)
+                                    Text("MARKET DATA VALIDATION IN PROGRESS", fontSize = 10.sp, fontWeight = FontWeight.Black, color = ElectricCyan, fontFamily = FontFamily.Monospace)
                                 }
                                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = ElectricCyan)
                                 Text(scanStage.ifBlank { "Multi-pass market structure scan in progress..." }, fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold)

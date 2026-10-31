@@ -13,6 +13,23 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class SecretsManagerBridgePendingTest {
+    @Test fun botConfigurationPersistsSeparatelyFromAnalyzerStrategy() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        manager.saveSelectedStrategy("ict-silver-bullet")
+        manager.saveBotSymbol("R_100")
+        manager.saveBotStrategy("smc-confluence-1.0.0")
+        manager.saveBotTimeframe("H1")
+        assertTrue(manager.saveBotRiskPercent(0.5))
+        assertFalse(manager.saveBotRiskPercent(1.01))
+
+        val restored = SecretsManager(ApplicationProvider.getApplicationContext())
+        assertEquals("ict-silver-bullet", restored.getSelectedStrategy())
+        assertEquals("R_100", restored.getBotSymbol())
+        assertEquals("smc-confluence-1.0.0", restored.getBotStrategy())
+        assertEquals("H1", restored.getBotTimeframe())
+        assertEquals(0.5, restored.getBotRiskPercent(), 0.0)
+    }
+
     @Test fun pendingCommandMethodsPersistPairAndClearTogetherWhenSecureStorageIsAvailable() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         if (!manager.isSecureStorageAvailable) return

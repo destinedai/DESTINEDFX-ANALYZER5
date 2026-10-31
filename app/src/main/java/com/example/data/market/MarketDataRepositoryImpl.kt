@@ -66,6 +66,13 @@ internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long
     timestampMs > 0L && nowMs > 0L && maxAgeMillis > 0L &&
         (nowMs - timestampMs).let { it >= 0L && it < maxAgeMillis }
 
+/** Keep the last accepted provider quote when a refresh candidate is rejected. */
+internal fun canonicalTickerAfterRefresh(
+    existing: MarketTicker?,
+    fetched: MarketTicker?,
+    accepted: Boolean
+): MarketTicker? = if (accepted) fetched else existing
+
 class MarketDataRepositoryImpl(
     private val secrets: SecretsManager,
     private val derivMarketDataGateway: com.example.data.deriv.DerivMarketDataGateway? = null,
@@ -330,13 +337,6 @@ class MarketDataRepositoryImpl(
             }
         }
     }
-
-    /** Returns the quote that is authoritative for analysis after source arbitration. */
-    internal fun canonicalTickerAfterRefresh(
-        existing: MarketTicker?,
-        fetched: MarketTicker?,
-        accepted: Boolean
-    ): MarketTicker? = if (accepted) fetched else existing
 
     private val lastSourceUpdate = ConcurrentHashMap<String, Long>()
 

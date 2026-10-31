@@ -53,6 +53,8 @@ class SecretsManager(private val ctx: Context) {
 
     val isSecureStorageAvailable: Boolean
     private val prefs: android.content.SharedPreferences
+    // Trading selections are non-secret preferences and must remain independent from Analyzer state.
+    private val botConfigPrefs = ctx.getSharedPreferences("destinedfx_bot_config", Context.MODE_PRIVATE)
     /** Live trading authorization is deliberately process-memory-only and never restored after restart. */
     @Volatile private var derivRealLease: DerivRealAuthorizationLease? = null
 
@@ -104,6 +106,19 @@ class SecretsManager(private val ctx: Context) {
     fun saveOandaAccountId(v: String)   = prefs.edit().putString(OANDA_ACC, v).apply()
     fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
+    fun saveBotSymbol(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("symbol", v.trim()).apply() }
+    fun getBotSymbol(): String = botConfigPrefs.getString("symbol", "EUR/USD") ?: "EUR/USD"
+    fun saveBotStrategy(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("strategy", v.trim()).apply() }
+    fun getBotStrategy(): String = botConfigPrefs.getString("strategy", "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0"
+    fun saveBotTimeframe(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("timeframe", v.trim()).apply() }
+    fun getBotTimeframe(): String = botConfigPrefs.getString("timeframe", "M15") ?: "M15"
+    fun saveBotRiskPercent(v: Double): Boolean {
+        if (!v.isFinite() || v <= 0.0 || v > 1.0) return false
+        botConfigPrefs.edit().putString("risk_percent", v.toString()).apply()
+        return true
+    }
+    fun getBotRiskPercent(): Double = botConfigPrefs.getString("risk_percent", "0.25")?.toDoubleOrNull()
+        ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 } ?: 0.25
     /** Deriv credentials must never be persisted to the in-memory fallback as if save succeeded. */
     fun saveDerivApiToken(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank()) return false

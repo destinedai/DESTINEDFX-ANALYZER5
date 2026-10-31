@@ -289,8 +289,8 @@ class AutonomousBotEngine(
                     continue
                 }
 
-                // 5. Obtain the canonical Analyzer signal. This stores the full validated report
-                // under the signal ID; TradeUseCaseImpl consumes this same report at execution.
+                // 5. Request a fresh analysis independently for this Bot's captured configuration.
+                // This stores the validated report under its own signal ID for TradeUseCaseImpl.
                 val candles = marketDataRepo.getCandles(symbol, tf.label, 150)
                 if (candles.size < 60) {
                     _status.value = _status.value.copy(

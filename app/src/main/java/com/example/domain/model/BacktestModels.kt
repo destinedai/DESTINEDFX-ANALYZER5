@@ -21,8 +21,8 @@ data class BacktestReport(
     val trades: List<BacktestTrade>
 )
 
-data class AIBotOpinion(
-    val botName: String,
+data class StrategyAnalysisOpinion(
+    val analysisName: String,
     val signal: String, // "BULLISH", "BEARISH", "NEUTRAL"
     val entry: Double,
     val sl: Double,
