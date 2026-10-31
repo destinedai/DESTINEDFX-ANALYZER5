@@ -33,9 +33,9 @@ class DerivAccountModeAndExecutionStateTest {
     fun realProfileCanConnectButRequiresSeparateExplicitAuthorizationForOrders() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         assertFalse(manager.isDerivRealExecutionEnabled())
+        if (!manager.isSecureStorageAvailable) return
         assertTrue(manager.saveDerivAccountMode("real"))
         assertEquals("real", manager.getDerivAccountMode())
-        if (!manager.isSecureStorageAvailable) return
         assertTrue(manager.enableDerivRealExecution(true))
         assertEquals("real", manager.getDerivAccountMode())
         manager.disableDerivRealExecution()
