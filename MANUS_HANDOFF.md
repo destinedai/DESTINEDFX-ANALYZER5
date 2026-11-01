@@ -4,7 +4,7 @@
 
 - Repository: `destinedai/DESTINEDFX-ANALYZER5`
 - Branch: `main`
-- Latest completed commit: `a32ec564696f9c02c27ea108a82496549e863d2b`
+- Latest completed commit: `04beb267364becb580052f624187449b6e122b23`
 - Working tree at handoff creation: clean before this document was added.
 
 ## Completed work
@@ -41,6 +41,12 @@ Commit `a32ec564696f9c02c27ea108a82496549e863d2b`:
 - Replaced sequential scanning with bounded batches of four cancellable coroutines and de-duplicates the configured symbol universe per cycle.
 - Added `GlobalMarketMatrixEngineTest.kt` covering fresh, stale, invalid, future, missing, timeout, provider-error, unsupported, duplicate-start, restart, bounded-concurrency, and cancellation behavior.
 
+Commit `04beb267364becb580052f624187449b6e122b23`:
+
+- Fixed the constructor default provider lambda by moving the crypto-symbol helper to valid file scope.
+- Fixed nullable `MarketTicker?` access by explicitly rejecting a missing quote before reading source, price, or timestamp fields.
+- Preserved distinct missing-quote, stale/invalid, timeout, and provider-error outcomes.
+
 ## Tests and CI evidence
 
 - `git diff --check`: passed for both implementation phases.
@@ -49,7 +55,9 @@ Commit `a32ec564696f9c02c27ea108a82496549e863d2b`:
 - GitHub Actions Build APK for commit `9c5a8edbe523d16d29aa341aaf23e77f82d2c7ac`: **SUCCESS**.
 - GitHub Actions Build APK for commit `7e26381ed4b742e9d0920aa1818450e43814d85b`: **SUCCESS**.
 - GitHub Actions Build APK for commit `a32ec564696f9c02c27ea108a82496549e863d2b`: **IN PROGRESS** at handoff update time.
-- Current CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347663473
+- GitHub Actions Build APK for commit `81ee621d42768083a3b3858d4080664e5ede5da9`: **FAILURE** during Kotlin compilation with the four errors repaired in `04beb26`.
+- GitHub Actions Build APK for commit `04beb267364becb580052f624187449b6e122b23`: **IN PROGRESS** at handoff update time.
+- Current CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347947941
 - The successful workflow includes the configured Android unit-test/build/signature/artifact stages and repository Python/EA checks as defined by `.github/workflows/build-apk.yml`.
 
 ## Current blockers
@@ -62,7 +70,7 @@ Commit `a32ec564696f9c02c27ea108a82496549e863d2b`:
 
 ## Remaining work, priority order
 
-1. Integrate fresh validated surveillance data with the existing `SignalGenerationUseCase` and authoritative `RiskEngine`; preserve WAIT/BLOCKED behavior and never guess broker sizing.
+1. After CI passes, integrate fresh validated surveillance data with the existing `SignalGenerationUseCase` and authoritative `RiskEngine`; preserve WAIT/BLOCKED behavior and never guess broker sizing.
 2. Connect the orchestrator to the existing deterministic signal/risk components only where their data requirements are met; preserve WAIT/BLOCKED behavior and never guess broker sizing.
 3. Add durable opportunity lifecycle and notification deduplication/expiry around analytical signal outputs; keep Telegram delivery separate from trade execution.
 4. Add the Android surveillance status surface only after real backend/provider state exists; display BLOCKED or DATA_UNAVAILABLE rather than simulated counts.
