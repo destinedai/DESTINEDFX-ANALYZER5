@@ -8,12 +8,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.abs
+import kotlinx.coroutines.TimeoutCancellationException
 
 /**
  * Data-surveillance orchestration only. This class never places orders and never manufactures a
@@ -24,7 +27,14 @@ class GlobalMarketMatrixEngine(
     private val uiListener: MatrixUiListener,
     private val marketDataRepository: MarketDataRepository? = null,
     private val clock: () -> Long = System::currentTimeMillis,
-    private val scanIntervalMs: Long = DEFAULT_SCAN_INTERVAL_MS
+    private val scanIntervalMs: Long = DEFAULT_SCAN_INTERVAL_MS,
+    private val providerTimeoutMs: Long = DEFAULT_PROVIDER_TIMEOUT_MS,
+    private val instrumentProvider: () -> List<String> = {
+        SymbolRegistry.getAllCanonical().filter { symbol ->
+            val info = SymbolRegistry.get(symbol)
+            info.oandaInstrument.isNotBlank() || isCryptoSymbol(symbol)
+        }
+    }
 ) {
     interface MatrixUiListener {
         fun onEngineOnline()
@@ -32,7 +42,7 @@ class GlobalMarketMatrixEngine(
         fun onEngineFault(error: String)
     }
 
-    enum class InstrumentState { WAITING, LIVE, STALE, UNSUPPORTED, ERROR }
+    enum class InstrumentState { WAITING, LIVE, STALE, UNSUPPORTED, TIMEOUT, ERROR }
 
     data class InstrumentSnapshot(
         val symbol: String,
@@ -76,15 +86,24 @@ class GlobalMarketMatrixEngine(
             var announcedOnline = false
             try {
                 while (isActive && running.get()) {
-                    val symbols = supportedSymbols()
+                    val symbols = instrumentProvider().map(String::trim).filter(String::isNotBlank).distinct()
                     if (symbols.isEmpty()) {
                         uiListener.onEngineFault("SURVEILLANCE BLOCKED: no provider-supported instruments are configured.")
+                        // Do not leave the engine marked as running after a failed empty-universe
+                        // cycle; callers must be able to repair configuration and restart it.
+                        running.set(false)
                         break
                     }
+                    val cycle = coroutineScope {
+                        symbols.chunked(MAX_CONCURRENT_SCANS).flatMap { batch ->
+                            batch.map { symbol ->
+                                async(Dispatchers.IO) { symbol to scanOne(repository, symbol) }
+                            }.awaitAll()
+                        }
+                    }
                     var acceptedFreshQuote = false
-                    for (symbol in symbols) {
+                    for ((symbol, snapshot) in cycle) {
                         if (!isActive || !running.get()) break
-                        val snapshot = scanOne(repository, symbol)
                         synchronized(snapshots) { snapshots[symbol] = snapshot }
                         if (snapshot.state == InstrumentState.LIVE && snapshot.price != null) {
                             acceptedFreshQuote = true
@@ -104,7 +123,7 @@ class GlobalMarketMatrixEngine(
                         announcedOnline = true
                         uiListener.onEngineOnline()
                     }
-                    delay(scanIntervalMs.coerceAtLeast(1_000L))
+                    delay(scanIntervalMs.coerceAtLeast(1L))
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -127,12 +146,22 @@ class GlobalMarketMatrixEngine(
     fun latestSnapshots(): Map<String, InstrumentSnapshot> = synchronized(snapshots) { snapshots.toMap() }
 
     private suspend fun scanOne(repository: MarketDataRepository, symbol: String): InstrumentSnapshot {
+        if (symbol !in SymbolRegistry.getAllCanonical()) {
+            return InstrumentSnapshot(symbol, InstrumentState.UNSUPPORTED, reason = "Symbol is not in the authoritative registry")
+        }
         val info = SymbolRegistry.get(symbol)
-        if (info.oandaInstrument.isBlank() && !isCrypto(symbol)) {
+        if (info.oandaInstrument.isBlank() && !isCryptoSymbol(symbol)) {
             return InstrumentSnapshot(symbol, InstrumentState.UNSUPPORTED, reason = "No supported provider mapping")
         }
-        val ticker = withTimeoutOrNull(5_000L) { repository.refreshSymbol(symbol) }
-            ?: return InstrumentSnapshot(symbol, InstrumentState.ERROR, reason = "Provider timeout")
+        val ticker = try {
+            withTimeout(providerTimeoutMs.coerceAtLeast(1L)) { repository.refreshSymbol(symbol) }
+        } catch (timeout: TimeoutCancellationException) {
+            return InstrumentSnapshot(symbol, InstrumentState.TIMEOUT, reason = "Provider timeout")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return InstrumentSnapshot(symbol, InstrumentState.ERROR, reason = "Provider error: ${error.javaClass.simpleName}")
+        }
         if (!isValidTicker(ticker, clock())) {
             val reason = if (ticker == null) "No quote returned" else "Quote is stale or invalid"
             return InstrumentSnapshot(symbol, if (ticker == null) InstrumentState.ERROR else InstrumentState.STALE, reason = reason)
@@ -147,18 +176,15 @@ class GlobalMarketMatrixEngine(
         )
     }
 
-    private fun supportedSymbols(): List<String> = SymbolRegistry.getAllCanonical().filter { symbol ->
-        val info = SymbolRegistry.get(symbol)
-        info.oandaInstrument.isNotBlank() || isCrypto(symbol)
-    }
-
     private fun isValidTicker(ticker: MarketTicker?, nowMs: Long): Boolean {
         if (ticker == null || !ticker.price.isFinite() || ticker.price <= 0.0) return false
         if (ticker.lastUpdateMillis <= 0L || nowMs < ticker.lastUpdateMillis) return false
         return nowMs - ticker.lastUpdateMillis <= MAX_QUOTE_AGE_MS && ticker.source.isNotBlank()
     }
 
-    private fun isCrypto(symbol: String): Boolean =
+    private fun isCrypto(symbol: String): Boolean = isCryptoSymbol(symbol)
+
+    private fun isCryptoSymbol(symbol: String): Boolean =
         symbol.substringBefore('/').uppercase() in setOf("BTC", "ETH", "BNB", "SOL", "XRP")
 
     private fun assetType(symbol: String): String = when {
@@ -170,6 +196,8 @@ class GlobalMarketMatrixEngine(
 
     companion object {
         const val DEFAULT_SCAN_INTERVAL_MS = 60_000L
+        const val DEFAULT_PROVIDER_TIMEOUT_MS = 5_000L
         const val MAX_QUOTE_AGE_MS = 30_000L
+        const val MAX_CONCURRENT_SCANS = 4
     }
 }
