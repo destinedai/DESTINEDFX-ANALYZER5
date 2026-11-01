@@ -35,21 +35,41 @@ if ($signer -notmatch 'MetaQuotes') {
 }
 Write-Host "Verified installer signer: $signer"
 
+function Find-MetaEditor {
+    $roots = @($installPath, (Join-Path $env:ProgramFiles 'MetaTrader 5'))
+    $x86ProgramFiles = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    if ($x86ProgramFiles) {
+        $roots += Join-Path $x86ProgramFiles 'MetaTrader 5'
+    }
+    foreach ($root in $roots | Select-Object -Unique) {
+        if (Test-Path -LiteralPath $root -PathType Container) {
+            $found = Get-ChildItem -LiteralPath $root -Filter 'metaeditor64.exe' -File -Recurse -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($null -ne $found) {
+                return $found
+            }
+        }
+    }
+    return $null
+}
+
+New-Item -ItemType Directory -Path $installPath -Force | Out-Null
 Write-Host "Installing MetaTrader into the temporary CI directory $installPath"
 $installProcess = Start-Process -FilePath $installerPath `
     -ArgumentList @('/auto', "/path:`"$installPath`"") `
     -Wait -PassThru
-if ($installProcess.ExitCode -ne 0) {
-    throw "MetaTrader installer failed with exit code $($installProcess.ExitCode)."
-}
-
-$metaEditor = Get-ChildItem -LiteralPath $installPath -Filter 'metaeditor64.exe' -File -Recurse |
-    Select-Object -First 1
+$metaEditor = Find-MetaEditor
 if ($null -eq $metaEditor) {
-    throw "metaeditor64.exe was not installed under $installPath"
+    Write-Warning "Custom-path installation returned $($installProcess.ExitCode) and no compiler was found; retrying the official installer at its documented default path."
+    $fallbackProcess = Start-Process -FilePath $installerPath -ArgumentList '/auto' -Wait -PassThru
+    $metaEditor = Find-MetaEditor
+    if ($null -eq $metaEditor) {
+        throw "MetaTrader installation failed (custom-path exit $($installProcess.ExitCode), default-path exit $($fallbackProcess.ExitCode)); no genuine metaeditor64.exe was installed."
+    }
 }
 
-$expertsPath = Join-Path $installPath 'MQL5\Experts'
+$terminalRoot = Split-Path -Path $metaEditor.FullName -Parent
+$expertsPath = Join-Path $terminalRoot 'MQL5\Experts'
 New-Item -ItemType Directory -Path $expertsPath -Force | Out-Null
 $stagedSource = Join-Path $expertsPath 'DestinedFXTraderEA.mq5'
 Copy-Item -LiteralPath $sourcePath -Destination $stagedSource -Force
