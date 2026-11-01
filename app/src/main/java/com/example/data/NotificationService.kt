@@ -25,6 +25,16 @@ internal fun redactSecrets(text: String?, vararg secrets: String): String {
         .replace(Regex("""\d{5,}:[A-Za-z0-9_-]{30,}"""), "[redacted]")
 }
 
+/** Telegram can return HTTP 2xx with a JSON-level ok=false response; never treat that as delivery. */
+internal data class TelegramApiResult(val ok: Boolean, val description: String? = null)
+
+internal fun parseTelegramApiResult(httpSuccessful: Boolean, body: String): TelegramApiResult {
+    val json = runCatching { JSONObject(body) }.getOrNull()
+        ?: return TelegramApiResult(false, if (httpSuccessful) "Telegram returned invalid JSON" else null)
+    val description = json.optString("description").trim().ifBlank { null }
+    return TelegramApiResult(httpSuccessful && json.optBoolean("ok", false), description)
+}
+
 class NotificationService(private val okHttpClient: OkHttpClient) {
 
     suspend fun verifyAndConnectTelegram(botToken: String, chatId: String, verificationMessage: String): Pair<Boolean, String> {
@@ -52,7 +62,8 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
                 val getMeRequest = Request.Builder().url(getMeUrl).get().build()
                 okHttpClient.newCall(getMeRequest).execute().use { response ->
                     val body = response.body?.string().orEmpty()
-                    if (!response.isSuccessful || body.isBlank()) {
+                    val api = parseTelegramApiResult(response.isSuccessful, body)
+                    if (!api.ok) {
                         return@withContext false to "Invalid Telegram Bot Token. Verify the token copied from @BotFather."
                     }
                     val json = JSONObject(body)
@@ -85,12 +96,13 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
 
                 okHttpClient.newCall(request).execute().use { response ->
                     val body = response.body?.string().orEmpty()
-                    if (response.isSuccessful) {
+                    val api = parseTelegramApiResult(response.isSuccessful, body)
+                    if (api.ok) {
                         Log.d("DestinedFX_Notification", "Telegram message sent successfully to @$botUsername.")
                         return@withContext true to "Connected to @$botUsername! Verification alert delivered to Chat ID $effectiveChatId."
                     } else {
                         val errorJson = runCatching { JSONObject(body) }.getOrNull()
-                        val desc = errorJson?.optString("description", "").orEmpty()
+                        val desc = api.description ?: errorJson?.optString("description", "").orEmpty()
                         Log.e("DestinedFX_Notification", "Telegram send error: $desc")
                         val helpfulMsg = when {
                             desc.contains("chat not found", ignoreCase = true) || desc.contains("Forbidden", ignoreCase = true) ->
@@ -174,7 +186,8 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
                 val requestMarkdown = Request.Builder().url(url).post(requestBodyMarkdown).build()
 
                 val firstAttempt = okHttpClient.newCall(requestMarkdown).execute()
-                val firstSuccess = firstAttempt.isSuccessful
+                val firstBody = firstAttempt.body?.string().orEmpty()
+                val firstSuccess = parseTelegramApiResult(firstAttempt.isSuccessful, firstBody).ok
                 firstAttempt.close()
                 if (firstSuccess) return@withContext true
 
@@ -187,7 +200,8 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
                 val requestPlain = Request.Builder().url(url).post(requestBodyPlain).build()
 
                 okHttpClient.newCall(requestPlain).execute().use { response ->
-                    response.isSuccessful
+                    val body = response.body?.string().orEmpty()
+                    parseTelegramApiResult(response.isSuccessful, body).ok
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.redactSecrets
+import com.example.data.parseTelegramApiResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -28,5 +29,19 @@ class TelegramRedactionTest {
     fun nullAndBenignMessagesStayUsable() {
         assertEquals("", redactSecrets(null, token))
         assertEquals("timeout", redactSecrets("timeout", token))
+    }
+
+    @Test
+    fun httpSuccessWithTelegramOkFalseIsNotDelivery() {
+        val result = parseTelegramApiResult(true, "{\"ok\":false,\"description\":\"Forbidden\"}")
+        assertFalse(result.ok)
+        assertEquals("Forbidden", result.description)
+    }
+
+    @Test
+    fun onlyHttpAndJsonSuccessTogetherCountAsDelivery() {
+        assertTrue(parseTelegramApiResult(true, "{\"ok\":true}").ok)
+        assertFalse(parseTelegramApiResult(false, "{\"ok\":true}").ok)
+        assertFalse(parseTelegramApiResult(true, "not-json").ok)
     }
 }
