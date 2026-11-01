@@ -44,9 +44,9 @@ class CandlestickPatternEngine {
             n >= 5 && threeCrows(candles.takeLast(3)) -> CandlestickPatternType.THREE_BLACK_CROWS to "BEARISH"
             n >= 5 && down && morningStar(p2, p, c, p2s, ps, s) -> CandlestickPatternType.MORNING_STAR to "BULLISH"
             n >= 5 && up && eveningStar(p2, p, c, p2s, ps, s) -> CandlestickPatternType.EVENING_STAR to "BEARISH"
-            down && p.close < p.open && c.close > c.open && c.open < p.low && c.close > p.open + ps.body * 0.5 && c.close < p.open ->
+            down && p.close < p.open && c.close > c.open && c.open < p.low && c.close > (p.open + p.close) * 0.5 && c.close < p.open ->
                 CandlestickPatternType.PIERCING_LINE to "BULLISH"
-            up && p.close > p.open && c.close < c.open && c.open > p.high && c.close < p.open - ps.body * 0.5 && c.close > p.open ->
+            up && p.close > p.open && c.close < c.open && c.open > p.high && c.close < (p.open + p.close) * 0.5 && c.close > p.open ->
                 CandlestickPatternType.DARK_CLOUD_COVER to "BEARISH"
             // An equal extreme tested by opposing candles is the more specific tweezer diagnosis.
             up && sameHigh && c.close < c.open && p.close > p.open -> CandlestickPatternType.TWEEZER_TOP to "BEARISH"
