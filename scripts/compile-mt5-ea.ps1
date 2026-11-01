@@ -118,11 +118,8 @@ Write-Host "Compiling with genuine MetaEditor: $($metaEditor.FullName)"
 $compileArguments = @("/compile:`"$stagedSource`"", "/include:`"$mql5Root`"", '/log')
 $compileProcess = Start-Process -FilePath $metaEditor.FullName `
     -ArgumentList $compileArguments -Wait -PassThru
-if ($compileProcess.ExitCode -ne 0) {
-    throw "MetaEditor exited with code $($compileProcess.ExitCode)."
-}
 if (!(Test-Path -LiteralPath $compileLog -PathType Leaf)) {
-    throw "MetaEditor did not produce the expected compiler log: $compileLog"
+    throw "MetaEditor exited with code $($compileProcess.ExitCode) and produced no compiler log at $compileLog"
 }
 $logText = Get-Content -LiteralPath $compileLog -Raw
 $summary = [regex]::Match($logText, '(?im)^\s*(?:Result:\s*)?(?<errors>\d+)\s+errors?,\s*(?<warnings>\d+)\s+warnings?\b')
@@ -134,6 +131,12 @@ if ([int]$summary.Groups['errors'].Value -ne 0) {
     Get-Content -LiteralPath $compileLog | ForEach-Object { Write-Host $_ }
     Write-Host '---- End MetaEditor compiler diagnostics ----'
     throw "MetaEditor reported $($summary.Groups['errors'].Value) compilation errors. See $compileLog"
+}
+if ($compileProcess.ExitCode -ne 0) {
+    Write-Host '---- MetaEditor compiler diagnostics ----'
+    Get-Content -LiteralPath $compileLog | ForEach-Object { Write-Host $_ }
+    Write-Host '---- End MetaEditor compiler diagnostics ----'
+    throw "MetaEditor reported success in its log but exited with code $($compileProcess.ExitCode)."
 }
 if (!(Test-Path -LiteralPath $compiledEa -PathType Leaf)) {
     throw "MetaEditor reported no errors but did not create the expected EA: $compiledEa"
