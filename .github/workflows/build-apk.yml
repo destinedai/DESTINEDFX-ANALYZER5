@@ -24,6 +24,24 @@ jobs:
       - name: Run MT5 EA source-contract and safety-math regressions
         run: python -m pytest -q mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py
 
+  mt5-ea-windows-compile:
+    name: Compile MT5 EA with genuine MetaEditor
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MetaTrader and compile the EA
+        shell: pwsh
+        run: ./scripts/compile-mt5-ea.ps1 -OutputDir "$env:RUNNER_TEMP\destinedfx-ea"
+
+      - name: Upload compiled EA and compiler evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: DestinedFX-MT5-EA-ex5
+          path: ${{ runner.temp }}/destinedfx-ea/
+          if-no-files-found: error
+
   build:
     runs-on: ubuntu-24.04
     # Set this public URL as a GitHub Actions repository variable only after the

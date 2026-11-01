@@ -1,0 +1,105 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$OutputDir
+)
+
+$ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($env:GITHUB_WORKSPACE)) {
+    throw 'GITHUB_WORKSPACE is required; run this script from the checked-out repository.'
+}
+if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+    throw 'RUNNER_TEMP is required; this script is intended for a disposable Windows CI runner.'
+}
+
+$installerUrl = 'https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe'
+$installerPath = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+$installPath = Join-Path $env:RUNNER_TEMP 'MetaTrader5'
+$sourcePath = Join-Path $env:GITHUB_WORKSPACE 'mt5-ea\DestinedFXTraderEA.mq5'
+
+if (!(Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+    throw "EA source not found: $sourcePath"
+}
+
+Write-Host "Downloading official MetaTrader 5 installer from $installerUrl"
+Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+
+$signature = Get-AuthenticodeSignature -LiteralPath $installerPath
+if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "MetaTrader installer Authenticode signature is not valid: $($signature.Status)"
+}
+$signer = $signature.SignerCertificate.Subject
+if ($signer -notmatch 'MetaQuotes') {
+    throw "Unexpected MetaTrader installer signer: $signer"
+}
+Write-Host "Verified installer signer: $signer"
+
+Write-Host "Installing MetaTrader into the temporary CI directory $installPath"
+$installProcess = Start-Process -FilePath $installerPath `
+    -ArgumentList @('/auto', "/path:`"$installPath`"") `
+    -Wait -PassThru
+if ($installProcess.ExitCode -ne 0) {
+    throw "MetaTrader installer failed with exit code $($installProcess.ExitCode)."
+}
+
+$metaEditor = Get-ChildItem -LiteralPath $installPath -Filter 'metaeditor64.exe' -File -Recurse |
+    Select-Object -First 1
+if ($null -eq $metaEditor) {
+    throw "metaeditor64.exe was not installed under $installPath"
+}
+
+$expertsPath = Join-Path $installPath 'MQL5\Experts'
+New-Item -ItemType Directory -Path $expertsPath -Force | Out-Null
+$stagedSource = Join-Path $expertsPath 'DestinedFXTraderEA.mq5'
+Copy-Item -LiteralPath $sourcePath -Destination $stagedSource -Force
+$compiledEa = [System.IO.Path]::ChangeExtension($stagedSource, '.ex5')
+$compileLog = [System.IO.Path]::ChangeExtension($stagedSource, '.log')
+Remove-Item -LiteralPath $compiledEa, $compileLog -Force -ErrorAction SilentlyContinue
+
+Write-Host "Compiling with genuine MetaEditor: $($metaEditor.FullName)"
+$compileArguments = @("/compile:`"$stagedSource`"", '/log')
+$compileProcess = Start-Process -FilePath $metaEditor.FullName `
+    -ArgumentList $compileArguments -Wait -PassThru
+if ($compileProcess.ExitCode -ne 0) {
+    throw "MetaEditor exited with code $($compileProcess.ExitCode)."
+}
+if (!(Test-Path -LiteralPath $compileLog -PathType Leaf)) {
+    throw "MetaEditor did not produce the expected compiler log: $compileLog"
+}
+$logText = Get-Content -LiteralPath $compileLog -Raw
+$summary = [regex]::Match($logText, '(?im)^\s*(?:Result:\s*)?(?<errors>\d+)\s+errors?,\s*(?<warnings>\d+)\s+warnings?\b')
+if (!$summary.Success) {
+    throw "Could not find an errors/warnings summary in the MetaEditor log: $compileLog"
+}
+if ([int]$summary.Groups['errors'].Value -ne 0) {
+    throw "MetaEditor reported $($summary.Groups['errors'].Value) compilation errors. See $compileLog"
+}
+if (!(Test-Path -LiteralPath $compiledEa -PathType Leaf)) {
+    throw "MetaEditor reported no errors but did not create the expected EA: $compiledEa"
+}
+
+New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+$outputEa = Join-Path $OutputDir 'DestinedFXTraderEA.ex5'
+$outputLog = Join-Path $OutputDir 'DestinedFXTraderEA.log'
+Copy-Item -LiteralPath $compiledEa -Destination $outputEa -Force
+Copy-Item -LiteralPath $compileLog -Destination $outputLog -Force
+$eaHash = (Get-FileHash -LiteralPath $outputEa -Algorithm SHA256).Hash.ToLowerInvariant()
+$sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$compilerVersion = (Get-Item -LiteralPath $metaEditor.FullName).VersionInfo.ProductVersion
+$warnings = [int]$summary.Groups['warnings'].Value
+
+@"
+Artifact: DestinedFXTraderEA.ex5
+Source: mt5-ea/DestinedFXTraderEA.mq5
+Source SHA-256: $sourceHash
+EA SHA-256: $eaHash
+MetaEditor version: $compilerVersion
+Installer signer: $signer
+Compilation: 0 errors, $warnings warnings
+Platform: disposable GitHub Actions windows-latest runner
+Scope: genuine MetaEditor compilation only; no broker login, terminal heartbeat, or order execution was performed.
+"@ | Set-Content -LiteralPath (Join-Path $OutputDir 'build-evidence.txt') -Encoding utf8
+
+Write-Host "MetaEditor compilation passed with 0 errors and $warnings warnings."
+Write-Host "Compiled EA SHA-256: $eaHash"
