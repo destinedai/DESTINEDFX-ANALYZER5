@@ -94,7 +94,7 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "I am DestinedFX's deterministic, on-device app-help chat. No conversational AI service is connected, and keyword matches are not AI-generated answers. I can explain the currently visible Analyzer state and app controls; for market data, check the reported source and freshness."
 
             q.contains("thank") || q.contains("great") || q.contains("cool") || q.contains("awesome") ->
-                "You're very welcome! If you need any more insights on market setups, strategy confluences, or terminal features, just ask!"
+                "You're welcome. I can help with supported app controls and currently visible, source-labelled analysis."
 
             // Current pair & price & analysis
             listOf("price", "cmp", "quote", "cost", "current market price", "ticker").any(q::contains) -> {
@@ -132,22 +132,18 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "4. In DestinedFX, go to More → Settings → Telegram Notifications, enter your Bot Token, and tap 'Auto-Detect'!\n" +
                 "5. Tap 'Connect Telegram' and test with 'Test Message' to verify instant delivery."
 
-            // Bot Tab & Demo Account
+            // Execution settings are explicitly outside this non-Bot chat scope.
             listOf("bot", "demo", "paper", "automate", "automated", "metaapi", "mt5", "account").any(q::contains) ->
-                "About the DestinedFX Bot Tab & MT5 Architecture:\n" +
-                "• MT5 Account Management: Select 'Demo' or 'Real' mode and choose your starting balance ($3,000 preset, $5,000, $10,000 or custom deposit). It validates real broker credentials and session health.\n" +
-                "• Real MT5 Broker: Connect your live broker account by entering your MT5 Login, Password, and Broker Server.\n" +
-                "• Instant 1-Tap Execution: Use the 1-Tap BUY / SELL buttons with live Bid/Ask quotes, lot volume selector (0.01-1.00), and automated 1:2.5 RR stop-loss/take-profit."
+                "This deterministic chat does not inspect broker accounts or Bot/execution state, which is outside this non-Bot scope. Check the relevant workspace for its current, verified status."
 
             // Strategies (SMC, ICT, Order Blocks, FVGs)
             listOf("smc", "ict", "order block", "fvg", "liquidity", "bos", "choch", "silver bullet").any(q::contains) ->
-                "Common SMC terminology (a heuristic interpretation, not proof of institutional orders):\n" +
+                "Common SMC terminology (heuristic labels, not proof of institutional orders or predictive edge):\n" +
                 "• Order Block (OB): Often described as the last opposing candle before a displacement move; it does not identify who placed orders.\n" +
-                "• Fair Value Gap (FVG): A 3-candle imbalance where price moved so violently that liquidity was skipped. Price tends to retrace and fill this pocket.\n" +
-                "• BOS (Break of Structure): Confirms continuation in the prevailing trend direction.\n" +
-                "• CHoCH (Change of Character): The first structural shift signaling a potential trend reversal.\n" +
-                "• Liquidity Sweeps: When price probes beyond previous highs/lows to take stop orders before reversing.\n" +
-                "Visit the Strategies tab in the bottom bar to inspect full blueprints for all 6 built-in institutional strategies!"
+                "• Fair Value Gap (FVG): A three-candle price imbalance sometimes monitored as a possible revisit area; a revisit is not assured.\n" +
+                "• BOS / CHoCH: Heuristic labels for selected swing-level breaks or shifts; neither confirms continuation nor predicts a reversal on its own.\n" +
+                "• Liquidity sweep: Price trades beyond a prior level; OHLC alone cannot prove orders were triggered or that price will reverse.\n" +
+                "Use the Strategies workspace to inspect implemented rules and analysis evidence; labels do not prove an edge."
 
             // Risk management
             listOf("risk", "lot", "sizing", "stop loss", "sl", "tp", "reward", "drawdown").any(q::contains) ->
@@ -159,35 +155,24 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
 
             // BTC / Crypto queries
             listOf("btc", "bitcoin", "crypto", "ethereum", "eth", "solana", "sol", "xrp").any(q::contains) ->
-                "Bitcoin (BTC) is the premier digital asset monitored 24/7 on our TradingView live feed.\n" +
-                "• In DestinedFX, BTC/USD is analyzed using institutional Smart Money Concepts (SMC).\n" +
-                "• Strategy Focus: The engine detects Equal Highs/Lows (EQH/EQL), liquidity sweeps, and 3-candle Fair Value Gap (FVG) imbalances on 15m, 1h, and 4h timeframes.\n" +
-                "• Risk Management: Due to BTC volatility, position volume is dynamically sized strictly under 1.0% account risk.\n" +
-                "Select BTC/USD in the Analyzer or Home tab to view the live TradingView chart and run instant algorithmic scans!"
+                "This chat does not monitor crypto markets continuously. Select a supported instrument in Analyzer and verify the separate feed's source, timestamp and status before relying on its analysis."
 
             // SMC Liquidity & Stop Hunts Strategy queries
             listOf("liquidity", "stop hunt", "hunt", "sweep", "eqh", "eql", "trendline", "pool", "raid").any(q::contains) ->
-                "SMC Liquidity & Stop Hunts Strategy Blueprint:\n" +
-                "• Hunt the Obvious: Pools of stop-loss orders sit directly above swing highs (Buy-Side Liquidity) and below swing lows (Sell-Side Liquidity).\n" +
-                "• Highlighting: Identifies Equal Highs (EQH), Equal Lows (EQL), and trendline liquidity pools acting as liquidity traps.\n" +
-                "• Sweep Anticipation: Anticipates a swift wick raid/sweep rather than chasing a clean breakout trap.\n" +
-                "• Reversal Entry: Triggers immediate post-sweep reversal entries with tight invalidation SL placed just beyond the sweep wick extreme and targets opposite liquidity pools with minimum 1:2.5 R:R!"
+                "A liquidity-sweep label is an OHLC-derived heuristic, not evidence of actual stop orders or a guaranteed reversal. Review the selected strategy's evidence, invalidation and risk blockers; no fixed reward-to-risk outcome is promised."
 
             // Balance & MT5 Account queries
             listOf("balance", "capital", "equity", "dollar", "$", "deposit", "funds", "3k", "100k").any(q::contains) ->
-                "Account Balance & Real Credential Synchronization:\n" +
-                "• When you connect your MT5 demo or real account, DestinedFX reads and displays your exact account balance (e.g. $3,000.00) directly from your broker credentials.\n" +
-                "• No Mock Figures: The terminal never hardcodes fake $100,000 balances for live/demo logins.\n" +
-                "• Capital Protection: All lot sizing calculations in the Risk and Bot workstations dynamically adjust to your actual balance using the 1.0% max risk rule."
+                "Chat cannot verify broker balances. Review the displayed account source and sizing assumptions in the Risk workspace. Bot and execution features are outside this non-Bot scope."
 
             // How to use the Analyzer
             listOf("analyzer", "chart", "tradingview", "timeframe", "pairs", "markets").any(q::contains) ->
-                "Using the DestinedFX Live Analyzer:\n" +
+                "Using the DestinedFX Analyzer:\n" +
                 "1. Select your market category (Forex Majors, Forex Minors, Crypto, Commodities, Indices).\n" +
                 "2. Pick your symbol and timeframe (M1, M5, M15, M30, H1, H4, D1, W1).\n" +
-                "3. The embedded TradingView chart renders real-time price action with interactive drawing tools.\n" +
-                "4. Tap 'RUN LIVE ANALYSIS' to let our deterministic engine compute order blocks, fair value gaps, and entry coordinates.\n" +
-                "5. Tap 'EXPORT ANALYSIS' to generate PDF or PNG institutional reports to share via WhatsApp, Telegram, or Email!"
+                "3. TradingView is an interactive chart embed; it is not the Analyzer OHLC API. Check the independent candle feed's source and freshness.\n" +
+                "4. Run analysis and review its state, evidence and blockers; incomplete levels are not a trade plan.\n" +
+                "5. Export only after reviewing the data source, status, blockers and actual price levels."
 
             // General Knowledge & Trivia & Non-trade questions
             q.contains("joke") || q.contains("funny") ->
@@ -200,10 +185,10 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "The capital of France is Paris. It's famous for art, fashion, gastronomy, and culture (and great cafes to watch the morning Forex session open!)."
 
             q.contains("capital of") ->
-                "That's an interesting geography question! While I specialize in financial markets and terminal operations, I'm always happy to chat about world capitals, science, or technology."
+                "No conversational AI provider is connected, so I cannot answer arbitrary general-knowledge questions beyond the small set of built-in responses."
 
             q.contains("math") || q.contains("calculate") || q.contains("+") || q.contains("-") || q.contains("*") || q.contains("/") ->
-                "Mathematics is the foundation of trading! Whether calculating pip values, risk percentages (capped at 1%), or general equations, precision is key. How can I help you calculate today?"
+                "This deterministic app-help chat does not evaluate arbitrary calculations. Use the Risk workspace for instrument-aware sizing and review its assumptions."
 
             q.contains("name") || q.contains("who made you") || q.contains("creator") ->
                 "I am DestinedFX's on-device deterministic guidance chat. No conversational AI provider is connected."
