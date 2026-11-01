@@ -8,8 +8,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONException
 import java.time.OffsetDateTime
 import java.util.*
+import java.text.ParsePosition
 import java.util.concurrent.TimeUnit
 
 class ForexNewsRepository(
@@ -29,54 +31,78 @@ class ForexNewsRepository(
             return@withContext cache
         }
         try {
-            val resp = client.newCall(
+            client.newCall(
                 Request.Builder()
                     .url("https://nfs.faireconomy.media/ff_calendar_thisweek.json")
                     .build()
-            ).execute()
-            if (!resp.isSuccessful) {
-                fetchFailed = true
-                lastCalendar = com.destinedfx.core.news.CalendarResult.Failed("Calendar HTTP ${resp.code}")
-                return@withContext cache
+            ).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    fetchFailed = true
+                    lastCalendar = com.destinedfx.core.news.CalendarResult.Failed("Calendar HTTP ${resp.code}")
+                    return@withContext cache
+                }
+                val body = resp.body?.string()
+                    ?: return@withContext failCalendar("Empty calendar response")
+                val now = System.currentTimeMillis()
+                val evts = parseFeedPayload(body, now)
+                cache = evts
+                lastCalendar = com.destinedfx.core.news.CalendarResult.Ok(evts.map {
+                    com.destinedfx.core.news.EconomicEvent(it.title, it.currency, it.currency,
+                        when (it.impact) {
+                            "High" -> com.destinedfx.core.news.NewsImpact.HIGH
+                            "Medium" -> com.destinedfx.core.news.NewsImpact.MEDIUM
+                            "Low" -> com.destinedfx.core.news.NewsImpact.LOW
+                            else -> throw JSONException("Unknown impact")
+                        }, it.dateTimeUtcMs, null, it.forecast, it.previous,
+                        "ForexFactory weekly feed (faireconomy)", now)
+                }, now, now - 3_600_000L, now + 6 * 86_400_000L)
+                lastFetch = now
+                fetchFailed = false
+                cache
             }
-            val body = resp.body?.string() ?: "[]"
-            val arr = JSONArray(body)
-            val now = System.currentTimeMillis()
-            val evts = mutableListOf<NewsEvent>()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val dateStr = o.optString("date", "")
-                val ms = parseDate(dateStr)
-                if (ms <= 0L || ms < now - 3_600_000) continue
-                evts.add(
-                    NewsEvent(
-                        title = o.optString("title", "Event"),
-                        currency = o.optString("country", "USD").uppercase(),
-                        impact = when (o.optString("impact", "").lowercase()) {
-                            "high" -> "High"
-                            "medium" -> "Medium"
-                            else -> "Low"
-                        },
-                        dateTimeUtcMs = ms,
-                        forecast = o.optString("forecast").ifBlank { null },
-                        previous = o.optString("previous").ifBlank { null }
-                    )
-                )
-            }
-            cache = evts
-            lastCalendar = com.destinedfx.core.news.CalendarResult.Ok(evts.map {
-                com.destinedfx.core.news.EconomicEvent(it.title, it.currency, it.currency, when (it.impact) { "High" -> com.destinedfx.core.news.NewsImpact.HIGH; "Medium" -> com.destinedfx.core.news.NewsImpact.MEDIUM; else -> com.destinedfx.core.news.NewsImpact.LOW },
-                    it.dateTimeUtcMs, null, it.forecast, it.previous, "ForexFactory weekly feed (faireconomy)", now) }, now, now - 3_600_000L, now + 6 * 86_400_000L)
-            lastFetch = now
-            fetchFailed = false
-            cache
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e("ForexNews", "Failed to fetch calendar: ${e.javaClass.simpleName}")
             fetchFailed = true
             lastCalendar = com.destinedfx.core.news.CalendarResult.Failed("Network/parse error: ${e.javaClass.simpleName}")
             cache
         }
     }
+
+    private fun failCalendar(reason: String): List<NewsEvent> {
+        fetchFailed = true
+        lastCalendar = com.destinedfx.core.news.CalendarResult.Failed(reason)
+        return cache
+    }
+
+    internal fun parseFeedPayload(body: String, now: Long): List<NewsEvent> {
+        val arr = JSONArray(body)
+        if (arr.length() == 0) throw JSONException("Empty calendar payload")
+        val out = mutableListOf<NewsEvent>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: throw JSONException("Malformed calendar event at index $i")
+            val dateStr = required(o.optString("date"), "timestamp")
+            val ms = parseDate(dateStr)
+            if (ms <= 0L) throw JSONException("Invalid calendar timestamp")
+            if (ms < now - 3_600_000L) continue
+            val title = required(o.optString("title"), "event title")
+            val currency = required(o.optString("country"), "event currency").uppercase(Locale.ROOT)
+            val impact = when (o.optString("impact").trim().lowercase(Locale.ROOT)) {
+                "high" -> "High"
+                "medium" -> "Medium"
+                "low" -> "Low"
+                else -> throw JSONException("Unknown calendar impact")
+            }
+            out += NewsEvent(title, currency, impact, ms,
+                o.optString("forecast").takeUnless { it.isBlank() || it == "null" },
+                o.optString("previous").takeUnless { it.isBlank() || it == "null" })
+        }
+        if (out.isEmpty()) throw JSONException("No current or upcoming events; coverage cannot be confirmed")
+        return out
+    }
+
+    private fun required(value: String, label: String): String =
+        value.takeUnless { it.isBlank() || it == "null" } ?: throw JSONException("Calendar $label is missing")
 
     override suspend fun isHighImpactWindowActive(currencies: List<String>, bufferMinutes: Int): Boolean {
         val now = System.currentTimeMillis()
@@ -115,8 +141,11 @@ class ForexNewsRepository(
             try {
                 val format = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
                     timeZone = TimeZone.getTimeZone("UTC")
+                    isLenient = false
                 }
-                format.parse(dateStr)?.time ?: -1L
+                val position = ParsePosition(0)
+                val parsed = format.parse(dateStr, position)
+                parsed?.time?.takeIf { position.index == dateStr.length } ?: -1L
             } catch (e: java.text.ParseException) {
                 -1L   // unparseable time: the event is skipped, never assigned "now"
             }

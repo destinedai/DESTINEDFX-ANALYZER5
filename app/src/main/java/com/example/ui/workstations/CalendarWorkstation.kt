@@ -66,7 +66,13 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                 events = if (result is CalendarResult.Ok) fetchedEvents else emptyList()
                 val verdict = NewsFilter.evaluate(result, AssetClassifier.newsCurrencies(activeSymbol), System.currentTimeMillis())
                 newsStatus = verdict.status
-                statusDetail = verdict.detail
+                statusDetail = if (result is CalendarResult.Ok) {
+                    val source = result.events.firstOrNull()?.source ?: "unavailable"
+                    val retrieved = SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'", Locale.US)
+                        .apply { timeZone = TimeZone.getTimeZone("UTC") }
+                        .format(Date(result.retrievedAtMs))
+                    "${verdict.detail} • Source: $source • Retrieved: $retrieved"
+                } else verdict.detail
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -177,7 +183,7 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                 NewsStatus.UNKNOWN -> OrangeAccent
             }
             val bannerTitle = when (newsStatus) {
-                NewsStatus.CLEAR -> "NEWS GATE: CLEAR (TRADING ALLOWED)"
+                NewsStatus.CLEAR -> "NEWS WINDOW: CLEAR (NO HIGH-IMPACT EVENT DETECTED)"
                 NewsStatus.HIGH_IMPACT_WINDOW -> "NEWS GATE: BLOCKED (HIGH IMPACT EVENT ACTIVE)"
                 NewsStatus.UNKNOWN -> "NEWS GATE: UNKNOWN (AUTOMATION BLOCKED)"
             }
