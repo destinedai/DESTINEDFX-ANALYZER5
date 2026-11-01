@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.material.icons.Icons
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.analysis.SignalState
 import com.destinedfx.core.instrument.SpecRegistry
@@ -307,8 +309,17 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                             modifier = Modifier.weight(1f)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(if (isSelected) ElectricCyan.copy(alpha = 0.13f) else Color.Transparent)
-                                .clickable { viewModel.selectScreen(screen) }
+                                .border(
+                                    BorderStroke(1.dp, if (isSelected) GoldPrimary.copy(alpha = 0.62f) else Color.Transparent),
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .selectable(
+                                    selected = isSelected,
+                                    role = Role.Tab,
+                                    onClick = { viewModel.selectScreen(screen) }
+                                )
                                 .testTag(screen.tag)
+                                .heightIn(min = 48.dp)
                                 .padding(horizontal = 2.dp, vertical = 6.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(3.dp)

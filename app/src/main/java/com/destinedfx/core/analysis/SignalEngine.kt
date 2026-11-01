@@ -355,16 +355,32 @@ object SignalEngine {
                             (if (bull) it.price < price else it.price > price)
                     }
                     val eqScore = if (eqLevels.isNotEmpty()) 25.0 else 0.0
-                    val eqC = ScoreComponent("Equal Highs / Lows (EQH/EQL) Pool", eqScore, 25.0, listOf(if (eqLevels.isNotEmpty()) "${eqLevels.size} liquidity pool(s) identified (EQH/EQL/Trendline)" else "General swing liquidity"), "25 distinct EQH/EQL liquidity pool identified; 10 single swing level")
+                    val eqC = ScoreComponent("Equal Highs / Lows (EQH/EQL) Pool", eqScore, 25.0, listOf(if (eqLevels.isNotEmpty()) "${eqLevels.size} EQH/EQL pool(s) identified" else "No directional EQH/EQL pool identified"), "25 distinct EQH/EQL pool identified; zero when this evidence is absent")
 
-                    val wickRejection = i.candles.takeLast(3).any { c ->
-                        val r = c.high - c.low
-                        if (r <= 0) false
-                        else if (bull) (c.open.coerceAtMost(c.close) - c.low) / r >= 0.4
-                        else (c.high - c.open.coerceAtLeast(c.close)) / r >= 0.4
+                    // Rejection is measured on the candle that actually swept the matching pool.
+                    // A wick on an unrelated recent candle is not stop-hunt evidence.
+                    val sweepCandle = sweep?.let { i.candles.getOrNull(it.index) }
+                    val raidWickRatio = sweepCandle?.let { c ->
+                        val range = c.high - c.low
+                        if (range <= 0.0) 0.0 else when (sweep?.level?.side) {
+                            LiquiditySide.SELL_SIDE -> (minOf(c.open, c.close) - c.low) / range
+                            LiquiditySide.BUY_SIDE -> (c.high - maxOf(c.open, c.close)) / range
+                            null -> 0.0
+                        }
+                    } ?: 0.0
+                    val wickRejection = sweep != null && raidWickRatio >= 0.4
+                    val rejectionScore = when {
+                        sweep == null -> 0.0
+                        wickRejection -> 20.0
+                        sweep.confirmed -> 12.0
+                        else -> 8.0
                     }
-                    val rejectionScore = if (wickRejection) 20.0 else 8.0
-                    val rejectionC = ScoreComponent("Wick Raid Rejection", rejectionScore, 20.0, listOf(if (wickRejection) "Strong pinbar/wick raid rejection bar" else "Standard price action"), "20 sharp wick rejection (>40% wick ratio); 8 neutral bar")
+                    val rejectionNote = when {
+                        sweep == null -> "No sweep candle; rejection credit withheld"
+                        wickRejection -> "Sweep candle rejection wick %.0f%%".format(raidWickRatio * 100.0)
+                        else -> "Sweep detected; rejection wick below the 40% threshold"
+                    }
+                    val rejectionC = ScoreComponent("Wick Raid Rejection", rejectionScore, 20.0, listOf(rejectionNote), "20 if the sweep candle's rejection wick is >=40%; 12 confirmed/8 unconfirmed sweep with a smaller wick; zero without a sweep")
 
                     val htfScore = when {
                         mtf.state == (if (bull) MtfState.FULL_BULLISH else MtfState.FULL_BEARISH) -> 15.0
@@ -532,6 +548,16 @@ object SignalEngine {
         val entry = (if (long) q.ask else q.bid) ?: q.mid ?: return null to "No executable price"
         val spread = q.spread ?: 0.0
         val priceMid = q.mid ?: entry
+
+        if (i.strategyId == "liquidity-stop-hunts") {
+            val last = i.candles.lastIndex
+            val confirmedSweep = LiquidityEngine.sweeps(i.candles, st, levels, cfg.liquidity).any {
+                it.confirmed && it.impliedDir == dir && last - it.index in 0..cfg.recentBars
+            }
+            if (!confirmedSweep) {
+                return null to "LIQUIDITY STOP HUNTS WAIT: require a recent wick sweep and subsequent reversal-structure confirmation before planning an entry."
+            }
+        }
 
         // ICT Silver Bullet is a location-specific setup, not a generic direction signal.
         // A current price far away from the 50% consequent-encroachment level is a WAIT.

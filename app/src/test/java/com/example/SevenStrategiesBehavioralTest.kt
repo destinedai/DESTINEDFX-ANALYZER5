@@ -273,6 +273,49 @@ class SevenStrategiesBehavioralTest {
     }
 
     @Test
+    fun liquidityStopHuntWithoutSweepCannotEarnRejectionCreditOrProducePlan() {
+        val candles = generateTrendingCandles(count = 120, isBullish = true)
+        val lastPrice = candles.last().close
+        val quote = MarketQuote.twoSided(
+            "EUR/USD", AssetClass.FOREX, lastPrice, lastPrice + 0.0001,
+            1700500000000L, 1700500000000L, "test"
+        )
+        val input = AnalysisInput(
+            symbol = "EUR/USD",
+            tf = Timeframe.H1,
+            candles = candles,
+            htf = emptyMap(),
+            quote = quote,
+            spec = spec,
+            nowMs = 1700500000000L,
+            strategyId = "liquidity-stop-hunts"
+        )
+
+        val report = SignalEngine.analyse(input)
+        assertEquals("liquidity-stop-hunts", report.strategyVersion)
+        assertEquals(SignalState.WAIT, report.state)
+        assertEquals(
+            0.0,
+            report.components.single { it.name == "Wick Raid Rejection" }.earned,
+            0.0
+        )
+
+        val structure = StructureEngine.analyze(candles, Timeframe.H1)
+        val (plan, reason) = SignalEngine.plan(
+            input,
+            quote!!,
+            structure,
+            emptyList(),
+            emptyList(),
+            Dir.BULL,
+            structure.atr ?: error("Test structure must have ATR"),
+            SignalConfig()
+        )
+        assertNull(plan)
+        assertTrue(reason.orEmpty().contains("subsequent reversal-structure confirmation"))
+    }
+
+    @Test
     fun testMeanReversionPlanTargetsTheTwentyPeriodMeanAndRequiresTwoR() {
         val candles = generateConsolidationCandles(count = 120, center = 1.0850)
         val quote = MarketQuote.twoSided(
