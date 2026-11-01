@@ -4,7 +4,7 @@
 
 - Repository: `destinedai/DESTINEDFX-ANALYZER5`
 - Branch: `main`
-- Latest completed commit: `04beb267364becb580052f624187449b6e122b23`
+- Latest completed commit: `84a884bc848db06d08adfa87171cb52b949adfd2`
 - Working tree at handoff creation: clean before this document was added.
 
 ## Completed work
@@ -56,8 +56,14 @@ Commit `04beb267364becb580052f624187449b6e122b23`:
 - GitHub Actions Build APK for commit `7e26381ed4b742e9d0920aa1818450e43814d85b`: **SUCCESS**.
 - GitHub Actions Build APK for commit `a32ec564696f9c02c27ea108a82496549e863d2b`: **IN PROGRESS** at handoff update time.
 - GitHub Actions Build APK for commit `81ee621d42768083a3b3858d4080664e5ede5da9`: **FAILURE** during Kotlin compilation with the four errors repaired in `04beb26`.
-- GitHub Actions Build APK for commit `04beb267364becb580052f624187449b6e122b23`: **IN PROGRESS** at handoff update time.
-- Current CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347947941
+- GitHub Actions Build APK for commit `04beb267364becb580052f624187449b6e122b23`: **SUCCESS**; the four reported Kotlin compiler errors are resolved.
+- Successful CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347976860
+- Successful jobs: Android unit tests, debug APK build, APK signature/package verification, APK artifact upload, Python tests, and genuine MetaEditor MT5 EA compilation.
+- The surveillance regression tests executed as part of `Run unit tests` and passed.
+- Debug APK artifact: `DestinedFX-debug-apk`, artifact ID `13099719885`, containing `app-debug.apk`.
+- APK SHA-256: `be21d0bfc7b86a2dcb25eb87645991c6a833eace4065671c838911ee540958b3`.
+- Artifact download: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347976860/artifacts/13099719885
+- Current handoff commit CI will be a new run after this document update; do not treat that pending run as the repair build evidence above.
 - The successful workflow includes the configured Android unit-test/build/signature/artifact stages and repository Python/EA checks as defined by `.github/workflows/build-apk.yml`.
 
 ## Current blockers
