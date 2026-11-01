@@ -53,7 +53,7 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
     val messages = remember {
         mutableStateListOf(
             AssistantMessage(
-                text = "Welcome to the DestinedFX Intelligence Terminal! I'm your interactive trading co-pilot. I can explain live market analysis, chart structures, ICT/SMC strategies, risk management, Telegram alert setup, and our 1-click Demo Bot. What would you like to explore today?",
+                text = "Welcome to DestinedFX. This chat currently provides deterministic, on-device guidance from the app's verified market state. No conversational AI provider is connected, so I will not pretend that responses are generated intelligence. Ask about the Analyzer, risk rules, chart controls, or app settings.",
                 fromUser = false
             )
         )
@@ -274,10 +274,11 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 }
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("DESTINEDFX INTELLIGENCE", fontSize = 10.sp, color = ElectricCyan, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(ProfitGreen))
+                        Text("DESTINEDFX GUIDANCE", fontSize = 10.sp, color = ElectricCyan, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(WarningAmber))
                     }
-                    Text("Interactive Terminal Assistant", fontSize = 16.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                    Text("Deterministic Local Assistant", fontSize = 16.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                    Text("Conversational AI provider unavailable • no fabricated AI replies", fontSize = 9.sp, color = WarningAmber)
                     Text("Live Context: $symbol • $timeframe • CMP: ${tickers[symbol]?.price?.let { formatPrice(it, symbol) } ?: "—"}", fontSize = 10.sp, color = TextSecondary)
                 }
                 IconButton(
