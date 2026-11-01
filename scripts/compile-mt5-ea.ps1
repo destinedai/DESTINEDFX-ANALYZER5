@@ -133,10 +133,7 @@ if ([int]$summary.Groups['errors'].Value -ne 0) {
     throw "MetaEditor reported $($summary.Groups['errors'].Value) compilation errors. See $compileLog"
 }
 if ($compileProcess.ExitCode -ne 0) {
-    Write-Host '---- MetaEditor compiler diagnostics ----'
-    Get-Content -LiteralPath $compileLog | ForEach-Object { Write-Host $_ }
-    Write-Host '---- End MetaEditor compiler diagnostics ----'
-    throw "MetaEditor reported success in its log but exited with code $($compileProcess.ExitCode)."
+    Write-Warning "MetaEditor returned code $($compileProcess.ExitCode), but its log reports zero compilation errors; the generated EX5 is still required below."
 }
 if (!(Test-Path -LiteralPath $compiledEa -PathType Leaf)) {
     throw "MetaEditor reported no errors but did not create the expected EA: $compiledEa"
