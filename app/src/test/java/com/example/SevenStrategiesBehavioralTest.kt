@@ -251,6 +251,24 @@ class SevenStrategiesBehavioralTest {
     }
 
     @Test
+    fun meanReversionDoesNotAwardReversalCreditForCandleColorAlone() {
+        val candles = generateConsolidationCandles(count = 120)
+        val lastPrice = candles.last().close
+        val quote = MarketQuote.twoSided(
+            "EUR/USD", AssetClass.FOREX, lastPrice, lastPrice + 0.0001,
+            System.currentTimeMillis(), System.currentTimeMillis(), "test"
+        )
+        val report = SignalEngine.analyse(AnalysisInput(
+            symbol = "EUR/USD", tf = Timeframe.H1, candles = candles, htf = emptyMap(),
+            quote = quote, spec = spec, nowMs = System.currentTimeMillis(), strategyId = "mean-reversion"
+        ))
+        val candleEvidence = report.components.single { it.name == "Reversal Candlestick" }
+        assertEquals(0.0, candleEvidence.earned, 0.0)
+        assertTrue(candleEvidence.formula.contains("closed"))
+        assertTrue(candleEvidence.formula.contains("cannot authorize"))
+    }
+
+    @Test
     fun testStrategy7_TrendFollowing_Components() {
         val candles = generateTrendingCandles(count = 120, isBullish = true)
         val lastPrice = candles.last().close

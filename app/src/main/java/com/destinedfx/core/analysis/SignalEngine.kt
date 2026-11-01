@@ -6,6 +6,8 @@ import com.destinedfx.core.marketdata.MarketQuote
 import com.destinedfx.core.marketdata.Timeframe
 import com.destinedfx.core.marketdata.VolumeType
 import com.destinedfx.core.risk.RiskEngine
+import com.example.domain.patterns.CandlestickPatternEngine
+import com.example.domain.patterns.CandlestickPatternType
 import kotlin.math.abs
 import com.destinedfx.core.analysis.FairValueGap
 import com.destinedfx.core.analysis.LiquidityLevel
@@ -321,14 +323,35 @@ object SignalEngine {
                     }
                     val rsiC = ScoreComponent("RSI Exhaustion", rsiScore, 25.0, listOf(rsi?.let { "RSI exhaustion: %.1f".format(it) } ?: "RSI n/a"), "25 RSI in extreme exhaustion (<30 / >70); 16 in extreme warning zone")
 
-                    val lastCandle = i.candles.last()
-                    val totalRange = maxOf(lastCandle.range, 0.00001)
-                    val lowerWick = minOf(lastCandle.open, lastCandle.close) - lastCandle.low
-                    val upperWick = lastCandle.high - maxOf(lastCandle.open, lastCandle.close)
-                    val candleReversal = if (bull) lowerWick / totalRange >= 0.5 || lastCandle.close > lastCandle.open
-                                        else upperWick / totalRange >= 0.5 || lastCandle.close < lastCandle.open
-                    val candleScore = if (candleReversal) 20.0 else 8.0
-                    val candleC = ScoreComponent("Reversal Candlestick", candleScore, 20.0, listOf(if (candleReversal) "Rejection wick / reversal body at outer band" else "Awaiting reversal trigger candle"), "20 clear rejection wick or counter-candle; 8 forming")
+                    val candleResult = CandlestickPatternEngine().detectPattern(i.candles.map {
+                        com.example.domain.model.Candle(
+                            timestamp = it.timeMs, open = it.open, high = it.high, low = it.low,
+                            close = it.close, volume = it.volume, complete = it.complete
+                        )
+                    })
+                    val bullishReversalPatterns = setOf(
+                        CandlestickPatternType.HAMMER, CandlestickPatternType.INVERTED_HAMMER,
+                        CandlestickPatternType.BULLISH_ENGULFING, CandlestickPatternType.MORNING_STAR,
+                        CandlestickPatternType.PIERCING_LINE, CandlestickPatternType.BULLISH_HARAMI,
+                        CandlestickPatternType.THREE_WHITE_SOLDIERS, CandlestickPatternType.TWEEZER_BOTTOM
+                    )
+                    val bearishReversalPatterns = setOf(
+                        CandlestickPatternType.HANGING_MAN, CandlestickPatternType.SHOOTING_STAR,
+                        CandlestickPatternType.BEARISH_ENGULFING, CandlestickPatternType.EVENING_STAR,
+                        CandlestickPatternType.DARK_CLOUD_COVER, CandlestickPatternType.BEARISH_HARAMI,
+                        CandlestickPatternType.THREE_BLACK_CROWS, CandlestickPatternType.TWEEZER_TOP
+                    )
+                    val expectedPatternSet = if (bull) bullishReversalPatterns else bearishReversalPatterns
+                    val expectedBias = if (bull) "BULLISH" else "BEARISH"
+                    val candleReversal = candleResult.confirmed && candleResult.bias == expectedBias &&
+                        candleResult.type in expectedPatternSet
+                    val candleScore = if (candleReversal) 20.0 else 0.0
+                    val candleNotes = if (candleReversal) listOf(
+                        "${candleResult.type.displayName} confirmed; pattern strength ${candleResult.confidence}/100 (not a success probability)",
+                        "Prior trend ${candleResult.priorTrend}; volatility ${candleResult.volatilityContext}; location ${candleResult.locationContext}; liquidity ${candleResult.liquidityContext}"
+                    ) else listOf("No confirmed ${if (bull) "bullish" else "bearish"} reversal formation; latest=${candleResult.type.displayName}, confirmed=${candleResult.confirmed}")
+                    val candleC = ScoreComponent("Reversal Candlestick", candleScore, 20.0, candleNotes,
+                        "20 only for a closed, structurally qualifying pattern in the expected direction; candle evidence alone cannot authorize a signal")
 
                     val regimeScore = if (st.consolidation) 15.0 else if (mtf.state == MtfState.NEUTRAL) 12.0 else 5.0
                     val regimeC = ScoreComponent("Consolidation Regime", regimeScore, 15.0, listOf(if (st.consolidation) "Consolidation regime: optimal for mean reversion" else "Trending conditions present"), "15 consolidating market state; 12 neutral; 5 strong trend")
