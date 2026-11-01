@@ -1682,48 +1682,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             fontSize = 9.sp, color = TextSecondary
                         )
                         Text("The selected account mode is checked against the authenticated MT5 terminal before trading is enabled.", fontSize = 9.sp, color = TextSecondary)
-                        // Server Selector with Dynamic Dropdown
-                        var expandedServer by remember { mutableStateOf(false) }
-                        val matchedBrokers = remember(mt5ServerInput, selectedBrokerCompanyName) {
-                            com.example.data.broker.BrokerDirectory.searchBrokers(
-                                if (mt5ServerInput.isNotBlank()) mt5ServerInput else selectedBrokerCompanyName
-                            )
-                        }
-                        val availableServerList = remember(matchedBrokers) {
-                            matchedBrokers.flatMap { it.servers }.distinct().take(12)
-                        }
+                        OutlinedTextField(
+                            value = mt5ServerInput,
+                            onValueChange = { mt5ServerInput = it },
+                            label = { Text("Exact MT5 server") },
+                            placeholder = { Text("Enter the server issued by your broker") },
+                            modifier = Modifier.fillMaxWidth().testTag("bot_mt5_server"),
+                            singleLine = true
+                        )
 
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            OutlinedTextField(
-                                value = mt5ServerInput,
-                                onValueChange = { mt5ServerInput = it },
-                                label = { Text("Server") },
-                                placeholder = { Text("e.g. Exness-MT5Real, ICMarketsSC-Live01, FBS-Real") },
-                                trailingIcon = {
-                                    IconButton(onClick = { expandedServer = !expandedServer }) {
-                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth().testTag("bot_mt5_server"),
-                                singleLine = true
-                            )
-                            DropdownMenu(
-                                expanded = expandedServer && availableServerList.isNotEmpty(),
-                                onDismissRequest = { expandedServer = false },
-                                modifier = Modifier.fillMaxWidth(0.85f)
-                            ) {
-                                availableServerList.forEach { srv ->
-                                    DropdownMenuItem(
-                                        text = { Text(srv, fontWeight = FontWeight.Bold) },
-                                        onClick = {
-                                            mt5ServerInput = srv
-                                            expandedServer = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
+                        Text("Server names are not guessed or prefilled. Listed broker names are discovery aids only; the managed terminal must authenticate the exact server you enter.", fontSize = 9.sp, color = WarningAmber)
                         Text("TRANSACTION COST MODEL", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
                         Text("Choose the model that matches your broker's published pricing. Incorrect cost inputs can make risk calculations unsafe.", fontSize = 9.sp, color = WarningAmber)
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1920,9 +1888,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     if (showBrokerSearchDialog) {
                         AlertDialog(
                             onDismissRequest = { showBrokerSearchDialog = false },
-                            title = { Text("Search listed brokers", fontWeight = FontWeight.Bold) },
+                            title = { Text("Listed broker names", fontWeight = FontWeight.Bold) },
                             text = {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Names are not verification. No server, demo login, or execution capability is assumed until the managed MT5 terminal returns a fresh authenticated heartbeat.", fontSize = 10.sp, color = WarningAmber)
                                     OutlinedTextField(
                                         value = brokerSearchQuery,
                                         onValueChange = { brokerSearchQuery = it },
@@ -1948,7 +1917,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             ) {
                                                 Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                                     Text(broker.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = ElectricCyan)
-                                                    Text("Servers: ${broker.servers.take(3).joinToString(", ")}", fontSize = 9.sp, color = TextSecondary)
+                                                    Text("Listed only · enter the exact broker-issued server manually", fontSize = 9.sp, color = TextSecondary)
                                                 }
                                             }
                                         }
