@@ -4,7 +4,7 @@
 
 - Repository: `destinedai/DESTINEDFX-ANALYZER5`
 - Branch: `main`
-- Latest completed commit: `7e26381ed4b742e9d0920aa1818450e43814d85b`
+- Latest completed commit: `a32ec564696f9c02c27ea108a82496549e863d2b`
 - Working tree at handoff creation: clean before this document was added.
 
 ## Completed work
@@ -34,27 +34,35 @@ Commit `7e26381ed4b742e9d0920aa1818450e43814d85b`:
 - Prevents duplicate starts, supports clean halt, rejects missing repositories explicitly, and never emits guessed prices, lots, risk, or trade plans.
 - Emits telemetry only for fresh validated quotes and explicitly labels it as data-only.
 
+Commit `a32ec564696f9c02c27ea108a82496549e863d2b`:
+
+- Fixed the empty-universe restart bug by clearing the running state after a blocked scan cycle.
+- Distinguishes provider timeout, missing quote, provider error, stale quote, invalid price, future-dated quote, and unsupported symbol states.
+- Replaced sequential scanning with bounded batches of four cancellable coroutines and de-duplicates the configured symbol universe per cycle.
+- Added `GlobalMarketMatrixEngineTest.kt` covering fresh, stale, invalid, future, missing, timeout, provider-error, unsupported, duplicate-start, restart, bounded-concurrency, and cancellation behavior.
+
 ## Tests and CI evidence
 
 - `git diff --check`: passed for both implementation phases.
 - Local Android Gradle tests/build: blocked in the sandbox because no Android SDK or `ANDROID_HOME`/`local.properties` is available.
 - Local Python tests: blocked because `pytest` is not installed in the sandbox.
 - GitHub Actions Build APK for commit `9c5a8edbe523d16d29aa341aaf23e77f82d2c7ac`: **SUCCESS**.
-- GitHub Actions Build APK for commit `7e26381ed4b742e9d0920aa1818450e43814d85b`: **IN PROGRESS** at handoff update time.
-- Current CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347253460
+- GitHub Actions Build APK for commit `7e26381ed4b742e9d0920aa1818450e43814d85b`: **SUCCESS**.
+- GitHub Actions Build APK for commit `a32ec564696f9c02c27ea108a82496549e863d2b`: **IN PROGRESS** at handoff update time.
+- Current CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347663473
 - The successful workflow includes the configured Android unit-test/build/signature/artifact stages and repository Python/EA checks as defined by `.github/workflows/build-apk.yml`.
 
 ## Current blockers
 
 - Real Telegram delivery has not been performed because no authorized bot token/chat was supplied through a secure external channel. Do not ask the user to paste credentials into chat or source code.
-- `GlobalMarketMatrixEngine.kt` is currently a stub: `configureRiskParameters` is empty, `startGlobalStream` reports no provider, and `haltEngine` is empty.
+- The surveillance layer is now a data-only polling foundation; it is not yet integrated with `SignalGenerationUseCase`, opportunity lifecycle, durable alert delivery, or an independent always-on backend.
 - Continuous all-instrument surveillance requires an authorized provider configuration and an independent always-on backend/worker. Do not claim 24/7 operation from an Android process.
 - Device rendering and real-device TradingView verification remain NOT TESTED.
 - No new surveillance backend or paid infrastructure has been provisioned.
 
 ## Remaining work, priority order
 
-1. Add pure tests for surveillance state transitions, provider capability coverage, quote/candle freshness, market-closed handling, cancellation, deduplication, expiry, and invalidation around `GlobalMarketMatrixEngine.kt`.
+1. Integrate fresh validated surveillance data with the existing `SignalGenerationUseCase` and authoritative `RiskEngine`; preserve WAIT/BLOCKED behavior and never guess broker sizing.
 2. Connect the orchestrator to the existing deterministic signal/risk components only where their data requirements are met; preserve WAIT/BLOCKED behavior and never guess broker sizing.
 3. Add durable opportunity lifecycle and notification deduplication/expiry around analytical signal outputs; keep Telegram delivery separate from trade execution.
 4. Add the Android surveillance status surface only after real backend/provider state exists; display BLOCKED or DATA_UNAVAILABLE rather than simulated counts.
@@ -62,7 +70,7 @@ Commit `7e26381ed4b742e9d0920aa1818450e43814d85b`:
 
 ## Exact next action
 
-Add focused tests for the new `GlobalMarketMatrixEngine` using a fake `MarketDataRepository` that returns fresh, stale, invalid, and unavailable tickers. Verify no telemetry is emitted for rejected data, duplicate starts do not duplicate scans, and `haltEngine()` cancels cleanly. Then push the tests with an updated `MANUS_HANDOFF.md`.
+Connect one supported strategy path to the surveillance cycle using the existing deterministic signal use case, then add tests proving fresh data can produce only a risk-gated result and stale/incomplete data produces WAIT or DATA_UNAVAILABLE. Do not add a parallel signal or risk calculator.
 
 ## Configuration still required
 
