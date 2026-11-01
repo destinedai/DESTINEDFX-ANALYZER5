@@ -6,6 +6,26 @@ import com.example.domain.model.TradeSignal
 import java.util.Locale
 import kotlin.math.abs
 
+/** A deterministic confluence report is not a probability; presentation scores stay on a 0..100 scale. */
+fun validatedDisplayRewardRisk(
+    signalState: String,
+    direction: String,
+    entry: Double,
+    stop: Double,
+    target: Double
+): Double? {
+    val state = signalState.trim().uppercase(Locale.ROOT)
+    val dir = direction.trim().uppercase(Locale.ROOT)
+    val isLong = state in setOf("BUY", "STRONG_BUY", "WEAK_BUY") && dir in setOf("BUY", "LONG")
+    val isShort = state in setOf("SELL", "STRONG_SELL", "WEAK_SELL") && dir in setOf("SELL", "SHORT")
+    if (!isLong && !isShort) return null
+    if (listOf(entry, stop, target).any { !it.isFinite() || it <= 0.0 }) return null
+    val risk = if (isLong) entry - stop else stop - entry
+    val reward = if (isLong) target - entry else entry - target
+    if (risk <= 0.0 || reward <= 0.0) return null
+    return (reward / risk).takeIf { it.isFinite() && it + 1e-9 >= 2.0 }
+}
+
 data class OrderBlockUiModel(
     val type: String, // "BULLISH" or "BEARISH"
     val zone: String, // e.g. "1.08200 - 1.08350"

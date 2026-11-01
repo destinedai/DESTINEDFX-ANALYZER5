@@ -191,7 +191,7 @@ fun LiveStructureHud(
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text(
-                    text = "FLOW: ${analysis.direction} (Score: ${analysis.confidencePct}/100)",
+                    text = "FLOW: ${analysis.direction} (Confluence: ${analysis.confidencePct}/100)",
                     color = dirCol,
                     fontSize = 8.5.sp,
                     fontWeight = FontWeight.Black,

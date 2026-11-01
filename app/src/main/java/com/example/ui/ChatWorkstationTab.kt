@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.theme.*
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -77,7 +76,7 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
         "📈 How to use Analyzer?"
     )
 
-    fun generateIntelligentResponse(rawPrompt: String): String {
+    fun generateDeterministicResponse(rawPrompt: String): String {
         val q = rawPrompt.lowercase(Locale.ROOT).trim()
         val ticker = tickers[symbol]
         val freshPrice = ticker?.price?.takeIf { it > 0.0 }
@@ -86,19 +85,13 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
         return when {
             // Greetings and pleasantries
             q in listOf("hi", "hello", "hey", "good morning", "good evening", "howdy", "sup") || q.startsWith("hello") || q.startsWith("hi ") ->
-                "Hello! Welcome to DestinedFX. I'm ready to assist with real-time market data, institutional trade setups, strategy mechanics, or app configurations. Currently monitoring $symbol on $timeframe (CMP: $priceStr). How can I assist you today?"
+                "Hello. I can provide deterministic help from the app's current analysis and explain its controls. Current market: $symbol on $timeframe (quote: $priceStr; verify freshness in Analyzer). What would you like to know?"
 
             q.contains("how are you") || q.contains("how're you") ->
                 "I'm ready to help. Market-feed status depends on the selected source and its latest verified timestamp; the embedded TradingView chart is for visualization and is not treated as an OHLC API. How can I help with your trading today?"
 
             q.contains("who are you") || q.contains("what are you") || q.contains("what can you do") ->
-                "I am the DestinedFX Interactive Terminal Assistant. I provide instant guidance on:\n" +
-                "• Live Market Analysis & Structures (BOS, CHoCH, Order Blocks, FVGs)\n" +
-                "• Chart navigation and the selected market-feed status\n" +
-                "• 1-Click Institutional Bot & MT5 Terminal ($3,000 / custom balance)\n" +
-                "• Telegram automated alerts setup via BotFather with Auto-Detect Chat ID\n" +
-                "• Mathematical Risk & Position sizing (1% rule, 2R minimum)\n" +
-                "Ask me anything about the app or trading concepts!"
+                "I am DestinedFX's deterministic, on-device app-help chat. No conversational AI service is connected, and keyword matches are not AI-generated answers. I can explain the currently visible Analyzer state and app controls; for market data, check the reported source and freshness."
 
             q.contains("thank") || q.contains("great") || q.contains("cool") || q.contains("awesome") ->
                 "You're very welcome! If you need any more insights on market setups, strategy confluences, or terminal features, just ask!"
@@ -107,32 +100,26 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
             listOf("price", "cmp", "quote", "cost", "current market price", "ticker").any(q::contains) -> {
                 if (freshPrice != null) {
                     val bias = ticker?.bias ?: "NEUTRAL"
-                    val change = String.format(Locale.US, "%+.2f%%", ticker?.changePercent ?: 0.0)
-                    "Current Market Price (CMP) for $symbol is $priceStr ($change today). Source: ${ticker?.source?.ifBlank { "unavailable" } ?: "unavailable"}; status: ${if (ticker?.isLive == true) "reported live" else "not verified live"}. Directional bias: $bias. You can view the interactive chart in Analyzer or Home."
+                    val change = ticker?.changePercent?.takeIf { it.isFinite() }?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "not supplied"
+                    "Latest available price for $symbol is $priceStr (daily change: $change). Source: ${ticker?.source?.ifBlank { "unavailable" } ?: "unavailable"}; status: ${if (ticker?.isLive == true) "reported live by feed" else "not verified live"}. Feed bias: $bias. Check Analyzer's quote timestamp/status before relying on it."
                 } else {
                     "A current verified quote for $symbol is unavailable. Switch to the Analyzer tab or tap REFRESH to request the selected market feed; do not treat the embedded TradingView chart as an OHLC API."
                 }
             }
 
             listOf("signal", "setup", "direction", "buy or sell", "analyze", "analysis", "trade plan").any(q::contains) -> {
-                if (analysis != null) {
-                    val dir = analysis?.direction ?: "WAIT"
-                    val conf = analysis?.confidencePct ?: 0
-                    val state = analysis?.signalState ?: "ACTIVE"
-                    val entry = formatPrice(analysis?.entry ?: 0.0, symbol)
-                    val tp = formatPrice(analysis?.tp1 ?: 0.0, symbol)
-                    val sl = formatPrice(analysis?.stopLoss ?: 0.0, symbol)
-                    val obs = analysis?.orderBlocks?.firstOrNull()?.let { "${it.type} Order Block" } ?: "Market Structure Shift"
-                    "Deterministic analysis for $symbol ($timeframe):\n" +
-                    "• Direction: $dir ($conf% confidence)\n" +
-                    "• State: $state\n" +
-                    "• Recommended Entry: $entry\n" +
-                    "• Target TP1: $tp (+${String.format(Locale.US, "%.1f", analysis?.tp1YieldPips ?: 0.0)} pips)\n" +
-                    "• Invalidation SL: $sl\n" +
-                    "• Structure Focus: $obs\n" +
-                    "Remember to always verify the setup on the TradingView chart before executing!"
+                val current = analysis
+                if (current != null) {
+                    val conf = current.confidencePct.coerceIn(0, 100)
+                    val rr = validatedDisplayRewardRisk(current.signalState, current.direction, current.entry, current.stopLoss, current.tp1)
+                    val status = "Analysis for ${current.symbol} ($timeframe): state=${current.signalState}; direction=${current.direction}; confluence=$conf/100 (not a win probability)."
+                    if (rr != null) {
+                        status + "\nValidated displayed plan: entry ${formatPrice(current.entry, current.symbol)}, stop ${formatPrice(current.stopLoss, current.symbol)}, TP1 ${formatPrice(current.tp1, current.symbol)}, geometric R:R 1:${String.format(Locale.US, "%.2f", rr)}. Verify feed freshness and broker constraints before acting."
+                    } else {
+                        status + "\nNo geometrically valid >=2R plan is available. ${current.blockReasons.firstOrNull() ?: "Use the Analyzer blockers for the reason; do not treat incomplete levels as a trade plan."}"
+                    }
                 } else {
-                    "No completed scan report is active for $symbol ($timeframe). Go to Analyzer and tap 'RUN LIVE ANALYSIS' to run our deterministic institutional scan."
+                    "No completed scan report is active for $symbol ($timeframe). Go to Analyzer and run a scan; until it completes, there is no current analysis to report."
                 }
             }
 
@@ -154,8 +141,8 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
 
             // Strategies (SMC, ICT, Order Blocks, FVGs)
             listOf("smc", "ict", "order block", "fvg", "liquidity", "bos", "choch", "silver bullet").any(q::contains) ->
-                "Institutional Smart Money Concepts (SMC) & ICT breakdown:\n" +
-                "• Order Block (OB): The last opposing candle before an aggressive displacement. Indicates institutional footprints where banks placed heavy orders.\n" +
+                "Common SMC terminology (a heuristic interpretation, not proof of institutional orders):\n" +
+                "• Order Block (OB): Often described as the last opposing candle before a displacement move; it does not identify who placed orders.\n" +
                 "• Fair Value Gap (FVG): A 3-candle imbalance where price moved so violently that liquidity was skipped. Price tends to retrace and fill this pocket.\n" +
                 "• BOS (Break of Structure): Confirms continuation in the prevailing trend direction.\n" +
                 "• CHoCH (Change of Character): The first structural shift signaling a potential trend reversal.\n" +
@@ -207,7 +194,7 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "Why do traders prefer graph paper? Because they love to plot! 😄 (Also, remember: markets go up and down, but good humor always trends higher!)"
 
             q.contains("weather") || q.contains("temperature") ->
-                "I'm operating in the cloud terminal, but market temperature across $symbol right now is showing high volatility! Check your TradingView chart for precise price action."
+                "This deterministic app-help chat has no weather or volatility-service provider, so it cannot report either value."
 
             q.contains("capital of france") || q.contains("paris") ->
                 "The capital of France is Paris. It's famous for art, fashion, gastronomy, and culture (and great cafes to watch the morning Forex session open!)."
@@ -219,12 +206,11 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
                 "Mathematics is the foundation of trading! Whether calculating pip values, risk percentages (capped at 1%), or general equations, precision is key. How can I help you calculate today?"
 
             q.contains("name") || q.contains("who made you") || q.contains("creator") ->
-                "I am the DestinedFX Intelligence Assistant, built into the DestinedFX Institutional Trading Terminal."
+                "I am DestinedFX's on-device deterministic guidance chat. No conversational AI provider is connected."
 
             // General fallthrough
             else ->
-                "I hear you! You asked: \"$rawPrompt\".\n\n" +
-                "As your DestinedFX assistant, I'm here to chat about anything you like—whether it's general knowledge, science, life, or market analysis, strategy confluences, and terminal tools. How can I help you further today?"
+                "This on-device chat has no conversational AI provider and cannot safely answer that request. It can report visible Analyzer data, explain app controls, or summarize deterministic rules."
         }
     }
 
@@ -235,8 +221,7 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
         draft = ""
         sending = true
         scope.launch {
-            delay(150L) // smooth conversational feel
-            val reply = generateIntelligentResponse(trimmed)
+            val reply = generateDeterministicResponse(trimmed)
             messages.add(AssistantMessage(text = reply, fromUser = false))
             sending = false
         }

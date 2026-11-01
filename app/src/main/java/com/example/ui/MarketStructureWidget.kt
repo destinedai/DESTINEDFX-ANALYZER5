@@ -129,7 +129,7 @@ fun MarketStructureWidget(
                             " [PARTIAL]"
                         } else ""
                         Text(
-                            text = "BIAS: ${analysis.direction} (Score: ${analysis.confidencePct}/100)$mtfSuffix",
+                            text = "BIAS: ${analysis.direction} (Confluence: ${analysis.confidencePct}/100)$mtfSuffix",
                             color = dirColor,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Black

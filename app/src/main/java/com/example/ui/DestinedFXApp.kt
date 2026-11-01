@@ -728,8 +728,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         (ticker?.bias ?: analysis?.direction.orEmpty()).contains("BEAR", true) || analysis?.direction == "SELL" -> LossRed
                         else -> WarningAmber
                     })
-                StatChip(label = "CONFIDENCE",
-                    value = analysis?.confidencePct?.takeIf { it > 0 }?.let { "$it%" } ?: "—",
+                StatChip(label = "CONFLUENCE",
+                    value = analysis?.confidencePct?.takeIf { it > 0 }?.let { "$it/100" } ?: "—",
                     modifier = Modifier.weight(1f), color = ElectricCyan)
             }
         }
@@ -764,31 +764,26 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                                 }
                                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = ElectricCyan)
                                 Text(scanStage.ifBlank { "Multi-pass market structure scan in progress..." }, fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
-                                Text("Analyzing OHLC candlesticks, pinbars, engulfings, order blocks, FVG, liquidity sweeps and MTF confluences before rendering high win-rate trade plan...", fontSize = 9.sp, color = TextSecondary, lineHeight = 13.sp)
+                                Text("Validating closed OHLC candles, market structure, liquidity, strategy evidence, timeframe alignment and risk gates. A trade plan is shown only when every required check passes.", fontSize = 9.sp, color = TextSecondary, lineHeight = 13.sp)
                             }
                         }
                     }
-                    val cmp = ticker?.price ?: result?.entry ?: 0.0
-                    val isBullish = (result?.direction ?: "BUY").contains("BUY", true) || (result?.direction ?: "").contains("LONG", true) || (ticker?.bias ?: "").contains("BULL", true)
-                    val effectiveEntry = if (result != null && result.entry > 0.0) result.entry else cmp
+                    val effectiveEntry = result?.entry?.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
                     val effectiveSl = if (result != null && result.stopLoss > 0.0) result.stopLoss else 0.0
                     val effectiveTp1 = if (result != null && result.tp1 > 0.0) result.tp1 else 0.0
                     val effectiveTp2 = result?.tp2 ?: 0.0
                     val effectiveTp3 = result?.tp3 ?: 0.0
-                    val effectiveState = if (result != null && listOf("STRONG_BUY", "BUY", "WEAK_BUY", "STRONG_SELL", "SELL", "WEAK_SELL").contains(result.signalState)) result.signalState else "BUY"
+                    val actualRr = result?.let {
+                        validatedDisplayRewardRisk(it.signalState, it.direction, it.entry, it.stopLoss, it.tp1)
+                    }
+                    val hasValidatedPlan = actualRr != null
 
-                    if (effectiveEntry > 0.0) {
+                    if (hasValidatedPlan) {
                         if (effectiveSl > 0.0 && effectiveTp1 > 0.0) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 PlanLevel("ENTRY", formatPrice(effectiveEntry, activeSymbol), TextPrimary, Modifier.weight(1f))
                                 PlanLevel("STOP LOSS", formatPrice(effectiveSl, activeSymbol), LossRed, Modifier.weight(1f))
                                 PlanLevel("TP1", formatPrice(effectiveTp1, activeSymbol), ProfitGreen, Modifier.weight(1f))
-                            }
-                        } else {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                PlanLevel("LIVE CMP", formatPrice(effectiveEntry, activeSymbol), TextPrimary, Modifier.weight(1f))
-                                PlanLevel("STOP LOSS", "AWAITING SMC", LossRed, Modifier.weight(1f))
-                                PlanLevel("TAKE PROFIT", "AWAITING SMC", ProfitGreen, Modifier.weight(1f))
                             }
                         }
                         if (effectiveTp2 > 0.0 || effectiveTp3 > 0.0) {
@@ -802,14 +797,13 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                             }
                         }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            StatChip(label = "REWARD / RISK", value = result?.tp1RR?.takeIf { it != "N/A" } ?: "1:2.00", modifier = Modifier.weight(1f), color = ProfitGreen)
-                            StatChip(label = "CONFIDENCE", value = "${result?.confidencePct?.takeIf { it > 0 } ?: 85}%", modifier = Modifier.weight(1f), color = ElectricCyan)
+                            StatChip(label = "REWARD / RISK", value = actualRr?.let { "1:${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "N/A", modifier = Modifier.weight(1f), color = ProfitGreen)
+                            StatChip(label = "CONFLUENCE", value = result?.confidencePct?.takeIf { it > 0 }?.let { "$it/100" } ?: "N/A", modifier = Modifier.weight(1f), color = ElectricCyan)
                         }
                         HorizontalDivider(color = CardBorder)
-                        Text("Direction: ${if (isBullish) "BUY (LONG)" else "SELL (SHORT)"} • Validated against live market price", fontSize = 10.sp, color = ProfitGreen, fontWeight = FontWeight.Bold)
-                        Text("Break-Even Rule: Shift Stop Loss to Entry (${formatPrice(effectiveEntry, activeSymbol)}) once price reaches TP1 to eliminate downside risk.", fontSize = 10.sp, color = ElectricCyan, fontWeight = FontWeight.SemiBold)
-                        Text("Stop rationale: ${result?.slReason?.ifBlank { null } ?: "Calculated from current market price swing boundary"}", fontSize = 10.sp, color = TextSecondary)
-                        Text("Target rationale: ${result?.tpReason?.ifBlank { null } ?: "Optimized risk-to-reward harvest level"}", fontSize = 10.sp, color = TextSecondary)
+                        Text("Signal state: ${result?.signalState ?: "WAIT"} • Source: ${result?.dataSource?.takeIf { it.isNotBlank() } ?: "unavailable"}", fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        result?.slReason?.takeIf { it.isNotBlank() }?.let { Text("Stop rationale: $it", fontSize = 10.sp, color = TextSecondary) }
+                        result?.tpReason?.takeIf { it.isNotBlank() }?.let { Text("Target rationale: $it", fontSize = 10.sp, color = TextSecondary) }
                     } else {
                         Text(result?.blockReasons?.firstOrNull() ?: result?.smcAnalysis?.takeIf { it.isNotBlank() }
                             ?: "WAIT — no validated setup is currently available for this symbol and timeframe.",
@@ -929,7 +923,7 @@ private fun FullAnalysisReport(result: DynamicAnalysisInfo?) {
         InsightLine("Instrument", result.symbol)
         InsightLine("Signal state", result.signalState.ifBlank { "UNKNOWN" })
         InsightLine("Direction", result.direction.ifBlank { "WAIT" })
-        InsightLine("Confidence", result.confidencePct.takeIf { it > 0 }?.let { "${it}%" } ?: "Not scored")
+        InsightLine("Confluence score (not a win probability)", result.confidencePct.takeIf { it > 0 }?.let { "$it/100" } ?: "Not scored")
         InsightLine("Data source", result.dataSource.ifBlank { "UNKNOWN" })
         InsightLine("Ruleset version", result.strategyVersion.ifBlank { "Not supplied" })
         InsightLine("MTF state", result.mtfStatus.ifBlank { "WAIT" })
@@ -1206,8 +1200,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                             Text(scanStatus, fontSize = 10.sp, color = TextSecondary)
                             HorizontalDivider(color = CardBorder)
                             Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text("High Win-Rate Alert Threshold", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                Text("85%+ CONFIDENCE", fontSize = 9.sp, fontWeight = FontWeight.Black, color = ElectricCyan, fontFamily = FontFamily.Monospace)
+                                Text("High-Confluence Alert Threshold", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                Text("85/100 SCORE", fontSize = 9.sp, fontWeight = FontWeight.Black, color = ElectricCyan, fontFamily = FontFamily.Monospace)
                             }
                         }
                     }

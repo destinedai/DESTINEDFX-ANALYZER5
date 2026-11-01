@@ -10,6 +10,7 @@ data class AnalysisEntity(
     val timeframe: String,
     val strategy: String,
     val dateMs: Long,
+    /** Legacy column name only: this stores a deterministic 0..100 confluence score, not a win rate. */
     val winRateConfidence: Double,
     val signal: String, // BUY, SELL, NEUTRAL
     val report: String

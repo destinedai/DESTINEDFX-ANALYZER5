@@ -96,7 +96,7 @@ fun EngineInsightsPanel(viewModel: DestinedFXViewModel) {
             HorizontalDivider(color = TabBorder.copy(alpha = 0.7f))
             InsightLine("Last engine signal", "${it.direction} · ${it.signalState}")
             InsightLine("Signal timeframe", it.timeframe)
-            InsightLine("Signal confidence", "${it.confidenceScore}%")
+            InsightLine("Confluence score (not win probability)", "${it.confidenceScore.coerceIn(0, 100)}/100")
             InsightLine("Execution status", if (it.executable) "ENGINE SAYS ELIGIBLE — BROKER/RISK GATES STILL APPLY" else "ANALYSIS ONLY / NOT EXECUTABLE")
             if (it.rationale.isNotBlank()) {
                 Text(it.rationale, fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)

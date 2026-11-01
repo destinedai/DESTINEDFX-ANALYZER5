@@ -16,6 +16,7 @@ import android.provider.MediaStore
 import android.widget.Toast
 import com.example.ui.DynamicAnalysisInfo
 import com.example.ui.formatPrice
+import com.example.ui.validatedDisplayRewardRisk
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -40,23 +41,20 @@ object RealAnalysisExporter {
         appendLine("Strategy: ${strategy.ifBlank { analysis.strategyVersion.ifBlank { "Not reported" } }}")
         appendLine("Direction: ${analysis.direction.ifBlank { "WAIT" }}")
         appendLine("Signal state: ${analysis.signalState.ifBlank { "UNKNOWN" }}")
-        appendLine("Confidence: ${analysis.confidencePct.coerceIn(0, 100)}%")
+        appendLine("Confluence score (not a win probability): ${analysis.confidencePct.coerceIn(0, 100)}/100")
         appendLine("Data source: ${analysis.dataSource.takeIf { it.isNotBlank() && it != "UNKNOWN" } ?: "Unavailable"}")
         appendLine("Strategy version: ${analysis.strategyVersion.ifBlank { "Not reported" }}")
         appendLine()
         appendLine("TRADE PLAN")
-        val recognizedDirection = analysis.signalState.uppercase(Locale.US) in setOf(
-            "STRONG_BUY", "BUY", "WEAK_BUY", "STRONG_SELL", "SELL", "WEAK_SELL"
+        val actualRr = validatedDisplayRewardRisk(
+            analysis.signalState, analysis.direction, analysis.entry, analysis.stopLoss, analysis.tp1
         )
-        val planIsValid = recognizedDirection &&
-            analysis.entry.isFinite() && analysis.entry > 0.0 &&
-            analysis.stopLoss.isFinite() && analysis.stopLoss > 0.0 &&
-            analysis.tp1.isFinite() && analysis.tp1 > 0.0
+        val planIsValid = actualRr != null
         if (planIsValid) {
             appendLine("Entry: ${formatPrice(analysis.entry, analysis.symbol)}")
             appendLine("Stop loss: ${formatPrice(analysis.stopLoss, analysis.symbol)}")
             appendLine("Take profit: ${formatPrice(analysis.tp1, analysis.symbol)}")
-            appendLine("Reward/risk: ${analysis.tp1RR.ifBlank { "Not reported" }}")
+            appendLine("Reward/risk: 1:${String.format(Locale.US, "%.2f", actualRr ?: error("Validated reward/risk missing"))}")
             appendLine("Entry rationale: ${analysis.entryReason.ifBlank { "Not reported" }}")
             appendLine("Stop rationale: ${analysis.slReason.ifBlank { "Not reported" }}")
             appendLine("Target rationale: ${analysis.tpReason.ifBlank { "Not reported" }}")

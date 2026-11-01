@@ -60,5 +60,21 @@ class AnalysisExportPayloadTest {
         assertTrue(report.contains("Take profit: 1.08702"))
         assertTrue(report.contains("M15: BULLISH"))
         assertTrue(report.contains("Deriv WebSocket"))
+        assertTrue(report.contains("Reward/risk: 1:2.00"))
+        assertTrue(report.contains("Confluence score (not a win probability): 74/100"))
+    }
+
+    @Test
+    fun subTwoRLevelsAreNotExportedEvenWhenReportedRrClaimsOtherwise() {
+        val report = RealAnalysisExporter.buildReportText(
+            analysis = DynamicAnalysisInfo(
+                symbol = "EUR/USD", direction = "BUY", signalState = "BUY",
+                entry = 1.10000, stopLoss = 1.09000, tp1 = 1.11000, tp1RR = "1:99.00"
+            ),
+            timeframe = "H1", strategy = "mean-reversion", generatedAtUtc = "2026-10-20T00:00:00Z"
+        )
+        assertTrue(report.contains("NO VALIDATED SETUP"))
+        assertFalse(report.contains("Entry: 1.10000"))
+        assertFalse(report.contains("Reward/risk: 1:99.00"))
     }
 }
