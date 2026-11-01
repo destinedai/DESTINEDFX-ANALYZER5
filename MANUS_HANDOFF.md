@@ -4,7 +4,7 @@
 
 - Repository: `destinedai/DESTINEDFX-ANALYZER5`
 - Branch: `main`
-- Latest completed commit: `9c5a8edbe523d16d29aa341aaf23e77f82d2c7ac`
+- Latest completed commit: `7e26381ed4b742e9d0920aa1818450e43814d85b`
 - Working tree at handoff creation: clean before this document was added.
 
 ## Completed work
@@ -24,13 +24,24 @@ Commit `9c5a8edbe523d16d29aa341aaf23e77f82d2c7ac`:
 - Added malformed-response and HTTP/JSON mismatch tests in `TelegramRedactionTest.kt`.
 - No Bot, MT5, Deriv execution, broker credential, or live-trading code was modified.
 
+### Surveillance foundation phase
+
+Commit `7e26381ed4b742e9d0920aa1818450e43814d85b`:
+
+- Replaced the empty `GlobalMarketMatrixEngine.kt` stub with a cancellable, bounded polling orchestrator over the existing `MarketDataRepository` and `SymbolRegistry`.
+- Scans provider-mapped instruments, validates finite prices, source identity, timestamps, and a 30-second freshness limit.
+- Exposes per-instrument `WAITING`, `LIVE`, `STALE`, `UNSUPPORTED`, and `ERROR` snapshots.
+- Prevents duplicate starts, supports clean halt, rejects missing repositories explicitly, and never emits guessed prices, lots, risk, or trade plans.
+- Emits telemetry only for fresh validated quotes and explicitly labels it as data-only.
+
 ## Tests and CI evidence
 
 - `git diff --check`: passed for both implementation phases.
 - Local Android Gradle tests/build: blocked in the sandbox because no Android SDK or `ANDROID_HOME`/`local.properties` is available.
 - Local Python tests: blocked because `pytest` is not installed in the sandbox.
 - GitHub Actions Build APK for commit `9c5a8edbe523d16d29aa341aaf23e77f82d2c7ac`: **SUCCESS**.
-- CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41346644067
+- GitHub Actions Build APK for commit `7e26381ed4b742e9d0920aa1818450e43814d85b`: **IN PROGRESS** at handoff update time.
+- Current CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347253460
 - The successful workflow includes the configured Android unit-test/build/signature/artifact stages and repository Python/EA checks as defined by `.github/workflows/build-apk.yml`.
 
 ## Current blockers
@@ -43,15 +54,15 @@ Commit `9c5a8edbe523d16d29aa341aaf23e77f82d2c7ac`:
 
 ## Remaining work, priority order
 
-1. Replace `app/src/main/java/com/example/data/trade/GlobalMarketMatrixEngine.kt` with a real, fail-closed orchestration layer using existing `SymbolRegistry`, `MarketDataRepositoryImpl`, deterministic signal/risk components, bounded concurrency, freshness validation, cancellation, and per-instrument states. Do not fabricate data and do not modify execution pathways.
-2. Add pure tests for surveillance state transitions, provider capability coverage, quote/candle freshness, market-closed handling, cancellation, deduplication, expiry, and invalidation before integrating UI.
-3. Add durable opportunity lifecycle and notification deduplication/expiry around the existing analytical signal outputs; keep Telegram delivery separate from trade execution.
+1. Add pure tests for surveillance state transitions, provider capability coverage, quote/candle freshness, market-closed handling, cancellation, deduplication, expiry, and invalidation around `GlobalMarketMatrixEngine.kt`.
+2. Connect the orchestrator to the existing deterministic signal/risk components only where their data requirements are met; preserve WAIT/BLOCKED behavior and never guess broker sizing.
+3. Add durable opportunity lifecycle and notification deduplication/expiry around analytical signal outputs; keep Telegram delivery separate from trade execution.
 4. Add the Android surveillance status surface only after real backend/provider state exists; display BLOCKED or DATA_UNAVAILABLE rather than simulated counts.
 5. Run and inspect GitHub Actions after each focused push; include this handoff file in every subsequent push.
 
 ## Exact next action
 
-Inspect `GlobalMarketMatrixEngine.kt`, `SymbolRegistry.kt`, `MarketDataRepositoryImpl.kt`, and the existing deterministic signal/risk APIs. Implement the smallest testable pure surveillance domain model first—capability, freshness, market state, and opportunity lifecycle—then connect it to provider calls. Push that logical unit together with an updated `MANUS_HANDOFF.md`.
+Add focused tests for the new `GlobalMarketMatrixEngine` using a fake `MarketDataRepository` that returns fresh, stale, invalid, and unavailable tickers. Verify no telemetry is emitted for rejected data, duplicate starts do not duplicate scans, and `haltEngine()` cancels cleanly. Then push the tests with an updated `MANUS_HANDOFF.md`.
 
 ## Configuration still required
 
