@@ -189,6 +189,24 @@ class TradingViewAndMtfValidationTest {
     }
 
     @Test
+    fun testTradingViewLoadState_ExposesConnectionInterruptionAndDataSafety() {
+        val reconnecting = TradingViewLoadState().reconnecting()
+        assertEquals(TradingViewLoadStatus.RECONNECTING, reconnecting.status)
+        assertTrue(reconnecting.isLoading)
+        assertEquals("Connection interrupted — reconnecting to market data...", reconnecting.message)
+
+        val stale = reconnecting.dataStale("Last verified candle is older than the freshness limit")
+        assertEquals(TradingViewLoadStatus.DATA_STALE, stale.status)
+        assertFalse(stale.isLoading)
+        assertTrue(stale.isRetryable)
+
+        val unavailable = stale.dataUnavailable("No validated candles returned by the selected feed")
+        assertEquals(TradingViewLoadStatus.DATA_UNAVAILABLE, unavailable.status)
+        assertTrue(unavailable.isTerminal)
+        assertTrue(unavailable.isRetryable)
+    }
+
+    @Test
     fun testTradingViewMappings_CoverEveryAnalyzerSelectableInstrument() {
         val selectableSymbols = listOf(
             "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",

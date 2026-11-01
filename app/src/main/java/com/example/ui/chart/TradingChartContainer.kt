@@ -473,15 +473,47 @@ fun TradingViewWebView(
         )
 
         when (embedState.value.status) {
-            TradingViewLoadStatus.LOADING -> {
+            TradingViewLoadStatus.CONNECTING,
+            TradingViewLoadStatus.LOADING,
+            TradingViewLoadStatus.RECONNECTING -> {
                 Surface(
                     modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
                     color = Color(0xCC0D121B),
                     shape = RoundedCornerShape(4.dp),
                     border = BorderStroke(1.dp, CardBorder)
                 ) {
-                    Text("CONNECTING TO TRADINGVIEW…", modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    Text(
+                        embedState.value.message ?: if (embedState.value.status == TradingViewLoadStatus.RECONNECTING) {
+                            "Connection interrupted — reconnecting to market data..."
+                        } else "CONNECTING TO TRADINGVIEW…",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                         color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            }
+            TradingViewLoadStatus.CONNECTED -> {
+                Surface(
+                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                    color = Color(0xCC0D121B),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, ProfitGreen.copy(alpha = 0.8f))
+                ) {
+                    Text("CONNECTED · ${embedState.value.message ?: "chart document loaded"}",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        color = ProfitGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            }
+            TradingViewLoadStatus.CONNECTION_LOST,
+            TradingViewLoadStatus.DATA_STALE,
+            TradingViewLoadStatus.DATA_UNAVAILABLE -> {
+                Surface(
+                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                    color = Color(0xCC0D121B),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, WarningAmber.copy(alpha = 0.8f))
+                ) {
+                    Text(embedState.value.message ?: "Market data is unavailable; no candles are being fabricated.",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        color = WarningAmber, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 }
             }
             TradingViewLoadStatus.DISPLAYED_UNVERIFIED -> {
