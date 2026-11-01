@@ -19,6 +19,8 @@ class CandlestickPatternEngine {
             "Pattern unavailable: $invalidReason", candles, valid = false)
         if (candles.isEmpty()) return result(CandlestickPatternType.NONE, fallback, "NEUTRAL", 0,
             "Insufficient candle data.", candles)
+        if (candles.dropLast(1).any { !it.complete }) return result(CandlestickPatternType.NONE, fallback, "NEUTRAL", 0,
+            "Pattern unavailable: incomplete candles are present inside the historical series.", candles, valid = false)
         if (!candles.last().complete) return result(CandlestickPatternType.NONE, fallback, "NEUTRAL", 0,
             "Latest candle is still forming; no confirmed pattern is reported.", candles, forming = true)
         if (candles.size < 3) return result(CandlestickPatternType.NONE, fallback, "NEUTRAL", 0,

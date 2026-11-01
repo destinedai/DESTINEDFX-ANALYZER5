@@ -62,6 +62,14 @@ class CandlestickPatternEngineTest {
         assertEquals(CandlestickPatternType.NONE, result.type)
     }
 
+    @Test fun incompleteHistoricalCandleCannotContributeToConfirmedPattern() {
+        val history = priorDown().toMutableList().also { it[2] = it[2].copy(complete = false) }
+        val result = engine.detectPattern(history + c(5, 9.6, 10.0, 9.4, 9.9))
+        assertFalse(result.dataValid)
+        assertFalse(result.confirmed)
+        assertEquals(CandlestickPatternType.NONE, result.type)
+    }
+
     @Test fun insufficientDataReturnsNoPattern() {
         val result = engine.detectPattern(listOf(c(0, 1.0, 1.1, 0.9, 1.0)))
         assertEquals(CandlestickPatternType.NONE, result.type)
