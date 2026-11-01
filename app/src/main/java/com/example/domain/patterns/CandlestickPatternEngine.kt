@@ -48,12 +48,13 @@ class CandlestickPatternEngine {
                 CandlestickPatternType.PIERCING_LINE to "BULLISH"
             up && p.close > p.open && c.close < c.open && c.open > p.high && c.close < p.open - ps.body * 0.5 && c.close > p.open ->
                 CandlestickPatternType.DARK_CLOUD_COVER to "BEARISH"
+            // An equal extreme tested by opposing candles is the more specific tweezer diagnosis.
+            up && sameHigh && c.close < c.open && p.close > p.open -> CandlestickPatternType.TWEEZER_TOP to "BEARISH"
+            down && sameLow && c.close > c.open && p.close < p.open -> CandlestickPatternType.TWEEZER_BOTTOM to "BULLISH"
             down && p.close < p.open && c.close > c.open && c.open >= p.close && c.close <= p.open && s.body < ps.body ->
                 CandlestickPatternType.BULLISH_HARAMI to "BULLISH"
             up && p.close > p.open && c.close < c.open && c.open <= p.close && c.close >= p.open && s.body < ps.body ->
                 CandlestickPatternType.BEARISH_HARAMI to "BEARISH"
-            up && sameHigh && c.close < c.open && p.close > p.open -> CandlestickPatternType.TWEEZER_TOP to "BEARISH"
-            down && sameLow && c.close > c.open && p.close < p.open -> CandlestickPatternType.TWEEZER_BOTTOM to "BULLISH"
             p.close < p.open && c.close > c.open && c.open <= p.close && c.close >= p.open && s.body > ps.body ->
                 CandlestickPatternType.BULLISH_ENGULFING to "BULLISH"
             p.close > p.open && c.close < c.open && c.open >= p.close && c.close <= p.open && s.body > ps.body ->

@@ -11,10 +11,10 @@ class CandlestickPatternEngineTest {
     private fun c(i: Int, o: Double, h: Double, l: Double, close: Double, complete: Boolean = true) =
         Candle(timestamp = 1_700_000_000_000L + i * 60_000L, open = o, high = h, low = l, close = close, volume = 1.0, complete = complete)
 
-    private fun priorDown() = listOf(c(0, 12.0, 12.2, 11.8, 11.5), c(1, 11.5, 11.7, 11.3, 11.0),
-        c(2, 11.0, 11.2, 10.8, 10.5), c(3, 10.5, 10.7, 10.3, 10.0), c(4, 10.0, 10.2, 9.8, 9.5))
-    private fun priorUp() = listOf(c(0, 9.0, 9.2, 8.8, 9.5), c(1, 9.5, 9.7, 9.3, 10.0),
-        c(2, 10.0, 10.2, 9.8, 10.5), c(3, 10.5, 10.7, 10.3, 11.0), c(4, 11.0, 11.2, 10.8, 11.5))
+    private fun priorDown() = listOf(c(0, 12.0, 12.2, 11.3, 11.5), c(1, 11.5, 11.7, 10.8, 11.0),
+        c(2, 11.0, 11.2, 10.3, 10.5), c(3, 10.5, 10.7, 9.8, 10.0), c(4, 10.0, 10.2, 9.3, 9.5))
+    private fun priorUp() = listOf(c(0, 9.0, 9.7, 8.8, 9.5), c(1, 9.5, 10.2, 9.3, 10.0),
+        c(2, 10.0, 10.7, 9.8, 10.5), c(3, 10.5, 11.2, 10.3, 11.0), c(4, 11.0, 11.7, 10.8, 11.5))
 
     @Test fun soldiersAndCrowsHaveTheirOwnClassifications() {
         val soldiers = priorDown() + listOf(c(5, 9.6, 10.8, 9.5, 10.7), c(6, 10.2, 11.2, 10.1, 11.1), c(7, 10.8, 11.8, 10.7, 11.7))
