@@ -148,6 +148,17 @@ class TradingCoreValidationTest {
     }
 
     @Test
+    fun testMarginCheckRejectsUnsafeBufferAndMalformedBrokerValues() {
+        val account = AccountState(balance = 1000.0, equity = 1000.0, freeMargin = 100.0, leverage = 100, currency = "USD")
+
+        assertFalse("A caller must not disable the margin safety buffer", RiskEngine.marginCheck(account, 95.0, safetyBuffer = 0.0).first)
+        assertFalse("A non-finite buffer must fail closed", RiskEngine.marginCheck(account, 95.0, safetyBuffer = Double.NaN).first)
+        assertFalse("Non-finite broker free margin must fail closed", RiskEngine.marginCheck(account.copy(freeMargin = Double.NaN), 1.0).first)
+        assertFalse("Negative broker-required margin must fail closed", RiskEngine.marginCheck(account, -1.0).first)
+        assertTrue("A valid broker margin check still passes", RiskEngine.marginCheck(account, 80.0).first)
+    }
+
+    @Test
     fun testRewardToRiskFloorCannotBeConfiguredBelowTwoR() {
         assertEquals(2.0, RiskEngine.requiredMinimumRewardToRisk(1.0)!!, 0.0)
         assertEquals(3.0, RiskEngine.requiredMinimumRewardToRisk(3.0)!!, 0.0)

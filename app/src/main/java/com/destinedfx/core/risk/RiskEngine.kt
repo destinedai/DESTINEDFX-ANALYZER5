@@ -84,8 +84,14 @@ object RiskEngine {
 
     /** Margin must come from the broker (order-calc). Leverage is only a labelled estimate used when the broker value is absent. */
     fun marginCheck(account: AccountState, requiredMargin: Double?, safetyBuffer: Double = 1.10): Pair<Boolean, String> {
+        if (!safetyBuffer.isFinite() || safetyBuffer < 1.0) {
+            return false to "Safety buffer must be finite and at least 1.0"
+        }
         val free = account.freeMargin ?: return false to "Free margin unavailable"
         val req = requiredMargin ?: return false to "Required margin unavailable from broker"
+        if (!free.isFinite() || free < 0.0 || !req.isFinite() || req < 0.0) {
+            return false to "Free and required margin must be finite, non-negative broker values"
+        }
         return if (free >= req * safetyBuffer) true to "Margin OK (free %.2f, required %.2f)".format(free, req)
         else false to "INSUFFICIENT MARGIN (free %.2f < required %.2f x%.2f)".format(free, req, safetyBuffer)
     }
