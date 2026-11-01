@@ -71,6 +71,43 @@ if ($null -eq $metaEditor) {
 $terminalRoot = Split-Path -Path $metaEditor.FullName -Parent
 $expertsPath = Join-Path $terminalRoot 'MQL5\Experts'
 New-Item -ItemType Directory -Path $expertsPath -Force | Out-Null
+$mql5Root = Join-Path $terminalRoot 'MQL5'
+$targetInclude = Join-Path $mql5Root 'Include'
+$tradeInclude = Join-Path $targetInclude 'Trade\Trade.mqh'
+if (!(Test-Path -LiteralPath $tradeInclude -PathType Leaf)) {
+    $terminalExe = Join-Path $terminalRoot 'terminal64.exe'
+    if (Test-Path -LiteralPath $terminalExe -PathType Leaf) {
+        Write-Host 'Initializing the genuine terminal in portable mode to provision its standard MQL5 library.'
+        $terminalProcess = Start-Process -FilePath $terminalExe -ArgumentList '/portable' -PassThru
+        try {
+            $deadline = (Get-Date).AddSeconds(45)
+            while ((Get-Date) -lt $deadline -and !(Test-Path -LiteralPath $tradeInclude -PathType Leaf)) {
+                Start-Sleep -Seconds 3
+            }
+        }
+        finally {
+            if (!$terminalProcess.HasExited) {
+                Stop-Process -Id $terminalProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+if (!(Test-Path -LiteralPath $tradeInclude -PathType Leaf)) {
+    $sharedData = Join-Path $env:APPDATA 'MetaQuotes\Terminal'
+    if (Test-Path -LiteralPath $sharedData -PathType Container) {
+        $sharedTradeInclude = Get-ChildItem -LiteralPath $sharedData -Filter 'Trade.mqh' -File -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($null -ne $sharedTradeInclude) {
+            $sourceInclude = Split-Path -Parent $sharedTradeInclude.DirectoryName
+            New-Item -ItemType Directory -Path $targetInclude -Force | Out-Null
+            Copy-Item -Path (Join-Path $sourceInclude '*') -Destination $targetInclude -Recurse -Force
+        }
+    }
+}
+if (!(Test-Path -LiteralPath $tradeInclude -PathType Leaf)) {
+    throw "MetaTrader's standard MQL5 library is missing Trade\Trade.mqh under $targetInclude"
+}
+
 $stagedSource = Join-Path $expertsPath 'DestinedFXTraderEA.mq5'
 Copy-Item -LiteralPath $sourcePath -Destination $stagedSource -Force
 $compiledEa = [System.IO.Path]::ChangeExtension($stagedSource, '.ex5')
@@ -78,7 +115,7 @@ $compileLog = [System.IO.Path]::ChangeExtension($stagedSource, '.log')
 Remove-Item -LiteralPath $compiledEa, $compileLog -Force -ErrorAction SilentlyContinue
 
 Write-Host "Compiling with genuine MetaEditor: $($metaEditor.FullName)"
-$compileArguments = @("/compile:`"$stagedSource`"", '/log')
+$compileArguments = @("/compile:`"$stagedSource`"", "/include:`"$mql5Root`"", '/log')
 $compileProcess = Start-Process -FilePath $metaEditor.FullName `
     -ArgumentList $compileArguments -Wait -PassThru
 if ($compileProcess.ExitCode -ne 0) {

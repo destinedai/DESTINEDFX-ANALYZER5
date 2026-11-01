@@ -14,13 +14,20 @@ class WorkerTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.install = self.root / "install"
         (self.install / "MQL5").mkdir(parents=True)
+        standard_include = self.install / "MQL5" / "Include" / "Trade" / "Trade.mqh"
+        standard_include.parent.mkdir(parents=True)
+        standard_include.write_text("// standard library fixture\n")
         self.term = self.install / "terminal64.exe"
         self.term.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + str(self.root / "terminal-args.txt") + "'\nexit 0\n")
         self.term.chmod(0o755)
         self.source = self.root / "DestinedFXTraderEA.mq5"
         self.source.write_text("// fake source\n")
         self.meta = self.install / "metaeditor64.exe"
-        self.meta.write_text("#!/usr/bin/env python3\nimport pathlib,sys\np=pathlib.Path(sys.argv[1].split(':',1)[1])\np.with_suffix('.ex5').write_bytes(b'fake compiled')\n")
+        self.meta.write_text("#!/usr/bin/env python3\nimport pathlib,sys\nargs=sys.argv[1:]\n"
+                             "p=pathlib.Path(args[0].split(':',1)[1])\n"
+                             "expected=f'/include:{p.parent.parent}'\n"
+                             "if expected not in args: sys.exit(9)\n"
+                             "p.with_suffix('.ex5').write_bytes(b'fake compiled')\n")
         self.meta.chmod(0o755)
         self.job = {"job_id": "job_123", "pairing_id": "pair_456", "pairing_code": "abcdefgh1234",
                     "bridge_url": "https://bridge.destinedfx.internal", "account": {"login": "123456", "server": "Demo-Server",
@@ -129,7 +136,25 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("/portable", args_file.read_text())
         self.assertFalse(list(result.glob("startup-*.ini")))
         self.assertTrue((result / "terminal/MQL5/Experts/DestinedFXTraderEA.ex5").is_file())
+        self.assertTrue((result / "terminal/MQL5/Include/Trade/Trade.mqh").is_file())
         self.assertTrue((result / "terminal/MQL5/Presets/DestinedFXTraderEA.set").is_file())
+
+    def test_standard_library_uses_matching_terminal_data_origin(self):
+        installed_trade = self.install / "MQL5" / "Include" / "Trade" / "Trade.mqh"
+        installed_trade.unlink()
+        appdata = self.root / "appdata"
+        data_dir = appdata / "MetaQuotes" / "Terminal" / "terminal-instance"
+        (data_dir / "origin.txt").parent.mkdir(parents=True)
+        (data_dir / "origin.txt").write_text(str(self.install), encoding="utf-8")
+        trade = data_dir / "MQL5" / "Include" / "Trade" / "Trade.mqh"
+        trade.parent.mkdir(parents=True)
+        trade.write_text("// genuine terminal data library fixture\n")
+        clone = self.root / "clone"
+        with patch.dict(os.environ, {"APPDATA": str(appdata)}):
+            worker._copy_terminal_standard_includes(self.install, clone)
+        staged = clone / "MQL5" / "Include" / "Trade" / "Trade.mqh"
+        self.assertTrue(staged.is_file())
+        self.assertEqual(staged.read_text(), "// genuine terminal data library fixture\n")
 
     def test_terminal_that_never_authenticates_times_out_without_ready_promotion(self):
         with patch.object(worker, "request_json", return_value={"status": "AUTHENTICATING"}), patch.object(worker.time, "sleep"):

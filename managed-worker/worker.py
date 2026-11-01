@@ -493,10 +493,12 @@ def ini_text(job: dict, access_type: str, symbol: str) -> str:
 def compile_ea(metaeditor: Path, source: Path, output: Path, cwd: Path) -> None:
     if not metaeditor.is_file():
         raise ProvisionError("EA_COMPILER_MISSING")
+    include_root = source.parent.parent
     # MetaEditor receives paths only; capture output to a pipe and discard it,
     # since compiler diagnostics may echo source lines or local paths.
     try:
-        p = subprocess.run([str(metaeditor), f"/compile:{source}", f"/log:{cwd / 'compile.log'}"],
+        p = subprocess.run([str(metaeditor), f"/compile:{source}", f"/include:{include_root}",
+                            f"/log:{cwd / 'compile.log'}"],
                            cwd=str(cwd), shell=False, timeout=180, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, check=False)
     except (OSError, subprocess.TimeoutExpired):
@@ -504,6 +506,47 @@ def compile_ea(metaeditor: Path, source: Path, output: Path, cwd: Path) -> None:
     if p.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
         raise ProvisionError("EA_COMPILE_FAILED")
     (cwd / "compile.log").unlink(missing_ok=True)
+
+
+def _copy_terminal_standard_includes(install: Path, terminal_home: Path) -> None:
+    """Stage the installed terminal's own MQL5 Standard Library into its clone."""
+    target = terminal_home / "MQL5" / "Include"
+    required = target / "Trade" / "Trade.mqh"
+    if required.is_file():
+        return
+
+    candidates = [install / "MQL5" / "Include"]
+    appdata = os.environ.get("APPDATA")
+    data_root = Path(appdata) / "MetaQuotes" / "Terminal" if appdata else None
+    if data_root and data_root.is_dir():
+        expected_install = os.path.normcase(os.path.normpath(str(install.resolve())))
+        for origin in data_root.glob("*/origin.txt"):
+            try:
+                raw = origin.read_bytes()
+            except OSError:
+                continue
+            for encoding in ("utf-16", "utf-8-sig", "utf-8"):
+                try:
+                    origin_install = raw.decode(encoding).strip().strip("\x00")
+                except (UnicodeError, LookupError):
+                    continue
+                if not origin_install:
+                    continue
+                actual_install = os.path.normcase(os.path.normpath(str(Path(origin_install).resolve())))
+                if actual_install == expected_install:
+                    candidates.append(origin.parent / "MQL5" / "Include")
+                    break
+
+    source = next((path for path in candidates if (path / "Trade" / "Trade.mqh").is_file()), None)
+    if source is None:
+        raise ProvisionError("MQL5_INCLUDE_LIBRARY_MISSING")
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copytree(source, target, dirs_exist_ok=True)
+    except OSError:
+        raise ProvisionError("MQL5_INCLUDE_LIBRARY_COPY_FAILED") from None
+    if not required.is_file():
+        raise ProvisionError("MQL5_INCLUDE_LIBRARY_MISSING")
 
 
 def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
@@ -525,6 +568,7 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
         shutil.copytree(install, terminal_home)
     except OSError:
         raise ProvisionError("TERMINAL_STAGE_FAILED") from None
+    _copy_terminal_standard_includes(install, terminal_home)
     account_terminal = terminal_home / terminal.name
     if not account_terminal.is_file():
         raise ProvisionError("TERMINAL_MISSING")
