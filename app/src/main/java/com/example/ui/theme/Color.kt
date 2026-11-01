@@ -2,9 +2,9 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// make-a-web-15 design tokens: midnight navy, restrained glass borders, gradient gold.
-val DarkBackground = Color(0xFF020618)
-val NavyBackground = Color(0xFF020618)
+// DestinedFX design tokens: deep navy, restrained glass borders, and institutional gold.
+val DarkBackground = Color(0xFF0A1128)
+val NavyBackground = Color(0xFF0A1128)
 val DarkSurface = Color(0xFF0F172B)
 val DarkSurfaceVariant = Color(0xFF1D293D)
 val TabBorder = Color(0x1AFFFFFF)

@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.di.AppContainer
 import com.example.ui.DestinedFXApp
 import com.example.ui.DestinedFXViewModel
+import com.example.ui.BrandWelcome
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.RiskViewModel
 
@@ -57,10 +59,17 @@ class MainActivity : FragmentActivity() {
         setContent {
             val app = (LocalContext.current.applicationContext as MyApplication)
             val initStatus by app.initStatus.collectAsStateWithLifecycle()
+            var showBrandWelcome by rememberSaveable { mutableStateOf(true) }
             // Never create dependency-backed ViewModels until initialization explicitly succeeds.
             val isReady = initStatus is MyApplication.InitState.Ready
 
-            if (isReady) {
+            if (showBrandWelcome && initStatus !is MyApplication.InitState.Failed) {
+                DestinedFXTheme {
+                    Surface(modifier = Modifier.fillMaxSize(), color = DarkBackground) {
+                        BrandWelcome(onFinished = { showBrandWelcome = false })
+                    }
+                }
+            } else if (isReady) {
                 val mainVm: DestinedFXViewModel = viewModel(factory = AppContainer.Factory)
                 mainViewModel = mainVm
                 val riskVm: RiskViewModel = viewModel(factory = AppContainer.Factory)
