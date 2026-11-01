@@ -93,6 +93,9 @@ if (!$summary.Success) {
     throw "Could not find an errors/warnings summary in the MetaEditor log: $compileLog"
 }
 if ([int]$summary.Groups['errors'].Value -ne 0) {
+    Write-Host '---- MetaEditor compiler diagnostics ----'
+    Get-Content -LiteralPath $compileLog | ForEach-Object { Write-Host $_ }
+    Write-Host '---- End MetaEditor compiler diagnostics ----'
     throw "MetaEditor reported $($summary.Groups['errors'].Value) compilation errors. See $compileLog"
 }
 if (!(Test-Path -LiteralPath $compiledEa -PathType Leaf)) {
