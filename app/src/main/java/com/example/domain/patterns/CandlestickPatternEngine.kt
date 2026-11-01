@@ -4,236 +4,164 @@ import com.example.domain.knowledge.ClassicalPriceAction
 import com.example.domain.model.Candle
 import kotlin.math.abs
 
+/** Deterministic OHLC-only pattern recognition. Patterns are descriptive evidence, never trade authorization. */
 class CandlestickPatternEngine {
+    private data class Shape(val range: Double, val body: Double, val upper: Double, val lower: Double) {
+        val bodyRatio get() = body / range
+        val upperRatio get() = upper / range
+        val lowerRatio get() = lower / range
+    }
 
-    /**
-     * Analyzes candles and detects patterns with trend-context differentiation.
-     * Incorporates wisdom from "The Candlestick Trading Bible" by Munehisa Homma.
-     */
     fun detectPattern(candles: List<Candle>): CandlestickPatternResult {
-        if (candles.size < 5) {
-            val dummyCandle = candles.lastOrNull() ?: Candle(System.currentTimeMillis(), 1.0, 1.0, 1.0, 1.0, 0.0)
-            return CandlestickPatternResult(
-                type = CandlestickPatternType.NONE,
-                candle = dummyCandle,
-                bias = "NEUTRAL",
-                confidence = 50,
-                rationale = "Homma's principle: Wait for the market to speak. Insufficient data for structural clarity.",
-                classicalFraming = ClassicalPriceAction.getFraming(CandlestickPatternType.NONE)
-            )
+        val fallback = candles.lastOrNull() ?: Candle(0L, 1.0, 1.0, 1.0, 1.0, 0.0)
+        val invalidReason = validate(candles)
+        if (invalidReason != null) return result(CandlestickPatternType.NONE, fallback, "NEUTRAL", 0,
+            "Pattern unavailable: $invalidReason", candles, valid = false)
+        if (candles.isEmpty()) return result(CandlestickPatternType.NONE, fallback, "NEUTRAL", 0,
+            "Insufficient candle data.", candles)
+        if (!candles.last().complete) return result(CandlestickPatternType.NONE, fallback, "NEUTRAL", 0,
+            "Latest candle is still forming; no confirmed pattern is reported.", candles, forming = true)
+        if (candles.size < 3) return result(CandlestickPatternType.NONE, fallback, "NEUTRAL", 0,
+            "Insufficient closed candles for pattern recognition.", candles)
+
+        val n = candles.size
+        val c = candles[n - 1]
+        val p = candles[n - 2]
+        val p2 = candles[n - 3]
+        val s = shape(c)
+        val ps = shape(p)
+        val p2s = shape(p2)
+        val trend = trendBefore(candles, n - 3)
+        val down = trend == "DOWN"
+        val up = trend == "UP"
+        val sameHigh = abs(c.high - p.high) <= maxOf(s.range, ps.range) * 0.08
+        val sameLow = abs(c.low - p.low) <= maxOf(s.range, ps.range) * 0.08
+        val typeAndBias: Pair<CandlestickPatternType, String> = when {
+            // Three-candle formations have precedence over single-candle geometry.
+            n >= 5 && threeSoldiers(candles.takeLast(3)) -> CandlestickPatternType.THREE_WHITE_SOLDIERS to "BULLISH"
+            n >= 5 && threeCrows(candles.takeLast(3)) -> CandlestickPatternType.THREE_BLACK_CROWS to "BEARISH"
+            n >= 5 && down && morningStar(p2, p, c, p2s, ps, s) -> CandlestickPatternType.MORNING_STAR to "BULLISH"
+            n >= 5 && up && eveningStar(p2, p, c, p2s, ps, s) -> CandlestickPatternType.EVENING_STAR to "BEARISH"
+            down && p.close < p.open && c.close > c.open && c.open < p.low && c.close > p.open + ps.body * 0.5 && c.close < p.open ->
+                CandlestickPatternType.PIERCING_LINE to "BULLISH"
+            up && p.close > p.open && c.close < c.open && c.open > p.high && c.close < p.open - ps.body * 0.5 && c.close > p.open ->
+                CandlestickPatternType.DARK_CLOUD_COVER to "BEARISH"
+            down && p.close < p.open && c.close > c.open && c.open >= p.close && c.close <= p.open && s.body < ps.body ->
+                CandlestickPatternType.BULLISH_HARAMI to "BULLISH"
+            up && p.close > p.open && c.close < c.open && c.open <= p.close && c.close >= p.open && s.body < ps.body ->
+                CandlestickPatternType.BEARISH_HARAMI to "BEARISH"
+            up && sameHigh && c.close < c.open && p.close > p.open -> CandlestickPatternType.TWEEZER_TOP to "BEARISH"
+            down && sameLow && c.close > c.open && p.close < p.open -> CandlestickPatternType.TWEEZER_BOTTOM to "BULLISH"
+            p.close < p.open && c.close > c.open && c.open <= p.close && c.close >= p.open && s.body > ps.body ->
+                CandlestickPatternType.BULLISH_ENGULFING to "BULLISH"
+            p.close > p.open && c.close < c.open && c.open >= p.close && c.close <= p.open && s.body > ps.body ->
+                CandlestickPatternType.BEARISH_ENGULFING to "BEARISH"
+            s.bodyRatio <= 0.10 && s.lowerRatio >= 0.65 && s.upperRatio <= 0.10 -> CandlestickPatternType.DRAGONFLY_DOJI to "NEUTRAL"
+            s.bodyRatio <= 0.10 && s.upperRatio >= 0.65 && s.lowerRatio <= 0.10 -> CandlestickPatternType.GRAVESTONE_DOJI to "NEUTRAL"
+            s.bodyRatio <= 0.10 -> CandlestickPatternType.DOJI to "NEUTRAL"
+            s.lower >= 2.0 * s.body && s.upper <= 0.15 * s.range && down -> CandlestickPatternType.HAMMER to "BULLISH"
+            s.lower >= 2.0 * s.body && s.upper <= 0.15 * s.range && up -> CandlestickPatternType.HANGING_MAN to "BEARISH"
+            s.upper >= 2.0 * s.body && s.lower <= 0.15 * s.range && up -> CandlestickPatternType.SHOOTING_STAR to "BEARISH"
+            s.upper >= 2.0 * s.body && s.lower <= 0.15 * s.range && down -> CandlestickPatternType.INVERTED_HAMMER to "BULLISH"
+            s.bodyRatio >= 0.90 && s.upperRatio <= 0.05 && s.lowerRatio <= 0.05 -> CandlestickPatternType.MARUBOZU to if (c.close > c.open) "BULLISH" else "BEARISH"
+            s.bodyRatio in 0.10..0.35 && s.upperRatio >= 0.25 && s.lowerRatio >= 0.25 -> CandlestickPatternType.SPINNING_TOP to "NEUTRAL"
+            else -> CandlestickPatternType.NONE to "NEUTRAL"
         }
+        val rationale = when (typeAndBias.first) {
+            CandlestickPatternType.THREE_WHITE_SOLDIERS -> "Three rising bullish sessions with substantial bodies; indicates persistent buying, not guaranteed reversal."
+            CandlestickPatternType.THREE_BLACK_CROWS -> "Three declining bearish sessions with substantial bodies; indicates persistent selling, not guaranteed reversal."
+            CandlestickPatternType.TWEEZER_TOP -> "Two closed candles tested a similar high and closed with rejection; requires structural confirmation."
+            CandlestickPatternType.TWEEZER_BOTTOM -> "Two closed candles tested a similar low and closed with rejection; requires structural confirmation."
+            CandlestickPatternType.PIERCING_LINE -> "Bullish close penetrated beyond the midpoint of the prior bearish body without engulfing it."
+            CandlestickPatternType.DARK_CLOUD_COVER -> "Bearish close penetrated beyond the midpoint of the prior bullish body without engulfing it."
+            CandlestickPatternType.HAMMER, CandlestickPatternType.HANGING_MAN -> "Long lower shadow and compact upper body show lower-price rejection; interpretation depends on prior trend."
+            CandlestickPatternType.SHOOTING_STAR, CandlestickPatternType.INVERTED_HAMMER -> "Long upper shadow shows rejection of higher prices; interpretation depends on prior trend."
+            CandlestickPatternType.NONE -> "No qualifying classical pattern; candle direction alone is not a reversal signal."
+            else -> "Recognized ${typeAndBias.first.displayName} geometry in closed OHLC candles; confirmation from structure and follow-through is required."
+        }
+        val strength = when (typeAndBias.first) {
+            CandlestickPatternType.NONE -> 0
+            CandlestickPatternType.DOJI, CandlestickPatternType.DRAGONFLY_DOJI,
+            CandlestickPatternType.GRAVESTONE_DOJI, CandlestickPatternType.SPINNING_TOP -> 0
+            else -> (50 + (s.bodyRatio * 25).toInt()).coerceIn(50, 75)
+        }
+        return result(typeAndBias.first, c, typeAndBias.second, strength, rationale, candles)
+    }
 
-        val current = candles.last()
-        val prev = candles[candles.size - 2]
-        val p2 = candles[candles.size - 3]
-        
-        val priorTrendLen = 5
-        val priorCandles = candles.dropLast(1).takeLast(priorTrendLen)
-        val isPriorDowntrend = priorCandles.first().close > priorCandles.last().close
-        val isPriorUptrend = priorCandles.first().close < priorCandles.last().close
+    private fun validate(candles: List<Candle>): String? {
+        var previousTime: Long? = null
+        for ((i, c) in candles.withIndex()) {
+            val values = listOf(c.open, c.high, c.low, c.close, c.volume)
+            if (values.any { !it.isFinite() }) return "non-finite OHLCV at index $i"
+            if (c.open < 0 || c.high < 0 || c.low < 0 || c.close < 0 || c.volume < 0) return "negative price or volume at index $i"
+            if (c.high < c.low || c.high < maxOf(c.open, c.close) || c.low > minOf(c.open, c.close)) return "impossible OHLC relationship at index $i"
+            if (previousTime != null && c.timestamp <= previousTime) return "duplicate or out-of-order timestamps"
+            previousTime = c.timestamp
+        }
+        return null
+    }
 
-        val range = current.high - current.low
-        val body = abs(current.close - current.open)
-        val upperWick = current.high - maxOf(current.open, current.close)
-        val lowerWick = minOf(current.open, current.close) - current.low
+    private fun shape(c: Candle): Shape {
+        val range = c.high - c.low
+        if (range <= 0.0) return Shape(0.0, 0.0, 0.0, 0.0)
+        return Shape(range, abs(c.close - c.open), c.high - maxOf(c.open, c.close), minOf(c.open, c.close) - c.low)
+    }
 
-        // 1. Three White Soldiers / Three Black Crows (Sakata's Three Methods)
-        if (candles.size >= 3) {
-            val c1 = candles[candles.size - 3]
-            val c2 = candles[candles.size - 2]
-            val c3 = current
+    private fun trendBefore(candles: List<Candle>, endExclusive: Int): String {
+        val end = endExclusive.coerceIn(0, candles.size)
+        val sample = candles.take(end).takeLast(5)
+        if (sample.size < 3) return "UNKNOWN"
+        val delta = sample.last().close - sample.first().close
+        val scale = sample.map { it.high - it.low }.average().coerceAtLeast(1e-12)
+        return when { delta > scale * 0.5 -> "UP"; delta < -scale * 0.5 -> "DOWN"; else -> "RANGE" }
+    }
 
-            // Three White Soldiers
-            if (c1.close > c1.open && c2.close > c2.open && c3.close > c3.open &&
-                c2.close > c1.close && c3.close > c2.close &&
-                abs(c1.close - c1.open) > (c1.high - c1.low) * 0.6 &&
-                abs(c2.close - c2.open) > (c2.high - c2.low) * 0.6
-            ) {
-                return CandlestickPatternResult(
-                    type = CandlestickPatternType.MORNING_STAR, // Using as placeholder or add to enum
-                    candle = current,
-                    bias = "BULLISH",
-                    confidence = 92,
-                    rationale = "Three White Soldiers (Sakata's San-hei): Powerful momentum expansion signaling the start of a massive trend. Psychology: Absolute buyer dominance.",
-                    classicalFraming = "Momentum Expansion"
-                )
+    private fun threeSoldiers(cs: List<Candle>): Boolean = cs.size == 3 && cs.all {
+        it.close > it.open && shape(it).bodyRatio >= 0.55
+    } && cs[1].close > cs[0].close && cs[2].close > cs[1].close &&
+        cs[1].open in cs[0].open..cs[0].close && cs[2].open in cs[1].open..cs[1].close
+
+    private fun threeCrows(cs: List<Candle>): Boolean = cs.size == 3 && cs.all {
+        it.close < it.open && shape(it).bodyRatio >= 0.55
+    } && cs[1].close < cs[0].close && cs[2].close < cs[1].close &&
+        cs[1].open in cs[0].close..cs[0].open && cs[2].open in cs[1].close..cs[1].open
+
+    private fun morningStar(a: Candle, b: Candle, c: Candle, as_: Shape, bs: Shape, cs: Shape) =
+        a.close < a.open && as_.bodyRatio >= 0.5 && bs.body < as_.body * 0.35 &&
+            c.close > c.open && c.close >= (a.open + a.close) / 2.0 && cs.bodyRatio >= 0.4
+
+    private fun eveningStar(a: Candle, b: Candle, c: Candle, as_: Shape, bs: Shape, cs: Shape) =
+        a.close > a.open && as_.bodyRatio >= 0.5 && bs.body < as_.body * 0.35 &&
+            c.close < c.open && c.close <= (a.open + a.close) / 2.0 && cs.bodyRatio >= 0.4
+
+    private fun result(type: CandlestickPatternType, candle: Candle, bias: String, score: Int, text: String,
+                       candles: List<Candle>, valid: Boolean = true, forming: Boolean = false): CandlestickPatternResult {
+        val sh = shape(candle)
+        val trend = trendBefore(candles, (candles.size - 3).coerceAtLeast(0))
+        val recent = candles.takeLast(21).dropLast(if (forming) 1 else 0)
+        val loc = if (recent.isEmpty()) "UNAVAILABLE" else {
+            val lo = recent.minOf { it.low }; val hi = recent.maxOf { it.high }
+            when { hi <= lo -> "UNAVAILABLE"; candle.close >= hi - (hi - lo) * 0.1 -> "NEAR_RECENT_HIGH";
+                candle.close <= lo + (hi - lo) * 0.1 -> "NEAR_RECENT_LOW"; else -> "MID_RANGE" }
+        }
+        val avgRange = recent.map { it.high - it.low }.average()
+        val vol = if (!avgRange.isFinite() || avgRange <= 0.0) "UNAVAILABLE" else
+            if (sh.range > avgRange * 1.5) "EXPANSION" else if (sh.range < avgRange * 0.65) "CONTRACTION" else "TYPICAL"
+        val previous = candles.dropLast(1).lastOrNull()?.let { prev ->
+            when { candle.open > prev.close -> "GAP_UP"; candle.open < prev.close -> "GAP_DOWN";
+                candle.close > candle.open -> "BULLISH_BODY"; candle.close < candle.open -> "BEARISH_BODY"; else -> "DOJI_BODY" }
+        } ?: "UNAVAILABLE"
+        val liquidity = if (recent.size < 2) "UNAVAILABLE" else {
+            val prior = recent.dropLast(1); when {
+                candle.low < prior.minOf { it.low } && candle.close > candle.low + sh.range * 0.5 -> "LOW_SWEEP_AND_RECLAIM_OBSERVED"
+                candle.high > prior.maxOf { it.high } && candle.close < candle.high - sh.range * 0.5 -> "HIGH_SWEEP_AND_REJECTION_OBSERVED"
+                else -> "NO_SWEEP_OBSERVED"
             }
-
-            // Three Black Crows
-            if (c1.close < c1.open && c2.close < c2.open && c3.close < c3.open &&
-                c2.close < c1.close && c3.close < c2.close &&
-                abs(c1.close - c1.open) > (c1.high - c1.low) * 0.6 &&
-                abs(c2.close - c2.open) > (c2.high - c2.low) * 0.6
-            ) {
-                return CandlestickPatternResult(
-                    type = CandlestickPatternType.EVENING_STAR,
-                    candle = current,
-                    bias = "BEARISH",
-                    confidence = 92,
-                    rationale = "Three Black Crows: Aggressive broker distribution. Homma's principle: The trend has shifted; do not fight the waterfall.",
-                    classicalFraming = "Momentum Distribution"
-                )
-            }
         }
-
-        // 2. Morning Star / Evening Star
-        if (candles.size >= 3) {
-            val c1 = candles[candles.size - 3]
-            val c2 = candles[candles.size - 2]
-            val c3 = current
-
-            val c1Body = abs(c1.close - c1.open)
-            val c2Body = abs(c2.close - c2.open)
-
-            if (c1.close < c1.open && c1Body > (c1.high - c1.low) * 0.5 &&
-                c2Body < c1Body * 0.3 &&
-                c3.close > c3.open && c3.close > (c1.open + c1.close) / 2.0
-            ) {
-                return CandlestickPatternResult(
-                    type = CandlestickPatternType.MORNING_STAR,
-                    candle = current,
-                    bias = "BULLISH",
-                    confidence = 90,
-                    rationale = "Morning Star (San-sen): The sun rises after the darkness. Panic selling absorbed by smart money at extreme lows.",
-                    classicalFraming = ClassicalPriceAction.getFraming(CandlestickPatternType.MORNING_STAR)
-                )
-            }
-
-            if (c1.close > c1.open && c1Body > (c1.high - c1.low) * 0.5 &&
-                c2Body < c1Body * 0.3 &&
-                c3.close < c3.open && c3.close < (c1.open + c1.close) / 2.0
-            ) {
-                return CandlestickPatternResult(
-                    type = CandlestickPatternType.EVENING_STAR,
-                    candle = current,
-                    bias = "BEARISH",
-                    confidence = 90,
-                    rationale = "Evening Star: Market exhaustion at peaks. Broker distribution successfully traps retail 'fomo' buyers.",
-                    classicalFraming = ClassicalPriceAction.getFraming(CandlestickPatternType.EVENING_STAR)
-                )
-            }
-        }
-
-        // 3. Tweezer Tops & Bottoms (Precise Rejection)
-        if (abs(current.high - prev.high) < range * 0.05 && current.high > current.open && isPriorUptrend) {
-            return CandlestickPatternResult(
-                type = CandlestickPatternType.SHOOTING_STAR,
-                candle = current,
-                bias = "BEARISH",
-                confidence = 86,
-                rationale = "Tweezer Top: Exact price rejection at psychological ceiling. Homma's view: Double ceiling indicates a fortified distribution zone.",
-                classicalFraming = "Tweezer Resistance"
-            )
-        }
-        if (abs(current.low - prev.low) < range * 0.05 && current.low < current.open && isPriorDowntrend) {
-            return CandlestickPatternResult(
-                type = CandlestickPatternType.HAMMER,
-                candle = current,
-                bias = "BULLISH",
-                confidence = 86,
-                rationale = "Tweezer Bottom: Market floor established. Buyers defending this level with absolute conviction.",
-                classicalFraming = "Tweezer Support"
-            )
-        }
-
-        // 4. Bullish & Bearish Engulfing
-        val prevBody = abs(prev.close - prev.open)
-        if (prev.close < prev.open && current.close > current.open &&
-            current.close >= prev.open && current.open <= prev.close && body > prevBody
-        ) {
-            return CandlestickPatternResult(
-                type = CandlestickPatternType.BULLISH_ENGULFING,
-                candle = current,
-                bias = "BULLISH",
-                confidence = 88,
-                rationale = "Bullish Engulfing: A 'Killing' pattern where buyers completely overwrite the prior fear. Strong broker buy-side footprint.",
-                classicalFraming = ClassicalPriceAction.getFraming(CandlestickPatternType.BULLISH_ENGULFING)
-            )
-        }
-        if (prev.close > prev.open && current.close < current.open &&
-            current.close <= prev.open && current.open >= prev.close && body > prevBody
-        ) {
-            return CandlestickPatternResult(
-                type = CandlestickPatternType.BEARISH_ENGULFING,
-                candle = current,
-                bias = "BEARISH",
-                confidence = 88,
-                rationale = "Bearish Engulfing: Total absorption of buying pressure. Distribution is now aggressive and immediate.",
-                classicalFraming = ClassicalPriceAction.getFraming(CandlestickPatternType.BEARISH_ENGULFING)
-            )
-        }
-
-        // 5. Piercing Line / Dark Cloud Cover
-        if (isPriorDowntrend && prev.close < prev.open && current.close > current.open &&
-            current.open < prev.close && current.close > (prev.open + prev.close) / 2.0 && current.close < prev.open
-        ) {
-            return CandlestickPatternResult(
-                type = CandlestickPatternType.HAMMER,
-                candle = current,
-                bias = "BULLISH",
-                confidence = 80,
-                rationale = "Piercing Line: Partial engulfment signaling a potent trend shift. The floor is being tested and held.",
-                classicalFraming = "Trend Shift"
-            )
-        }
-        if (isPriorUptrend && prev.close > prev.open && current.close < current.open &&
-            current.open > prev.close && current.close < (prev.open + prev.close) / 2.0 && current.close > prev.open
-        ) {
-            return CandlestickPatternResult(
-                type = CandlestickPatternType.SHOOTING_STAR,
-                candle = current,
-                bias = "BEARISH",
-                confidence = 80,
-                rationale = "Dark Cloud Cover: Topping signal where sellers have penetrated deep into the buyers' territory.",
-                classicalFraming = "Trend Shift"
-            )
-        }
-
-        // 6. Hammer vs Shooting Star (Pin Bars)
-        if (range > 0 && lowerWick >= 2.0 * body && upperWick <= range * 0.15) {
-            val hammerBias = if (isPriorDowntrend) "BULLISH" else "BEARISH"
-            val hammerType = if (isPriorDowntrend) CandlestickPatternType.HAMMER else CandlestickPatternType.HANGING_MAN
-            return CandlestickPatternResult(
-                type = hammerType,
-                candle = current,
-                bias = hammerBias,
-                confidence = 84,
-                rationale = "Pin Bar (Hammer/Hanging Man): Rejection of liquidity. The long shadow shows where the big money pushed back.",
-                classicalFraming = ClassicalPriceAction.getFraming(hammerType)
-            )
-        }
-        if (range > 0 && upperWick >= 2.0 * body && lowerWick <= range * 0.15) {
-            val starBias = if (isPriorUptrend) "BEARISH" else "BULLISH"
-            val starType = if (isPriorUptrend) CandlestickPatternType.SHOOTING_STAR else CandlestickPatternType.INVERTED_HAMMER
-            return CandlestickPatternResult(
-                type = starType,
-                candle = current,
-                bias = starBias,
-                confidence = 84,
-                rationale = "Shooting Star/Inverted Hammer: Testing high/low liquidity. Homma: The shadow points to the future path.",
-                classicalFraming = ClassicalPriceAction.getFraming(starType)
-            )
-        }
-
-        // 7. Doji (Equilibrium)
-        if (range > 0 && body <= range * 0.1) {
-            return CandlestickPatternResult(
-                type = CandlestickPatternType.DOJI,
-                candle = current,
-                bias = "NEUTRAL",
-                confidence = 70,
-                rationale = "Doji: The market is in a state of perfect balance (Kaikiri). Prepare for a breakout.",
-                classicalFraming = ClassicalPriceAction.getFraming(CandlestickPatternType.DOJI)
-            )
-        }
-
-        return CandlestickPatternResult(
-            type = CandlestickPatternType.NONE,
-            candle = current,
-            bias = if (current.close >= current.open) "BULLISH" else "BEARISH",
-            confidence = 60,
-            rationale = "Steady Market Pulse. No extreme reversal signatures present. Follow the dominant trend.",
-            classicalFraming = "Structural Continuation"
-        )
+        return CandlestickPatternResult(type, candle, bias, score, text, ClassicalPriceAction.getFraming(type),
+            sh.bodyRatio.takeIf { it.isFinite() } ?: 0.0, sh.upperRatio.takeIf { it.isFinite() } ?: 0.0,
+            sh.lowerRatio.takeIf { it.isFinite() } ?: 0.0, trend, vol, previous, loc, liquidity,
+            confirmed = valid && candle.complete && type != CandlestickPatternType.NONE,
+            forming = forming, dataValid = valid)
     }
 }
