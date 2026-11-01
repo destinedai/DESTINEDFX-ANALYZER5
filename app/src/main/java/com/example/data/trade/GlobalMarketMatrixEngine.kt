@@ -18,6 +18,9 @@ import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.TimeoutCancellationException
 
+private fun isCryptoSymbol(symbol: String): Boolean =
+    symbol.substringBefore('/').uppercase() in setOf("BTC", "ETH", "BNB", "SOL", "XRP")
+
 /**
  * Data-surveillance orchestration only. This class never places orders and never manufactures a
  * price, candle, lot size, or trade plan. A caller must provide the application's existing
@@ -162,16 +165,20 @@ class GlobalMarketMatrixEngine(
         } catch (error: Exception) {
             return InstrumentSnapshot(symbol, InstrumentState.ERROR, reason = "Provider error: ${error.javaClass.simpleName}")
         }
-        if (!isValidTicker(ticker, clock())) {
-            val reason = if (ticker == null) "No quote returned" else "Quote is stale or invalid"
-            return InstrumentSnapshot(symbol, if (ticker == null) InstrumentState.ERROR else InstrumentState.STALE, reason = reason)
+        val acceptedTicker = ticker ?: return InstrumentSnapshot(
+            symbol,
+            InstrumentState.ERROR,
+            reason = "No quote returned"
+        )
+        if (!isValidTicker(acceptedTicker, clock())) {
+            return InstrumentSnapshot(symbol, InstrumentState.STALE, reason = "Quote is stale or invalid")
         }
         return InstrumentSnapshot(
             symbol = symbol,
             state = InstrumentState.LIVE,
-            source = ticker.source,
-            price = ticker.price,
-            quoteTimestampMs = ticker.lastUpdateMillis,
+            source = acceptedTicker.source,
+            price = acceptedTicker.price,
+            quoteTimestampMs = acceptedTicker.lastUpdateMillis,
             reason = "Fresh validated quote"
         )
     }
@@ -183,9 +190,6 @@ class GlobalMarketMatrixEngine(
     }
 
     private fun isCrypto(symbol: String): Boolean = isCryptoSymbol(symbol)
-
-    private fun isCryptoSymbol(symbol: String): Boolean =
-        symbol.substringBefore('/').uppercase() in setOf("BTC", "ETH", "BNB", "SOL", "XRP")
 
     private fun assetType(symbol: String): String = when {
         isCrypto(symbol) -> "CRYPTO"
