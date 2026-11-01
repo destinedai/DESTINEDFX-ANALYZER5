@@ -1556,12 +1556,12 @@ open class DestinedFXViewModel(
         onResult: (Boolean, String?) -> Unit
     ) {
         val message = if (isPreview) "Broker login is disabled in preview mode." else
-            "Direct MT5/MetaAPI login is disabled. Use Bot → Managed MT5; credentials are not sent by this legacy route."
+            "Direct MT5 login is disabled. Use Bot → Managed MT5; credentials are accepted only through the configured HTTPS bridge."
         onResult(false, message)
     }
 
     fun reconnectMT5Session(onResult: (Boolean, String?) -> Unit) {
-        onResult(false, "Legacy MetaAPI reconnect is disabled. Reconnect through Bot → Managed MT5 and verify a fresh terminal heartbeat.")
+        onResult(false, "Legacy MT5 reconnect is disabled. Reconnect through Bot → Managed MT5 and verify a fresh terminal heartbeat.")
     }
     fun selectBroker(type: com.example.data.broker.BrokerType) {
         if (isPreview) return

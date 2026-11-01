@@ -30,7 +30,7 @@ class MT5BrokerGatewayAdapter(
         _connectionStatus.value = BrokerConnectionStatus.ERROR
         _accountMetrics.value = null
         _openPositions.value = emptyList()
-        return Result.failure(IllegalStateException("Direct MT5/MetaAPI connection is disabled; authenticate through the managed terminal service."))
+        return Result.failure(IllegalStateException("Direct MT5 connection is disabled; authenticate through the configured managed terminal service."))
     }
 
     override suspend fun disconnect() {
