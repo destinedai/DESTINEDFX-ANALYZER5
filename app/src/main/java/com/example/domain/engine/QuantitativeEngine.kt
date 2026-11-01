@@ -21,6 +21,9 @@ object QuantitativeEngine {
         return RiskEngine.positionSize(AccountState(accountBalance, accountBalance, null, null, "ACC"), riskPercent, entryPrice, stopLoss, spec)
     }
 
+    /** Compatibility-only guard; unknown, zero, negative, or non-finite broker values fail closed. */
     fun checkMarginSafety(accountBalance: Double, requiredMarginForLot: Double): Boolean =
-        accountBalance > requiredMarginForLot && requiredMarginForLot >= 0.0
+        accountBalance.isFinite() && accountBalance > 0.0 &&
+            requiredMarginForLot.isFinite() && requiredMarginForLot > 0.0 &&
+            accountBalance > requiredMarginForLot
 }

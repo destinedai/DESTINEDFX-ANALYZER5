@@ -8,6 +8,7 @@ import com.destinedfx.core.analysis.*
 import com.destinedfx.core.trade.*
 import com.destinedfx.core.news.*
 import com.destinedfx.core.strategy.*
+import com.example.domain.engine.QuantitativeEngine
 import org.junit.Assert.*
 import org.junit.Test
 import kotlin.math.abs
@@ -156,6 +157,15 @@ class TradingCoreValidationTest {
         assertFalse("Non-finite broker free margin must fail closed", RiskEngine.marginCheck(account.copy(freeMargin = Double.NaN), 1.0).first)
         assertFalse("Negative broker-required margin must fail closed", RiskEngine.marginCheck(account, -1.0).first)
         assertTrue("A valid broker margin check still passes", RiskEngine.marginCheck(account, 80.0).first)
+    }
+
+    @Test
+    fun testCompatibilityMarginGuardRejectsUnknownOrZeroMargin() {
+        assertTrue(QuantitativeEngine.checkMarginSafety(1000.0, 100.0))
+        assertFalse(QuantitativeEngine.checkMarginSafety(1000.0, 0.0))
+        assertFalse(QuantitativeEngine.checkMarginSafety(1000.0, -1.0))
+        assertFalse(QuantitativeEngine.checkMarginSafety(1000.0, Double.NaN))
+        assertFalse(QuantitativeEngine.checkMarginSafety(Double.POSITIVE_INFINITY, 100.0))
     }
 
     @Test
