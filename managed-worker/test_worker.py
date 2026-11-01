@@ -173,7 +173,10 @@ class WorkerTests(unittest.TestCase):
         result = worker.provision(self.job, self.settings, launch=False)
         marker = result / "terminal" / ".destinedfx-worker.json"
         marker.write_text('{"pairing_id":"pair_456","pid":123}', encoding="utf-8")
-        worker.revoke_pairing(self.settings, "pair_456")
+        # PID 123 may be a live unrelated process on the host; pin the ownership result so the
+        # test does not depend on host PIDs. Fail-closed behaviour is covered by other tests.
+        with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD):
+            worker.revoke_pairing(self.settings, "pair_456")
         self.assertFalse(result.exists())
 
     def test_revoke_fails_if_nonempty_tree_has_no_matching_ownership_marker(self):
