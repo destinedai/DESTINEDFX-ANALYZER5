@@ -424,6 +424,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             validServiceOrigin(override).takeIf { override.isNotBlank() }
                 ?: validServiceOrigin(buildValue).orEmpty()
 
+        internal fun initialServiceUrl(savedValue: String, buildValue: String): String =
+            savedValue.ifBlank { buildValue.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty() }
+
         internal fun validServiceOrigin(raw: String): String? {
             return try {
                 val uri = URI(raw.trim()).normalize()

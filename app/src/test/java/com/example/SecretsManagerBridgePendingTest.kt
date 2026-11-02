@@ -43,6 +43,16 @@ class SecretsManagerBridgePendingTest {
         assertEquals("", manager.getMT5BridgePendingCommandAction())
     }
 
+    @Test fun manuallyChangedManagedBridgeUrlPersistsAcrossManagerRestart() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+
+        val changedUrl = "https://new-demo-tunnel.trycloudflare.com"
+        assertTrue(manager.saveManagedMT5ServiceUrl(changedUrl))
+        val restored = SecretsManager(ApplicationProvider.getApplicationContext())
+        assertEquals(changedUrl, restored.getManagedMT5ServiceUrl())
+    }
+
     @Test fun demoAndLiveBridgeStateAreEncryptedAndProfileIsolated() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         if (!manager.isSecureStorageAvailable) return

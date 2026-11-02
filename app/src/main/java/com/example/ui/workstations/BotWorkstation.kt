@@ -63,9 +63,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgeMessage by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode).let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
     var bridgeSnapshot by remember(selectedAccountMode) { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
     var managedBridgeUrlInput by remember {
-        mutableStateOf(bridgeSecrets.getManagedMT5ServiceUrl().ifBlank {
-            com.example.BuildConfig.MT5_MANAGED_SERVICE_URL.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty()
-        })
+        mutableStateOf(MT5RemoteBridgeClient.initialServiceUrl(
+            bridgeSecrets.getManagedMT5ServiceUrl(), com.example.BuildConfig.MT5_MANAGED_SERVICE_URL
+        ))
     }
     var bridgeBusy by remember { mutableStateOf(false) }
     var bridgePendingId by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgePendingCommandId(selectedAccountMode)) }
@@ -308,6 +308,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         supportingText = { Text("Enter the public service origin only. Never enter a token or password here.") }
                     )
+                    if (managedBridgeUrlInput.contains(".trycloudflare.com", ignoreCase = true)) {
+                        Text(
+                            "DEMO / DEVELOPMENT ONLY — Cloudflare Quick Tunnel URLs are temporary and are not a production endpoint.",
+                            color = WarningAmber,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(enabled = !bridgeBusy, onClick = {
                             val origin = MT5RemoteBridgeClient.validServiceOrigin(managedBridgeUrlInput)

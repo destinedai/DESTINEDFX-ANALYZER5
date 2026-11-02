@@ -152,6 +152,20 @@ class MT5RemoteBridgeClientTest {
         assertEquals(null, MT5RemoteBridgeClient.recentClosedDealNetPnl(listOf(invalidTime), now))
     }
 
+    @Test fun demoBuildDefaultsToTheConfiguredTemporaryTunnelAndSavedUrlOverridesIt() {
+        val demoUrl = "https://ancient-put-forge-preferences.trycloudflare.com"
+        assertEquals(demoUrl, BuildConfig.MT5_MANAGED_SERVICE_URL)
+        assertEquals(demoUrl, MT5RemoteBridgeClient.initialServiceUrl("", BuildConfig.MT5_MANAGED_SERVICE_URL))
+        assertEquals("https://saved.example.org", MT5RemoteBridgeClient.initialServiceUrl(
+            "https://saved.example.org", BuildConfig.MT5_MANAGED_SERVICE_URL
+        ))
+        assertEquals("", MT5RemoteBridgeClient.initialServiceUrl("", "__CONFIGURATION_REQUIRED__"))
+        assertEquals(demoUrl, MT5RemoteBridgeClient.resolveServiceOrigin("", BuildConfig.MT5_MANAGED_SERVICE_URL))
+        assertEquals("https://new-tunnel.trycloudflare.com", MT5RemoteBridgeClient.resolveServiceOrigin(
+            "https://new-tunnel.trycloudflare.com", BuildConfig.MT5_MANAGED_SERVICE_URL
+        ))
+    }
+
     @Test fun runtimeBridgeUrlOverridesBuildDefaultOnlyWhenItIsValid() {
         assertEquals("https://bridge.realcop.com", MT5RemoteBridgeClient.resolveServiceOrigin(
             "https://bridge.realcop.com", "__CONFIGURATION_REQUIRED__"))

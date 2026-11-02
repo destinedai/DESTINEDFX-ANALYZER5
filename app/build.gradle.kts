@@ -8,6 +8,7 @@ plugins {
   alias(libs.plugins.secrets)
 }
 
+val mt5ManagedServiceUrlFromGradle = providers.gradleProperty("mt5ManagedServiceUrl").orNull.orEmpty().trim()
 val mt5ManagedServiceUrlFromEnv = System.getenv("MT5_MANAGED_SERVICE_URL").orEmpty().trim()
 val mt5ManagedServiceUrlFromFile = rootProject.file(".env").takeIf { it.isFile }
   ?.readLines()
@@ -17,12 +18,14 @@ val mt5ManagedServiceUrlFromFile = rootProject.file(".env").takeIf { it.isFile }
   ?.removeSurrounding("\"")
   ?.removeSurrounding("'")
   .orEmpty()
-val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromEnv.takeIf { it.isNotBlank() }
+val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromGradle.takeIf { it.isNotBlank() }
+  ?: mt5ManagedServiceUrlFromEnv.takeIf { it.isNotBlank() }
   ?: mt5ManagedServiceUrlFromFile.takeIf { it.isNotBlank() }
   ?: ""
 val mt5ManagedServiceUrlBuildValue = mt5ManagedServiceUrl.ifBlank { "__CONFIGURATION_REQUIRED__" }
   .replace("\\", "\\\\")
   .replace("\"", "\\\"")
+val mt5ManagedDemoDefault = "https://ancient-put-forge-preferences.trycloudflare.com"
 
 android {
   namespace = "com.example"
@@ -36,7 +39,7 @@ android {
     versionName = "1.0.9"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
+    buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
   }
 
   signingConfigs {
@@ -57,12 +60,19 @@ android {
 
   buildTypes {
     release {
+      buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug {
+      val debugBridgeUrl = mt5ManagedServiceUrl.ifBlank { mt5ManagedDemoDefault }
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+      buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$debugBridgeUrl\"")
+      signingConfig = signingConfigs.getByName("debugConfig")
+    }
   }
 
   gradle.taskGraph.whenReady {
