@@ -4,7 +4,7 @@
 
 - Repository: `destinedai/DESTINEDFX-ANALYZER5`
 - Branch: `main`
-- Latest completed commit: `84a884bc848db06d08adfa87171cb52b949adfd2`
+- Latest completed commit: `234a4004eaecd29909c05debde8f58290dc91c02`
 - Working tree at handoff creation: clean before this document was added.
 
 ## Completed work
@@ -47,6 +47,17 @@ Commit `04beb267364becb580052f624187449b6e122b23`:
 - Fixed nullable `MarketTicker?` access by explicitly rejecting a missing quote before reading source, price, or timestamp fields.
 - Preserved distinct missing-quote, stale/invalid, timeout, and provider-error outcomes.
 
+### Surveillance-to-signal integration
+
+Commit `234a4004eaecd29909c05debde8f58290dc91c02`:
+
+- Added an optional `SignalGenerationUseCase` dependency to `GlobalMarketMatrixEngine`.
+- Fresh validated quotes now invoke the existing deterministic signal-generation adapter using the configured timeframe and strategy ID.
+- Relays the returned signal state, `executable` flag, and block/reason details to the listener.
+- Keeps signal generation fail-closed on timeout or exception as `DATA_UNAVAILABLE` and non-executable.
+- Does not calculate entry, stop, target, R:R, lots, or risk in surveillance; those remain owned by `SignalGenerationUseCaseImpl`, `SignalEngine`, and the authoritative `RiskEngine` path.
+- Added a regression test proving a RiskEngine-rejected result remains non-executable and is not approved by surveillance.
+
 ## Tests and CI evidence
 
 - `git diff --check`: passed for both implementation phases.
@@ -57,6 +68,9 @@ Commit `04beb267364becb580052f624187449b6e122b23`:
 - GitHub Actions Build APK for commit `a32ec564696f9c02c27ea108a82496549e863d2b`: **IN PROGRESS** at handoff update time.
 - GitHub Actions Build APK for commit `81ee621d42768083a3b3858d4080664e5ede5da9`: **FAILURE** during Kotlin compilation with the four errors repaired in `04beb26`.
 - GitHub Actions Build APK for commit `04beb267364becb580052f624187449b6e122b23`: **SUCCESS**; the four reported Kotlin compiler errors are resolved.
+- GitHub Actions Build APK for commit `234a4004eaecd29909c05debde8f58290dc91c02`: **SUCCESS**.
+- Signal integration CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41393983514
+- Signal integration CI passed Android unit tests, debug APK build, APK signature/package verification, artifact upload, Python/worker tests, and genuine MetaEditor MT5 EA compilation.
 - Successful CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347976860
 - Successful jobs: Android unit tests, debug APK build, APK signature/package verification, APK artifact upload, Python tests, and genuine MetaEditor MT5 EA compilation.
 - The surveillance regression tests executed as part of `Run unit tests` and passed.
@@ -69,22 +83,22 @@ Commit `04beb267364becb580052f624187449b6e122b23`:
 ## Current blockers
 
 - Real Telegram delivery has not been performed because no authorized bot token/chat was supplied through a secure external channel. Do not ask the user to paste credentials into chat or source code.
-- The surveillance layer is now a data-only polling foundation; it is not yet integrated with `SignalGenerationUseCase`, opportunity lifecycle, durable alert delivery, or an independent always-on backend.
+- The surveillance layer now invokes the deterministic `SignalGenerationUseCase` when configured, but opportunity lifecycle, durable alert delivery, and an independent always-on backend remain unfinished.
 - Continuous all-instrument surveillance requires an authorized provider configuration and an independent always-on backend/worker. Do not claim 24/7 operation from an Android process.
 - Device rendering and real-device TradingView verification remain NOT TESTED.
 - No new surveillance backend or paid infrastructure has been provisioned.
 
 ## Remaining work, priority order
 
-1. After CI passes, integrate fresh validated surveillance data with the existing `SignalGenerationUseCase` and authoritative `RiskEngine`; preserve WAIT/BLOCKED behavior and never guess broker sizing.
-2. Connect the orchestrator to the existing deterministic signal/risk components only where their data requirements are met; preserve WAIT/BLOCKED behavior and never guess broker sizing.
-3. Add durable opportunity lifecycle and notification deduplication/expiry around analytical signal outputs; keep Telegram delivery separate from trade execution.
+1. Add durable opportunity lifecycle and notification deduplication/expiry around the relayed analytical signal outputs; keep Telegram delivery separate from trade execution.
+2. Add integration tests proving stale/missing/incomplete analysis cannot become executable or alertable, and repeated scans cannot duplicate opportunities.
+3. Add the Android surveillance status surface only after real backend/provider state exists; display BLOCKED or DATA_UNAVAILABLE rather than simulated counts.
 4. Add the Android surveillance status surface only after real backend/provider state exists; display BLOCKED or DATA_UNAVAILABLE rather than simulated counts.
 5. Run and inspect GitHub Actions after each focused push; include this handoff file in every subsequent push.
 
 ## Exact next action
 
-Connect one supported strategy path to the surveillance cycle using the existing deterministic signal use case, then add tests proving fresh data can produce only a risk-gated result and stale/incomplete data produces WAIT or DATA_UNAVAILABLE. Do not add a parallel signal or risk calculator.
+Implement the opportunity lifecycle around `TradeSignal.id` and its closed-candle identity. Persist candidate/approved/invalidated/expired/notified state through the existing persistence architecture, with deduplication and no automatic execution. Do not add a parallel signal or risk calculator.
 
 ## Configuration still required
 
