@@ -136,7 +136,11 @@ class DerivDemoBotService : Service() {
                 return
             }
         }
-        val executor = DerivMultiplierExecutor(gateway, app.db.derivExecutionDao())
+        val executor = DerivMultiplierExecutor(
+            gateway,
+            app.db.derivExecutionDao(),
+            sensitiveActionAuthorized = { com.example.security.AppSecurityGuard.authorizeSensitiveAction() }
+        )
         if (!reconcileWithRecovery(executor, gateway)) return
         update("Running — scanning $symbol; no order is assumed confirmed")
         while (currentCoroutineContext().isActive && !stopRequested) {

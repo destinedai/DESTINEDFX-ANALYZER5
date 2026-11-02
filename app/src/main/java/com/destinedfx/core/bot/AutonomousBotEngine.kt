@@ -70,7 +70,8 @@ class AutonomousBotEngine(
     private val tradeUseCase: TradeUseCase,
     private val tradeRepo: TradeRepository,
     private val brokerManager: BrokerManager,
-    private val signalGenerationUseCase: SignalGenerationUseCaseImpl
+    private val signalGenerationUseCase: SignalGenerationUseCaseImpl,
+    private val sensitiveActionAuthorized: () -> Boolean = { false }
 ) {
     companion object {
         private const val TAG = "AutonomousBotEngine"
@@ -88,6 +89,11 @@ class AutonomousBotEngine(
         timeframe: String,
         riskPercent: Double
     ): Result<Boolean> = withContext(Dispatchers.IO) {
+        if (!sensitiveActionAuthorized()) {
+            val err = "REAUTHENTICATION_REQUIRED: authenticate again before starting or resuming trading"
+            _status.value = _status.value.copy(state = BotLifecycleState.STOPPED, isRunning = false, lastError = err, lastAction = "Activation blocked by app security")
+            return@withContext Result.failure(IllegalStateException(err))
+        }
         // Gate 1: Strategy implementation
         val strat = StrategyRegistry.allStrategies.find { it.id == strategyId }
         if (strat == null || !strat.isImplemented) {
@@ -230,6 +236,10 @@ class AutonomousBotEngine(
         val broker = brokerManager.activeBroker.value
         while (scope.isActive) {
             try {
+                if (!sensitiveActionAuthorized()) {
+                    _status.value = _status.value.copy(state = BotLifecycleState.STOPPED, isRunning = false, lastError = "REAUTHENTICATION_REQUIRED: trading authorization expired", lastAction = "Bot stopped after app backgrounding or timeout")
+                    return
+                }
                 val now = System.currentTimeMillis()
                 val tf = Timeframe.parse(timeframe) ?: Timeframe.H1
 

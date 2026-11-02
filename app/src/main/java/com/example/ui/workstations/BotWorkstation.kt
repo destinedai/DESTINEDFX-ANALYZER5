@@ -56,7 +56,9 @@ import org.json.JSONObject
 fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val bridgeSecrets = viewModel.app.secretsManager
     var selectedAccountMode by remember { mutableStateOf(bridgeSecrets.getManagedMT5SelectedProfile()) }
-    val bridgeClient = remember(bridgeSecrets, selectedAccountMode) { MT5RemoteBridgeClient(bridgeSecrets, selectedAccountMode) }
+    val bridgeClient = remember(bridgeSecrets, selectedAccountMode) {
+        MT5RemoteBridgeClient(bridgeSecrets, selectedAccountMode) { AppSecurityGuard.authorizeSensitiveAction() }
+    }
     val reportContext = LocalContext.current
     var bridgeMode by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode).isNotBlank()) }
     var bridgeCode by remember { mutableStateOf("") }
@@ -679,7 +681,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 else DerivBotServiceStatePolicy.canStart(derivServiceState)
                             } else true,
                             onCheckedChange = { active ->
-                                if (bridgeMode) coroutineScope.launch {
+                                if (active && !AppSecurityGuard.authorizeSensitiveAction()) {
+                                    statusMessage = "REAUTHENTICATION REQUIRED — authenticate before starting or resuming trading."
+                                    (reportContext as? com.example.MainActivity)?.showBiometricPrompt()
+                                } else if (bridgeMode) coroutineScope.launch {
                                     bridgeBusy = true
                                     val action = if (active) "START" else "STOP"
                                     val config = JSONObject()

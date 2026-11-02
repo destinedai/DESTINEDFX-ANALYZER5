@@ -19,7 +19,11 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** Android control/status client for the remote MT5 relay. Never places orders. */
-class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String = "DEMO") {
+class MT5RemoteBridgeClient(
+    private val secrets: SecretsManager,
+    profile: String = "DEMO",
+    private val sensitiveActionAuthorized: () -> Boolean = { false }
+) {
     val profile: String = profile.trim().uppercase().also { require(it == "DEMO" || it == "LIVE") }
     private val http = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS)
@@ -150,6 +154,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     suspend fun command(requestId: String, action: String, config: JSONObject = JSONObject()): CommandResult {
         require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP", "CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL"))
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
+        if (action in TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
+            return CommandResult(requestId, false, "REAUTHENTICATION_REQUIRED: authenticate again before this trading action", rejected = true)
+        }
         if (action in TRADE_ACTIONS) {
             val fresh = try { state() } catch (e: Exception) {
                 return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
@@ -263,6 +270,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     }
 
     suspend fun authorizeLiveSession(): String {
+        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
         require(profile == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
         val fresh = state()
         val reason = gateFailure(fresh, requireLiveAuthorization = false)

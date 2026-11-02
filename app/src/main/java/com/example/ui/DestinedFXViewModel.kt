@@ -55,6 +55,7 @@ import com.destinedfx.core.bot.BotStatusSummary
 import com.destinedfx.core.bot.BotLifecycleState
 import com.example.ui.DestinedFXScreen
 import com.example.ui.export.RealAnalysisExporter
+import com.example.security.AppSecurityGuard
 
 data class BacktestTrade(
     val dateString: String,
@@ -714,10 +715,12 @@ open class DestinedFXViewModel(
     val canUseBiometrics = MutableStateFlow(false)
 
     fun lockApp() {
-        // Disabled by default to ensure terminal remains accessible
+        AppSecurityGuard.lock()
+        isAppLocked.value = true
     }
 
     fun unlockApp() {
+        AppSecurityGuard.unlock()
         isAppLocked.value = false
     }
 

@@ -48,13 +48,21 @@ import com.example.ui.DestinedFXViewModel
 import com.example.ui.BrandWelcome
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.RiskViewModel
+import com.example.security.AppSecurityGuard
 
 class MainActivity : FragmentActivity() {
     private var mainViewModel: DestinedFXViewModel? = null
+    private val processLifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStop(owner: LifecycleOwner) {
+            AppSecurityGuard.lock()
+            mainViewModel?.lockApp()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        ProcessLifecycleOwner.get().lifecycle.addObserver(processLifecycleObserver)
 
         setContent {
             val app = (LocalContext.current.applicationContext as MyApplication)
@@ -163,7 +171,12 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    private fun showBiometricPrompt() {
+    override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(processLifecycleObserver)
+        super.onDestroy()
+    }
+
+    fun showBiometricPrompt() {
         val executor = ContextCompat.getMainExecutor(this)
         val biometricPrompt = BiometricPrompt(this, executor,
             object : BiometricPrompt.AuthenticationCallback() {

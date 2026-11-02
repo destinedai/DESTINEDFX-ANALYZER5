@@ -12,6 +12,7 @@ import com.example.domain.engine.impl.CoreMarketStructureAnalyzer
 import com.example.domain.engine.MTFAlignmentEngine
 import com.example.domain.usecase.impl.*
 import com.example.security.SecretsManager
+import com.example.security.AppSecurityGuard
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.OkHttpClient
@@ -167,7 +168,8 @@ class MyApplication : Application() {
                         minRR = 2.0,
                         portfolio = com.destinedfx.core.risk.PortfolioLimits(maxDailyLossPct = 3.0, maxWeeklyLossPct = 6.0)
                     ) 
-                }
+                },
+                sensitiveActionAuthorized = { AppSecurityGuard.authorizeSensitiveAction() }
             )
             _backtestUseCase = BacktestUseCaseImpl(marketDataRepository, startingBalance = { null })
             
@@ -177,7 +179,8 @@ class MyApplication : Application() {
                 tradeUseCase = tradeUseCase,
                 tradeRepo = tradeRepository,
                 brokerManager = brokerManager,
-                signalGenerationUseCase = signalGenerationUseCase
+                signalGenerationUseCase = signalGenerationUseCase,
+                sensitiveActionAuthorized = { AppSecurityGuard.authorizeSensitiveAction() }
             )
             
             initStatus.value = InitState.Ready

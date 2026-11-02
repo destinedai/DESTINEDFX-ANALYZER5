@@ -49,6 +49,7 @@ import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import java.util.Locale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
 import com.example.R
 import com.example.BuildConfig
 import com.example.MyApplication
@@ -1468,6 +1469,7 @@ fun SplashScreen(onFinished: () -> Unit, username: String) {
 
 @Composable
 fun BiometricLockScreen(viewModel: DestinedFXViewModel, onUnlocked: () -> Unit) {
+    val context = LocalContext.current
     Box(
         modifier = Modifier.fillMaxSize().background(DarkBackground),
         contentAlignment = Alignment.Center
@@ -1488,7 +1490,9 @@ fun BiometricLockScreen(viewModel: DestinedFXViewModel, onUnlocked: () -> Unit) 
                 Text("Authentication required to access institutional trading desk.", fontSize = 11.sp, color = TextSecondary, textAlign = TextAlign.Center)
 
                 Button(
-                    onClick = { onUnlocked() },
+                    onClick = {
+                        (context as? com.example.MainActivity)?.showBiometricPrompt()
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
                     modifier = Modifier.fillMaxWidth()
                 ) {

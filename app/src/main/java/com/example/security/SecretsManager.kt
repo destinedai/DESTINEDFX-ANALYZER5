@@ -59,7 +59,6 @@ class SecretsManager(private val ctx: Context) {
     @Volatile private var derivRealLease: DerivRealAuthorizationLease? = null
 
     init {
-        var tempSecure = false
         prefs = try {
             val masterKey = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
             val p = EncryptedSharedPreferences.create(
@@ -67,14 +66,12 @@ class SecretsManager(private val ctx: Context) {
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-            tempSecure = true
             p
         } catch (e: Exception) {
-            android.util.Log.e("SecretsManager", "KEYSTORE UNAVAILABLE - falling back to memory-only storage to prevent plaintext disk exposure", e)
-            tempSecure = false
-            InMemorySharedPreferences()
+            android.util.Log.e("SecretsManager", "Encrypted Android Keystore storage unavailable; refusing credential persistence", e)
+            throw SecureStorageUnavailableException(e)
         }
-        isSecureStorageAvailable = tempSecure
+        isSecureStorageAvailable = true
     }
 
 
@@ -119,7 +116,7 @@ class SecretsManager(private val ctx: Context) {
     }
     fun getBotRiskPercent(): Double = botConfigPrefs.getString("risk_percent", "0.25")?.toDoubleOrNull()
         ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 } ?: 0.25
-    /** Deriv credentials must never be persisted to the in-memory fallback as if save succeeded. */
+    /** Deriv credentials are persisted only after encrypted Keystore storage is initialized. */
     fun saveDerivApiToken(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank()) return false
         invalidateDerivRealAuthorization()
@@ -386,45 +383,5 @@ class SecretsManager(private val ctx: Context) {
     }
 }
 
-private class InMemorySharedPreferences : android.content.SharedPreferences {
-    private val map = java.util.concurrent.ConcurrentHashMap<String, Any?>()
-
-    override fun getAll(): Map<String, *> = map
-    override fun getString(key: String, defValue: String?): String? = map[key] as? String ?: defValue
-    override fun getStringSet(key: String, defValues: Set<String>?): Set<String>? = map[key] as? Set<String> ?: defValues
-    override fun getInt(key: String, defValue: Int): Int = map[key] as? Int ?: defValue
-    override fun getLong(key: String, defValue: Long): Long = map[key] as? Long ?: defValue
-    override fun getFloat(key: String, defValue: Float): Float = map[key] as? Float ?: defValue
-    override fun getBoolean(key: String, defValue: Boolean): Boolean = map[key] as? Boolean ?: defValue
-    override fun contains(key: String): Boolean = map.containsKey(key)
-    override fun edit(): android.content.SharedPreferences.Editor = Editor()
-
-    override fun registerOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
-    override fun unregisterOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
-
-    inner class Editor : android.content.SharedPreferences.Editor {
-        private val temp = HashMap<String, Any?>()
-        private var clear = false
-
-        override fun putString(key: String, value: String?): android.content.SharedPreferences.Editor = apply { temp[key] = value }
-        override fun putStringSet(key: String, values: Set<String>?): android.content.SharedPreferences.Editor = apply { temp[key] = values }
-        override fun putInt(key: String, value: Int): android.content.SharedPreferences.Editor = apply { temp[key] = value }
-        override fun putLong(key: String, value: Long): android.content.SharedPreferences.Editor = apply { temp[key] = value }
-        override fun putFloat(key: String, value: Float): android.content.SharedPreferences.Editor = apply { temp[key] = value }
-        override fun putBoolean(key: String, value: Boolean): android.content.SharedPreferences.Editor = apply { temp[key] = value }
-        override fun remove(key: String): android.content.SharedPreferences.Editor = apply { temp[key] = null }
-        override fun clear(): android.content.SharedPreferences.Editor = apply { clear = true }
-
-        override fun commit(): Boolean {
-            if (clear) map.clear()
-            for ((k, v) in temp) {
-                if (v == null) map.remove(k) else map[k] = v
-            }
-            return true
-        }
-
-        override fun apply() {
-            commit()
-        }
-    }
-}
+class SecureStorageUnavailableException(cause: Throwable) :
+    IllegalStateException("Secure Android Keystore storage is unavailable; credentials were not saved.", cause)

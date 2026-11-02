@@ -5,7 +5,8 @@ import kotlinx.coroutines.withContext
 
 class DerivMultiplierExecutor(
     private val gateway: DerivBrokerGateway,
-    private val dao: DerivExecutionDao
+    private val dao: DerivExecutionDao,
+    private val sensitiveActionAuthorized: () -> Boolean = { false }
 ) {
     companion object {
         private const val PORTFOLIO_MAX_AGE_MS = 8_000L
@@ -131,6 +132,9 @@ class DerivMultiplierExecutor(
     }
 
     suspend fun submit(intent: DerivMultiplierIntent): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
+        if (!sensitiveActionAuthorized()) {
+            return@withContext Result.failure(Exception("REAUTHENTICATION_REQUIRED: authenticate again before authorizing or submitting a purchase"))
+        }
         val current = account ?: return@withContext Result.failure(Exception("ACCOUNT_UNVERIFIED: verify the selected Deriv account before submitting"))
         if (current.loginId.isBlank() || current.mode !in setOf("demo", "real")) return@withContext Result.failure(Exception("ACCOUNT_INVALID: broker account identity is unavailable"))
         val existing = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId)
