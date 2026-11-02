@@ -1,18 +1,13 @@
-"""Deterministic, analysis-only quantitative primitives for the bridge.
-
-This module deliberately stops before execution risk and broker sizing. It accepts only
-provider-sourced, timestamped closed candles and returns an explainable candidate. A
-candidate is never executable merely because a structural event was detected.
-"""
+"""Deterministic, analysis-only quantitative primitives for bridge and Android."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import json
 from math import isfinite
 from typing import Iterable, Sequence
 
-
 STRATEGY_ID = "smc-confluence-1.0.0"
-RULESET_VERSION = "rules-2026.10-python-1"
+RULESET_VERSION = "rules-2026.10-python-2"
 MAX_CANDLE_AGE_MS = 5 * 60 * 1000
 
 
@@ -54,6 +49,7 @@ class SignalCandidate:
     take_profit: float | None
     reward_to_risk: float | None
     confidence_score: int
+    score_basis: tuple[str, ...]
     evidence: tuple[str, ...]
     reason: str
     source: str
@@ -61,14 +57,9 @@ class SignalCandidate:
     executable: bool = False
 
 
-def validate_ohlcv(
-    candles: Iterable[OHLCV],
-    *,
-    now_ms: int,
-    source: str,
-    expected_interval_ms: int | None = None,
-    max_age_ms: int = MAX_CANDLE_AGE_MS,
-) -> ValidatedSeries:
+def validate_ohlcv(candles: Iterable[OHLCV], *, now_ms: int, source: str,
+                   expected_interval_ms: int | None = None,
+                   max_age_ms: int = MAX_CANDLE_AGE_MS) -> ValidatedSeries:
     """Validate provider candles without repairing, sorting, or fabricating data."""
     rows = tuple(candles)
     if not rows:
@@ -80,6 +71,8 @@ def validate_ohlcv(
     previous: OHLCV | None = None
     intervals: list[int] = []
     for row in rows:
+        if row.source.strip() != source.strip():
+            raise DataIntegrityError("CANDLE_SOURCE_MISMATCH")
         if row.timestamp_ms <= 0 or row.timestamp_ms > now_ms:
             raise DataIntegrityError("FUTURE_OR_INVALID_TIMESTAMP")
         if row.retrieved_at_ms <= 0 or row.retrieved_at_ms > now_ms:
@@ -121,24 +114,16 @@ def _ema(values: Sequence[float], period: int) -> float | None:
 def _atr(candles: Sequence[OHLCV], period: int = 14) -> float | None:
     if len(candles) < period + 1:
         return None
-    true_ranges: list[float] = []
-    for previous, current in zip(candles, candles[1:]):
-        true_ranges.append(max(current.high - current.low, abs(current.high - previous.close), abs(current.low - previous.close)))
+    true_ranges = [max(current.high - current.low,
+                       abs(current.high - previous.close),
+                       abs(current.low - previous.close))
+                   for previous, current in zip(candles, candles[1:])]
     return sum(true_ranges[-period:]) / period
 
 
-def evaluate_smc(
-    series: ValidatedSeries,
-    *,
-    symbol: str,
-    timeframe: str,
-    quote_price: float | None = None,
-) -> SignalCandidate:
-    """Detect a closed-candle BOS candidate; never marks it executable.
-
-    The structure event is based only on completed candles. A live quote may be supplied
-    for provenance, but it is not substituted for candles and does not approve execution.
-    """
+def evaluate_smc(series: ValidatedSeries, *, symbol: str, timeframe: str,
+                 quote_price: float | None = None) -> SignalCandidate:
+    """Detect a closed-candle BOS candidate; never marks it executable."""
     candles = series.candles
     if len(candles) < 22:
         return _waiting(series, symbol, timeframe, "INSUFFICIENT_CLOSED_CANDLES")
@@ -147,12 +132,10 @@ def evaluate_smc(
     ema20 = _ema(closes, 20)
     if atr is None or ema20 is None or atr <= 0:
         return _waiting(series, symbol, timeframe, "INSUFFICIENT_STRUCTURE_OR_ATR")
-    current = candles[-1]
-    previous = candles[-2]
+    current, previous = candles[-1], candles[-2]
     evidence: list[str] = []
     direction = "WAIT"
     stop: float | None = None
-    target: float | None = None
     entry: float | None = None
     if current.close > previous.high and current.close > ema20:
         direction = "LONG"
@@ -170,43 +153,81 @@ def evaluate_smc(
     if risk <= 0 or not isfinite(risk):
         return _waiting(series, symbol, timeframe, "INVALID_STRUCTURE_RISK")
     target = entry + 2.0 * risk if direction == "LONG" else entry - 2.0 * risk
-    evidence.append("MINIMUM_2R_TARGET_PROPOSAL")
+    score_basis = (
+        "BOS confirmation: 40 points",
+        "EMA20 directional confirmation: 20 points",
+        "Closed-candle data integrity: 20 points",
+        "Minimum 2R target proposal: 20 points",
+    )
     return SignalCandidate(
-        symbol=symbol,
-        strategy_id=STRATEGY_ID,
-        strategy_version=RULESET_VERSION,
-        timeframe=timeframe,
-        state="CANDIDATE",
-        direction=direction,
-        entry=entry,
-        stop_loss=stop,
-        take_profit=target,
-        reward_to_risk=2.0,
-        confidence_score=60,
-        evidence=tuple(evidence),
+        symbol=symbol, strategy_id=STRATEGY_ID, strategy_version=RULESET_VERSION,
+        timeframe=timeframe, state="CANDIDATE", direction=direction, entry=entry,
+        stop_loss=stop, take_profit=target, reward_to_risk=2.0,
+        confidence_score=sum((40, 20, 20, 20)), score_basis=score_basis,
+        evidence=tuple(evidence) + ("MINIMUM_2R_TARGET_PROPOSAL",),
         reason="Closed-candle BOS candidate; requires independent quote, RiskEngine, broker and account validation.",
-        source=series.source,
-        candle_timestamp_ms=series.last_timestamp_ms,
+        source=series.source, candle_timestamp_ms=series.last_timestamp_ms,
         executable=False,
     )
 
 
 def _waiting(series: ValidatedSeries, symbol: str, timeframe: str, reason: str) -> SignalCandidate:
     return SignalCandidate(
-        symbol=symbol,
-        strategy_id=STRATEGY_ID,
-        strategy_version=RULESET_VERSION,
-        timeframe=timeframe,
-        state="WAITING",
-        direction="WAIT",
-        entry=None,
-        stop_loss=None,
-        take_profit=None,
-        reward_to_risk=None,
-        confidence_score=0,
-        evidence=(),
-        reason=reason,
-        source=series.source,
-        candle_timestamp_ms=series.last_timestamp_ms,
-        executable=False,
+        symbol=symbol, strategy_id=STRATEGY_ID, strategy_version=RULESET_VERSION,
+        timeframe=timeframe, state="WAITING", direction="WAIT", entry=None,
+        stop_loss=None, take_profit=None, reward_to_risk=None, confidence_score=0,
+        score_basis=(), evidence=(), reason=reason, source=series.source,
+        candle_timestamp_ms=series.last_timestamp_ms, executable=False,
     )
+
+
+def _candidate_to_dict(candidate: SignalCandidate) -> dict:
+    result = asdict(candidate)
+    result["evidence"] = list(candidate.evidence)
+    result["score_basis"] = list(candidate.score_basis)
+    return result
+
+
+def analyze_json(payload: str) -> str:
+    """Analyze one immutable candle snapshot for the local Android runtime."""
+    try:
+        request = json.loads(payload)
+        if not isinstance(request, dict):
+            raise DataIntegrityError("INVALID_REQUEST")
+        symbol = str(request.get("symbol", "")).strip()
+        timeframe = str(request.get("timeframe", "")).strip()
+        strategy_id = str(request.get("strategy_id", "")).strip()
+        source = str(request.get("source", "")).strip()
+        now_ms = int(request.get("now_ms", 0))
+        expected_interval_ms = request.get("expected_interval_ms")
+        if expected_interval_ms is not None:
+            expected_interval_ms = int(expected_interval_ms)
+        rows = request.get("candles")
+        if not symbol or not timeframe or not strategy_id or not isinstance(rows, list):
+            raise DataIntegrityError("INVALID_REQUEST")
+        if strategy_id != STRATEGY_ID:
+            return json.dumps({
+                "symbol": symbol, "strategy_id": strategy_id, "strategy_version": "",
+                "timeframe": timeframe, "state": "NOT_IMPLEMENTED", "direction": "WAIT",
+                "entry": None, "stop_loss": None, "take_profit": None,
+                "reward_to_risk": None, "confidence_score": 0, "score_basis": [],
+                "evidence": [], "reason": "Python ruleset is not implemented for this strategy.",
+                "source": source, "candle_timestamp_ms": 0, "executable": False,
+            }, sort_keys=True)
+        candles = tuple(OHLCV(
+            timestamp_ms=int(row["timestamp_ms"]), open=float(row["open"]),
+            high=float(row["high"]), low=float(row["low"]), close=float(row["close"]),
+            volume=float(row.get("volume", 0.0)), complete=bool(row.get("complete", True)),
+            source=str(row.get("source", source)), retrieved_at_ms=int(row["retrieved_at_ms"]),
+        ) for row in rows)
+        series = validate_ohlcv(candles, now_ms=now_ms, source=source,
+                                expected_interval_ms=expected_interval_ms)
+        return json.dumps(_candidate_to_dict(evaluate_smc(
+            series, symbol=symbol, timeframe=timeframe,
+            quote_price=request.get("quote_price"),
+        )), sort_keys=True)
+    except (DataIntegrityError, KeyError, TypeError, ValueError, OverflowError) as error:
+        return json.dumps({
+            "state": "DATA_UNAVAILABLE", "direction": "WAIT", "executable": False,
+            "reason": str(error) or "INVALID_REQUEST",
+        }, sort_keys=True)

@@ -121,3 +121,11 @@ Expose the Python analysis foundation through a versioned authenticated bridge r
 - An authorized always-on deployment target with persistent storage, health checks, restart recovery, and secure environment variables.
 - Optional secure Telegram bot token/chat configuration for real delivery verification.
 - Android SDK/device access for local device verification; CI remains the authoritative build environment until then.
+
+## Continuation: local Python runtime integration
+
+On the `feat/complete-demo-readiness` branch after `d3094c623ebdf58f6aadc40352ffe0534208bc55`, the native Android app now has a Chaquopy 17.2.0 configuration. It packages the shared `bridge/quantitative.py` module with Python 3.12 for `arm64-v8a` and `x86_64`. `PythonQuantitativeSignalEngine` initializes Chaquopy once per process, runs JSON analysis on a bounded background coroutine, and fails closed on exceptions or cancellation. `SignalGenerationUseCaseImpl` invokes it on the same Kotlin-validated closed-candle snapshot as a shadow candidate. Python results are explicitly `NOT_VERIFIED` for parity and never set Kotlin `TradeSignal.executable`.
+
+The Python module now exposes `analyze_json`, rejects candle-level source mismatches, returns `NOT_IMPLEMENTED` for unsupported strategy IDs, and uses a documented 100-point confluence basis rather than an unexplained static score. The implemented Python ruleset remains SMC closed-candle BOS only. Local quantitative tests: **15 passed**. Android compile and APK runtime are **NOT VERIFIED** in the sandbox because no Android SDK is installed; CI and device instrumentation remain required. TradingView remains a visual widget only, and the exact recorded OHLC source is surfaced rather than attributed to TradingView.
+
+See `docs/python-android-quantitative-readiness.md` for the architecture, source truthfulness, references and verification state. No broker credentials, orders, paid infrastructure, force-pushes or changes to `main` were made.

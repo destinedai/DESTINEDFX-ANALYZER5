@@ -6,6 +6,7 @@ plugins {
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
+  id("com.chaquo.python")
 }
 
 val mt5ManagedServiceUrlFromGradle = providers.gradleProperty("mt5ManagedServiceUrl").orNull.orEmpty().trim()
@@ -39,6 +40,7 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
+    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
   signingConfigs {
@@ -109,6 +111,19 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+}
+
+chaquopy {
+  defaultConfig {
+    version = "3.12"
+    buildPython("/usr/bin/python3.12")
+  }
+  sourceSets {
+    getByName("main") {
+      setSrcDirs(listOf("../bridge"))
+      include("quantitative.py")
+    }
   }
 }
 

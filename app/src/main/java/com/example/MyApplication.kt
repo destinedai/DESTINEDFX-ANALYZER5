@@ -86,6 +86,10 @@ class MyApplication : Application() {
     private var _structureAnalyzer: CoreMarketStructureAnalyzer? = null
     val structureAnalyzer: CoreMarketStructureAnalyzer get() = _structureAnalyzer ?: throw IllegalStateException("StructureAnalyzer not initialized")
 
+    private var _pythonQuantitativeEngine: com.example.domain.engine.PythonQuantitativeSignalEngine? = null
+    val pythonQuantitativeEngine: com.example.domain.engine.PythonQuantitativeSignalEngine
+        get() = _pythonQuantitativeEngine ?: throw IllegalStateException("PythonQuantitativeSignalEngine not initialized")
+
     private var _mtfAlignmentEngine: MTFAlignmentEngine? = null
     val mtfAlignmentEngine: MTFAlignmentEngine get() = _mtfAlignmentEngine ?: throw IllegalStateException("MTFAlignmentEngine not initialized")
 
@@ -113,6 +117,12 @@ class MyApplication : Application() {
             }
         }
         super.onCreate()
+        runCatching {
+            com.example.domain.engine.PythonQuantitativeRuntime.ensureStarted(this)
+        }.onFailure { error ->
+            // Python analysis remains fail-closed; startup failure must not take down the app.
+            android.util.Log.e("MyApplication", "Embedded Python startup unavailable", error)
+        }
         initializeDependencies()
     }
 
@@ -130,6 +140,7 @@ class MyApplication : Application() {
             
             _marketDataRepository = MarketDataRepositoryImpl(secrets, derivMarketDataGateway)
             _mt5GatewayRepository = MT5GatewayRepository(secrets)
+            _pythonQuantitativeEngine = com.example.domain.engine.PythonQuantitativeSignalEngine(this@MyApplication)
             _newsRepository = ForexNewsRepository()
             _tradeRepository = TradeRepository(dbInstance.tradeDao())
             _analysisRepository = com.example.data.AnalysisRepository(dbInstance.analysisDao())
@@ -148,7 +159,11 @@ class MyApplication : Application() {
             
             _authUseCase = AuthUseCaseImpl(dbInstance, secrets)
             _marketDataUseCase = GetMarketDataUseCaseImpl(marketDataRepository)
-            _signalGenerationUseCase = SignalGenerationUseCaseImpl(marketDataRepository, newsRepository)
+            _signalGenerationUseCase = SignalGenerationUseCaseImpl(
+                market = marketDataRepository,
+                news = newsRepository,
+                pythonEngine = pythonQuantitativeEngine
+            )
             
             _derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secrets)
             _derivGatewayAdapter = com.example.data.broker.DerivBrokerGatewayAdapter(derivBrokerGateway)

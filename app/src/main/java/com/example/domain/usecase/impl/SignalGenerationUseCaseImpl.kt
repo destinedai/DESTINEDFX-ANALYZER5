@@ -23,6 +23,7 @@ import com.example.domain.model.TradeSignal
 import com.example.domain.repository.MarketDataRepository
 import com.example.domain.repository.NewsRepository
 import com.example.domain.usecase.SignalGenerationUseCase
+import com.example.domain.engine.PythonQuantitativeSignalEngine
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import com.example.domain.model.Candle as LegacyCandle
@@ -45,7 +46,8 @@ class SignalGenerationUseCaseImpl(
     private val news: NewsRepository,
     private val cfg: SignalConfig = SignalConfig(),
     private val clock: () -> Long = System::currentTimeMillis,
-    private val pollIntervalMs: Long = 45_000L
+    private val pollIntervalMs: Long = 45_000L,
+    private val pythonEngine: PythonQuantitativeSignalEngine? = null
 ) : SignalGenerationUseCase, SignalReportStore {
 
     data class TimingRecord(val loadMs: Long, val computeMs: Long, val totalMs: Long, val cacheHit: Boolean, val timestamp: Long)
@@ -146,6 +148,19 @@ class SignalGenerationUseCaseImpl(
             val main = load(tf, 250)
             val chk = CandleValidator.validate(main, tf, 60, tolerateWeekendGaps = cls != AssetClass.CRYPTO)
             if (!chk.ok) return unavailable(symbol, timeframe, "DATA ERROR: " + chk.problems.firstOrNull(), "GAP_DETECTED")
+            val pythonShadow = pythonEngine?.analyze(
+                symbol = symbol,
+                timeframe = timeframe,
+                strategyId = strategyId,
+                candles = main.map { candle ->
+                    LegacyCandle(candle.timeMs, candle.open, candle.high, candle.low, candle.close, candle.volume, candle.complete)
+                },
+                source = market.candleSources[candleSourceKey(symbol, tf.label)].orEmpty()
+                    .ifBlank { "UNVERIFIED_OHLC_SOURCE" },
+                nowMs = now,
+                expectedIntervalMs = timeframeIntervalMs(tf.label),
+                quotePrice = quote?.last
+            )
             
             val displayTargets = selectedMtfTimeframes
                 .mapNotNull { Timeframe.parse(it) }
@@ -302,7 +317,13 @@ class SignalGenerationUseCaseImpl(
                 analysisLoadMs = loadMs,
                 analysisComputeMs = computeMs,
                 analysisTotalMs = totalMs,
-                cacheHit = cacheHit
+                cacheHit = cacheHit,
+                pythonState = pythonShadow?.state ?: "NOT_RUN",
+                pythonEngineVersion = pythonShadow?.engineVersion.orEmpty(),
+                pythonRulesetVersion = pythonShadow?.strategyVersion.orEmpty(),
+                pythonEvidence = pythonShadow?.evidence ?: emptyList(),
+                pythonReason = pythonShadow?.reason.orEmpty(),
+                pythonParityStatus = "NOT_VERIFIED"
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -320,6 +341,19 @@ class SignalGenerationUseCaseImpl(
     private fun unavailable(symbol: String, tf: String, why: String, health: String) = TradeSignal(
         id = UUID.randomUUID().toString(), symbol = symbol, timeframe = tf, direction = SignalDirection.WAIT, entryPrice = 0.0, stopLoss = 0.0, takeProfit = 0.0,
         confidenceScore = 0, rationale = why, timestamp = clock(), signalState = SignalState.DATA_UNAVAILABLE.name, blockReasons = listOf(why), reasons = listOf(why), dataHealth = health)
+}
+
+
+private fun timeframeIntervalMs(label: String): Long? = when (label.trim().uppercase(java.util.Locale.ROOT)) {
+    "M1" -> 60_000L
+    "M5" -> 5 * 60_000L
+    "M15" -> 15 * 60_000L
+    "M30" -> 30 * 60_000L
+    "H1" -> 60 * 60_000L
+    "H4" -> 4 * 60 * 60_000L
+    "D1" -> 24 * 60 * 60_000L
+    "W1" -> 7 * 24 * 60 * 60_000L
+    else -> null
 }
 
 

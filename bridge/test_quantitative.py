@@ -1,4 +1,6 @@
-from quantitative import DataIntegrityError, OHLCV, evaluate_smc, validate_ohlcv
+import json
+
+from quantitative import DataIntegrityError, OHLCV, analyze_json, evaluate_smc, validate_ohlcv
 import pytest
 
 NOW = 1_700_000_000_000
@@ -40,6 +42,8 @@ def test_identical_closed_candles_are_deterministic_and_non_executable():
     assert first.state == "CANDIDATE"
     assert first.direction == "LONG"
     assert first.reward_to_risk == 2.0
+    assert first.confidence_score == 100
+    assert len(first.score_basis) == 4
     assert first.executable is False
     assert "BOS_UP_CLOSED_CANDLE" in first.evidence
 
@@ -91,7 +95,34 @@ def test_missing_source_and_empty_series_fail_closed():
         validate_ohlcv(candles(), now_ms=NOW, source=" ")
 
 
+def test_candle_source_mismatch_fails_closed():
+    rows = candles()
+    rows[0] = OHLCV(**{**rows[0].__dict__, "source": "other-provider"})
+    with pytest.raises(DataIntegrityError, match="CANDLE_SOURCE_MISMATCH"):
+        validate(rows)
+
+
 def test_short_series_cannot_create_signal():
     result = evaluate_smc(validate(candles(count=10)), symbol="EUR/USD", timeframe="M15")
     assert result.state == "WAITING"
     assert result.reason == "INSUFFICIENT_CLOSED_CANDLES"
+
+
+def test_json_boundary_returns_not_implemented_without_falling_back_to_smc():
+    result = json.loads(analyze_json(json.dumps({
+        "symbol": "EUR/USD", "timeframe": "M15", "strategy_id": "ict-silver-bullet",
+        "source": "fixture-provider", "now_ms": NOW, "candles": [],
+    })))
+    assert result["state"] == "NOT_IMPLEMENTED"
+    assert result["direction"] == "WAIT"
+    assert result["executable"] is False
+
+
+def test_json_boundary_rejects_missing_candles_fail_closed():
+    result = json.loads(analyze_json(json.dumps({
+        "symbol": "EUR/USD", "timeframe": "M15", "strategy_id": "smc-confluence-1.0.0",
+        "source": "fixture-provider", "now_ms": NOW,
+    })))
+    assert result["state"] == "DATA_UNAVAILABLE"
+    assert result["direction"] == "WAIT"
+    assert result["executable"] is False

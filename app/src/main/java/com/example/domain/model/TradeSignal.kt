@@ -52,5 +52,12 @@ data class TradeSignal(
     val analysisLoadMs: Long = 0L,
     val analysisComputeMs: Long = 0L,
     val analysisTotalMs: Long = 0L,
-    val cacheHit: Boolean = false
+    val cacheHit: Boolean = false,
+    /** Local Python result is a shadow candidate until parity is explicitly approved. */
+    val pythonState: String = "NOT_RUN",
+    val pythonEngineVersion: String = "",
+    val pythonRulesetVersion: String = "",
+    val pythonEvidence: List<String> = emptyList(),
+    val pythonReason: String = "",
+    val pythonParityStatus: String = "NOT_VERIFIED"
 )
