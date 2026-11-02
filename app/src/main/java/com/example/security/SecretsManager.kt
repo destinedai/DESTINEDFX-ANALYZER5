@@ -69,28 +69,30 @@ class SecretsManager(private val ctx: Context) {
             p
         } catch (e: Exception) {
             android.util.Log.e("SecretsManager", "Encrypted Android Keystore storage unavailable; refusing credential persistence", e)
-            throw SecureStorageUnavailableException(e)
+            UnavailableSharedPreferences
         }
-        isSecureStorageAvailable = true
+        isSecureStorageAvailable = prefs !== UnavailableSharedPreferences
     }
 
 
-    fun saveTelegramToken(v: String)    = prefs.edit().putString(TG_TOK,  v).apply()
-    fun saveTelegramChatId(v: String)   = prefs.edit().putString(TG_CHAT, v).apply()
-    fun saveWhatsAppApiKey(v: String)   = prefs.edit().putString(WA_KEY,  v).apply()
-    fun saveWhatsAppPhone(v: String)    = prefs.edit().putString(WA_PHN,  v).apply()
-    fun saveMT5Password(v: String)      = prefs.edit().putString(MT5_PW,  v).apply()
-    fun saveMT5PasswordIfAllowed(v: String, enabled: Boolean) {
+    fun saveTelegramToken(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(TG_TOK, v).apply(); true } else false
+    fun saveTelegramChatId(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(TG_CHAT, v).apply(); true } else false
+    fun saveWhatsAppApiKey(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(WA_KEY, v).apply(); true } else false
+    fun saveWhatsAppPhone(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(WA_PHN, v).apply(); true } else false
+    fun saveMT5Password(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(MT5_PW, v).apply(); true } else false
+    fun saveMT5PasswordIfAllowed(v: String, enabled: Boolean): Boolean {
+        if (!isSecureStorageAvailable) return false
         prefs.edit().putBoolean(MT5_SAVE_PASSWORD, enabled).apply()
         if (enabled) saveMT5Password(v) else prefs.edit().remove(MT5_PW).apply()
+        return true
     }
     fun isMT5PasswordSaveEnabled(): Boolean = prefs.getBoolean(MT5_SAVE_PASSWORD, false)
     fun clearMT5Credentials() {
         prefs.edit().remove(MT5_PW).remove(MT5_INVESTOR_PW).remove(MT5_LOGIN).remove(MT5_AC)
             .remove(MT5_SV).putString(MT5_SESSION_STATUS, "DISCONNECTED").apply()
     }
-    fun saveMT5Login(v: String)         = prefs.edit().putString(MT5_LOGIN, v).apply()
-    fun saveMT5InvestorPassword(v: String) = prefs.edit().putString(MT5_INVESTOR_PW, v).apply()
+    fun saveMT5Login(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(MT5_LOGIN, v).apply(); true } else false
+    fun saveMT5InvestorPassword(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(MT5_INVESTOR_PW, v).apply(); true } else false
     fun saveMT5AccountNumber(v: String) = prefs.edit().putString(MT5_AC,  v).apply()
     fun saveMT5BrokerServer(v: String)  = prefs.edit().putString(MT5_SV,  v).apply()
     fun saveMT5AccountBalance(v: Double) = prefs.edit().putString(MT5_BALANCE, v.toString()).apply()
@@ -99,8 +101,8 @@ class SecretsManager(private val ctx: Context) {
     fun saveMT5SessionStatus(v: String) = prefs.edit().putString(MT5_SESSION_STATUS, v).apply()
     fun saveMT5Currency(v: String)      = prefs.edit().putString(MT5_CURRENCY, v).apply()
     fun saveMT5LastLoginMs(v: Long)     = prefs.edit().putLong(MT5_LAST_LOGIN_MS, v).apply()
-    fun saveOandaApiKey(v: String)      = prefs.edit().putString(OANDA_KEY, v).apply()
-    fun saveOandaAccountId(v: String)   = prefs.edit().putString(OANDA_ACC, v).apply()
+    fun saveOandaApiKey(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(OANDA_KEY, v).apply(); true } else false
+    fun saveOandaAccountId(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(OANDA_ACC, v).apply(); true } else false
     fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
     fun saveBotSymbol(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("symbol", v.trim()).apply() }
@@ -385,3 +387,31 @@ class SecretsManager(private val ctx: Context) {
 
 class SecureStorageUnavailableException(cause: Throwable) :
     IllegalStateException("Secure Android Keystore storage is unavailable; credentials were not saved.", cause)
+
+/** Read-only, non-persistent preferences used only to keep guest analysis available. */
+private object UnavailableSharedPreferences : android.content.SharedPreferences {
+    override fun getAll(): Map<String, *> = emptyMap()
+    override fun getString(key: String, defValue: String?): String? = defValue
+    override fun getStringSet(key: String, defValues: Set<String>?): Set<String>? = defValues
+    override fun getInt(key: String, defValue: Int): Int = defValue
+    override fun getLong(key: String, defValue: Long): Long = defValue
+    override fun getFloat(key: String, defValue: Float): Float = defValue
+    override fun getBoolean(key: String, defValue: Boolean): Boolean = defValue
+    override fun contains(key: String): Boolean = false
+    override fun edit(): android.content.SharedPreferences.Editor = Editor
+    override fun registerOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+    override fun unregisterOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+
+    private object Editor : android.content.SharedPreferences.Editor {
+        override fun putString(key: String, value: String?) = this
+        override fun putStringSet(key: String, values: Set<String>?) = this
+        override fun putInt(key: String, value: Int) = this
+        override fun putLong(key: String, value: Long) = this
+        override fun putFloat(key: String, value: Float) = this
+        override fun putBoolean(key: String, value: Boolean) = this
+        override fun remove(key: String) = this
+        override fun clear() = this
+        override fun commit(): Boolean = false
+        override fun apply() {}
+    }
+}
