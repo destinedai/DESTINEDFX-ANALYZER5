@@ -4,7 +4,7 @@
 
 - Repository: `destinedai/DESTINEDFX-ANALYZER5`
 - Branch: `main`
-- Latest completed commit: `234a4004eaecd29909c05debde8f58290dc91c02`
+- Latest completed commit: `b21f202eef89ded9676dd5be8a74de177e2d710a`
 - Working tree at handoff creation: clean before this document was added.
 
 ## Completed work
@@ -58,6 +58,16 @@ Commit `234a4004eaecd29909c05debde8f58290dc91c02`:
 - Does not calculate entry, stop, target, R:R, lots, or risk in surveillance; those remain owned by `SignalGenerationUseCaseImpl`, `SignalEngine`, and the authoritative `RiskEngine` path.
 - Added a regression test proving a RiskEngine-rejected result remains non-executable and is not approved by surveillance.
 
+### Python quantitative analysis foundation
+
+Commit `b21f202eef89ded9676dd5be8a74de177e2d710a`:
+
+- Added `bridge/quantitative.py` as a deterministic, analysis-only Python quantitative core.
+- Validates provider OHLCV without sorting, repairing, or fabricating data: timestamps, retrieval provenance, chronological order, duplicates, gaps, complete candles, finite/impossible values, source identity, and freshness.
+- Added a closed-candle Smart Money Concepts BOS candidate calculation with EMA20 and ATR evidence, explicit strategy/ruleset versions, 2R target proposal, provenance, and non-executable output.
+- The Python candidate cannot approve execution, size a position, or bypass the existing Kotlin `RiskEngine`/broker gate.
+- Added deterministic positive and negative fixtures for data integrity, stale/incomplete input, BOS/no-BOS behavior, and non-executability.
+
 ## Tests and CI evidence
 
 - `git diff --check`: passed for both implementation phases.
@@ -71,6 +81,9 @@ Commit `234a4004eaecd29909c05debde8f58290dc91c02`:
 - GitHub Actions Build APK for commit `234a4004eaecd29909c05debde8f58290dc91c02`: **SUCCESS**.
 - Signal integration CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41393983514
 - Signal integration CI passed Android unit tests, debug APK build, APK signature/package verification, artifact upload, Python/worker tests, and genuine MetaEditor MT5 EA compilation.
+- Local Python verification for commit `b21f202eef89ded9676dd5be8a74de177e2d710a`: **107 passed**, one existing Starlette deprecation warning.
+- GitHub Actions Build APK for commit `b21f202eef89ded9676dd5be8a74de177e2d710a`: **QUEUED** at handoff update time.
+- Python milestone CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41394812802
 - Successful CI URL: https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41347976860
 - Successful jobs: Android unit tests, debug APK build, APK signature/package verification, APK artifact upload, Python tests, and genuine MetaEditor MT5 EA compilation.
 - The surveillance regression tests executed as part of `Run unit tests` and passed.
@@ -84,21 +97,23 @@ Commit `234a4004eaecd29909c05debde8f58290dc91c02`:
 
 - Real Telegram delivery has not been performed because no authorized bot token/chat was supplied through a secure external channel. Do not ask the user to paste credentials into chat or source code.
 - The surveillance layer now invokes the deterministic `SignalGenerationUseCase` when configured, but opportunity lifecycle, durable alert delivery, and an independent always-on backend remain unfinished.
+- The Python quantitative module is not yet exposed through the authenticated bridge API, persisted as opportunities, or selected as the server-side canonical production engine; Kotlin/Python parity has not been established.
 - Continuous all-instrument surveillance requires an authorized provider configuration and an independent always-on backend/worker. Do not claim 24/7 operation from an Android process.
 - Device rendering and real-device TradingView verification remain NOT TESTED.
 - No new surveillance backend or paid infrastructure has been provisioned.
 
 ## Remaining work, priority order
 
-1. Add durable opportunity lifecycle and notification deduplication/expiry around the relayed analytical signal outputs; keep Telegram delivery separate from trade execution.
-2. Add integration tests proving stale/missing/incomplete analysis cannot become executable or alertable, and repeated scans cannot duplicate opportunities.
-3. Add the Android surveillance status surface only after real backend/provider state exists; display BLOCKED or DATA_UNAVAILABLE rather than simulated counts.
+1. Expose the Python analysis foundation through a versioned authenticated bridge route with strict request/response models, request IDs, idempotency, and no execution side effects.
+2. Add durable opportunity lifecycle and notification deduplication/expiry around relayed analytical signal outputs; keep Telegram delivery separate from trade execution.
+3. Establish Kotlin/Python parity fixtures before selecting Python as the server-side canonical signal source; unsupported parity remains explicitly disabled.
+4. Add the Android surveillance status surface only after real backend/provider state exists; display BLOCKED or DATA_UNAVAILABLE rather than simulated counts.
 4. Add the Android surveillance status surface only after real backend/provider state exists; display BLOCKED or DATA_UNAVAILABLE rather than simulated counts.
 5. Run and inspect GitHub Actions after each focused push; include this handoff file in every subsequent push.
 
 ## Exact next action
 
-Implement the opportunity lifecycle around `TradeSignal.id` and its closed-candle identity. Persist candidate/approved/invalidated/expired/notified state through the existing persistence architecture, with deduplication and no automatic execution. Do not add a parallel signal or risk calculator.
+Expose the Python analysis foundation through a versioned authenticated bridge route using the existing pairing/authorization model. Return typed provenance and candidate status only; do not wire it to order submission or claim Kotlin/Python parity yet.
 
 ## Configuration still required
 
