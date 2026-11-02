@@ -152,17 +152,14 @@ class MT5RemoteBridgeClientTest {
         assertEquals(null, MT5RemoteBridgeClient.recentClosedDealNetPnl(listOf(invalidTime), now))
     }
 
-    @Test fun demoBuildDefaultsToTheConfiguredTemporaryTunnelAndSavedUrlOverridesIt() {
-        val demoUrl = "https://ancient-put-forge-preferences.trycloudflare.com"
-        assertEquals(demoUrl, BuildConfig.MT5_MANAGED_SERVICE_URL)
-        assertEquals(demoUrl, MT5RemoteBridgeClient.initialServiceUrl("", BuildConfig.MT5_MANAGED_SERVICE_URL))
-        assertEquals("https://saved.example.org", MT5RemoteBridgeClient.initialServiceUrl(
-            "https://saved.example.org", BuildConfig.MT5_MANAGED_SERVICE_URL
-        ))
+    @Test fun unconfiguredBuildRequiresExplicitBridgeOriginAndSavedUrlOverridesIt() {
         assertEquals("", MT5RemoteBridgeClient.initialServiceUrl("", "__CONFIGURATION_REQUIRED__"))
-        assertEquals(demoUrl, MT5RemoteBridgeClient.resolveServiceOrigin("", BuildConfig.MT5_MANAGED_SERVICE_URL))
+        assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin("", "__CONFIGURATION_REQUIRED__"))
+        assertEquals("https://saved.example.org", MT5RemoteBridgeClient.initialServiceUrl(
+            "https://saved.example.org", "__CONFIGURATION_REQUIRED__"
+        ))
         assertEquals("https://new-tunnel.trycloudflare.com", MT5RemoteBridgeClient.resolveServiceOrigin(
-            "https://new-tunnel.trycloudflare.com", BuildConfig.MT5_MANAGED_SERVICE_URL
+            "https://new-tunnel.trycloudflare.com", "__CONFIGURATION_REQUIRED__"
         ))
     }
 
@@ -172,6 +169,11 @@ class MT5RemoteBridgeClientTest {
         assertEquals("https://embedded.realcop.com", MT5RemoteBridgeClient.resolveServiceOrigin(
             "http://bridge.realcop.com", "https://embedded.realcop.com"))
         assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin("", "__CONFIGURATION_REQUIRED__"))
+    }
+
+    @Test fun dashboardMonitoringCadenceMatchesTheRequestBudget() {
+        assertEquals(5_000L, MT5RemoteBridgeClient.DASHBOARD_POLL_INTERVAL_MS)
+        assertEquals(60_000L, MT5RemoteBridgeClient.LEGACY_TRADE_HISTORY_INTERVAL_MS)
     }
 
     @Test fun serviceOriginValidationRejectsUnsafeOrigins() {

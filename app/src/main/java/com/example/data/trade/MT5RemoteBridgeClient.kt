@@ -25,6 +25,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(5, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
+    @Volatile private var dashboardRouteUnavailable = false
 
     data class Pairing(val code: String, val expiresAt: String)
     data class CommandResult(
@@ -83,7 +84,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             .put("access_type", accessType).put("account_mode", profile).put("consent", consent)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
-        secrets.saveManagedMT5Profile(profile, login.trim(), server, accessType, password, savePasswordLocally)
+        if (!secrets.saveManagedMT5Profile(profile, login.trim(), server, accessType, password, savePasswordLocally)) {
+            throw IllegalStateException("REMOTE_PROFILE_ACCEPTED_LOCAL_SAVE_FAILED")
+        }
         return state()
     }
 
@@ -95,8 +98,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         Pairing(code, body.optString("expires_at"))
     }
 
-    suspend fun state(): Snapshot {
-        val obj = request("GET", "/v1/app/state")
+    suspend fun state(): Snapshot = parseSnapshot(request("GET", "/v1/app/state"))
+
+    private fun parseSnapshot(obj: JSONObject): Snapshot {
         val account = obj.optJSONObject("account")
         val managed = obj.optJSONObject("managed_execution")
         val age = obj.optLong("heartbeat_age_seconds", Long.MAX_VALUE)
@@ -137,14 +141,38 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     }
 
     data class TradePage(val cursor: Int, val watermark: Double, val trades: List<JSONObject>)
+    data class Dashboard(val snapshot: Snapshot, val history: TradePage?, val combined: Boolean)
 
-    suspend fun tradeHistory(cursor: Int = 0, updatedAfter: Double = 0.0): TradePage {
-        val body = request("GET", "/v1/app/trades?cursor=$cursor&updated_after=$updatedAfter&limit=200")
+    /**
+     * Prefer one server-side snapshot/history request. Older bridges fall back to the existing
+     * routes after a single 404; their non-critical history sync can be throttled separately.
+     */
+    suspend fun dashboard(cursor: Int = 0, updatedAfter: Double = 0.0, includeLegacyHistory: Boolean = true): Dashboard {
+        if (!dashboardRouteUnavailable) {
+            try {
+                val body = request("GET", "/v1/app/dashboard?cursor=$cursor&updated_after=$updatedAfter&limit=200")
+                val snapshot = body.optJSONObject("state") ?: throw IllegalStateException("Bridge dashboard has no state snapshot.")
+                return Dashboard(parseSnapshot(snapshot), parseTradePage(body, cursor, updatedAfter), combined = true)
+            } catch (e: BridgeHttpException) {
+                if (e.status != 404) throw e
+                dashboardRouteUnavailable = true
+            }
+        }
+        val snapshot = state()
+        val history = if (includeLegacyHistory) tradeHistory(cursor, updatedAfter) else null
+        return Dashboard(snapshot, history, combined = false)
+    }
+
+    private fun parseTradePage(body: JSONObject, cursor: Int, updatedAfter: Double): TradePage {
         val rows = body.optJSONArray("trades") ?: return TradePage(body.optInt("cursor", cursor), body.optDouble("watermark", updatedAfter), emptyList())
         val out = mutableListOf<JSONObject>()
         for (i in 0 until rows.length()) rows.optJSONObject(i)?.let(out::add)
         return TradePage(body.optInt("cursor", cursor), body.optDouble("watermark", updatedAfter), out)
     }
+
+    suspend fun tradeHistory(cursor: Int = 0, updatedAfter: Double = 0.0): TradePage = parseTradePage(
+        request("GET", "/v1/app/trades?cursor=$cursor&updated_after=$updatedAfter&limit=200"), cursor, updatedAfter
+    )
 
     /** Creates one profile-scoped idempotency key; UNKNOWN is retained for reconciliation, never retried here. */
     suspend fun command(requestId: String, action: String, config: JSONObject = JSONObject()): CommandResult {
@@ -331,6 +359,8 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     class BridgeHttpException(val status: Int, val safeDescription: String) : Exception(safeDescription)
 
     companion object {
+        internal const val DASHBOARD_POLL_INTERVAL_MS = 5_000L
+        internal const val LEGACY_TRADE_HISTORY_INTERVAL_MS = 60_000L
         internal val TRADE_ACTIONS = setOf("CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")
         private val MAX_UINT64 = BigInteger("18446744073709551615")
 

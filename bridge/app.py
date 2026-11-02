@@ -727,6 +727,13 @@ def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=
     next_cursor=max([cursor]+[r['id'] for r in rows])
     return {'cursor':next_cursor,'watermark':watermark,'trades':[{'id':r['id'],'identity':r['identity'],'account_mode':r['account_mode'],'position_id':r['position_id'],'order_ticket':r['order_ticket'],'deal_ticket':r['deal_ticket'],'symbol':r['symbol'],'direction':r['direction'],'status':r['status'],'payload':json.loads(r['payload']),'updated_at':iso(datetime.fromtimestamp(r['created'],timezone.utc))} for r in rows]}
 
+@app.get('/v1/app/dashboard')
+def app_dashboard(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=0,ge=0),updated_after:float=Query(default=0,ge=0),authorization:str|None=Header(default=None)):
+    """Combine the existing read-only state and one bounded trade page into one app request."""
+    snapshot=state(authorization)
+    page=app_trades(limit,cursor,updated_after,authorization)
+    return {'state':snapshot,**page}
+
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
     require_durable_execution()

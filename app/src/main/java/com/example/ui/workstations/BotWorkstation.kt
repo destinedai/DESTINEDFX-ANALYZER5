@@ -185,21 +185,32 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         isConnectingBroker = false
     }
 
+    // This loop observes remote state; command POSTs are sent immediately in their own action handlers.
+    // Keep monitoring aligned to the EA's 5-second heartbeat, without polling non-critical history every tick on legacy servers.
     LaunchedEffect(bridgeMode, bridgeToken, selectedAccountMode, bridgeClient.baseUrl()) {
         if (bridgeMode && bridgeClient.baseUrl().isNotBlank() && bridgeToken.isNotBlank()) {
+            var nextLegacyHistoryAt = 0L
+            val syncPrefs = reportContext.getSharedPreferences("destinedfx_trade_sync", android.content.Context.MODE_PRIVATE)
+            val syncKey = selectedAccountMode.uppercase()
             while (true) {
                 try {
-                    val fresh = bridgeClient.state()
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    val includeLegacyHistory = now >= nextLegacyHistoryAt
+                    val cursor = syncPrefs.getInt("${syncKey}_cursor", 0)
+                    val updatedAfter = syncPrefs.getString("${syncKey}_watermark", "0")?.toDoubleOrNull() ?: 0.0
+                    val dashboard = bridgeClient.dashboard(cursor, updatedAfter, includeLegacyHistory)
+                    if (!dashboard.combined && includeLegacyHistory) {
+                        nextLegacyHistoryAt = now + MT5RemoteBridgeClient.LEGACY_TRADE_HISTORY_INTERVAL_MS
+                    }
+                    val fresh = dashboard.snapshot
                     bridgeSnapshot = fresh
-                    runCatching {
-                        val syncPrefs = reportContext.getSharedPreferences("destinedfx_trade_sync", android.content.Context.MODE_PRIVATE)
-                        val syncKey = selectedAccountMode.uppercase()
-                        val records = mutableListOf<JSONObject>(); var cursor = syncPrefs.getInt("${syncKey}_cursor", 0); var updatedAfter = syncPrefs.getString("${syncKey}_watermark", "0")?.toDoubleOrNull() ?: 0.0; var next: Int; var watermark = updatedAfter
-                        do { val page = bridgeClient.tradeHistory(cursor, updatedAfter); next = page.cursor; watermark = maxOf(watermark, page.watermark); records += page.trades; if (next <= cursor) break; cursor = next } while (true)
-                        val result = TradeReportManager.sync(reportContext, records)
-                        syncPrefs.edit().putInt("${syncKey}_cursor", cursor).putString("${syncKey}_watermark", watermark.toString()).apply()
-                        reportStatus = "Trade reports: ${result.generated} synchronized/generated, ${result.failed} failed"
-                    }.onFailure { reportStatus = "Trade reports: sync unavailable; retrying (${it.javaClass.simpleName})" }
+                    dashboard.history?.let { page ->
+                        runCatching {
+                            val result = TradeReportManager.sync(reportContext, page.trades)
+                            syncPrefs.edit().putInt("${syncKey}_cursor", page.cursor).putString("${syncKey}_watermark", page.watermark.toString()).apply()
+                            reportStatus = "Trade reports: ${result.generated} synchronized/generated, ${result.failed} failed"
+                        }.onFailure { reportStatus = "Trade reports: sync unavailable; retrying (${it.javaClass.simpleName})" }
+                    }
                     val cmd = fresh.raw.optJSONObject("last_command")
                     val observedServerId = cmd?.let { MT5RemoteBridgeClient.serverCommandId(it) }.orEmpty()
                     if (bridgeCommandPending && cmd != null && cmd.optString("request_id") == bridgePendingId &&
@@ -263,7 +274,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                 }
                 catch (_: Exception) { bridgeSnapshot = null; bridgeMessage = if (bridgeCommandPending) "UNKNOWN request $bridgePendingId: bridge unreachable or authorization required. Do not resend; reconcile or revoke pairing." else "Bridge unreachable or authorization required" }
-                delay(2000)
+                delay(MT5RemoteBridgeClient.DASHBOARD_POLL_INTERVAL_MS)
             }
         }
     }
@@ -1796,9 +1807,15 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Checkbox(
                                 checked = savePasswordChecked,
                                 onCheckedChange = { savePasswordChecked = it },
+                                enabled = bridgeSecrets.isSecureStorageAvailable,
                                 colors = CheckboxDefaults.colors(checkedColor = Color(0xFF2196F3))
                             )
-                            Text("Also save password on this device", fontSize = 11.sp, color = TextPrimary)
+                            Text(
+                                if (bridgeSecrets.isSecureStorageAvailable) "Also save password in encrypted device storage"
+                                else "Secure storage unavailable; password cannot be saved on this device",
+                                fontSize = 11.sp,
+                                color = if (bridgeSecrets.isSecureStorageAvailable) TextPrimary else LossRed
+                            )
                         }
 
                         // Prominent MT5 Blue Login Button (#2196F3)
@@ -1867,7 +1884,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             isEditingCredentials = false
                                         }
                                     } catch (e: Exception) {
-                                        brokerConnectionMessage = e.message?.takeIf { it == "CONFIGURATION_REQUIRED" } ?: "Managed registration failed; check service availability and credentials."
+                                        brokerConnectionMessage = when (e.message) {
+                                            "CONFIGURATION_REQUIRED" -> "CONFIGURATION_REQUIRED"
+                                            "REMOTE_PROFILE_ACCEPTED_LOCAL_SAVE_FAILED" -> "Bridge accepted account registration, but encrypted profile storage failed on this device. Do not re-register blindly; verify status and restore secure storage first."
+                                            else -> "Managed registration failed; check service availability and credentials."
+                                        }
                                     } finally {
                                         mt5PasswordInput = ""
                                         mt5InvestorPasswordInput = ""

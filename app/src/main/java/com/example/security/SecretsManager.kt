@@ -236,8 +236,9 @@ class SecretsManager(private val ctx: Context) {
             prefs.edit().remove(profileKey(MT5_BRIDGE_TOKEN, profile)).apply()
         }
     }
-    fun saveManagedMT5Profile(profile: String, login: String, server: String, accessType: String, password: String, savePassword: Boolean) {
+    fun saveManagedMT5Profile(profile: String, login: String, server: String, accessType: String, password: String, savePassword: Boolean): Boolean {
         require(accessType == "MASTER" || accessType == "INVESTOR")
+        if (!isSecureStorageAvailable) return false
         val mode = managedProfile(profile)
         val edit = prefs.edit().putString("managed_mt5_${mode.lowercase()}_login", login.trim())
             .putString("managed_mt5_${mode.lowercase()}_server", server)
@@ -245,7 +246,7 @@ class SecretsManager(private val ctx: Context) {
             .putBoolean("managed_mt5_${mode.lowercase()}_save_password", savePassword)
         if (savePassword) edit.putString("managed_mt5_${mode.lowercase()}_password", password)
         else edit.remove("managed_mt5_${mode.lowercase()}_password")
-        edit.apply()
+        return edit.commit()
     }
     fun getManagedMT5Login(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_login", "") ?: ""
     fun getManagedMT5Server(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_server", "") ?: ""

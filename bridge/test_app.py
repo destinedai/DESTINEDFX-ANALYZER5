@@ -503,6 +503,21 @@ def test_trade_event_cursor_pages_more_than_200_rows_without_skipping():
     ids=[x['id'] for x in page1['trades']+page2['trades']]
     assert len(set(ids))==205
 
+def test_app_dashboard_combines_snapshot_and_one_authenticated_trade_page():
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    payload=heartbeat_data(last_signal={'order':'99','position':'77','symbol':'EURUSD','direction':'BUY','executed_volume':0.10,'requested_volume':0.10})
+    with app.tx(True) as c:
+        app.ingest_trade_ledger(c,p['pairing_id'],'DEMO',payload,time.time())
+    response=client.get('/v1/app/dashboard?limit=1&cursor=0',headers=headers)
+    assert response.status_code==200
+    body=response.json()
+    assert body['state']['pairing_status']=='PAIRING'
+    assert body['state']['ea_state']=='OFFLINE'
+    assert len(body['trades'])==1
+    assert body['cursor']>0 and body['watermark']>0
+    assert body['trades'][0]['account_mode']=='DEMO'
+    assert client.get('/v1/app/dashboard').status_code==401
+
 
 
 def test_closed_trade_ledger_preserves_broker_entry_metadata_and_true_costs():
