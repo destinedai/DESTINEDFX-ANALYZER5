@@ -2,7 +2,7 @@
 
 ## Branch and delivery
 
-The implementation commit is `192c88bfb424b5ff7f96e516e72f1a51d0becd53`. The later documentation commit was `80e0e095392cca97df3733241e3d32706103e6a3`. The final branch tip for this continuation is `5b884f54776ea9eb0606266892d53c534173d5c4` on `feat/complete-demo-readiness`, pushed to `origin/feat/complete-demo-readiness`; `main` was not modified and no force-push was used.
+The previously reported commit references are historical. At the start of this continuation, the fetched `feat/complete-demo-readiness` branch head was `0308374e09faec3fb429a6530533033f5d3e13d7`, matching `origin/feat/complete-demo-readiness`. The final local SHA for this continuation is `602f9ef750e932907ccf283e4badf678bdffb5ee`; `main` was not modified and no force-push was used.
 
 Changed files are `build.gradle.kts`, `app/build.gradle.kts`, `app/src/main/java/com/example/MyApplication.kt`, `app/src/main/java/com/example/domain/engine/PythonQuantitativeSignalEngine.kt`, `app/src/main/java/com/example/domain/model/TradeSignal.kt`, `app/src/main/java/com/example/domain/usecase/impl/SignalGenerationUseCaseImpl.kt`, `bridge/quantitative.py`, `bridge/test_quantitative.py`, `MANUS_HANDOFF.md`, and `docs/python-android-quantitative-readiness.md`.
 
@@ -44,11 +44,11 @@ Python output is stored on `TradeSignal` as shadow metadata with `pythonParitySt
 
 ## Test and CI results
 
-Local Python bridge and quantitative tests: **VERIFIED — 76 passed**. Python syntax compilation: **VERIFIED**. A real Android instrumentation test has been added and CI is configured to run it on an x86_64 API 35 emulator; runtime evidence remains **NOT VERIFIED** until that job executes successfully. Local Android compilation: **BLOCKED** because the sandbox has no Android SDK configured.
+Local Python bridge, quantitative, worker and EA tests: **VERIFIED — 115 passed**, with one existing Starlette deprecation warning. Python syntax compilation: **VERIFIED**. A real Android instrumentation test has been added and CI is configured to run it on an x86_64 API 35 emulator; runtime evidence remains **NOT VERIFIED** until that job executes successfully. Local Android compilation and instrumentation: **BLOCKED** because the sandbox has no Android SDK, ADB or emulator configured.
 
 GitHub Actions run [41467861528](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41467861528) passed for implementation commit `192c88bfb424b5ff7f96e516e72f1a51d0becd53`. Run [41468988507](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41468988507) passed for documentation commit `80e0e095392cca97df3733241e3d32706103e6a3`. Final run [41481731986](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41481731986) for `5b884f54776ea9eb0606266892d53c534173d5c4` passed Python, MetaEditor, Android unit tests, APK build/signature/package verification and artifact packaging, but its emulator job failed at APK installation timeout with zero tests executed. Installed-APK Python runtime therefore remains **NOT VERIFIED**.
 
-The debug APK artifact is [DestinedFX-debug-apk, artifact 13153836953](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41467861528/artifacts/13153836953). The uploaded artifact size was 56,344,518 bytes; the individual APK byte size was not recorded in the retained log. CI verified package `com.aistudio.destinedfx.qwvzxp`, version `1.0.9`, minSdk 24, native ABIs `arm64-v8a` and `x86_64`, and a valid APK Signature Scheme v2 signature. No keystore or private key was committed. Debug-signing upgrade continuity across installations is **NOT VERIFIED**.
+The previously retained debug APK artifact was 56,344,518 bytes and included `arm64-v8a` and `x86_64`; that historical CI artifact does not prove installed-app runtime for this continuation. No keystore or private key was committed. Debug-signing upgrade continuity across installations is **NOT VERIFIED**.
 
 ## Final readiness decision
 

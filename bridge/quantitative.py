@@ -211,6 +211,14 @@ def analyze_json(payload: str) -> str:
             expected_interval_ms = int(expected_interval_ms)
         provider_retrieved_at_ms = int(request.get("provider_retrieved_at_ms", 0))
         allow_session_gaps = bool(request.get("allow_session_gaps", False))
+        quote_price = request.get("quote_price")
+        if quote_price is not None:
+            try:
+                quote_price = float(quote_price)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise DataIntegrityError("INVALID_QUOTE_PRICE") from error
+            if not isfinite(quote_price) or quote_price <= 0:
+                raise DataIntegrityError("INVALID_QUOTE_PRICE")
         rows = request.get("candles")
         if not symbol or not timeframe or not strategy_id or not isinstance(rows, list):
             raise DataIntegrityError("INVALID_REQUEST")
@@ -235,7 +243,7 @@ def analyze_json(payload: str) -> str:
                                 allow_session_gaps=allow_session_gaps)
         return json.dumps(_candidate_to_dict(evaluate_smc(
             series, symbol=symbol, timeframe=timeframe,
-            quote_price=request.get("quote_price"),
+            quote_price=quote_price,
         )), sort_keys=True)
     except (DataIntegrityError, KeyError, TypeError, ValueError, OverflowError) as error:
         return json.dumps({

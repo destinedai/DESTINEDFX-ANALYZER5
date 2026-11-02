@@ -135,3 +135,15 @@ See `docs/python-android-quantitative-readiness.md` for the architecture, source
 The next focused changes add `PythonQuantitativeSignalEngineInstrumentedTest`, which executes the packaged `quantitative.analyze_json` module through Chaquopy on an Android emulator. It covers a positive closed-candle BOS candidate, a negative WAIT fixture, unsupported strategy `NOT_IMPLEMENTED`, invalid/non-finite data fail-closed behavior, repeated calls, and non-executability. The CI workflow now has an `android-instrumentation` job using an API 35 x86_64 emulator and includes that job in the verification gate.
 
 The adapter now distinguishes provider receipt time from Android analysis time and receives the exact `CandleValidator` closed snapshot. Python permits only an explicit, bounded non-crypto session-gap rule; crypto remains strict. Chaquopy startup is scheduled off the main thread with the existing process-wide initialization guard. Until the emulator job passes on a pushed commit, installed-APK execution remains **NOT VERIFIED**.
+
+## Continuation: broker truthfulness and fail-closed preview
+
+At the start of this continuation, the fetched feature branch head was `0308374e09faec3fb429a6530533033f5d3e13d7`, matching the remote feature branch. The implementation commit is `602f9ef750e932907ccf283e4badf678bdffb5ee`; the final pushed SHA must be checked after this documentation update. The following changes were made without modifying `main`:
+
+- `PreviewBrokerGateway` no longer reports a fake successful connection, fake account balance, synthetic order ID, successful close, quote, or zero margin. All preview execution and broker-state operations now fail closed with `PREVIEW_ONLY` errors.
+- Added `BrokerCapabilityMatrix` to the Android broker package and `docs/broker-capability-matrix.md`. Deriv generic Forex/CFD execution is explicitly not verified because the adapter rejects unvalidated Multiplier mappings; MT5 DEMO remains unverified and LIVE blocked; OANDA trading remains not implemented; Preview is blocked.
+- Added regression coverage for preview isolation and explicit broker capability statuses.
+- Added Python JSON-boundary validation for optional quote prices; zero, negative, NaN and infinite values return `DATA_UNAVAILABLE` and cannot become candidates.
+- Local Python bridge, quantitative, worker and EA tests pass: **115 passed**, one existing Starlette deprecation warning. `git diff --check` and Python bytecode compilation pass.
+
+Android JVM/instrumentation tests and APK installation remain **BLOCKED / NOT VERIFIED** in this sandbox because Android SDK, ADB and an emulator/device are unavailable. No genuine Deriv or MT5 DEMO account evidence was available or requested in this continuation. LIVE remains locked and no order was submitted.

@@ -126,3 +126,15 @@ def test_json_boundary_rejects_missing_candles_fail_closed():
     assert result["state"] == "DATA_UNAVAILABLE"
     assert result["direction"] == "WAIT"
     assert result["executable"] is False
+
+
+@pytest.mark.parametrize("quote_price", [0, -1, float("nan"), float("inf")])
+def test_json_boundary_rejects_invalid_quote_price(quote_price):
+    result = json.loads(analyze_json(json.dumps({
+        "symbol": "EUR/USD", "timeframe": "M15", "strategy_id": "smc-confluence-1.0.0",
+        "source": "fixture-provider", "now_ms": NOW, "quote_price": quote_price,
+        "candles": [],
+    }, allow_nan=True)))
+    assert result["state"] == "DATA_UNAVAILABLE"
+    assert result["reason"] == "INVALID_QUOTE_PRICE"
+    assert result["executable"] is False
