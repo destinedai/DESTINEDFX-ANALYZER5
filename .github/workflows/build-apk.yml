@@ -206,11 +206,13 @@ jobs:
       - name: Run Chaquopy instrumentation on x86_64 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          force-avd-creation: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-spellchecker: true
           disable-animations: true
           script: ./gradlew connectedDebugAndroidTest --stacktrace
 
