@@ -43,6 +43,7 @@ jobs:
           if-no-files-found: error
 
   build:
+    needs: [python-tests, mt5-ea-windows-compile]
     runs-on: ubuntu-24.04
     # Set this public URL as a GitHub Actions repository variable only after the
     # managed bridge is deployed. It is embedded in the APK; never put secrets here.
@@ -187,3 +188,20 @@ jobs:
           name: DestinedFX-Windows-Worker-Kit
           path: dist/DestinedFX-Windows-Worker-Kit/
           if-no-files-found: error
+
+  verification-gate:
+    name: All platform checks passed
+    runs-on: ubuntu-24.04
+    if: always()
+    needs: [python-tests, mt5-ea-windows-compile, build]
+    steps:
+      - name: Require every platform job to succeed
+        env:
+          PYTHON_RESULT: ${{ needs.python-tests.result }}
+          MT5_RESULT: ${{ needs.mt5-ea-windows-compile.result }}
+          ANDROID_RESULT: ${{ needs.build.result }}
+        run: |
+          printf 'Python: %s\nMetaEditor: %s\nAndroid: %s\n' "$PYTHON_RESULT" "$MT5_RESULT" "$ANDROID_RESULT"
+          test "$PYTHON_RESULT" = success
+          test "$MT5_RESULT" = success
+          test "$ANDROID_RESULT" = success
