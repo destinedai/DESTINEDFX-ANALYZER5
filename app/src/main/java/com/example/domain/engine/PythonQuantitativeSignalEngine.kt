@@ -10,6 +10,8 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 
+private const val PYTHON_ENGINE_VERSION = "python-quantitative-android-1.0.0"
+
 /** A non-executable Python analysis result. Kotlin/RiskEngine remains authoritative. */
 data class PythonSignalCandidate(
     val symbol: String,
@@ -29,7 +31,7 @@ data class PythonSignalCandidate(
     val source: String,
     val candleTimestampMs: Long,
     val executable: Boolean,
-    val engineVersion: String = ENGINE_VERSION
+    val engineVersion: String = PYTHON_ENGINE_VERSION
 )
 
 /**
@@ -135,7 +137,7 @@ class PythonQuantitativeSignalEngine(
     )
 
     companion object {
-        const val ENGINE_VERSION = "python-quantitative-android-1.0.0"
+        const val ENGINE_VERSION = PYTHON_ENGINE_VERSION
     }
 }
 
