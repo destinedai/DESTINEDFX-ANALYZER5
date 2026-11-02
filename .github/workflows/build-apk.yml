@@ -203,6 +203,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Create .env from example
         run: cp .env.example .env
+      - name: Prepare debug keystore for instrumentation
+        run: |
+          keytool -genkeypair -v -keystore debug.keystore \
+            -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
       - name: Run Chaquopy instrumentation on x86_64 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
