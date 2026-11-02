@@ -2,8 +2,11 @@ package com.example.data.trade
 
 import com.example.domain.model.Candle
 import com.example.domain.model.MarketTicker
+import com.example.domain.model.SignalDirection
 import com.example.domain.model.Tick
+import com.example.domain.model.TradeSignal
 import com.example.domain.repository.MarketDataRepository
+import com.example.domain.usecase.SignalGenerationUseCase
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -107,19 +110,58 @@ class GlobalMarketMatrixEngineTest {
         assertFalse(engine.isRunning())
     }
 
+    @Test
+    fun freshQuoteRelaysExistingDeterministicSignalResultWithoutApprovingIt() = runBlocking {
+        val listener = RecordingListener()
+        val calls = AtomicInteger(0)
+        val signalUseCase = object : SignalGenerationUseCase {
+            override suspend fun generateSignal(symbol: String, timeframe: String, strategyId: String): TradeSignal {
+                calls.incrementAndGet()
+                return TradeSignal(
+                    id = "signal-1",
+                    symbol = symbol,
+                    timeframe = timeframe,
+                    direction = SignalDirection.LONG,
+                    entryPrice = 1.1,
+                    stopLoss = 1.0,
+                    takeProfit = 1.3,
+                    confidenceScore = 70,
+                    rationale = "deterministic test result",
+                    timestamp = now,
+                    signalState = "BUY",
+                    executable = false,
+                    blockReasons = listOf("RiskEngine rejected test plan")
+                )
+            }
+        }
+        val repo = FakeRepository {
+            MarketTicker("EUR/USD", 1.1, 0.0, 1.2, 1.0, 0.0, "NEUTRAL", 0, now, true, "TEST")
+        }
+        val engine = engine(repo, listener = listener, signalUseCase = signalUseCase)
+        engine.startGlobalStream()
+        await { calls.get() == 1 }
+        assertEquals("BUY", listener.signalState)
+        assertFalse(listener.signalExecutable)
+        assertTrue(listener.signalDetail.contains("RiskEngine rejected"))
+        engine.haltEngine()
+    }
+
     private fun engine(
         repo: FakeRepository,
         symbols: List<String> = listOf("EUR/USD"),
         scanIntervalMs: Long = 1_000,
         providerTimeoutMs: Long = 200,
-        symbolsProvider: (() -> List<String>)? = null
+        symbolsProvider: (() -> List<String>)? = null,
+        listener: RecordingListener = RecordingListener(),
+        signalUseCase: SignalGenerationUseCase? = null
     ) = GlobalMarketMatrixEngine(
-        uiListener = RecordingListener(),
+        uiListener = listener,
         marketDataRepository = repo,
         clock = { now },
         scanIntervalMs = scanIntervalMs,
         providerTimeoutMs = providerTimeoutMs,
-        instrumentProvider = symbolsProvider ?: { symbols }
+        instrumentProvider = symbolsProvider ?: { symbols },
+        signalGenerationUseCase = signalUseCase
     )
 
     private suspend fun await(condition: () -> Boolean) {
@@ -129,9 +171,17 @@ class GlobalMarketMatrixEngineTest {
     }
 
     private class RecordingListener : GlobalMarketMatrixEngine.MatrixUiListener {
+        var signalState: String = ""
+        var signalExecutable: Boolean = false
+        var signalDetail: String = ""
         override fun onEngineOnline() = Unit
         override fun onLiveAssetTelemetry(symbol: String, assetType: String, price: Double, optimalLots: Double, cashRisk: Double, advice: String) = Unit
         override fun onEngineFault(error: String) = Unit
+        override fun onSignalEvaluation(symbol: String, signalState: String, executable: Boolean, detail: String) {
+            this.signalState = signalState
+            this.signalExecutable = executable
+            this.signalDetail = detail
+        }
     }
 
     private class FakeRepository(private val response: suspend (String) -> MarketTicker?) : MarketDataRepository {

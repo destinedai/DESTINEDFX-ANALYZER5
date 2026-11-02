@@ -3,6 +3,7 @@ package com.example.data.trade
 import com.example.data.market.SymbolRegistry
 import com.example.domain.model.MarketTicker
 import com.example.domain.repository.MarketDataRepository
+import com.example.domain.usecase.SignalGenerationUseCase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,12 +38,18 @@ class GlobalMarketMatrixEngine(
             val info = SymbolRegistry.get(symbol)
             info.oandaInstrument.isNotBlank() || isCryptoSymbol(symbol)
         }
-    }
+    },
+    private val signalGenerationUseCase: SignalGenerationUseCase? = null,
+    private val signalTimeframe: String = "M15",
+    private val signalStrategyId: String = "smc-confluence-1.0.0"
 ) {
     interface MatrixUiListener {
         fun onEngineOnline()
         fun onLiveAssetTelemetry(symbol: String, assetType: String, price: Double, optimalLots: Double, cashRisk: Double, advice: String)
         fun onEngineFault(error: String)
+
+        /** Default no-op keeps existing UI listeners source-compatible. */
+        fun onSignalEvaluation(symbol: String, signalState: String, executable: Boolean, detail: String) = Unit
     }
 
     enum class InstrumentState { WAITING, LIVE, STALE, UNSUPPORTED, TIMEOUT, ERROR }
@@ -120,6 +127,7 @@ class GlobalMarketMatrixEngine(
                                 0.0,
                                 "LIVE DATA ONLY: ${snapshot.source}; no risk-gated trade plan emitted."
                             )
+                            evaluateSignal(symbol)
                         }
                     }
                     if (acceptedFreshQuote && !announcedOnline) {
@@ -147,6 +155,36 @@ class GlobalMarketMatrixEngine(
     fun isRunning(): Boolean = running.get()
 
     fun latestSnapshots(): Map<String, InstrumentSnapshot> = synchronized(snapshots) { snapshots.toMap() }
+
+    /**
+     * Runs the existing deterministic analysis adapter only after this scanner has accepted a
+     * fresh provider quote. SignalGenerationUseCaseImpl performs candle validation, MTF checks,
+     * SignalEngine analysis, and authoritative RiskEngine plan validation. This class only relays
+     * its result; it never computes entry, stop, target, R:R, or position size.
+     */
+    private suspend fun evaluateSignal(symbol: String) {
+        val generator = signalGenerationUseCase ?: return
+        try {
+            val signal = withTimeout(30_000L) {
+                generator.generateSignal(symbol, signalTimeframe, signalStrategyId)
+            }
+            val detail = (signal.blockReasons + signal.reasons)
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString("; ")
+                .ifBlank { signal.rationale }
+            uiListener.onSignalEvaluation(symbol, signal.signalState, signal.executable, detail)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            uiListener.onSignalEvaluation(
+                symbol,
+                "DATA_UNAVAILABLE",
+                false,
+                "Signal generation failed: ${error.javaClass.simpleName}"
+            )
+        }
+    }
 
     private suspend fun scanOne(repository: MarketDataRepository, symbol: String): InstrumentSnapshot {
         if (symbol !in SymbolRegistry.getAllCanonical()) {
