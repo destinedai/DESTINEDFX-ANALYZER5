@@ -100,9 +100,11 @@ class MarketDataRepositoryImpl(
     private val candleCache = mutableMapOf<String, CachedCandles>()
     private val dataSourceMap = mutableMapOf<String, String>()
     private val _candleSources = ConcurrentHashMap<String, String>()
+    private val _candleRetrievedAtMs = ConcurrentHashMap<String, Long>()
     // Canonical app symbols discovered from Deriv's live active_symbols directory.
     private val dynamicCanonicalByDerivSymbol = ConcurrentHashMap<String, String>()
     override val candleSources: Map<String, String> get() = _candleSources
+    override val candleRetrievedAtMs: Map<String, Long> get() = _candleRetrievedAtMs
 
     private val _tickers = MutableStateFlow<Map<String, MarketTicker>>(emptyMap())
     override val tickerFlow: StateFlow<Map<String, MarketTicker>> = _tickers.asStateFlow()
@@ -643,6 +645,8 @@ class MarketDataRepositoryImpl(
 
             dataSourceMap[key] = finalSource
             _candleSources[key] = finalSource
+            // Provider receipt time is distinct from each candle timestamp and later analysis time.
+            _candleRetrievedAtMs[key] = now
             candleCache[key] = CachedCandles(processedCandles, now)
             _candleFetchErrors.update { it - key }
             return@withContext processedCandles.takeLast(count)
@@ -661,6 +665,7 @@ class MarketDataRepositoryImpl(
             _candleFetchErrors.update { it + (key to errorMsg) }
             dataSourceMap.remove(key)
             _candleSources.remove(key)
+            _candleRetrievedAtMs.remove(key)
             return@withContext emptyList()
         }
     }

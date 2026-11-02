@@ -189,19 +189,46 @@ jobs:
           path: dist/DestinedFX-Windows-Worker-Kit/
           if-no-files-found: error
 
+  android-instrumentation:
+    name: Android Chaquopy instrumentation
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Create .env from example
+        run: cp .env.example .env
+      - name: Run Chaquopy instrumentation on x86_64 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: ./gradlew connectedDebugAndroidTest --stacktrace
+
   verification-gate:
     name: All platform checks passed
     runs-on: ubuntu-24.04
     if: always()
-    needs: [python-tests, mt5-ea-windows-compile, build]
+    needs: [python-tests, mt5-ea-windows-compile, build, android-instrumentation]
     steps:
       - name: Require every platform job to succeed
         env:
           PYTHON_RESULT: ${{ needs.python-tests.result }}
           MT5_RESULT: ${{ needs.mt5-ea-windows-compile.result }}
           ANDROID_RESULT: ${{ needs.build.result }}
+          INSTRUMENTATION_RESULT: ${{ needs.android-instrumentation.result }}
         run: |
-          printf 'Python: %s\nMetaEditor: %s\nAndroid: %s\n' "$PYTHON_RESULT" "$MT5_RESULT" "$ANDROID_RESULT"
+          printf 'Python: %s\nMetaEditor: %s\nAndroid: %s\nInstrumentation: %s\n' "$PYTHON_RESULT" "$MT5_RESULT" "$ANDROID_RESULT" "$INSTRUMENTATION_RESULT"
           test "$PYTHON_RESULT" = success
           test "$MT5_RESULT" = success
           test "$ANDROID_RESULT" = success
+          test "$INSTRUMENTATION_RESULT" = success

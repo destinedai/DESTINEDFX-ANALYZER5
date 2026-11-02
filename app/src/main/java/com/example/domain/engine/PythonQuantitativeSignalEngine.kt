@@ -65,6 +65,8 @@ class PythonQuantitativeSignalEngine(
         source: String,
         nowMs: Long = System.currentTimeMillis(),
         expectedIntervalMs: Long? = null,
+        providerRetrievedAtMs: Long? = null,
+        allowSessionGaps: Boolean = false,
         quotePrice: Double? = null,
     ): PythonSignalCandidate = withContext(Dispatchers.Default) {
         try {
@@ -77,6 +79,8 @@ class PythonQuantitativeSignalEngine(
                     .put("source", source)
                     .put("now_ms", nowMs)
                     .putOpt("expected_interval_ms", expectedIntervalMs)
+                    .putOpt("provider_retrieved_at_ms", providerRetrievedAtMs)
+                    .put("allow_session_gaps", allowSessionGaps)
                     .putOpt("quote_price", quotePrice)
                     .put("candles", JSONArray().apply {
                         candles.forEach { candle ->
@@ -89,7 +93,7 @@ class PythonQuantitativeSignalEngine(
                                 .put("volume", candle.volume)
                                 .put("complete", candle.complete)
                                 .put("source", source)
-                                .put("retrieved_at_ms", nowMs))
+                                .putOpt("retrieved_at_ms", providerRetrievedAtMs))
                         }
                     })
                 val module = Python.getInstance().getModule("quantitative")

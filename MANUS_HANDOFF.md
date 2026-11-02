@@ -3,8 +3,8 @@
 ## Repository
 
 - Repository: `destinedai/DESTINEDFX-ANALYZER5`
-- Branch: `main`
-- Latest completed commit: `b21f202eef89ded9676dd5be8a74de177e2d710a`
+- Branch: `feat/complete-demo-readiness`
+- Latest completed documentation commit before this continuation: `80e0e095392cca97df3733241e3d32706103e6a3`
 - Working tree at handoff creation: clean before this document was added.
 
 ## Completed work
@@ -129,3 +129,9 @@ On the `feat/complete-demo-readiness` branch after `d3094c623ebdf58f6aadc40352ff
 The Python module now exposes `analyze_json`, rejects candle-level source mismatches, returns `NOT_IMPLEMENTED` for unsupported strategy IDs, and uses a documented 100-point confluence basis rather than an unexplained static score. The implemented Python ruleset remains SMC closed-candle BOS only. Local quantitative tests: **15 passed**. Android compile and APK runtime are **NOT VERIFIED** in the sandbox because no Android SDK is installed; CI and device instrumentation remain required. TradingView remains a visual widget only, and the exact recorded OHLC source is surfaced rather than attributed to TradingView.
 
 See `docs/python-android-quantitative-readiness.md` for the architecture, source truthfulness, references and verification state. No broker credentials, orders, paid infrastructure, force-pushes or changes to `main` were made.
+
+## Continuation: Android runtime verification
+
+The next focused changes add `PythonQuantitativeSignalEngineInstrumentedTest`, which executes the packaged `quantitative.analyze_json` module through Chaquopy on an Android emulator. It covers a positive closed-candle BOS candidate, a negative WAIT fixture, unsupported strategy `NOT_IMPLEMENTED`, invalid/non-finite data fail-closed behavior, repeated calls, and non-executability. The CI workflow now has an `android-instrumentation` job using an API 35 x86_64 emulator and includes that job in the verification gate.
+
+The adapter now distinguishes provider receipt time from Android analysis time and receives the exact `CandleValidator` closed snapshot. Python permits only an explicit, bounded non-crypto session-gap rule; crypto remains strict. Chaquopy startup is scheduled off the main thread with the existing process-wide initialization guard. Until the emulator job passes on a pushed commit, installed-APK execution remains **NOT VERIFIED**.

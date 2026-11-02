@@ -148,17 +148,22 @@ class SignalGenerationUseCaseImpl(
             val main = load(tf, 250)
             val chk = CandleValidator.validate(main, tf, 60, tolerateWeekendGaps = cls != AssetClass.CRYPTO)
             if (!chk.ok) return unavailable(symbol, timeframe, "DATA ERROR: " + chk.problems.firstOrNull(), "GAP_DETECTED")
+            val primaryCandleKey = candleSourceKey(symbol, tf.label)
+            val providerRetrievedAtMs = market.candleRetrievedAtMs[primaryCandleKey]
             val pythonShadow = pythonEngine?.analyze(
                 symbol = symbol,
                 timeframe = timeframe,
                 strategyId = strategyId,
-                candles = main.map { candle ->
+                // Python receives exactly the same validated, closed snapshot used by Kotlin.
+                candles = chk.cleanClosed.map { candle ->
                     LegacyCandle(candle.timeMs, candle.open, candle.high, candle.low, candle.close, candle.volume, candle.complete)
                 },
-                source = market.candleSources[candleSourceKey(symbol, tf.label)].orEmpty()
+                source = market.candleSources[primaryCandleKey].orEmpty()
                     .ifBlank { "UNVERIFIED_OHLC_SOURCE" },
                 nowMs = now,
                 expectedIntervalMs = timeframeIntervalMs(tf.label),
+                providerRetrievedAtMs = providerRetrievedAtMs,
+                allowSessionGaps = cls != AssetClass.CRYPTO,
                 quotePrice = quote?.last
             )
             

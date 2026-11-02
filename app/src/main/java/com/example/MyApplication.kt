@@ -117,11 +117,15 @@ class MyApplication : Application() {
             }
         }
         super.onCreate()
-        runCatching {
-            com.example.domain.engine.PythonQuantitativeRuntime.ensureStarted(this)
-        }.onFailure { error ->
-            // Python analysis remains fail-closed; startup failure must not take down the app.
-            android.util.Log.e("MyApplication", "Embedded Python startup unavailable", error)
+        // Chaquopy startup can load native libraries and must not block the main thread.
+        // The engine repeats the same process-wide guarded initialization if analysis wins
+        // the race; startup failure remains a DATA_UNAVAILABLE condition, not an app crash.
+        CoroutineScope(Dispatchers.Default).launch {
+            runCatching {
+                com.example.domain.engine.PythonQuantitativeRuntime.ensureStarted(this@MyApplication)
+            }.onFailure { error ->
+                android.util.Log.e("MyApplication", "Embedded Python startup unavailable", error)
+            }
         }
         initializeDependencies()
     }

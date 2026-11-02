@@ -926,6 +926,17 @@ private fun FullAnalysisReport(result: DynamicAnalysisInfo?) {
         InsightLine("Confluence score (not a win probability)", result.confidencePct.takeIf { it > 0 }?.let { "$it/100" } ?: "Not scored")
         InsightLine("Data source", result.dataSource.ifBlank { "UNKNOWN" })
         InsightLine("Ruleset version", result.strategyVersion.ifBlank { "Not supplied" })
+        HorizontalDivider(color = CardBorder)
+        Text("PYTHON QUANTITATIVE CANDIDATE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        InsightLine("Python state", result.pythonState)
+        InsightLine("Python direction", if (result.pythonState == "CANDIDATE") result.direction else "WAIT")
+        InsightLine("Python engine", result.pythonEngineVersion.ifBlank { "Not initialized" })
+        InsightLine("Python ruleset", result.pythonRulesetVersion.ifBlank { "Not supplied" })
+        InsightLine("Parity", result.pythonParityStatus)
+        Text(result.pythonReason.ifBlank { "No Python candidate reason returned." }, fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+        result.pythonEvidence.take(6).forEach { evidence ->
+            Text("• $evidence", color = TextPrimary, fontSize = 10.sp, lineHeight = 15.sp)
+        }
         InsightLine("MTF state", result.mtfStatus.ifBlank { "WAIT" })
         InsightLine("MTF summary", result.mtfSummary.ifBlank { "No summary returned" })
         InsightLine("Risk gate", result.riskNote.ifBlank { "No risk note returned" })

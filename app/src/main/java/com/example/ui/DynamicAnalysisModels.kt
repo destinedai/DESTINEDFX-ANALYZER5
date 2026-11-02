@@ -77,7 +77,13 @@ data class DynamicAnalysisInfo(
     val dataSource: String = "",
     val strategyVersion: String = "",
     val signalState: String = "WAIT",
-    val blockReasons: List<String> = emptyList()
+    val blockReasons: List<String> = emptyList(),
+    val pythonState: String = "NOT_RUN",
+    val pythonEngineVersion: String = "",
+    val pythonRulesetVersion: String = "",
+    val pythonEvidence: List<String> = emptyList(),
+    val pythonReason: String = "",
+    val pythonParityStatus: String = "NOT_VERIFIED"
 ) {
     fun getTfBias(tf: String): String {
         val norm = tf.trim().uppercase()
@@ -192,6 +198,12 @@ fun mapTradeSignalToUiModel(signal: TradeSignal): DynamicAnalysisInfo {
         dataSource = signal.dataSource.ifBlank { "UNKNOWN" },
         strategyVersion = signal.strategyVersion.ifBlank { "smc-confluence-1.0.0" },
         signalState = signal.signalState,
-        blockReasons = signal.blockReasons
+        blockReasons = signal.blockReasons,
+        pythonState = signal.pythonState,
+        pythonEngineVersion = signal.pythonEngineVersion,
+        pythonRulesetVersion = signal.pythonRulesetVersion,
+        pythonEvidence = signal.pythonEvidence,
+        pythonReason = signal.pythonReason,
+        pythonParityStatus = signal.pythonParityStatus
     )
 }

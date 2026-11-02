@@ -2,7 +2,7 @@
 
 ## Branch and delivery
 
-The final branch is `feat/complete-demo-readiness`. The final commit is `192c88bfb424b5ff7f96e516e72f1a51d0becd53`, pushed to `origin/feat/complete-demo-readiness`. `main` was not modified and no force-push was used.
+The implementation commit is `192c88bfb424b5ff7f96e516e72f1a51d0becd53`. The later documentation commit currently at the branch tip is `80e0e095392cca97df3733241e3d32706103e6a3`. Both are on `feat/complete-demo-readiness`, which is pushed to `origin/feat/complete-demo-readiness`; `main` was not modified and no force-push was used.
 
 Changed files are `build.gradle.kts`, `app/build.gradle.kts`, `app/src/main/java/com/example/MyApplication.kt`, `app/src/main/java/com/example/domain/engine/PythonQuantitativeSignalEngine.kt`, `app/src/main/java/com/example/domain/model/TradeSignal.kt`, `app/src/main/java/com/example/domain/usecase/impl/SignalGenerationUseCaseImpl.kt`, `bridge/quantitative.py`, `bridge/test_quantitative.py`, `MANUS_HANDOFF.md`, and `docs/python-android-quantitative-readiness.md`.
 
@@ -10,7 +10,7 @@ Changed files are `build.gradle.kts`, `app/build.gradle.kts`, `app/src/main/java
 
 **VERIFIED:** The application remains native Android Kotlin/Jetpack Compose. Chaquopy 17.2.0 is applied only to the Android app module. Python 3.12 is configured with `arm64-v8a` and `x86_64` ABIs. The shared `bridge/quantitative.py` module is packaged as the Python source; Python tests are excluded from the APK source set.
 
-**VERIFIED by CI packaging:** `PythonQuantitativeSignalEngine` initializes the Chaquopy runtime once per Android process, serializes typed candle data to JSON, invokes Python on `Dispatchers.Default`, applies a five-second calculation bound, parses a typed candidate, and returns `DATA_UNAVAILABLE` with `executable=false` on errors. Cancellation is not swallowed. Python has no broker, credential, order, sizing, or execution API.
+**VERIFIED by CI packaging:** `PythonQuantitativeSignalEngine` initializes the Chaquopy runtime once per Android process, serializes typed candle data to JSON, invokes Python on `Dispatchers.Default`, applies a bounded calculation wait, parses a typed candidate, and returns `DATA_UNAVAILABLE` with `executable=false` on errors. Cancellation is not swallowed. Python has no broker, credential, order, sizing, or execution API. Chaquopy startup is scheduled off the Android main thread and remains guarded against duplicate initialization.
 
 **NOT VERIFIED:** No Android instrumentation test has executed the Python adapter inside an installed APK. The successful CI build proves compilation, packaging, and APK generation, not runtime execution on a device.
 
@@ -26,7 +26,7 @@ Python returns `NOT_IMPLEMENTED` for strategy IDs that it does not implement. It
 
 ## Data source and TradingView truthfulness
 
-Python consumes the same Kotlin-validated candle snapshot that the existing signal use case loads. The repository records the actual OHLC source. Depending on configuration and symbol support, that source can be OANDA, Binance Spot OHLC, or Deriv WebSocket candles. The Python boundary requires a non-empty source and rejects candle-level source mismatches.
+Python consumes the same Kotlin-validated closed-candle snapshot that the existing signal use case loads. The repository records the actual OHLC source and the provider receipt time separately from the candle timestamp and Android analysis time. Depending on configuration and symbol support, that source can be OANDA, Binance Spot OHLC, or Deriv WebSocket candles. The Python boundary requires a non-empty source and rejects candle-level source mismatches. FX/session gaps are accepted only through an explicit bounded non-crypto session-gap rule; crypto remains strict.
 
 TradingView remains the visible chart interface. The official widget is not treated as an OHLC API. Its documentation says widget data cannot be downloaded/exported and that widgets do not provide a data API. Advanced Charts requires an application-owned or third-party datafeed. No cross-origin scraping, private endpoint inspection, pixel reconstruction, or new market-data API key was added. Consequently, chart candles and Python candles are **NOT VERIFIED as the same feed**; the UI must show the recorded candle source and must not call the analysis a TradingView-data signal.
 
@@ -44,9 +44,9 @@ Python output is stored on `TradeSignal` as shadow metadata with `pythonParitySt
 
 ## Test and CI results
 
-Local Python quantitative tests: **VERIFIED — 15 passed**. Python syntax compilation and JSON boundary smoke test: **VERIFIED**. Local Android compilation: **BLOCKED** because the sandbox has no Android SDK configured.
+Local Python bridge and quantitative tests: **VERIFIED — 76 passed**. Python syntax compilation: **VERIFIED**. A real Android instrumentation test has been added and CI is configured to run it on an x86_64 API 35 emulator; runtime evidence remains **NOT VERIFIED** until that job executes successfully. Local Android compilation: **BLOCKED** because the sandbox has no Android SDK configured.
 
-GitHub Actions run [41467861528](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41467861528) completed successfully for the exact final SHA. The successful jobs were Python/bridge/worker/EA tests, genuine MetaEditor MT5 EA compilation, Android unit tests, debug APK build, APK signature/package verification, artifact upload, Windows worker kit packaging, and the aggregate `All platform checks passed` gate.
+GitHub Actions run [41467861528](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41467861528) passed for implementation commit `192c88bfb424b5ff7f96e516e72f1a51d0becd53`. GitHub Actions run [41468988507](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41468988507) passed for documentation commit `80e0e095392cca97df3733241e3d32706103e6a3`. Those runs prove Python/bridge/worker/EA tests, genuine MetaEditor MT5 EA compilation, Android unit tests, debug APK build, APK signature/package verification, artifact upload, Windows worker kit packaging, and the aggregate gate; they do not prove installed-APK Python execution because the emulator job was not present in those runs.
 
 The debug APK artifact is [DestinedFX-debug-apk, artifact 13153836953](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41467861528/artifacts/13153836953). The uploaded artifact size was 56,344,518 bytes; the individual APK byte size was not recorded in the retained log. CI verified package `com.aistudio.destinedfx.qwvzxp`, version `1.0.9`, minSdk 24, native ABIs `arm64-v8a` and `x86_64`, and a valid APK Signature Scheme v2 signature. No keystore or private key was committed. Debug-signing upgrade continuity across installations is **NOT VERIFIED**.
 

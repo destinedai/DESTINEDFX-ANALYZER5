@@ -59,6 +59,7 @@ class SignalCandidate:
 
 def validate_ohlcv(candles: Iterable[OHLCV], *, now_ms: int, source: str,
                    expected_interval_ms: int | None = None,
+                   allow_session_gaps: bool = False,
                    max_age_ms: int = MAX_CANDLE_AGE_MS) -> ValidatedSeries:
     """Validate provider candles without repairing, sorting, or fabricating data."""
     rows = tuple(candles)
@@ -95,8 +96,14 @@ def validate_ohlcv(candles: Iterable[OHLCV], *, now_ms: int, source: str,
     if rows[-1].timestamp_ms + max_age_ms < now_ms:
         raise DataIntegrityError("STALE_CANDLES")
     if expected_interval_ms is not None:
-        if expected_interval_ms <= 0 or any(delta != expected_interval_ms for delta in intervals):
+        if expected_interval_ms <= 0:
             raise DataIntegrityError("CANDLE_GAP_OR_WRONG_INTERVAL")
+        for delta in intervals:
+            if delta == expected_interval_ms:
+                continue
+            # Explicitly bounded weekend/session closure allowance for non-crypto feeds.
+            if not (allow_session_gaps and expected_interval_ms <= delta <= 72 * 60 * 60 * 1000):
+                raise DataIntegrityError("CANDLE_GAP_OR_WRONG_INTERVAL")
     interval = intervals[0] if intervals and all(delta == intervals[0] for delta in intervals) else None
     return ValidatedSeries(rows, source.strip(), rows[-1].timestamp_ms, interval)
 
@@ -202,6 +209,8 @@ def analyze_json(payload: str) -> str:
         expected_interval_ms = request.get("expected_interval_ms")
         if expected_interval_ms is not None:
             expected_interval_ms = int(expected_interval_ms)
+        provider_retrieved_at_ms = int(request.get("provider_retrieved_at_ms", 0))
+        allow_session_gaps = bool(request.get("allow_session_gaps", False))
         rows = request.get("candles")
         if not symbol or not timeframe or not strategy_id or not isinstance(rows, list):
             raise DataIntegrityError("INVALID_REQUEST")
@@ -218,10 +227,12 @@ def analyze_json(payload: str) -> str:
             timestamp_ms=int(row["timestamp_ms"]), open=float(row["open"]),
             high=float(row["high"]), low=float(row["low"]), close=float(row["close"]),
             volume=float(row.get("volume", 0.0)), complete=bool(row.get("complete", True)),
-            source=str(row.get("source", source)), retrieved_at_ms=int(row["retrieved_at_ms"]),
+            source=str(row.get("source", source)),
+            retrieved_at_ms=int(row.get("retrieved_at_ms", provider_retrieved_at_ms)),
         ) for row in rows)
         series = validate_ohlcv(candles, now_ms=now_ms, source=source,
-                                expected_interval_ms=expected_interval_ms)
+                                expected_interval_ms=expected_interval_ms,
+                                allow_session_gaps=allow_session_gaps)
         return json.dumps(_candidate_to_dict(evaluate_smc(
             series, symbol=symbol, timeframe=timeframe,
             quote_price=request.get("quote_price"),
