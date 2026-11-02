@@ -121,6 +121,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         !bridgeClient.managedConfigured() -> "CONFIGURATION_REQUIRED"
         bridgeToken.isBlank() -> "SETUP REQUIRED"
         !bridgeMode -> "REMOTE CONTROL DISABLED"
+        bridgeCommandPending && bridgePendingAction in setOf("START", "RESUME") -> "STARTING / AWAITING ACK"
+        bridgeCommandPending && bridgePendingAction in setOf("STOP", "EMERGENCY_STOP") -> "STOPPING / AWAITING ACK"
         verifiedRemoteSnapshotForBot != null -> bridgeSnapshot?.state ?: "UNKNOWN"
         bridgeIdentityFresh -> bridgeSnapshot?.managedState?.ifBlank { "PROVISIONING" } ?: "PROVISIONING"
         bridgeSnapshot != null -> "STALE / UNVERIFIED"
