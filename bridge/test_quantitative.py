@@ -3,7 +3,7 @@ import json
 from quantitative import STRATEGY_ID, DataIntegrityError, OHLCV, analyze_json, evaluate_smc, validate_ohlcv
 import pytest
 
-NOW = 1_700_000_000_000
+NOW = 1_699_975_860_000  # 2023-11-14 15:31 UTC / 10:31 New York (EST)
 INTERVAL = 60_000
 
 
@@ -109,7 +109,11 @@ def _strategy_rows(strategy, count=35):
         previous = rows[-2]
         rows[-1] = OHLCV(last.timestamp_ms, previous.high + .2, previous.high + .6, previous.high + .1, previous.high + .5, 100.0, True, "fixture-provider", NOW)
     elif strategy == "ict-silver-bullet":
-        rows[-1] = OHLCV(last.timestamp_ms, 100.0, 102.0, 90.0, 101.0, 100.0, True, "fixture-provider", NOW)
+        rows[-6] = OHLCV(rows[-6].timestamp_ms, 105.0, 106.0, 100.0, 105.8, 100.0, True, "fixture-provider", NOW)
+        rows[-4] = OHLCV(rows[-4].timestamp_ms, 105.8, 106.0, 105.5, 105.9, 100.0, True, "fixture-provider", NOW)
+        rows[-3] = OHLCV(rows[-3].timestamp_ms, 105.9, 106.2, 105.8, 106.1, 100.0, True, "fixture-provider", NOW)
+        rows[-2] = OHLCV(rows[-2].timestamp_ms, 106.5, 108.0, 106.4, 107.5, 100.0, True, "fixture-provider", NOW)
+        rows[-1] = OHLCV(last.timestamp_ms, 106.3, 107.1, 106.1, 106.5, 100.0, True, "fixture-provider", NOW)
     elif strategy == "wyckoff-schematics":
         rows[-1] = OHLCV(last.timestamp_ms, 100.0, 108.0, 99.0, 107.0, 200.0, True, "fixture-provider", NOW)
     elif strategy in {"supply-and-demand", "breakout-momentum"}:
@@ -132,6 +136,8 @@ def test_each_known_strategy_has_versioned_positive_evidence_and_is_non_executab
     assert result.strategy_version == STRATEGY_RULESETS[strategy]
     assert result.evidence
     assert result.reason
+    assert result.confidence_score == 0
+    assert "NO_EMPIRICAL_CONFIDENCE_SCORE" in result.score_basis
     assert result.executable is False
 
 def _neutral_rows(count=35):
@@ -156,6 +162,39 @@ def test_each_known_strategy_insufficient_history_waits(strategy):
     assert result.state == "WAITING"
     assert result.reason == "INSUFFICIENT_CLOSED_CANDLES"
     assert result.strategy_id == strategy
+
+
+def test_ict_requires_sweep_displacement_fvg_and_consequent_encroachment():
+    result = evaluate_strategy(validate(_strategy_rows("ict-silver-bullet")), strategy_id="ict-silver-bullet", symbol="EUR/USD", timeframe="M15")
+    assert result.state == "CANDIDATE"
+    assert result.direction == "LONG"
+    assert "LIQUIDITY_SWEEP_LOW" in result.evidence
+    assert "DISPLACEMENT_CLOSE_UP" in result.evidence
+    assert "BULLISH_FVG" in result.evidence
+    assert "FVG_CONSEQUENT_ENCROACHMENT" in result.evidence
+    assert "SILVER_BULLET_NEW_YORK_AM" in result.evidence
+    assert result.executable is False
+
+
+def test_ict_session_windows_use_new_york_dst_and_half_open_boundaries():
+    from quantitative import _ict_silver_bullet_window
+
+    assert _ict_silver_bullet_window(1_699_975_860_000) == "NEW_YORK_AM"  # Nov EST
+    assert _ict_silver_bullet_window(1_689_345_060_000) == "NEW_YORK_AM"  # Jul EDT
+    assert _ict_silver_bullet_window(1_699_950_600_000) == "LONDON"  # 03:30 EST
+    assert _ict_silver_bullet_window(1_699_990_200_000) == "NEW_YORK_PM"  # 14:30 EST
+    assert _ict_silver_bullet_window(1_699_977_600_000) is None  # 11:00 EST is end-exclusive
+
+
+def test_ict_rejects_an_otherwise_valid_pattern_outside_session():
+    rows = _strategy_rows("ict-silver-bullet")
+    shift_ms = 2 * 60 * 60 * 1000
+    shifted = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + shift_ms}) for row in rows]
+    series = validate_ohlcv(shifted, now_ms=NOW + shift_ms, source="fixture-provider", expected_interval_ms=INTERVAL)
+    result = evaluate_strategy(series, strategy_id="ict-silver-bullet", symbol="EUR/USD", timeframe="M15")
+    assert result.state == "WAITING"
+    assert result.reason == "OUTSIDE_ICT_SILVER_BULLET_WINDOW"
+    assert result.executable is False
 
 
 def test_unknown_strategy_is_only_not_implemented_case():

@@ -7,9 +7,11 @@ probabilities, size positions, or approve orders.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, time, timezone
 import json
 from math import isfinite, sqrt
 from typing import Iterable, Sequence
+from zoneinfo import ZoneInfo
 
 STRATEGY_ID = "smc-confluence-1.0.0"
 RULESET_VERSION = "rules-2026.10-python-1"
@@ -149,6 +151,27 @@ def _std(values: Sequence[float], mean: float) -> float:
     return sqrt(sum((x - mean) ** 2 for x in values) / len(values))
 
 
+def _ict_silver_bullet_window(timestamp_ms: int) -> str | None:
+    """Return the NY-local Silver Bullet window for a candle's open timestamp.
+
+    UTC-to-New-York conversion is intentional: ZoneInfo applies US daylight-saving
+    transitions rather than relying on a fixed offset or the device's local timezone.
+    Windows are [start, end): 03:00-04:00 (London), 10:00-11:00 (NY AM),
+    and 14:00-15:00 (NY PM).
+    """
+    local_time = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).astimezone(
+        ZoneInfo("America/New_York")
+    ).time().replace(tzinfo=None)
+    for start, end, label in (
+        (time(3, 0), time(4, 0), "LONDON"),
+        (time(10, 0), time(11, 0), "NEW_YORK_AM"),
+        (time(14, 0), time(15, 0), "NEW_YORK_PM"),
+    ):
+        if start <= local_time < end:
+            return label
+    return None
+
+
 def _waiting(series: ValidatedSeries, symbol: str, timeframe: str,
              strategy_id: str, reason: str, evidence=()) -> SignalCandidate:
     return SignalCandidate(
@@ -159,8 +182,7 @@ def _waiting(series: ValidatedSeries, symbol: str, timeframe: str,
 
 
 def _candidate(series: ValidatedSeries, symbol: str, timeframe: str,
-               strategy_id: str, direction: str, evidence: Sequence[str],
-               confidence: int = 60) -> SignalCandidate:
+               strategy_id: str, direction: str, evidence: Sequence[str]) -> SignalCandidate:
     atr = _atr(series.candles)
     if atr is None or atr <= 0:
         return _waiting(series, symbol, timeframe, strategy_id, "INSUFFICIENT_STRUCTURE_OR_ATR")
@@ -174,8 +196,8 @@ def _candidate(series: ValidatedSeries, symbol: str, timeframe: str,
     target = entry + 2 * risk if direction == "LONG" else entry - 2 * risk
     return SignalCandidate(
         symbol, strategy_id, STRATEGY_RULESETS[strategy_id], timeframe, "CANDIDATE",
-        direction, entry, stop, target, 2.0, confidence,
-        ("closed-candle ruleset evidence", "minimum 2R target proposal"),
+        direction, entry, stop, target, 2.0, 0,
+        ("rule-condition match only", "NO_EMPIRICAL_CONFIDENCE_SCORE", "minimum 2R target proposal"),
         tuple(evidence) + ("MINIMUM_2R_TARGET_PROPOSAL",),
         "Deterministic closed-candle candidate; requires independent quote, RiskEngine, broker and account validation.",
         series.source, series.last_timestamp_ms, False,
@@ -221,11 +243,51 @@ def _evaluate_ruleset(series: ValidatedSeries, *, symbol: str, timeframe: str,
     long = short = False
     evidence = ()
     if strategy_id == "ict-silver-bullet":
-        prior = candles[-7:-1]
-        long = current.low < min(x.low for x in prior) and current.close > current.open
-        short = current.high > max(x.high for x in prior) and current.close < current.open
-        evidence = (("LIQUIDITY_SWEEP_LOW", "DISPLACEMENT_CLOSE_UP") if long else
-                    ("LIQUIDITY_SWEEP_HIGH", "DISPLACEMENT_CLOSE_DOWN"))
+        session = _ict_silver_bullet_window(current.timestamp_ms)
+        if session is None:
+            return _waiting(series, symbol, timeframe, strategy_id,
+                            "OUTSIDE_ICT_SILVER_BULLET_WINDOW")
+        # A sweep must precede the displacement/FVG candles and be confirmed
+        # against bars that precede it. No future bars are read.
+        sweep = None
+        for index in reversed(range(max(5, len(candles) - 8), len(candles) - 4)):
+            prior = candles[index - 5:index]
+            candle = candles[index]
+            if candle.low < min(x.low for x in prior) and candle.close > min(x.low for x in prior):
+                sweep = ("LONG", candle)
+                break
+            if candle.high > max(x.high for x in prior) and candle.close < max(x.high for x in prior):
+                sweep = ("SHORT", candle)
+                break
+        if sweep is None:
+            return _waiting(series, symbol, timeframe, strategy_id, "NO_CONFIRMED_LIQUIDITY_SWEEP")
+        direction, _ = sweep
+        fvg_left, displacement = candles[-4], candles[-2]
+        body = abs(displacement.close - displacement.open)
+        candle_range = displacement.high - displacement.low
+        if (direction == "LONG" and displacement.close <= displacement.open) or (
+            direction == "SHORT" and displacement.close >= displacement.open
+        ) or body < 0.5 * atr or candle_range < atr:
+            return _waiting(series, symbol, timeframe, strategy_id, "NO_CONFIRMED_DISPLACEMENT")
+        if direction == "LONG":
+            gap_low, gap_high = fvg_left.high, displacement.low
+            if gap_high <= gap_low or current.low < gap_low:
+                return _waiting(series, symbol, timeframe, strategy_id, "NO_UNMITIGATED_BULLISH_FVG")
+            consequent_encroachment = (gap_low + gap_high) / 2.0
+            if current.low > consequent_encroachment or current.close <= consequent_encroachment:
+                return _waiting(series, symbol, timeframe, strategy_id, "FVG_CONSEQUENT_ENCROACHMENT_NOT_CONFIRMED")
+            evidence = ("LIQUIDITY_SWEEP_LOW", "DISPLACEMENT_CLOSE_UP", "BULLISH_FVG",
+                        "FVG_CONSEQUENT_ENCROACHMENT", f"SILVER_BULLET_{session}")
+        else:
+            gap_low, gap_high = displacement.high, fvg_left.low
+            if gap_high <= gap_low or current.high > gap_high:
+                return _waiting(series, symbol, timeframe, strategy_id, "NO_UNMITIGATED_BEARISH_FVG")
+            consequent_encroachment = (gap_low + gap_high) / 2.0
+            if current.high < consequent_encroachment or current.close >= consequent_encroachment:
+                return _waiting(series, symbol, timeframe, strategy_id, "FVG_CONSEQUENT_ENCROACHMENT_NOT_CONFIRMED")
+            evidence = ("LIQUIDITY_SWEEP_HIGH", "DISPLACEMENT_CLOSE_DOWN", "BEARISH_FVG",
+                        "FVG_CONSEQUENT_ENCROACHMENT", f"SILVER_BULLET_{session}")
+        return _candidate(series, symbol, timeframe, strategy_id, direction, evidence)
     elif strategy_id == "wyckoff-schematics":
         average_volume = _mean([x.volume for x in candles[-11:-1]])
         long = current.close > max(x.high for x in candles[-11:-1]) and current.volume >= average_volume
