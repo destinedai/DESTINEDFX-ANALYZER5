@@ -2,7 +2,7 @@
 
 ## Branch and delivery
 
-The previously reported commit references are historical. At the start of this continuation, the fetched `feat/complete-demo-readiness` branch head was `0308374e09faec3fb429a6530533033f5d3e13d7`, matching `origin/feat/complete-demo-readiness`. The final local SHA for this continuation is `602f9ef750e932907ccf283e4badf678bdffb5ee`; `main` was not modified and no force-push was used.
+The previously reported commit references are historical. At the start of this continuation, the fetched `feat/complete-demo-readiness` branch head was `0308374e09faec3fb429a6530533033f5d3e13d7`, matching `origin/feat/complete-demo-readiness`. The pushed implementation commit for this continuation is `3c28f89b5e6706fee015f0cd0e9aa741f954fb27`; `main` was not modified and no force-push was used. The exact final branch head is reported from the post-push verification.
 
 Changed files are `build.gradle.kts`, `app/build.gradle.kts`, `app/src/main/java/com/example/MyApplication.kt`, `app/src/main/java/com/example/domain/engine/PythonQuantitativeSignalEngine.kt`, `app/src/main/java/com/example/domain/model/TradeSignal.kt`, `app/src/main/java/com/example/domain/usecase/impl/SignalGenerationUseCaseImpl.kt`, `bridge/quantitative.py`, `bridge/test_quantitative.py`, `MANUS_HANDOFF.md`, and `docs/python-android-quantitative-readiness.md`.
 

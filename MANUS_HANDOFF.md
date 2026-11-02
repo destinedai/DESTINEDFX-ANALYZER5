@@ -138,7 +138,7 @@ The adapter now distinguishes provider receipt time from Android analysis time a
 
 ## Continuation: broker truthfulness and fail-closed preview
 
-At the start of this continuation, the fetched feature branch head was `0308374e09faec3fb429a6530533033f5d3e13d7`, matching the remote feature branch. The implementation commit is `602f9ef750e932907ccf283e4badf678bdffb5ee`; the final pushed SHA must be checked after this documentation update. The following changes were made without modifying `main`:
+At the start of this continuation, the fetched feature branch head was `0308374e09faec3fb429a6530533033f5d3e13d7`, matching the remote feature branch. The pushed implementation commit is `3c28f89b5e6706fee015f0cd0e9aa741f954fb27`; the final documentation head must be checked after this update. The following changes were made without modifying `main`:
 
 - `PreviewBrokerGateway` no longer reports a fake successful connection, fake account balance, synthetic order ID, successful close, quote, or zero margin. All preview execution and broker-state operations now fail closed with `PREVIEW_ONLY` errors.
 - Added `BrokerCapabilityMatrix` to the Android broker package and `docs/broker-capability-matrix.md`. Deriv generic Forex/CFD execution is explicitly not verified because the adapter rejects unvalidated Multiplier mappings; MT5 DEMO remains unverified and LIVE blocked; OANDA trading remains not implemented; Preview is blocked.
