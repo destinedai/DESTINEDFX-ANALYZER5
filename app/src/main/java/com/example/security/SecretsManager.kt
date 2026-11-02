@@ -390,7 +390,7 @@ class SecureStorageUnavailableException(cause: Throwable) :
 
 /** Read-only, non-persistent preferences used only to keep guest analysis available. */
 private object UnavailableSharedPreferences : android.content.SharedPreferences {
-    override fun getAll(): Map<String, *> = emptyMap()
+    override fun getAll(): Map<String, *> = emptyMap<String, Any?>()
     override fun getString(key: String, defValue: String?): String? = defValue
     override fun getStringSet(key: String, defValues: Set<String>?): Set<String>? = defValues
     override fun getInt(key: String, defValue: Int): Int = defValue
