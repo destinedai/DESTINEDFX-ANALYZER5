@@ -53,7 +53,8 @@ Severity labels here prioritize follow-up; they are not CVSS scores. No finding 
 - `python3 -m pytest -q bridge managed-worker mt5-ea`: **142 passed**, one third-party Starlette deprecation warning.
 - `python3 -m py_compile bridge/quantitative.py bridge/test_quantitative.py`: passed.
 - Android `./gradlew testDebugUnitTest`: **BLOCKED before compilation** because no Android SDK is configured (`ANDROID_HOME`/`sdk.dir` absent). This is not a test failure in app source and is not a pass.
-- No Deriv/OANDA/MT5 broker request, account login, DEMO or REAL order, MetaEditor compile, Android install/device test, staging penetration test, full static scan, dependency vulnerability scan, secret scan, release signing verification or final-branch CI run was performed.
+- GitHub Actions run [41515406776](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41515406776) on exact commit `a7a4731d7b252c39eb013ba054db1e18ea0a43f4` passed all three jobs: Python tests, Android unit tests/debug APK signature verification, and genuine MetaEditor EA compilation. The run published `DestinedFX-debug-apk`, `DestinedFX-Windows-Worker-Kit`, and `DestinedFX-MT5-EA-ex5` artifacts.
+- No Deriv/OANDA/MT5 broker account login or order, Android install/device/instrumentation test, Chaquopy runtime test, staging penetration test, full static scan, dependency vulnerability scan, secret scan, or release signing verification was performed. A CI MetaEditor compile does not establish terminal or broker acceptance.
 
 ## Operator actions required before a go decision
 
