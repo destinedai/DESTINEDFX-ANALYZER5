@@ -15,7 +15,7 @@ The Python input source is the repository's validated closed OHLC candle result,
 - Python bridge and quantitative tests: **VERIFIED — 76 passed locally**.
 - Python syntax and JSON boundary smoke test: **VERIFIED**.
 - Android compile/APK: **NOT VERIFIED** in this sandbox because the Android SDK location is unavailable (`ANDROID_HOME`/`sdk.dir` missing).
-- Chaquopy runtime inside an APK: **NOT VERIFIED** until the new API 35 x86_64 emulator job executes the adapter test.
+- Chaquopy runtime inside an APK: **NOT VERIFIED**. Final CI run `41481731986` reached `connectedDebugAndroidTest`, but APK installation timed out after 360 seconds and zero tests executed.
 - Kotlin/Python parity: **NOT VERIFIED**. Python is shadow-only and cannot authorize execution.
 - TradingView OHLC source match: **BLOCKED / NOT CLAIMED**. The visible official widget is display-only; Python uses the recorded repository candle source.
 - DEMO/LIVE execution readiness: **NO-GO**. No orders, credentials, broker accounts, or paid infrastructure were used.

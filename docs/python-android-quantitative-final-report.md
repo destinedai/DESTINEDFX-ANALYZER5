@@ -2,7 +2,7 @@
 
 ## Branch and delivery
 
-The implementation commit is `192c88bfb424b5ff7f96e516e72f1a51d0becd53`. The later documentation commit currently at the branch tip is `80e0e095392cca97df3733241e3d32706103e6a3`. Both are on `feat/complete-demo-readiness`, which is pushed to `origin/feat/complete-demo-readiness`; `main` was not modified and no force-push was used.
+The implementation commit is `192c88bfb424b5ff7f96e516e72f1a51d0becd53`. The later documentation commit was `80e0e095392cca97df3733241e3d32706103e6a3`. The final branch tip for this continuation is `5b884f54776ea9eb0606266892d53c534173d5c4` on `feat/complete-demo-readiness`, pushed to `origin/feat/complete-demo-readiness`; `main` was not modified and no force-push was used.
 
 Changed files are `build.gradle.kts`, `app/build.gradle.kts`, `app/src/main/java/com/example/MyApplication.kt`, `app/src/main/java/com/example/domain/engine/PythonQuantitativeSignalEngine.kt`, `app/src/main/java/com/example/domain/model/TradeSignal.kt`, `app/src/main/java/com/example/domain/usecase/impl/SignalGenerationUseCaseImpl.kt`, `bridge/quantitative.py`, `bridge/test_quantitative.py`, `MANUS_HANDOFF.md`, and `docs/python-android-quantitative-readiness.md`.
 
@@ -12,7 +12,7 @@ Changed files are `build.gradle.kts`, `app/build.gradle.kts`, `app/src/main/java
 
 **VERIFIED by CI packaging:** `PythonQuantitativeSignalEngine` initializes the Chaquopy runtime once per Android process, serializes typed candle data to JSON, invokes Python on `Dispatchers.Default`, applies a bounded calculation wait, parses a typed candidate, and returns `DATA_UNAVAILABLE` with `executable=false` on errors. Cancellation is not swallowed. Python has no broker, credential, order, sizing, or execution API. Chaquopy startup is scheduled off the Android main thread and remains guarded against duplicate initialization.
 
-**NOT VERIFIED:** No Android instrumentation test has executed the Python adapter inside an installed APK. The successful CI build proves compilation, packaging, and APK generation, not runtime execution on a device.
+**NOT VERIFIED:** The instrumentation test was added and CI reached `connectedDebugAndroidTest`, but the 56 MB APK timed out during installation on the x86_64 emulator after 360 seconds; zero tests ran. The successful APK build proves compilation, packaging, and APK generation, not runtime execution on a device.
 
 ## Python engine and strategies
 
@@ -46,7 +46,7 @@ Python output is stored on `TradeSignal` as shadow metadata with `pythonParitySt
 
 Local Python bridge and quantitative tests: **VERIFIED — 76 passed**. Python syntax compilation: **VERIFIED**. A real Android instrumentation test has been added and CI is configured to run it on an x86_64 API 35 emulator; runtime evidence remains **NOT VERIFIED** until that job executes successfully. Local Android compilation: **BLOCKED** because the sandbox has no Android SDK configured.
 
-GitHub Actions run [41467861528](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41467861528) passed for implementation commit `192c88bfb424b5ff7f96e516e72f1a51d0becd53`. GitHub Actions run [41468988507](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41468988507) passed for documentation commit `80e0e095392cca97df3733241e3d32706103e6a3`. Those runs prove Python/bridge/worker/EA tests, genuine MetaEditor MT5 EA compilation, Android unit tests, debug APK build, APK signature/package verification, artifact upload, Windows worker kit packaging, and the aggregate gate; they do not prove installed-APK Python execution because the emulator job was not present in those runs.
+GitHub Actions run [41467861528](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41467861528) passed for implementation commit `192c88bfb424b5ff7f96e516e72f1a51d0becd53`. Run [41468988507](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41468988507) passed for documentation commit `80e0e095392cca97df3733241e3d32706103e6a3`. Final run [41481731986](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41481731986) for `5b884f54776ea9eb0606266892d53c534173d5c4` passed Python, MetaEditor, Android unit tests, APK build/signature/package verification and artifact packaging, but its emulator job failed at APK installation timeout with zero tests executed. Installed-APK Python runtime therefore remains **NOT VERIFIED**.
 
 The debug APK artifact is [DestinedFX-debug-apk, artifact 13153836953](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41467861528/artifacts/13153836953). The uploaded artifact size was 56,344,518 bytes; the individual APK byte size was not recorded in the retained log. CI verified package `com.aistudio.destinedfx.qwvzxp`, version `1.0.9`, minSdk 24, native ABIs `arm64-v8a` and `x86_64`, and a valid APK Signature Scheme v2 signature. No keystore or private key was committed. Debug-signing upgrade continuity across installations is **NOT VERIFIED**.
 
