@@ -13,7 +13,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONException
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.time.OffsetDateTime
@@ -39,7 +39,7 @@ class ForexNewsRepositoryTest {
     @Test
     fun emptyArrayIsAValidEmptySnapshotButMalformedRowsStillFail() {
         val repository = ForexNewsRepository()
-        assertEquals(emptyList<Any>(), repository.parseFeedPayload("[]", now))
+        assertTrue(repository.parseFeedPayload("[]", now).isEmpty())
         assertParseFails(repository, """[{"title":"CPI","country":"USD","date":"2026-11-02T12:30:00Z","impact":"unexpected"}]""")
         assertParseFails(repository, """[{"title":"CPI","country":"USD","date":"not-a-date","impact":"High"}]""")
         assertParseFails(repository, """[{"title":"CPI","date":"2026-11-02T12:30:00Z","impact":"High"}]""")
@@ -61,7 +61,7 @@ class ForexNewsRepositoryTest {
 
         current.addAndGet(31 * 60 * 1000L)
         val refreshed = repository.calendar() as CalendarResult.Ok
-        assertEquals(emptyList<Any>(), refreshed.events)
+        assertTrue(refreshed.events.isEmpty())
         assertEquals(current.get(), refreshed.retrievedAtMs)
         assertEquals("ForexFactory weekly feed (faireconomy)", refreshed.source)
         assertEquals(current.get() - 3_600_000L, refreshed.coverageFromMs)
@@ -71,7 +71,7 @@ class ForexNewsRepositoryTest {
         assertTrueContains(verdict.detail, "ForexFactory weekly feed")
 
         // Empty successful snapshots are cached too; no second provider hit is needed.
-        assertEquals(emptyList<Any>(), repository.fetchUpcomingEvents())
+        assertTrue(repository.fetchUpcomingEvents().isEmpty())
         assertEquals(2, requests.get())
     }
 
@@ -85,6 +85,30 @@ class ForexNewsRepositoryTest {
     }
 
     @Test
+    fun nullCalendarResultRemainsUnknownAndBlocksAutomation() {
+        val result: CalendarResult? = null
+        val verdict = NewsFilter.evaluate(result, setOf("USD"), now)
+        assertEquals(NewsStatus.UNKNOWN, verdict.status)
+        assertTrue(verdict.blocksAutomation(manualRiskMode = false))
+    }
+
+    @Test
+    fun timeoutAndMissingBodyRemainUnknownRatherThanBecomingEmptySuccess() = runBlocking {
+        val timeoutClient = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { throw java.net.SocketTimeoutException("test timeout") })
+            .build()
+        val timeoutResult = ForexNewsRepository(timeoutClient, { now }, 0L).calendar()
+        assertEquals(CalendarResult.Failed("Network/parse error: SocketTimeoutException"), timeoutResult)
+        assertEquals(NewsStatus.UNKNOWN, NewsFilter.evaluate(timeoutResult, setOf("USD"), now).status)
+
+        val noBodyResult = ForexNewsRepository(
+            queuedClient(AtomicInteger(), listOf(204 to null)), { now }, 0L
+        ).calendar()
+        assertEquals(CalendarResult.Failed("Empty calendar response"), noBodyResult)
+        assertEquals(NewsStatus.UNKNOWN, NewsFilter.evaluate(noBodyResult, setOf("USD"), now).status)
+    }
+
+    @Test
     fun cancellationIsPropagatedRatherThanConvertedToAnEmptyOrFailedSnapshot() = runBlocking {
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { throw CancellationException("test cancellation") }).build()
         val repository = ForexNewsRepository(client, { now })
@@ -94,9 +118,15 @@ class ForexNewsRepositoryTest {
         } catch (_: CancellationException) {
             // Expected: cancellation must not be transformed into a provider result.
         }
+        try {
+            repository.isHighImpactWindowActive(listOf("USD"), 30)
+            fail("The safety query must not swallow cancellation")
+        } catch (_: CancellationException) {
+            // Cancellation must also propagate through the fail-closed safety API.
+        }
     }
 
-    private fun queuedClient(requests: AtomicInteger, responses: List<Pair<Int, String>>): OkHttpClient {
+    private fun queuedClient(requests: AtomicInteger, responses: List<Pair<Int, String?>>): OkHttpClient {
         return OkHttpClient.Builder().addInterceptor { chain ->
             val index = requests.getAndIncrement()
             val (code, body) = responses.getOrElse(index) { 500 to "unexpected request" }
@@ -105,7 +135,7 @@ class ForexNewsRepositoryTest {
                 .protocol(Protocol.HTTP_1_1)
                 .code(code)
                 .message(if (code in 200..299) "OK" else "Failure")
-                .body(body.toResponseBody("application/json".toMediaType()))
+                .body(body?.toResponseBody("application/json".toMediaType()))
                 .build()
         }.build()
     }

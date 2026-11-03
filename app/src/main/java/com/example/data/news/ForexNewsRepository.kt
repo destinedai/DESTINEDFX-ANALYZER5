@@ -110,6 +110,8 @@ class ForexNewsRepository(
         
         val events = try {
             fetchUpcomingEvents()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             fetchFailed = true
             cache
