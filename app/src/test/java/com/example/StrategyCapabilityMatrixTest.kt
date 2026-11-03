@@ -3,7 +3,7 @@ package com.example
 import com.destinedfx.core.analysis.SignalEngine
 import com.destinedfx.core.strategy.StrategyCapabilityStatus
 import com.destinedfx.core.strategy.StrategyRegistry
-import com.example.domain.usecase.impl.OnDevicePythonAnalyzer
+import com.example.domain.usecase.impl.ChaquopyPythonAnalyzer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -44,7 +44,7 @@ class StrategyCapabilityMatrixTest {
         assertEquals("python-mean-reversion-1.0.0", StrategyRegistry.MEAN_REVERSION.pythonVersion)
         assertEquals("python-trend-following-1.0.0", StrategyRegistry.TREND_FOLLOWING.pythonVersion)
         val registryPythonVersions = pythonCandidates.associate { it.id to requireNotNull(it.pythonVersion) }
-        assertEquals(registryPythonVersions, OnDevicePythonAnalyzer.RULESET_VERSIONS)
+        assertEquals(registryPythonVersions, ChaquopyPythonAnalyzer.RULESET_VERSIONS)
     }
 
     @Test
