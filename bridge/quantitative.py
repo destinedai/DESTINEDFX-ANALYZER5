@@ -365,6 +365,7 @@ def analyze_json(payload: str) -> str:
         expected_interval_ms = request.get("expected_interval_ms")
         if expected_interval_ms is not None:
             expected_interval_ms = int(expected_interval_ms)
+        max_candle_age_ms = int(request.get("max_candle_age_ms", MAX_CANDLE_AGE_MS))
         provider_retrieved_at_ms = int(request.get("provider_retrieved_at_ms", 0))
         quote_price = request.get("quote_price")
         if quote_price is not None:
@@ -381,16 +382,13 @@ def analyze_json(payload: str) -> str:
             source=str(row.get("source", source)),
             retrieved_at_ms=int(row.get("retrieved_at_ms", provider_retrieved_at_ms)),
         ) for row in rows)
-        if strategy_id not in STRATEGY_RULESETS:
-            result = _waiting(ValidatedSeries(candles, source, candles[-1].timestamp_ms if candles else 0, None),
-                              symbol, timeframe, strategy_id, "NOT_IMPLEMENTED")
-        else:
-            series = validate_ohlcv(
-                candles, now_ms=now_ms, source=source,
-                expected_interval_ms=expected_interval_ms,
-                allow_session_gaps=bool(request.get("allow_session_gaps", False)),
-            )
-            result = evaluate_strategy(series, strategy_id=strategy_id, symbol=symbol, timeframe=timeframe)
+        series = validate_ohlcv(
+            candles, now_ms=now_ms, source=source,
+            expected_interval_ms=expected_interval_ms,
+            allow_session_gaps=bool(request.get("allow_session_gaps", False)),
+            max_age_ms=max_candle_age_ms,
+        )
+        result = evaluate_strategy(series, strategy_id=strategy_id, symbol=symbol, timeframe=timeframe)
         response = result.__dict__.copy()
         response["evidence"] = list(result.evidence)
         response["score_basis"] = list(result.score_basis)

@@ -6,6 +6,7 @@ plugins {
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
+  id("com.chaquo.python")
 }
 
 val mt5ManagedServiceUrlFromGradle = providers.gradleProperty("mt5ManagedServiceUrl").orNull.orEmpty().trim()
@@ -38,6 +39,7 @@ android {
     versionName = "1.0.9"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
   }
 
@@ -117,6 +119,14 @@ android {
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
+}
+
+chaquopy {
+  defaultConfig {
+    version = "3.13"
+    pip { install("tzdata==2025.2") }
+  }
+  sourceSets { getByName("main") { srcDir("src/main/python") } }
 }
 
 // Dependencies

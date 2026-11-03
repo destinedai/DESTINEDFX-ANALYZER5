@@ -149,7 +149,10 @@ class MyApplication : Application() {
             
             _authUseCase = AuthUseCaseImpl(dbInstance, secrets)
             _marketDataUseCase = GetMarketDataUseCaseImpl(marketDataRepository)
-            _signalGenerationUseCase = SignalGenerationUseCaseImpl(marketDataRepository, newsRepository)
+            _signalGenerationUseCase = SignalGenerationUseCaseImpl(
+                marketDataRepository, newsRepository,
+                pythonAnalyzer = ChaquopyPythonAnalyzer(this@MyApplication)
+            )
             
             _derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secrets)
             _derivGatewayAdapter = com.example.data.broker.DerivBrokerGatewayAdapter(derivBrokerGateway)

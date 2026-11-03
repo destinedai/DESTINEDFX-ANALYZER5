@@ -45,7 +45,8 @@ class SignalGenerationUseCaseImpl(
     private val news: NewsRepository,
     private val cfg: SignalConfig = SignalConfig(),
     private val clock: () -> Long = System::currentTimeMillis,
-    private val pollIntervalMs: Long = 45_000L
+    private val pollIntervalMs: Long = 45_000L,
+    private val pythonAnalyzer: PythonAnalyzer? = null
 ) : SignalGenerationUseCase, SignalReportStore {
 
     data class TimingRecord(val loadMs: Long, val computeMs: Long, val totalMs: Long, val cacheHit: Boolean, val timestamp: Long)
@@ -257,7 +258,21 @@ class SignalGenerationUseCaseImpl(
             // alongside a non-actionable state where a UI could mistake them for an instruction.
             if (finalState !in buyStates && finalState !in sellStates) finalPlan = null
 
-            val finalReport = report.copy(state = finalState, plan = finalPlan)
+            val pythonSummary = try {
+                pythonAnalyzer?.analyze(
+                    symbol = symbol, timeframe = tf.label, strategyId = strategyId,
+                    source = primaryCandleSource, nowMs = now, intervalMs = tf.millis,
+                    allowSessionGaps = cls != AssetClass.CRYPTO,
+                    candles = chk.cleanClosed
+                )?.displayLine() ?: "ON-DEVICE PYTHON: unavailable (runtime not configured); Kotlin SignalEngine remains the identified analysis engine."
+            } catch (e: TimeoutCancellationException) {
+                "ON-DEVICE PYTHON: unavailable (analysis timed out); no Python result was used."
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "ON-DEVICE PYTHON: unavailable (${e.javaClass.simpleName}); no Python result was used."
+            }
+            val finalReport = report.copy(state = finalState, plan = finalPlan, reasons = listOf(pythonSummary) + report.reasons)
             val closedCandleTimestamp = chk.cleanClosed.lastOrNull()?.timeMs
                 ?: return unavailable(symbol, timeframe, "NO CLOSED CANDLE available for stable signal identity", "DATA_UNAVAILABLE")
             // One stable signal identity per symbol/timeframe/strategy/closed candle. Repeated scans

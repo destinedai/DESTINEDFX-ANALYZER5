@@ -1,10 +1,18 @@
 import json
+from pathlib import Path
 
 from quantitative import STRATEGY_ID, DataIntegrityError, OHLCV, analyze_json, evaluate_smc, validate_ohlcv
 import pytest
 
 NOW = 1_699_975_860_000  # 2023-11-14 15:31 UTC / 10:31 New York (EST)
 INTERVAL = 60_000
+
+
+def test_android_bundled_engine_matches_canonical_bridge_module():
+    canonical = Path(__file__).with_name("quantitative.py")
+    bundled = canonical.parent.parent / "app/src/main/python/quantitative.py"
+    assert bundled.is_file()
+    assert bundled.read_bytes() == canonical.read_bytes()
 
 
 def candles(direction=None, count=30):
@@ -52,6 +60,25 @@ def test_no_confirmed_event_returns_waiting():
     assert result.direction == "WAIT"
     assert result.entry is None
     assert result.executable is False
+
+
+def test_json_contract_supports_timeframe_appropriate_candle_age():
+    rows = candles()
+    payload = {
+        "symbol": "EUR/USD", "timeframe": "M15", "strategy_id": STRATEGY_ID,
+        "source": "fixture-provider", "now_ms": NOW, "provider_retrieved_at_ms": NOW,
+        "expected_interval_ms": 15 * INTERVAL, "max_candle_age_ms": 31 * INTERVAL,
+        "candles": [
+            {"timestamp_ms": NOW - (len(rows) - index) * 15 * INTERVAL - 5 * INTERVAL, "open": row.open,
+             "high": row.high, "low": row.low, "close": row.close, "volume": row.volume,
+             "complete": True, "source": row.source, "retrieved_at_ms": NOW}
+            for index, row in enumerate(rows)
+        ],
+    }
+    result = json.loads(analyze_json(json.dumps(payload)))
+    assert result["state"] == "WAITING"
+    assert result["reason"] == "NO_CONFIRMED_BOS"
+    assert result["executable"] is False
 
 
 @pytest.mark.parametrize("bad", [
@@ -229,8 +256,10 @@ def test_json_boundary_preserves_non_executable_candidate_and_provenance():
 def test_json_boundary_unknown_strategy_is_not_implemented_without_fallback():
     result = json.loads(analyze_json(json.dumps({
         "symbol": "EUR/USD", "timeframe": "M15", "strategy_id": "future-strategy",
-        "source": "fixture-provider", "now_ms": NOW, "candles": [],
+        "source": "fixture-provider", "now_ms": NOW, "expected_interval_ms": INTERVAL,
+        "provider_retrieved_at_ms": NOW, "candles": [row.__dict__ for row in candles()],
     })))
+    assert result["state"] == "WAITING"
     assert result["strategy_version"] == "NOT_IMPLEMENTED"
     assert result["reason"] == "NOT_IMPLEMENTED"
     assert result["executable"] is False

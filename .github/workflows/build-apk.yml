@@ -56,6 +56,10 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       # The runner image already ships the Android SDK; just accept licenses
       # so Gradle can download platform 36 on demand.
       - name: Accept Android licenses
@@ -146,6 +150,9 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Compile Android Python runtime instrumentation tests
+        run: ./gradlew :app:compileDebugAndroidTestKotlin --stacktrace
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
