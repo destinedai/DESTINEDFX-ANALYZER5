@@ -94,6 +94,8 @@ def validate_ohlcv(candles: Iterable[OHLCV], *, now_ms: int, source: str,
             raise DataIntegrityError("FUTURE_OR_INVALID_TIMESTAMP")
         if row.retrieved_at_ms <= 0 or row.retrieved_at_ms > now_ms:
             raise DataIntegrityError("INVALID_RETRIEVAL_TIMESTAMP")
+        if now_ms - row.retrieved_at_ms > max_age_ms:
+            raise DataIntegrityError("STALE_RETRIEVAL")
         if not row.complete:
             raise DataIntegrityError("INCOMPLETE_CANDLE")
         if row.source.strip() != source:
@@ -353,8 +355,11 @@ def evaluate_smc_confluence(series: ValidatedSeries, *, symbol: str,
 
 def analyze_json(payload: str) -> str:
     """Analyze one immutable Kotlin-validated candle snapshot."""
+    request = {}
     try:
         request = json.loads(payload)
+        if not isinstance(request, dict):
+            raise DataIntegrityError("INVALID_REQUEST_OBJECT")
         if not isinstance(request, dict):
             raise DataIntegrityError("INVALID_REQUEST")
         symbol = str(request.get("symbol", "")).strip()
@@ -392,9 +397,27 @@ def analyze_json(payload: str) -> str:
         response = result.__dict__.copy()
         response["evidence"] = list(result.evidence)
         response["score_basis"] = list(result.score_basis)
+        response["rejection_reasons"] = [result.reason] if result.state in {"WAITING", "DATA_UNAVAILABLE"} else []
         return json.dumps(response, sort_keys=True)
     except (DataIntegrityError, KeyError, TypeError, ValueError, OverflowError, IndexError) as error:
+        reason = str(error) or "INVALID_REQUEST"
+        rows = request.get("candles", []) if isinstance(request, dict) else []
+        timestamp_ms = 0
+        if isinstance(rows, list) and rows and isinstance(rows[-1], dict):
+            try:
+                timestamp_ms = int(rows[-1].get("timestamp_ms", 0))
+            except (TypeError, ValueError, OverflowError):
+                timestamp_ms = 0
+        strategy_id = str(request.get("strategy_id", "")).strip() if isinstance(request, dict) else ""
         return json.dumps({
-            "state": "DATA_UNAVAILABLE", "direction": "WAIT", "executable": False,
-            "reason": str(error) or "INVALID_REQUEST",
+            "symbol": str(request.get("symbol", "")).strip() if isinstance(request, dict) else "",
+            "strategy_id": strategy_id,
+            "strategy_version": STRATEGY_RULESETS.get(strategy_id, "NOT_IMPLEMENTED"),
+            "timeframe": str(request.get("timeframe", "")).strip() if isinstance(request, dict) else "",
+            "state": "DATA_UNAVAILABLE", "direction": "WAIT", "entry": None,
+            "stop_loss": None, "take_profit": None, "reward_to_risk": None,
+            "confidence_score": 0, "score_basis": [], "evidence": [],
+            "reason": reason, "rejection_reasons": [reason],
+            "source": str(request.get("source", "")).strip() if isinstance(request, dict) else "",
+            "candle_timestamp_ms": timestamp_ms, "executable": False,
         }, sort_keys=True)

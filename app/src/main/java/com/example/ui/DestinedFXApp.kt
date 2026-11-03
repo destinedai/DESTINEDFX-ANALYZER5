@@ -864,6 +864,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
         }
         item { MarketStructureReport(analysis) }
         item { FullAnalysisReport(analysis) }
+        item { PythonQuantitativeAnalysisPanel(analysis?.pythonAnalysis) }
         item { EngineInsightsPanel(viewModel) }
     }
 }
@@ -1647,5 +1648,59 @@ private fun MoreTab(viewModel: DestinedFXViewModel) {
                 }
             }
         }
+    }
+}
+
+
+@Composable
+private fun PythonQuantitativeAnalysisPanel(result: com.example.domain.model.PythonAnalysisReport?) {
+    InsightCard("ON-DEVICE PYTHON QUANTITATIVE ANALYSIS") {
+        Text("Execution state: ANALYSIS ONLY — Python output is never execution approval.",
+            fontSize = 10.sp, color = WarningAmber, lineHeight = 15.sp)
+        val outcome = when {
+            result == null -> "PYTHON RUNTIME UNAVAILABLE"
+            result.conflict || result.state == "KOTLIN_PYTHON_CONFLICT" -> "KOTLIN/PYTHON CONFLICT"
+            result.state == "CANDIDATE" -> "PYTHON CANDIDATE"
+            result.state == "WAITING" -> "PYTHON WAITING"
+            result.state == "DATA_UNAVAILABLE" -> "PYTHON DATA UNAVAILABLE"
+            !result.runtimeAvailable -> "PYTHON RUNTIME UNAVAILABLE"
+            else -> "PYTHON RUNTIME UNAVAILABLE"
+        }
+        Text(outcome, fontSize = 11.sp,
+            color = if (outcome.contains("UNAVAILABLE") || outcome.contains("CONFLICT")) LossRed else ElectricCyan,
+            fontWeight = FontWeight.Black)
+        if (result == null) {
+            Text("No Python result was returned for this scan. The Kotlin SignalEngine is the identified analysis engine.",
+                fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+            return@InsightCard
+        }
+        InsightLine("Runtime availability", when {
+            result.runtimeAvailable -> "Chaquopy result received"
+            result.state == "DATA_UNAVAILABLE" -> "Not invoked or no valid Python response; data/provenance blocked analysis"
+            else -> "Unavailable; no Python result used"
+        })
+        InsightLine("Strategy", result.strategyId)
+        InsightLine("Ruleset version", result.strategyVersion)
+        InsightLine("Python state / direction", "${result.state} / ${result.direction}")
+        InsightLine("Provider source", result.source.ifBlank { "UNKNOWN" })
+        InsightLine("Closed-candle timestamp", if (result.candleTimestampMs > 0L)
+            java.time.Instant.ofEpochMilli(result.candleTimestampMs).toString() else "Unavailable")
+        InsightLine("Snapshot retrieved at", if (result.retrievedAtMs > 0L)
+            java.time.Instant.ofEpochMilli(result.retrievedAtMs).toString() else "Unavailable")
+        Text("EVIDENCE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        Text(result.evidence.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "No supporting Python evidence returned.",
+            fontSize = 10.sp, color = TextPrimary, lineHeight = 15.sp)
+        if (result.scoreBasis.isNotEmpty()) InsightLine("Score basis", result.scoreBasis.joinToString(" · "))
+        Text("REJECTION / WAITING REASONS", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        Text(result.rejectionReasons.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: result.reason.ifBlank { "None returned." },
+            fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+        if (result.state == "CANDIDATE" && result.entry != null && result.stopLoss != null && result.takeProfit != null) {
+            HorizontalDivider(color = CardBorder)
+            Text("RESEARCH CANDIDATE ONLY — NOT AN APPROVED TRADE", fontSize = 9.sp, color = WarningAmber, fontWeight = FontWeight.Black)
+            InsightLine("Entry / stop / target", "${formatPrice(result.entry, result.symbol)} / ${formatPrice(result.stopLoss, result.symbol)} / ${formatPrice(result.takeProfit, result.symbol)}")
+            InsightLine("Reward-to-risk proposal", result.rewardToRisk?.let { "${"%.2f".format(java.util.Locale.US, it)}R" } ?: "Not supplied")
+        }
+        if (result.conflict) Text("Automated execution is blocked until the configured engine-agreement policy resolves this conflict.",
+            fontSize = 10.sp, color = LossRed, lineHeight = 15.sp)
     }
 }

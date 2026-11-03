@@ -20,6 +20,7 @@ import com.example.data.market.canMergeQuoteIntoCandle
 import com.example.data.market.candleSourceKey
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
+import com.example.domain.model.PythonAnalysisReport
 import com.example.domain.repository.MarketDataRepository
 import com.example.domain.repository.NewsRepository
 import com.example.domain.usecase.SignalGenerationUseCase
@@ -258,21 +259,74 @@ class SignalGenerationUseCaseImpl(
             // alongside a non-actionable state where a UI could mistake them for an instruction.
             if (finalState !in buyStates && finalState !in sellStates) finalPlan = null
 
-            val pythonSummary = try {
+            val snapshotKey = candleSourceKey(symbol, tf.label)
+            val retrievedAtMs = market.candleRetrievedAtMs[snapshotKey] ?: 0L
+            var pythonReport = try {
                 pythonAnalyzer?.analyze(
                     symbol = symbol, timeframe = tf.label, strategyId = strategyId,
-                    source = primaryCandleSource, nowMs = now, intervalMs = tf.millis,
-                    allowSessionGaps = cls != AssetClass.CRYPTO,
+                    source = primaryCandleSource, retrievedAtMs = retrievedAtMs, nowMs = now,
+                    intervalMs = tf.millis, allowSessionGaps = cls != AssetClass.CRYPTO,
                     candles = chk.cleanClosed
-                )?.displayLine() ?: "ON-DEVICE PYTHON: unavailable (runtime not configured); Kotlin SignalEngine remains the identified analysis engine."
+                )?.toReport() ?: PythonAnalysisReport(
+                    state = "RUNTIME_UNAVAILABLE", runtimeAvailable = false, direction = "WAIT",
+                    symbol = symbol, strategyId = strategyId,
+                    strategyVersion = ChaquopyPythonAnalyzer.RULESET_VERSIONS[strategyId] ?: "UNSUPPORTED",
+                    timeframe = tf.label, candleTimestampMs = chk.cleanClosed.last().timeMs,
+                    source = primaryCandleSource.ifBlank { "UNKNOWN" }, retrievedAtMs = retrievedAtMs,
+                    reason = "Python analyzer is not configured. Kotlin SignalEngine remains the identified engine."
+                )
+            } catch (e: PythonInputUnavailableException) {
+                PythonAnalysisReport(
+                    state = "DATA_UNAVAILABLE", runtimeAvailable = false, direction = "WAIT",
+                    symbol = symbol, strategyId = strategyId,
+                    strategyVersion = ChaquopyPythonAnalyzer.RULESET_VERSIONS[strategyId] ?: "UNSUPPORTED",
+                    timeframe = tf.label, candleTimestampMs = chk.cleanClosed.last().timeMs,
+                    source = primaryCandleSource.ifBlank { "UNKNOWN" }, retrievedAtMs = retrievedAtMs,
+                    reason = e.message ?: "Snapshot failed Python input freshness/provenance checks."
+                )
             } catch (e: TimeoutCancellationException) {
-                "ON-DEVICE PYTHON: unavailable (analysis timed out); no Python result was used."
+                PythonAnalysisReport(
+                    state = "RUNTIME_UNAVAILABLE", runtimeAvailable = false, direction = "WAIT",
+                    symbol = symbol, strategyId = strategyId,
+                    strategyVersion = ChaquopyPythonAnalyzer.RULESET_VERSIONS[strategyId] ?: "UNSUPPORTED",
+                    timeframe = tf.label, candleTimestampMs = chk.cleanClosed.last().timeMs,
+                    source = primaryCandleSource.ifBlank { "UNKNOWN" }, retrievedAtMs = retrievedAtMs,
+                    reason = "On-device Python analysis timed out; no Python result was used."
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                "ON-DEVICE PYTHON: unavailable (${e.javaClass.simpleName}); no Python result was used."
+                PythonAnalysisReport(
+                    state = "RUNTIME_UNAVAILABLE", runtimeAvailable = false, direction = "WAIT",
+                    symbol = symbol, strategyId = strategyId,
+                    strategyVersion = ChaquopyPythonAnalyzer.RULESET_VERSIONS[strategyId] ?: "UNSUPPORTED",
+                    timeframe = tf.label, candleTimestampMs = chk.cleanClosed.last().timeMs,
+                    source = primaryCandleSource.ifBlank { "UNKNOWN" }, retrievedAtMs = retrievedAtMs,
+                    reason = "On-device Python analysis unavailable (${e.javaClass.simpleName}); no Python result was used."
+                )
             }
-            val finalReport = report.copy(state = finalState, plan = finalPlan, reasons = listOf(pythonSummary) + report.reasons)
+            val kotlinDirection = when {
+                finalState in buyStates -> "LONG"
+                finalState in sellStates -> "SHORT"
+                else -> "WAIT"
+            }
+            val pythonActionable = pythonReport.state == "CANDIDATE"
+            val kotlinActionable = kotlinDirection != "WAIT"
+            val enginesConflict = pythonReport.state in setOf("CANDIDATE", "WAITING") &&
+                (pythonActionable != kotlinActionable ||
+                    (pythonActionable && kotlinActionable && pythonReport.direction != kotlinDirection))
+            if (enginesConflict) {
+                blockers += "KOTLIN/PYTHON CONFLICT: Kotlin=$kotlinDirection, Python=${pythonReport.direction} (${pythonReport.state}); automated execution blocked."
+                finalState = SignalState.BLOCKED
+                finalPlan = null
+                pythonReport = pythonReport.copy(state = "KOTLIN_PYTHON_CONFLICT", conflict = true)
+            }
+            val pythonSummary = "ON-DEVICE PYTHON ${pythonReport.state}: ${pythonReport.reason.ifBlank { pythonReport.evidence.joinToString().ifBlank { "No Python rationale supplied" } }}"
+            val finalReport = report.copy(
+                state = finalState, plan = finalPlan,
+                reasons = listOf(pythonSummary) + report.reasons,
+                blockers = blockers
+            )
             val closedCandleTimestamp = chk.cleanClosed.lastOrNull()?.timeMs
                 ?: return unavailable(symbol, timeframe, "NO CLOSED CANDLE available for stable signal identity", "DATA_UNAVAILABLE")
             // One stable signal identity per symbol/timeframe/strategy/closed candle. Repeated scans
@@ -290,7 +344,7 @@ class SignalGenerationUseCaseImpl(
                 stopLoss = finalPlan?.stopLoss ?: 0.0,
                 takeProfit = finalPlan?.primary?.price ?: 0.0,
                 confidenceScore = finalReport.confluenceScore.coerceIn(0, 100),
-                rationale = "Current Market Structure Analysis: ${finalReport.mtf?.summary ?: "No MTF summary available"}",
+                rationale = "Current Market Structure Analysis: ${finalReport.mtf?.summary ?: "No MTF summary available"}. $pythonSummary",
                 timestamp = now,
                 invalidationLevel = finalPlan?.stopLoss ?: 0.0,
                 entryReason = finalReport.reasons.take(6).joinToString("; ").ifBlank { "No qualified entry reason was produced." },
@@ -317,7 +371,8 @@ class SignalGenerationUseCaseImpl(
                 analysisLoadMs = loadMs,
                 analysisComputeMs = computeMs,
                 analysisTotalMs = totalMs,
-                cacheHit = cacheHit
+                cacheHit = cacheHit,
+                pythonAnalysis = pythonReport
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e

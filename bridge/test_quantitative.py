@@ -88,6 +88,7 @@ def test_json_contract_supports_timeframe_appropriate_candle_age():
     "IMPOSSIBLE_OHLCV",
     "FUTURE_OR_INVALID_TIMESTAMP",
     "INVALID_RETRIEVAL_TIMESTAMP",
+    "STALE_RETRIEVAL",
     "STALE_CANDLES",
     "CANDLE_GAP_OR_WRONG_INTERVAL",
 ])
@@ -105,12 +106,28 @@ def test_invalid_provider_data_is_rejected_before_analysis(bad):
         rows[-1] = OHLCV(**{**rows[-1].__dict__, "timestamp_ms": NOW + 1})
     elif bad == "INVALID_RETRIEVAL_TIMESTAMP":
         rows[-1] = OHLCV(**{**rows[-1].__dict__, "retrieved_at_ms": NOW + 1})
+    elif bad == "STALE_RETRIEVAL":
+        rows[-1] = OHLCV(**{**rows[-1].__dict__, "retrieved_at_ms": NOW - 600_000})
     elif bad == "STALE_CANDLES":
         rows = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms - 600_000, "retrieved_at_ms": NOW}) for row in rows]
     elif bad == "CANDLE_GAP_OR_WRONG_INTERVAL":
         rows[15:] = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + INTERVAL}) for row in rows[15:]]
     with pytest.raises(DataIntegrityError, match=bad):
         validate(rows)
+
+
+def test_market_session_gap_can_be_explicitly_allowed_but_not_assumed():
+    rows = candles()
+    gap = 48 * 60 * 60 * 1000
+    rows = [OHLCV(**{**row.__dict__, "retrieved_at_ms": NOW + gap}) for row in rows]
+    rows[15:] = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + gap}) for row in rows[15:]]
+    with pytest.raises(DataIntegrityError, match="CANDLE_GAP_OR_WRONG_INTERVAL"):
+        validate_ohlcv(rows, now_ms=NOW + gap, source="fixture-provider",
+                        expected_interval_ms=INTERVAL, allow_session_gaps=False)
+    accepted = validate_ohlcv(rows, now_ms=NOW + gap, source="fixture-provider",
+                              expected_interval_ms=INTERVAL, allow_session_gaps=True)
+    assert accepted.source == "fixture-provider"
+    assert accepted.last_timestamp_ms == rows[-1].timestamp_ms
 
 
 def test_missing_source_and_empty_series_fail_closed():
@@ -216,7 +233,8 @@ def test_ict_session_windows_use_new_york_dst_and_half_open_boundaries():
 def test_ict_rejects_an_otherwise_valid_pattern_outside_session():
     rows = _strategy_rows("ict-silver-bullet")
     shift_ms = 2 * 60 * 60 * 1000
-    shifted = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + shift_ms}) for row in rows]
+    shifted = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + shift_ms,
+                        "retrieved_at_ms": row.retrieved_at_ms + shift_ms}) for row in rows]
     series = validate_ohlcv(shifted, now_ms=NOW + shift_ms, source="fixture-provider", expected_interval_ms=INTERVAL)
     result = evaluate_strategy(series, strategy_id="ict-silver-bullet", symbol="EUR/USD", timeframe="M15")
     assert result.state == "WAITING"
@@ -250,6 +268,28 @@ def test_json_boundary_preserves_non_executable_candidate_and_provenance():
     assert result["source"] == "fixture-provider"
     assert result["candle_timestamp_ms"] == candles("LONG")[-1].timestamp_ms
     assert result["score_basis"]
+    assert result["executable"] is False
+
+
+def test_json_boundary_stale_retrieval_response_preserves_exact_identity():
+    rows = candles()
+    rows[-1] = OHLCV(**{**rows[-1].__dict__, "retrieved_at_ms": NOW - 600_000})
+    payload = {
+        "symbol": "EUR/USD", "timeframe": "M1", "strategy_id": STRATEGY_ID,
+        "source": "fixture-provider", "now_ms": NOW, "expected_interval_ms": INTERVAL,
+        "provider_retrieved_at_ms": NOW, "candles": [row.__dict__ for row in rows],
+    }
+    result = json.loads(analyze_json(json.dumps(payload)))
+    assert result["state"] == "DATA_UNAVAILABLE"
+    assert result["reason"] == "STALE_RETRIEVAL"
+    assert result["symbol"] == payload["symbol"]
+    assert result["strategy_id"] == payload["strategy_id"]
+    assert result["strategy_version"] == "python-smc-confluence-1.0.0"
+    assert result["timeframe"] == payload["timeframe"]
+    assert result["candle_timestamp_ms"] == rows[-1].timestamp_ms
+    assert result["source"] == payload["source"]
+    assert result["evidence"] == [] and result["score_basis"] == []
+    assert result["entry"] is None and result["stop_loss"] is None and result["take_profit"] is None
     assert result["executable"] is False
 
 

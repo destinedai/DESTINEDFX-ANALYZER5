@@ -3,6 +3,7 @@ package com.example.ui
 import com.example.domain.model.OBType
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
+import com.example.domain.model.PythonAnalysisReport
 import java.util.Locale
 import kotlin.math.abs
 
@@ -77,7 +78,8 @@ data class DynamicAnalysisInfo(
     val dataSource: String = "",
     val strategyVersion: String = "",
     val signalState: String = "WAIT",
-    val blockReasons: List<String> = emptyList()
+    val blockReasons: List<String> = emptyList(),
+    val pythonAnalysis: PythonAnalysisReport? = null
 ) {
     fun getTfBias(tf: String): String {
         val norm = tf.trim().uppercase()
@@ -192,6 +194,7 @@ fun mapTradeSignalToUiModel(signal: TradeSignal): DynamicAnalysisInfo {
         dataSource = signal.dataSource.ifBlank { "UNKNOWN" },
         strategyVersion = signal.strategyVersion.ifBlank { "smc-confluence-1.0.0" },
         signalState = signal.signalState,
-        blockReasons = signal.blockReasons
+        blockReasons = signal.blockReasons,
+        pythonAnalysis = signal.pythonAnalysis
     )
 }
