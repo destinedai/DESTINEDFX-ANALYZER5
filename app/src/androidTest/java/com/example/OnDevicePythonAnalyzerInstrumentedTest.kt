@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.destinedfx.core.marketdata.Candle
 import com.destinedfx.core.marketdata.Timeframe
+import com.destinedfx.core.marketdata.VolumeType
 import com.example.domain.usecase.impl.ChaquopyPythonAnalyzer
 import com.example.domain.usecase.impl.PythonInputUnavailableException
 import kotlinx.coroutines.runBlocking
@@ -125,9 +126,9 @@ class OnDevicePythonAnalyzerInstrumentedTest {
             if (index == 39) {
                 val priorClose = 2000.0 + 38 * 0.1
                 Candle(timestamp, priorClose + 0.2, priorClose + 0.8, priorClose + 0.1,
-                    priorClose + 0.7, 10.0, true)
+                    priorClose + 0.7, 10.0, VolumeType.TICK, complete = true)
             } else {
-                Candle(timestamp, close - 0.05, close + 0.2, close - 0.2, close, 10.0, true)
+                Candle(timestamp, close - 0.05, close + 0.2, close - 0.2, close, 10.0, VolumeType.TICK, complete = true)
             }
         }
 }
