@@ -2677,22 +2677,26 @@ private fun BridgeTelemetry(
         )
     }
     val deals = current?.closedDeals
-    val netValue = if (deals == null || current == null) null
+    val netValue = if (deals == null) null
         else MT5RemoteBridgeClient.recentClosedDealNetPnl(deals, System.currentTimeMillis())
     Text(
         "REALIZED DEAL NET (last 7 days, including fees): ${netValue?.toString() ?: unavailable} ${current?.currency.orEmpty()}",
         color = TextPrimary, fontSize = 10.sp
     )
     deals.orEmpty().take(10).forEach { deal ->
-        val fees = if (deal.has("fees") && !deal.isNull("fees")) deal.opt("fees").toString() else unavailable
+        val feeValue = if (deal.has("fees") && !deal.isNull("fees")) deal.opt("fees") else null
+        val fees = feeValue?.toString() ?: unavailable
         Text(
             "Closed deal #${deal.optString("ticket", unavailable)} / position ${deal.optString("position_id", unavailable)} · ${deal.optString("symbol", unavailable)} · closed ${deal.optString("closed_at", unavailable)} · realized ${deal.optString("profit", unavailable)} · commission ${deal.optString("commission", unavailable)} · swap ${deal.optString("swap", unavailable)} · fees $fees",
             color = TextSecondary, fontSize = 10.sp
         )
     }
     val lastSignal = current?.lastSignal
+    val signalState = lastSignal?.optString("execution_state")?.takeIf { it.isNotBlank() }
+        ?: lastSignal?.optString("state")?.takeIf { it.isNotBlank() }
+        ?: unavailable
     Text(
-        "Last signal: ${lastSignal?.optString("execution_state", lastSignal?.optString("state", unavailable)) ?: unavailable} · requested ${lastSignal?.optString("requested_volume", unavailable) ?: unavailable} · executed ${lastSignal?.optString("executed_volume", unavailable) ?: unavailable} · order ${lastSignal?.optString("order", unavailable) ?: unavailable} · deal ${lastSignal?.optString("deal", unavailable) ?: unavailable}",
+        "Last signal: $signalState · requested ${lastSignal?.optString("requested_volume", unavailable) ?: unavailable} · executed ${lastSignal?.optString("executed_volume", unavailable) ?: unavailable} · order ${lastSignal?.optString("order", unavailable) ?: unavailable} · deal ${lastSignal?.optString("deal", unavailable) ?: unavailable}",
         color = TextSecondary, fontSize = 10.sp
     )
     current?.raw?.optString("last_error")?.takeIf { it.isNotBlank() }?.let { Text("EA ERROR: $it", color = LossRed, fontSize = 10.sp) }

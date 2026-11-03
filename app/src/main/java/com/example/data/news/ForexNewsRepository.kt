@@ -1,6 +1,5 @@
 package com.example.data.news
 
-import android.util.Log
 import com.example.domain.repository.NewsEvent
 import com.example.domain.repository.NewsRepository
 import kotlinx.coroutines.Dispatchers
@@ -64,7 +63,6 @@ class ForexNewsRepository(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            Log.e("ForexNews", "Failed to fetch calendar: ${e.javaClass.simpleName}")
             fetchFailed = true
             lastCalendar = com.destinedfx.core.news.CalendarResult.Failed("Network/parse error: ${e.javaClass.simpleName}")
             cache

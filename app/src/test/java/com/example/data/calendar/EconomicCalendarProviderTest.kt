@@ -35,10 +35,22 @@ class EconomicCalendarProviderTest {
     @Test
     fun malformedNonemptyPayloadAndHttpFailureRemainUnknown() = runBlocking {
         val malformed = EconomicCalendarProvider(client(200, "[{}]")) { "test-key" }.fetch(now)
+        assertTrue(malformed is CalendarResult.Failed)
         assertEquals(NewsStatus.UNKNOWN, NewsFilter.evaluate(malformed, setOf("USD"), now).status)
 
         val httpFailure = EconomicCalendarProvider(client(503, "maintenance")) { "test-key" }.fetch(now)
         assertEquals(NewsStatus.UNKNOWN, NewsFilter.evaluate(httpFailure, setOf("USD"), now).status)
+    }
+
+    @Test
+    fun malformedEventIsSkippedWhenAValidSiblingIsPresent() = runBlocking {
+        val body = """[{"date":"not-a-date"},{"date":"2026-11-03 12:30:00","event":"CPI","country":"USD","currency":"USD","impact":"high"}]"""
+        val result = EconomicCalendarProvider(client(200, body)) { "test-key" }.fetch(now)
+
+        assertTrue(result is CalendarResult.Ok)
+        val events = (result as CalendarResult.Ok).events
+        assertEquals(1, events.size)
+        assertEquals("CPI", events.single().name)
     }
 
     private fun client(status: Int, body: String): OkHttpClient = OkHttpClient.Builder()

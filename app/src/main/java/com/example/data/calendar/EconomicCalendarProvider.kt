@@ -10,6 +10,7 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONException
 import java.io.IOException
+import java.text.ParsePosition
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
@@ -36,11 +37,18 @@ class EconomicCalendarProvider(private val client: OkHttpClient, private val fmp
                         emptyList(), nowMs, coverageFrom, coverageTo, "FinancialModelingPrep"
                     )
                 }
-                val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
+                val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                    isLenient = false
+                }
                 val out = ArrayList<VerifiedEvent>()
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
-                    val t = sdf.parse(o.optString("date"))?.time ?: continue     // unparseable time => skip, never "now"
+                    val rawDate = o.optString("date")
+                    val parsePosition = ParsePosition(0)
+                    val parsedDate = sdf.parse(rawDate, parsePosition)
+                    val t = parsedDate?.time?.takeIf { parsePosition.index == rawDate.length }
+                        ?: continue // malformed time => skip, never "now"
                     out += VerifiedEvent(o.optString("event"), o.optString("country"), o.optString("currency").uppercase(),
                         when (o.optString("impact").lowercase()) { "high" -> NewsImpact.HIGH; "medium" -> NewsImpact.MEDIUM; else -> NewsImpact.LOW },
                         t, o.optString("actual").takeUnless { it.isBlank() || it == "null" }, o.optString("estimate").takeUnless { it.isBlank() || it == "null" },

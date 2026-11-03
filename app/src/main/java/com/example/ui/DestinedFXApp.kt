@@ -1010,7 +1010,7 @@ internal fun StrategyWorkbench(
         matchesSearch && matchesFilter
     }
 
-    LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground),
+    LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground).testTag("strategy_list"),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 18.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp)) {
         item {

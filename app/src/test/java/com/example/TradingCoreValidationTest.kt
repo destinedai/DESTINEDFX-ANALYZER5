@@ -302,8 +302,16 @@ class TradingCoreValidationTest {
         assertNotNull(ictDef)
         assertTrue(ictDef!!.isImplemented)
 
+        val volatilityBreakout = StrategyRegistry.allStrategies.single { it.id == "volatility-breakout" }
+        assertEquals(StrategyCapabilityStatus.CANDIDATE_ONLY, volatilityBreakout.kotlinStatus)
+        assertFalse(volatilityBreakout.isImplemented)
+        assertFalse(volatilityBreakout.botExecutionEligible)
+
         StrategyRegistry.allStrategies.forEach { strat ->
-            assertTrue("Strategy ${strat.name} (${strat.id}) must be implemented", strat.isImplemented)
+            assertTrue(
+                "Bot-eligible strategy ${strat.name} (${strat.id}) must be Kotlin implemented and final validated",
+                !strat.botExecutionEligible || (strat.isImplemented && strat.kotlinFinalValidation)
+            )
         }
     }
 

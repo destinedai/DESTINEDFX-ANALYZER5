@@ -7,10 +7,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import com.example.ui.StrategyWorkbench
@@ -42,7 +43,9 @@ class StrategyWorkbenchResponsiveTest {
         }
 
         composeRule.onNodeWithTag("strategy_open_analyzer").assertIsNotEnabled()
-        composeRule.onNodeWithTag("strategy_card_volatility-breakout").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("strategy_list")
+            .performScrollToNode(hasTestTag("strategy_card_volatility-breakout"))
+        composeRule.onNodeWithTag("strategy_card_volatility-breakout").assertIsDisplayed()
         composeRule.onNodeWithText("CANDIDATE ONLY · NOT EXECUTABLE").assertIsDisplayed()
         composeRule.onNodeWithText("NOT ELIGIBLE").assertIsDisplayed()
         composeRule.onNodeWithText("Volatility Breakout").assertIsDisplayed()
@@ -63,8 +66,13 @@ class StrategyWorkbenchResponsiveTest {
         }
 
         composeRule.onNodeWithTag("strategy_open_analyzer").assertIsEnabled()
+        composeRule.onNodeWithTag("strategy_list")
+            .performScrollToNode(hasTestTag("strategy_search"))
         composeRule.onNodeWithTag("strategy_search").performTextInput("mean-reversion")
-        composeRule.onNodeWithTag("strategy_card_mean-reversion").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("strategy_list")
+            .performScrollToNode(hasTestTag("strategy_card_mean-reversion"))
+        composeRule.onNodeWithTag("strategy_card_mean-reversion").assertIsDisplayed()
         composeRule.onNodeWithText("Statistical Mean Reversion").assertIsDisplayed()
+        composeRule.onNodeWithTag("strategy_open_analyzer").assertIsEnabled()
     }
 }
