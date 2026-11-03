@@ -30,11 +30,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
       - name: Install MetaTrader and compile the EA
         shell: pwsh
         run: ./scripts/compile-mt5-ea.ps1 -OutputDir "$env:RUNNER_TEMP\destinedfx-ea"
-
       - name: Upload compiled EA and compiler evidence
         uses: actions/upload-artifact@v4
         with:
@@ -42,33 +40,25 @@ jobs:
           path: ${{ runner.temp }}/destinedfx-ea/
           if-no-files-found: error
 
-  build:
+  android-build-and-unit-tests:
+    name: Android JVM tests and APK build
     runs-on: ubuntu-24.04
-    # Set this public URL as a GitHub Actions repository variable only after the
-    # managed bridge is deployed. It is embedded in the APK; never put secrets here.
+    # APK assembly and upload are intentionally independent of emulator health.
+    # Set this public URL only after the managed bridge is deployed; never put secrets here.
     env:
       MT5_MANAGED_SERVICE_URL: ${{ vars.MT5_MANAGED_SERVICE_URL }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-
-      # The runner image already ships the Android SDK; just accept licenses
-      # so Gradle can download platform 36 on demand.
       - name: Accept Android licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-
       - uses: gradle/actions/setup-gradle@v4
-
-      # Keep the debug certificate stable across builds when the protected repository secret
-      # is configured. The fallback is intentionally fresh-install-only and is reported.
       - name: Prepare stable debug keystore
         env:
           DESTINEDFX_DEBUG_KEYSTORE_B64: ${{ secrets.DESTINEDFX_DEBUG_KEYSTORE_B64 }}
@@ -85,16 +75,13 @@ jobs:
             echo "::warning title=Fresh-install-only APK::DESTINEDFX_DEBUG_KEYSTORE_B64 is not configured; this build uses a new debug certificate and is not guaranteed to update an earlier APK."
             echo "Fresh debug keystore generated; configure the protected DESTINEDFX_DEBUG_KEYSTORE_B64 secret for upgrade-compatible builds." >> "$GITHUB_STEP_SUMMARY"
           fi
-
       - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
-
       - name: Explain runtime bridge URL setup when no URL is embedded
         if: env.MT5_MANAGED_SERVICE_URL == ''
         run: |
           echo "::warning title=Runtime bridge URL required::Enter the deployed public HTTPS origin in Bot > Remote MT5 EA Bridge > Managed bridge HTTPS URL."
           echo "The APK supports runtime bridge URL setup. This does not deploy or connect the Windows worker." >> "$GITHUB_STEP_SUMMARY"
-
       - name: Validate configured managed-service URL (if supplied)
         if: env.MT5_MANAGED_SERVICE_URL != ''
         run: |
@@ -126,8 +113,6 @@ jobs:
               raise SystemExit("MT5_MANAGED_SERVICE_URL must be a real public HTTPS origin without a path, credentials, query, or fragment.")
           print("Managed-service URL format accepted; no connection or deployment is implied.")
           PY
-
-
       - name: Check managed bridge readiness when configured
         if: env.MT5_MANAGED_SERVICE_URL != ''
         run: |
@@ -145,40 +130,178 @@ jobs:
           print("Managed bridge /health/ready responded. This does not prove worker, news provider, or broker-terminal readiness.")
           PY
           echo "Managed bridge readiness endpoint responded successfully. This is only a deployment health check; provider, worker, MT5 compile, and DEMO fill acceptance remain separate." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Run unit tests
+      - name: Run Android JVM unit tests
         run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest --stacktrace
-
-      - name: Run Android Python runtime instrumentation tests on emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: google_apis
-          disable-animations: true
-          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
-
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Verify APK signature and package metadata
+      - name: Verify nonzero Android JVM test execution
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import xml.etree.ElementTree as ET
+          files = list(Path("app/build/test-results/testDebugUnitTest").rglob("TEST-*.xml"))
+          executed = failed = 0
+          for path in files:
+              root = ET.parse(path).getroot()
+              for case in root.iter("testcase"):
+                  if case.find("skipped") is None:
+                      executed += 1
+                  if case.find("failure") is not None or case.find("error") is not None:
+                      failed += 1
+          if executed == 0:
+              raise SystemExit("Android JVM task produced zero executed tests; refusing to report a pass.")
+          print(f"Android JVM tests executed: {executed}; failed: {failed}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"\nAndroid JVM tests executed: **{executed}**; failed: **{failed}**.\n")
+          PY
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+      - name: Verify APK signature, identity, metadata, ABI, and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
           apk="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$apk"
           apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
-          test -n "$apksigner_path"
-          "$apksigner_path" verify --verbose --print-certs "$apk"
           aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
-          "$aapt_path" dump badging "$apk" | grep -E "package:|sdkVersion:|native-code:"
-
-      - uses: actions/upload-artifact@v4
+          test -n "$apksigner_path"
+          test -n "$aapt_path"
+          "$apksigner_path" verify --verbose --print-certs "$apk"
+          metadata="$("$aapt_path" dump badging "$apk")"
+          printf '%s\n' "$metadata" | grep -F "package: name='com.aistudio.destinedfx.qwvzxp'"
+          printf '%s\n' "$metadata" | grep -E "sdkVersion:|targetSdkVersion:|native-code:"
+          printf '%s\n' "$metadata" | grep -F "versionCode='9'"
+          printf '%s\n' "$metadata" | grep -F "versionName='1.0.9'"
+          unzip -l "$apk" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
+            echo "Chaquopy native library listing was not found for configured ABIs." >&2
+            exit 1
+          }
+          sha256sum "$apk" | tee /tmp/apk-sha256.txt
+          {
+            echo "### Debug APK verification"
+            echo 'Package: `com.aistudio.destinedfx.qwvzxp`'
+            echo 'Version: `1.0.9` (code `9`)'
+            echo 'Signature verified by apksigner; supported ABI metadata and Chaquopy native payload inspected.'
+            echo 'SHA-256:'
+            echo '```text'
+            cat /tmp/apk-sha256.txt
+            echo '```'
+            echo 'This is a debug APK, not a production release. Emulator instrumentation is reported by its separate job.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload verified debug APK
+        uses: actions/upload-artifact@v4
         with:
           name: DestinedFX-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+  android-emulator-instrumentation:
+    name: Android emulator instrumentation (runtime acceptance)
+    runs-on: ubuntu-24.04
+    needs: android-build-and-unit-tests
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Accept Android licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare test configuration
+        run: |
+          chmod +x gradlew
+          cp .env.example .env
+          keytool -genkeypair -v -keystore debug.keystore \
+            -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+      - name: Run Android Python runtime instrumentation on clean API 34 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          disable-animations: true
+          emulator-boot-timeout: 600
+          emulator-options: -no-snapshot -no-snapshot-save -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: |
+            set -Eeuo pipefail
+            capture_failure() {
+              rc=$?
+              if [ "$rc" -ne 0 ]; then
+                mkdir -p "$RUNNER_TEMP/emulator-diagnostics"
+                adb devices -l > "$RUNNER_TEMP/emulator-diagnostics/adb-devices.txt" 2>&1 || true
+                adb shell getprop > "$RUNNER_TEMP/emulator-diagnostics/getprop.txt" 2>&1 || true
+                adb shell df -h > "$RUNNER_TEMP/emulator-diagnostics/storage.txt" 2>&1 || true
+                adb shell pm list packages > "$RUNNER_TEMP/emulator-diagnostics/packages.txt" 2>&1 || true
+                adb logcat -d -v threadtime > "$RUNNER_TEMP/emulator-diagnostics/logcat.txt" 2>&1 || true
+                echo "Instrumentation failed with exit code $rc. Device diagnostics captured; this is not a passing runtime test." >> "$GITHUB_STEP_SUMMARY"
+              fi
+              return "$rc"
+            }
+            trap capture_failure EXIT
+            adb wait-for-device
+            for attempt in $(seq 1 120); do
+              booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+              state="$(adb get-state 2>/dev/null || true)"
+              if [ "$booted" = "1" ] && [ "$state" = "device" ]; then break; fi
+              if [ "$attempt" -eq 120 ]; then echo "Emulator did not complete boot within 120 checks." >&2; exit 1; fi
+              sleep 5
+            done
+            for attempt in $(seq 1 30); do
+              if adb shell pm path android >/dev/null 2>&1; then break; fi
+              if [ "$attempt" -eq 30 ]; then echo "Package manager did not become ready." >&2; exit 1; fi
+              sleep 2
+            done
+            adb devices -l
+            adb shell getprop ro.build.version.sdk
+            adb shell df -h /data
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace
+      - name: Verify nonzero Android instrumentation test execution
+        if: success()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import xml.etree.ElementTree as ET
+          files = list(Path("app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml"))
+          executed = failed = 0
+          for path in files:
+              root = ET.parse(path).getroot()
+              for case in root.iter("testcase"):
+                  if case.find("skipped") is None:
+                      executed += 1
+                  if case.find("failure") is not None or case.find("error") is not None:
+                      failed += 1
+          if executed == 0:
+              raise SystemExit("Emulator task produced zero executed instrumentation tests; runtime acceptance is incomplete.")
+          print(f"Android instrumentation tests executed: {executed}; failed: {failed}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"\nAndroid instrumentation tests executed: **{executed}**; failed: **{failed}**. Chaquopy runtime acceptance requires these tests to pass.\n")
+          PY
+      - name: Upload emulator test reports and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-emulator-test-reports
+          path: |
+            app/build/reports/androidTests/connected/**
+            app/build/outputs/androidTest-results/connected/**
+            ${{ runner.temp }}/emulator-diagnostics/**
+          if-no-files-found: warn
 
+  package-windows-worker-kit:
+    name: Package Windows MT5 worker kit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
       - name: Package Windows MT5 worker kit
         run: |
           mkdir -p dist/DestinedFX-Windows-Worker-Kit
@@ -194,7 +317,6 @@ jobs:
           6. Select DEMO MASTER in the Android app for the first execution test.
           Keep worker.toml and terminal data private. Worker start does not place trades without an app command.
           EOF
-
       - uses: actions/upload-artifact@v4
         with:
           name: DestinedFX-Windows-Worker-Kit

@@ -1,6 +1,6 @@
 # Security and Broker Readiness Register
 
-**Assessment baseline:** continuation branch `feat/trading-path-finalization` at `cc6cd2fabc6d3431f3b4a37a836b80f2dceed928` (`test(android): update Python candle fixture volume type`), stacked on PR #7. Previous security implementation commit: `ea21299d57cf7dde386b7863c25341f7e47730a8`. This continuation also includes a DST-aware ICT Silver Bullet session gate, closed-candle sweep/displacement/FVG/Consequent Encroachment checks, and explicitly unscored candidate confidence. This register is not a full penetration test, broker acceptance, or production approval.
+**Assessment baseline:** verified pre-remediation branch head `feat/trading-path-finalization` at `94bfc513bf8d616f926dafd97404086f7cb648ad` (`docs: record emulator instrumentation blocker`), stacked on PR #7. Previous security implementation commit: `ea21299d57cf7dde386b7863c25341f7e47730a8`. This continuation also includes a DST-aware ICT Silver Bullet session gate, closed-candle sweep/displacement/FVG/Consequent Encroachment checks, and explicitly unscored candidate confidence. This register is not a full penetration test, broker acceptance, or production approval.
 
 **Overall disposition: NO-GO for production or automated LIVE trading.** Source controls exist in selected paths, but this environment lacks an Android SDK/device, genuine broker DEMO credentials, an operator-owned Windows MT5 terminal/MetaEditor, and a durable configured managed bridge. No order was sent.
 
@@ -65,3 +65,16 @@ Severity labels here prioritize follow-up; they are not CVSS scores. No finding 
 5. Keep OANDA trade execution disabled until a separately tested official execution integration exists.
 6. Add/execute branch CI for Python, Kotlin, release build/signing verification, manifests, dependencies, secrets, static analysis and artifact hashes. Retain full reports and exact commit SHA.
 7. Do not arm or submit REAL orders in this project continuation. Any controlled LIVE test requires new, separate, exact account/broker authorization after review of DEMO and security evidence.
+
+
+## Android CI remediation in this continuation
+
+**Current status: IMPLEMENTED IN SOURCE; UNIT TESTED / EMULATOR VERIFIED / ARTIFACT VERIFIED remain pending a successful run on this change.** This section records the workflow changes made after the assessment baseline above; it does not upgrade runtime or release acceptance.
+
+- GitHub run [41663990011](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41663990011) was inspected on commit `94bfc513bf8d616f926dafd97404086f7cb648ad`. Android JVM tests, Python suites and genuine MetaEditor compilation passed. The API 35 emulator instrumentation failed during app split installation (`PackageManagerInternal.freeStorage` null-pointer / `Failed to install split APK(s)`), started zero tests, and then Gradle report merging failed. APK assembly, signature checks and artifact upload were skipped by the prior single-job dependency chain. No Android runtime/Chaquopy pass is claimed.
+- The same run explicitly warned that `DESTINEDFX_DEBUG_KEYSTORE_B64` is not configured. CI generated a new debug certificate, so upgrade compatibility with any previously installed APK is not established. Do not describe that signing identity as stable; configure the protected secret before claiming upgrade-compatible builds.
+- `.github/workflows/build-apk.yml` now defines independent Python, Windows MetaEditor, Android JVM+APK, Android emulator instrumentation, and worker-kit jobs. Emulator failure can no longer gate APK assembly or APK artifact upload; independent worker-kit packaging also cannot gate either Android job.
+- The Android APK job verifies nonzero JVM test execution, assembles the debug APK, verifies the signature and expected package/version metadata, checks ABI/Chaquopy library payloads, records SHA-256, and uploads `DestinedFX-debug-apk`. It remains a debug build, not a production release.
+- Emulator instrumentation uses a fresh API 34 Google APIs x86_64 AVD with snapshots disabled, waits for boot and package-manager readiness, runs `:app:connectedDebugAndroidTest`, rejects zero executed tests, and uploads reports plus failure-time ADB/getprop/storage/package/logcat diagnostics. API 34 stability and the new installation path have not yet been demonstrated by a completed run.
+- This sandbox has no configured Android SDK (`ANDROID_HOME` is unset), so Android Gradle tests and APK build were not run locally. No physical device, broker, Telegram, TradingView, market-provider, or persistent-worker acceptance was performed in this continuation.
+- The GitHub Actions result must still be checked for real nonzero test counts, Chaquopy execution inside Android, install/launch success, APK artifact presence, and SHA-256 before any corresponding runtime status is changed to verified.
