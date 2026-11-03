@@ -251,7 +251,7 @@ jobs:
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot -no-snapshot-save -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
           script: |
-            set -Eeuo pipefail
+            set -eu
             collect_ui_screenshots() {
               app_id="com.aistudio.destinedfx.qwvzxp"
               destination="app/build/reports/ui-screenshots"
