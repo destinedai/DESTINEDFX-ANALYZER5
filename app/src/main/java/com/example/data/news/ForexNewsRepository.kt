@@ -42,7 +42,7 @@ class ForexNewsRepository(
                     lastCalendar = com.destinedfx.core.news.CalendarResult.Failed("Calendar HTTP ${resp.code}")
                     return@withContext cache
                 }
-                val body = resp.body?.string()
+                val body = resp.body?.string()?.takeIf { it.isNotBlank() }
                     ?: return@withContext failCalendar("Empty calendar response")
                 val now = clock()
                 val evts = parseFeedPayload(body, now)

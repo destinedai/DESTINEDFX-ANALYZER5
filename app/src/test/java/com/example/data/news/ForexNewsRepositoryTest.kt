@@ -106,6 +106,12 @@ class ForexNewsRepositoryTest {
         ).calendar()
         assertEquals(CalendarResult.Failed("Empty calendar response"), noBodyResult)
         assertEquals(NewsStatus.UNKNOWN, NewsFilter.evaluate(noBodyResult, setOf("USD"), now).status)
+
+        val emptyBodyResult = ForexNewsRepository(
+            queuedClient(AtomicInteger(), listOf(200 to "")), { now }, 0L
+        ).calendar()
+        assertEquals(CalendarResult.Failed("Empty calendar response"), emptyBodyResult)
+        assertEquals(NewsStatus.UNKNOWN, NewsFilter.evaluate(emptyBodyResult, setOf("USD"), now).status)
     }
 
     @Test
@@ -135,7 +141,7 @@ class ForexNewsRepositoryTest {
                 .protocol(Protocol.HTTP_1_1)
                 .code(code)
                 .message(if (code in 200..299) "OK" else "Failure")
-            if (body != null) builder.body(body.toResponseBody("application/json".toMediaType()))
+            builder.body(body.orEmpty().toResponseBody("application/json".toMediaType()))
             builder.build()
         }.build()
     }
