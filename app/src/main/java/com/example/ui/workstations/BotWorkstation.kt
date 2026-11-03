@@ -1874,7 +1874,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             isEditingCredentials = false
                                         }
                                     } catch (e: Exception) {
-                                        brokerConnectionMessage = e.message?.takeIf { it == "CONFIGURATION_REQUIRED" } ?: "Managed registration failed; check service availability and credentials."
+                                        brokerConnectionMessage = e.message?.takeIf {
+                                            it == "CONFIGURATION_REQUIRED" || it.contains("Secure storage") ||
+                                                it.contains("encrypted storage")
+                                        } ?: "Managed registration failed; check service availability and credentials."
                                     } finally {
                                         mt5PasswordInput = ""
                                         mt5InvestorPasswordInput = ""

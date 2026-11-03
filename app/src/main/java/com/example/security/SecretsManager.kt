@@ -11,7 +11,10 @@ import java.security.MessageDigest
  * Stores Supabase, Broker (MT5, OANDA), and Risk Configuration.
  * All values stored in Android Keystore via EncryptedSharedPreferences.
  */
-class SecretsManager(private val ctx: Context) {
+class SecretsManager internal constructor(
+    private val ctx: Context,
+    private val encryptedPreferencesFactory: (() -> android.content.SharedPreferences)? = null
+) {
 
     companion object {
         private const val PREFS   = "destinedfx_secrets"
@@ -60,13 +63,14 @@ class SecretsManager(private val ctx: Context) {
 
     init {
         prefs = try {
-            val masterKey = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-            val p = EncryptedSharedPreferences.create(
-                ctx, PREFS, masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-            p
+            encryptedPreferencesFactory?.invoke() ?: run {
+                val masterKey = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+                EncryptedSharedPreferences.create(
+                    ctx, PREFS, masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+            }
         } catch (e: Exception) {
             android.util.Log.e("SecretsManager", "Encrypted Android Keystore storage unavailable; refusing credential persistence", e)
             UnavailableSharedPreferences
@@ -75,34 +79,35 @@ class SecretsManager(private val ctx: Context) {
     }
 
 
-    fun saveTelegramToken(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(TG_TOK, v).apply(); true } else false
-    fun saveTelegramChatId(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(TG_CHAT, v).apply(); true } else false
-    fun saveWhatsAppApiKey(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(WA_KEY, v).apply(); true } else false
-    fun saveWhatsAppPhone(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(WA_PHN, v).apply(); true } else false
-    fun saveMT5Password(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(MT5_PW, v).apply(); true } else false
+    fun saveTelegramToken(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(TG_TOK, v).commit()
+    fun saveTelegramChatId(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(TG_CHAT, v).commit()
+    fun saveWhatsAppApiKey(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(WA_KEY, v).commit()
+    fun saveWhatsAppPhone(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(WA_PHN, v).commit()
+    fun saveMT5Password(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_PW, v).commit()
     fun saveMT5PasswordIfAllowed(v: String, enabled: Boolean): Boolean {
         if (!isSecureStorageAvailable) return false
-        prefs.edit().putBoolean(MT5_SAVE_PASSWORD, enabled).apply()
-        if (enabled) saveMT5Password(v) else prefs.edit().remove(MT5_PW).apply()
-        return true
+        val edit = prefs.edit().putBoolean(MT5_SAVE_PASSWORD, enabled)
+        if (enabled) edit.putString(MT5_PW, v) else edit.remove(MT5_PW)
+        return edit.commit()
     }
     fun isMT5PasswordSaveEnabled(): Boolean = prefs.getBoolean(MT5_SAVE_PASSWORD, false)
-    fun clearMT5Credentials() {
-        prefs.edit().remove(MT5_PW).remove(MT5_INVESTOR_PW).remove(MT5_LOGIN).remove(MT5_AC)
-            .remove(MT5_SV).putString(MT5_SESSION_STATUS, "DISCONNECTED").apply()
+    fun clearMT5Credentials(): Boolean {
+        if (!isSecureStorageAvailable) return false
+        return prefs.edit().remove(MT5_PW).remove(MT5_INVESTOR_PW).remove(MT5_LOGIN).remove(MT5_AC)
+            .remove(MT5_SV).putString(MT5_SESSION_STATUS, "DISCONNECTED").commit()
     }
-    fun saveMT5Login(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(MT5_LOGIN, v).apply(); true } else false
-    fun saveMT5InvestorPassword(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(MT5_INVESTOR_PW, v).apply(); true } else false
-    fun saveMT5AccountNumber(v: String) = prefs.edit().putString(MT5_AC,  v).apply()
-    fun saveMT5BrokerServer(v: String)  = prefs.edit().putString(MT5_SV,  v).apply()
-    fun saveMT5AccountBalance(v: Double) = prefs.edit().putString(MT5_BALANCE, v.toString()).apply()
-    fun saveMT5AccountType(v: String)   = prefs.edit().putString(MT5_ACCOUNT_TYPE, v).apply()
-    fun saveMT5Leverage(v: Int)         = prefs.edit().putInt(MT5_LEVERAGE, v).apply()
-    fun saveMT5SessionStatus(v: String) = prefs.edit().putString(MT5_SESSION_STATUS, v).apply()
-    fun saveMT5Currency(v: String)      = prefs.edit().putString(MT5_CURRENCY, v).apply()
-    fun saveMT5LastLoginMs(v: Long)     = prefs.edit().putLong(MT5_LAST_LOGIN_MS, v).apply()
-    fun saveOandaApiKey(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(OANDA_KEY, v).apply(); true } else false
-    fun saveOandaAccountId(v: String): Boolean = if (isSecureStorageAvailable) { prefs.edit().putString(OANDA_ACC, v).apply(); true } else false
+    fun saveMT5Login(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_LOGIN, v).commit()
+    fun saveMT5InvestorPassword(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_INVESTOR_PW, v).commit()
+    fun saveMT5AccountNumber(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_AC, v).commit()
+    fun saveMT5BrokerServer(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_SV, v).commit()
+    fun saveMT5AccountBalance(v: Double): Boolean = isSecureStorageAvailable && v.isFinite() && prefs.edit().putString(MT5_BALANCE, v.toString()).commit()
+    fun saveMT5AccountType(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_ACCOUNT_TYPE, v).commit()
+    fun saveMT5Leverage(v: Int): Boolean = isSecureStorageAvailable && v > 0 && prefs.edit().putInt(MT5_LEVERAGE, v).commit()
+    fun saveMT5SessionStatus(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_SESSION_STATUS, v).commit()
+    fun saveMT5Currency(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_CURRENCY, v).commit()
+    fun saveMT5LastLoginMs(v: Long): Boolean = isSecureStorageAvailable && v >= 0L && prefs.edit().putLong(MT5_LAST_LOGIN_MS, v).commit()
+    fun saveOandaApiKey(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(OANDA_KEY, v).commit()
+    fun saveOandaAccountId(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(OANDA_ACC, v).commit()
     fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
     fun saveBotSymbol(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("symbol", v.trim()).apply() }
@@ -235,16 +240,21 @@ class SecretsManager(private val ctx: Context) {
             prefs.edit().remove(profileKey(MT5_BRIDGE_TOKEN, profile)).apply()
         }
     }
-    fun saveManagedMT5Profile(profile: String, login: String, server: String, accessType: String, password: String, savePassword: Boolean) {
-        require(accessType == "MASTER" || accessType == "INVESTOR")
-        val mode = managedProfile(profile)
+    fun saveManagedMT5Profile(
+        profile: String, login: String, server: String, accessType: String,
+        password: String, savePassword: Boolean = false
+    ): Boolean {
+        if (!isSecureStorageAvailable || login.isBlank() || server.isBlank() ||
+            accessType !in setOf("MASTER", "INVESTOR") || (savePassword && password.isBlank())
+        ) return false
+        val mode = runCatching { managedProfile(profile) }.getOrNull() ?: return false
         val edit = prefs.edit().putString("managed_mt5_${mode.lowercase()}_login", login.trim())
-            .putString("managed_mt5_${mode.lowercase()}_server", server)
+            .putString("managed_mt5_${mode.lowercase()}_server", server.trim())
             .putString("managed_mt5_${mode.lowercase()}_access", accessType)
             .putBoolean("managed_mt5_${mode.lowercase()}_save_password", savePassword)
         if (savePassword) edit.putString("managed_mt5_${mode.lowercase()}_password", password)
         else edit.remove("managed_mt5_${mode.lowercase()}_password")
-        edit.apply()
+        return edit.commit()
     }
     fun getManagedMT5Login(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_login", "") ?: ""
     fun getManagedMT5Server(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_server", "") ?: ""

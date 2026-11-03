@@ -1,6 +1,9 @@
 package com.example
 
 import com.example.data.trade.MT5RemoteBridgeClient
+import com.example.security.SecretsManager
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,6 +14,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MT5RemoteBridgeClientTest {
+    @Test fun unavailableEncryptedStorageBlocksManagedRegistrationBeforeNetwork() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
+        val client = MT5RemoteBridgeClient(secrets)
+        val failure = runCatching {
+            client.registerManagedAccount(
+                login = "12345", password = "test-password", server = "Broker-Demo",
+                accessType = "MASTER", consent = true
+            )
+        }.exceptionOrNull()
+        assertTrue(failure?.message.orEmpty().contains("Secure storage is unavailable"))
+    }
+
     @Test fun riskMustBeFiniteAndWithinTheExactSupportedInterval() {
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(0.25))
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(1.0))

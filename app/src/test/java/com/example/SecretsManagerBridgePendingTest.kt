@@ -68,8 +68,8 @@ class SecretsManagerBridgePendingTest {
         assertEquals("demo-request", manager.getMT5BridgePendingCommandId("DEMO"))
         assertEquals("live-request", manager.getMT5BridgePendingCommandId("LIVE"))
 
-        manager.saveManagedMT5Profile("DEMO", "111", "Demo-Server", "MASTER", "demo-password", true)
-        manager.saveManagedMT5Profile("LIVE", "999", "Live-Server", "MASTER", "live-password", true)
+        assertTrue(manager.saveManagedMT5Profile("DEMO", "111", "Demo-Server", "MASTER", "demo-password", true))
+        assertTrue(manager.saveManagedMT5Profile("LIVE", "999", "Live-Server", "MASTER", "live-password", true))
         assertEquals("111", manager.getManagedMT5Login("DEMO"))
         assertEquals("999", manager.getManagedMT5Login("LIVE"))
         assertEquals("Demo-Server", manager.getManagedMT5Server("DEMO"))
@@ -83,6 +83,22 @@ class SecretsManagerBridgePendingTest {
         manager.clearMT5BridgeAppToken("LIVE")
         assertEquals("demo-token", manager.getMT5BridgeAppToken("DEMO"))
         assertFalse(manager.getMT5BridgeAppToken("LIVE").isNotBlank())
+    }
+
+    @Test fun managedMt5ProfileRefusesUnavailableStorageAndDefaultsPasswordSavingOff() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val unavailable = SecretsManager(context) { throw IllegalStateException("simulated Android Keystore failure") }
+        assertFalse(unavailable.isSecureStorageAvailable)
+        assertFalse(unavailable.saveManagedMT5Profile("DEMO", "123", "Demo-Server", "MASTER", "pw"))
+        assertFalse(unavailable.saveManagedMT5Profile("DEMO", "123", "Demo-Server", "MASTER", "pw", true))
+        assertEquals("", unavailable.getManagedMT5Login("DEMO"))
+        assertEquals("", unavailable.getManagedMT5Password("DEMO"))
+
+        val manager = SecretsManager(context)
+        if (!manager.isSecureStorageAvailable) return
+        assertTrue(manager.saveManagedMT5Profile("DEMO", "456", "Demo-Server", "MASTER", "do-not-save"))
+        assertFalse(manager.isManagedMT5PasswordSaveEnabled("DEMO"))
+        assertEquals("", manager.getManagedMT5Password("DEMO"))
     }
 
     @Test fun derivCredentialsAreStoredOnlyInEncryptedPreferencesAndModeIsExplicit() {

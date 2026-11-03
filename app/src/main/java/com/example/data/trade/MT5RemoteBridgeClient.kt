@@ -68,6 +68,7 @@ class MT5RemoteBridgeClient(
         commissionPerLot: Double = 0.0,
         costEvidence: String = ""
     ): Snapshot {
+        check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; managed account registration was not attempted." }
         require(managedConfigured()) { "CONFIGURATION_REQUIRED" }
         require(accessType == "MASTER" || accessType == "INVESTOR")
         require(consent) { "Explicit consent is required before sending broker credentials." }
@@ -80,23 +81,26 @@ class MT5RemoteBridgeClient(
         when (costModel) {
             "OBSERVED_ROUND_TURN" -> require(commissionPerLot == 0.0 && evidence.isEmpty()) { "Observed mode uses broker deal history and must not include a configured commission." }
             "ZERO_COMMISSION_SPREAD_ONLY" -> require(commissionPerLot == 0.0 && evidence.length >= 8) { "Zero-commission mode requires a broker pricing reference; the EA will calculate spread and slippage costs live." }
-            else -> require(commissionPerLot > 0.0 && evidence.length >= 8) { "Configured commission requires a positive account-currency amount per standard lot and a broker pricing reference." }
+        else -> require(commissionPerLot > 0.0 && evidence.length >= 8) { "Configured commission requires a positive account-currency amount per standard lot and a broker pricing reference." }
+        }
+        check(secrets.saveManagedMT5Profile(profile, login.trim(), server, accessType, password, savePasswordLocally)) {
+            "Managed MT5 profile could not be durably saved in encrypted storage; no credentials were submitted."
         }
         if (secrets.getMT5BridgeAppToken(profile).isBlank()) pair()
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
             .put("access_type", accessType).put("account_mode", profile).put("consent", consent)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
-        secrets.saveManagedMT5Profile(profile, login.trim(), server, accessType, password, savePasswordLocally)
         return state()
     }
 
-    suspend fun pair(): Pairing = request("POST", "/v1/pairings", JSONObject()).let { body ->
+    suspend fun pair(): Pairing {
+        check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; pairing request was not sent." }
+        val body = request("POST", "/v1/pairings", JSONObject())
         val code = body.optString("pairing_code"); val token = body.optString("app_token")
         require(code.isNotBlank() && token.isNotBlank()) { "Bridge returned an incomplete pairing response." }
-        if (!secrets.isSecureStorageAvailable) throw IllegalStateException("Secure storage is unavailable; app token was not saved.")
         check(secrets.saveMT5BridgeAppToken(token, profile)) { "Bridge app token could not be durably stored in encrypted preferences." }
-        Pairing(code, body.optString("expires_at"))
+        return Pairing(code, body.optString("expires_at"))
     }
 
     suspend fun state(): Snapshot {
