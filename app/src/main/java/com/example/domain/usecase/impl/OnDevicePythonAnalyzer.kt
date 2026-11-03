@@ -149,7 +149,7 @@ class ChaquopyPythonAnalyzer(context: Context) : PythonAnalyzer {
         val rejectionReasons = requiredStringList("rejection_reasons")
         val reason = requiredString("reason")
         val confidence = o.opt("confidence_score")
-        require(confidence is Number && confidence.toDouble().isFinite() && confidence.toInt() == confidence.toDouble() && confidence.toInt() == 0) {
+        require(confidence is Number && confidence.toDouble().isFinite() && confidence.toDouble() == 0.0) {
             "UNSUPPORTED_PYTHON_CONFIDENCE_SCORE"
         }
         val entry = optionalFiniteNumber("entry")
