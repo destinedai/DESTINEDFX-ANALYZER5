@@ -139,7 +139,7 @@ class GlobalMarketMatrixEngineTest {
         }
         val engine = engine(repo, listener = listener, signalUseCase = signalUseCase)
         engine.startGlobalStream()
-        await { calls.get() == 1 }
+        await { calls.get() == 1 && listener.signalState.isNotBlank() }
         assertEquals("BUY", listener.signalState)
         assertFalse(listener.signalExecutable)
         assertTrue(listener.signalDetail.contains("RiskEngine rejected"))
@@ -171,16 +171,16 @@ class GlobalMarketMatrixEngineTest {
     }
 
     private class RecordingListener : GlobalMarketMatrixEngine.MatrixUiListener {
-        var signalState: String = ""
-        var signalExecutable: Boolean = false
-        var signalDetail: String = ""
+        @Volatile var signalState: String = ""
+        @Volatile var signalExecutable: Boolean = false
+        @Volatile var signalDetail: String = ""
         override fun onEngineOnline() = Unit
         override fun onLiveAssetTelemetry(symbol: String, assetType: String, price: Double, optimalLots: Double, cashRisk: Double, advice: String) = Unit
         override fun onEngineFault(error: String) = Unit
         override fun onSignalEvaluation(symbol: String, signalState: String, executable: Boolean, detail: String) {
-            this.signalState = signalState
             this.signalExecutable = executable
             this.signalDetail = detail
+            this.signalState = signalState
         }
     }
 

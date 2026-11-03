@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -73,6 +74,9 @@ class StrategyWorkbenchResponsiveTest {
             .performScrollToNode(hasTestTag("strategy_card_mean-reversion"))
         composeRule.onNodeWithTag("strategy_card_mean-reversion").assertIsDisplayed()
         composeRule.onNodeWithText("Statistical Mean Reversion").assertIsDisplayed()
+        composeRule.onNodeWithTag("strategy_list")
+            .performScrollToNode(hasTestTag("strategy_selected_id"))
+        composeRule.onNodeWithTag("strategy_selected_id").assertTextEquals("smc-confluence-1.0.0")
         composeRule.onNodeWithTag("strategy_open_analyzer").assertIsEnabled()
     }
 }

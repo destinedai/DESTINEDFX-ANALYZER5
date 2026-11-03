@@ -130,13 +130,13 @@ class ForexNewsRepositoryTest {
         return OkHttpClient.Builder().addInterceptor { chain ->
             val index = requests.getAndIncrement()
             val (code, body) = responses.getOrElse(index) { 500 to "unexpected request" }
-            Response.Builder()
+            val builder = Response.Builder()
                 .request(chain.request())
                 .protocol(Protocol.HTTP_1_1)
                 .code(code)
                 .message(if (code in 200..299) "OK" else "Failure")
-                .body(body?.toResponseBody("application/json".toMediaType()))
-                .build()
+            if (body != null) builder.body(body.toResponseBody("application/json".toMediaType()))
+            builder.build()
         }.build()
     }
 

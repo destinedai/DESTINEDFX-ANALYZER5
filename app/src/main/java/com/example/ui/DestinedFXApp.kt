@@ -1038,6 +1038,10 @@ internal fun StrategyWorkbench(
                         fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                     Text(selected?.name ?: "No registered strategy selected", fontSize = 18.sp,
                         color = TextPrimary, fontWeight = FontWeight.Black)
+                    if (selected != null) {
+                        Text(selected.id, modifier = Modifier.testTag("strategy_selected_id"),
+                            fontSize = 9.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+                    }
                     Text(selected?.description ?: "Choose a Kotlin-implemented ruleset below.", fontSize = 11.sp,
                         color = TextSecondary, lineHeight = 17.sp)
                     if (selected != null) {
