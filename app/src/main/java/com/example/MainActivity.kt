@@ -55,7 +55,6 @@ class MainActivity : FragmentActivity() {
     private val processLifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStop(owner: LifecycleOwner) {
             AppSecurityGuard.lock()
-            mainViewModel?.lockApp()
         }
     }
 
@@ -177,24 +176,36 @@ class MainActivity : FragmentActivity() {
     }
 
     fun showBiometricPrompt() {
+        requestSensitiveAuthentication(
+            onSuccess = { mainViewModel?.unlockApp() },
+            onFailure = { message -> mainViewModel?.biometricStatus?.value = message }
+        )
+    }
+
+    /**
+     * Authenticate one sensitive operation without forcing guest/read-only analysis through a
+     * whole-screen gate. The lease is granted only after the platform callback succeeds.
+     */
+    fun requestSensitiveAuthentication(onSuccess: () -> Unit, onFailure: (String) -> Unit = {}) {
         val executor = ContextCompat.getMainExecutor(this)
         val biometricPrompt = BiometricPrompt(this, executor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    if (errorCode != BiometricPrompt.ERROR_USER_CANCELED && errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
-                        mainViewModel?.biometricStatus?.value = "Auth Error: $errString"
-                    }
+                    onFailure(if (errorCode == BiometricPrompt.ERROR_USER_CANCELED || errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON)
+                        "Authentication cancelled; sensitive action denied."
+                    else "Authentication error: $errString")
                 }
 
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    mainViewModel?.unlockApp()
+                    AppSecurityGuard.unlock()
+                    onSuccess()
                 }
 
                 override fun onAuthenticationFailed() {
                     super.onAuthenticationFailed()
-                    mainViewModel?.biometricStatus?.value = "Validation failed. Access denied."
+                    onFailure("Authentication failed; sensitive action denied.")
                 }
             })
 
@@ -213,7 +224,7 @@ class MainActivity : FragmentActivity() {
             biometricPrompt.authenticate(promptInfoBuilder.build())
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Biometric authenticate failed: ${e.message}")
-            mainViewModel?.biometricStatus?.value = "Biometric prompt error: ${e.message}"
+            onFailure("Biometric prompt unavailable; sensitive action denied.")
         }
     }
 }

@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.bot.BotLifecycleState
 import com.example.data.broker.BrokerType
 import com.example.data.broker.BrokerConnectionStatus
+import com.example.MainActivity
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.InsightCard
 import com.example.ui.InsightLine
@@ -1854,9 +1855,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     brokerConnectionMessage = "Enter a reference to the actual broker pricing or contract specification (at least 8 characters)."
                                     return@Button
                                 }
-                                isConnectingBroker = true
-                                brokerConnectionMessage = null
-                                coroutineScope.launch {
+                                val activity = reportContext as? MainActivity
+                                if (activity == null) {
+                                    brokerConnectionMessage = "Authentication is unavailable; sensitive action denied."
+                                    return@Button
+                                }
+                                activity.requestSensitiveAuthentication(
+                                    onSuccess = {
+                                        isConnectingBroker = true
+                                        brokerConnectionMessage = null
+                                        coroutineScope.launch {
                                     val secret = selectedTerminalPassword
                                     try {
                                         if (!bridgeClient.managedConfigured()) {
@@ -1884,7 +1892,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         managedCredentialConsent = false
                                         isConnectingBroker = false
                                     }
-                                }
+                                        }
+                                    },
+                                    onFailure = { message ->
+                                        brokerConnectionMessage = message
+                                        isConnectingBroker = false
+                                    }
+                                )
                             },
                             enabled = !isConnectingBroker,
                             modifier = Modifier.fillMaxWidth().height(50.dp).testTag("bot_connect_mt5"),
