@@ -1,8 +1,12 @@
 package com.example
 
 import android.graphics.Bitmap
+import android.content.ContentValues
+import android.os.Build
+import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.provider.MediaStore
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -22,8 +26,14 @@ class CoreWorkspaceScreenshotTest {
         val outputDirectory = File(instrumentation.targetContext.filesDir, "ui-review")
         outputDirectory.deleteRecursively()
         check(outputDirectory.mkdirs()) { "Unable to create screenshot output directory" }
-        val sharedOutputDirectory = "/sdcard/Download/destinedfx-ui-review"
-        runShell(instrumentation, "rm -rf $sharedOutputDirectory && mkdir -p $sharedOutputDirectory")
+        check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) { "Shared screenshot export requires Android 10 or later" }
+        val resolver = instrumentation.targetContext.contentResolver
+        val relativePath = "${Environment.DIRECTORY_PICTURES}/DESTINEDFX-Test-UI-Review/"
+        resolver.delete(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            "${MediaStore.Images.Media.RELATIVE_PATH} = ?",
+            arrayOf(relativePath)
+        )
 
         val screens = listOf(
             DestinedFXScreen.Analyzer,
@@ -50,15 +60,48 @@ class CoreWorkspaceScreenshotTest {
                     }
                     assertEquals("Unexpected screenshot width", widthDp, image.width)
                     assertTrue("Screenshot is unexpectedly small: $fileName", screenshot.length() > 2_000L)
-                    val copied = runShell(
-                        instrumentation,
-                        "run-as ${instrumentation.targetContext.packageName} cat files/ui-review/$fileName > $sharedOutputDirectory/$fileName && echo PNG_COPY_OK"
-                    )
-                    assertTrue("Could not export $fileName from the target app: $copied", copied.contains("PNG_COPY_OK"))
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                        put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                    val imageUri = checkNotNull(
+                        resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ) { "Could not create shared MediaStore entry for $fileName" }
+                    try {
+                        val stream = checkNotNull(resolver.openOutputStream(imageUri)) {
+                            "Could not open shared MediaStore entry for $fileName"
+                        }
+                        stream.use { destination ->
+                            screenshot.inputStream().use { source -> source.copyTo(destination) }
+                        }
+                        val publishValues = ContentValues().apply {
+                            put(MediaStore.Images.Media.IS_PENDING, 0)
+                        }
+                        check(resolver.update(imageUri, publishValues, null, null) == 1) {
+                            "Could not publish shared MediaStore entry for $fileName"
+                        }
+                    } catch (failure: Throwable) {
+                        resolver.delete(imageUri, null, null)
+                        throw failure
+                    }
                     image.recycle()
                 }
             }
             assertEquals("Expected a screenshot for all six workspaces at both widths", 12, outputDirectory.listFiles()?.size)
+            val exportedFileNames = mutableSetOf<String>()
+            resolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media.DISPLAY_NAME),
+                "${MediaStore.Images.Media.RELATIVE_PATH} = ?",
+                arrayOf(relativePath),
+                null
+            )?.use { cursor ->
+                val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                while (cursor.moveToNext()) exportedFileNames += cursor.getString(nameColumn)
+            }
+            assertEquals("Expected all 12 screenshots exported through MediaStore", 12, exportedFileNames.size)
         } finally {
             runShell(instrumentation, "wm size reset")
             runShell(instrumentation, "wm density reset")

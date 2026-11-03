@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 collect_ui_screenshots() {
   local destination="app/build/reports/ui-screenshots"
-  local source="/sdcard/Download/destinedfx-ui-review"
+  local source="/sdcard/Pictures/DESTINEDFX-Test-UI-Review"
   local valid=0
   mkdir -p "$destination"
   rm -f "$destination"/*.png
