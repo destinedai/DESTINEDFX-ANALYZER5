@@ -2,16 +2,33 @@
 set -Eeuo pipefail
 
 collect_ui_screenshots() {
-  local app_id="com.aistudio.destinedfx.qwvzxp"
   local destination="app/build/reports/ui-screenshots"
+  local source="/sdcard/Download/destinedfx-ui-review"
+  local valid=0
   mkdir -p "$destination"
+  rm -f "$destination"/*.png
   for width in 320 430; do
     for screen in analyzer strategies calendar bot risk settings; do
       local name="${screen}_${width}dp.png"
-      adb exec-out run-as "$app_id" cat "files/ui-review/$name" > "$destination/$name" 2>/dev/null || rm -f "$destination/$name"
+      local output="$destination/$name"
+      local magic
+      if adb pull "$source/$name" "$output" >/dev/null 2>&1; then
+        magic="$(od -An -tx1 -N8 "$output" | tr -d ' \n')"
+        if [ "$magic" = "89504e470d0a1a0a" ] && [ "$(wc -c < "$output")" -gt 2000 ]; then
+          valid=$((valid + 1))
+        else
+          rm -f "$output"
+        fi
+      else
+        rm -f "$output"
+      fi
     done
   done
   find "$destination" -type f -name '*.png' -printf '%f %s bytes\n' || true
+  if [ "$valid" -ne 12 ]; then
+    echo "Expected 12 valid PNG screenshots from the emulator, found $valid." >&2
+    return 1
+  fi
 }
 
 capture_failure() {

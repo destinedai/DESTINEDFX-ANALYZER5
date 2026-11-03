@@ -8,7 +8,7 @@ import com.example.ui.DestinedFXScreen
 import com.example.ui.createPreviewViewModel
 import com.example.ui.theme.DestinedFXTheme
 
-/** Test-only host using the app's deterministic, explicitly non-live preview data. */
+/** Debug-only host using deterministic, explicitly non-live preview data for emulator screenshots. */
 class WorkspaceScreenshotActivity : ComponentActivity() {
     private lateinit var previewViewModel: com.example.ui.DestinedFXViewModel
 

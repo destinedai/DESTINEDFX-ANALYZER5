@@ -22,6 +22,8 @@ class CoreWorkspaceScreenshotTest {
         val outputDirectory = File(instrumentation.targetContext.filesDir, "ui-review")
         outputDirectory.deleteRecursively()
         check(outputDirectory.mkdirs()) { "Unable to create screenshot output directory" }
+        val sharedOutputDirectory = "/sdcard/Download/destinedfx-ui-review"
+        runShell(instrumentation, "rm -rf $sharedOutputDirectory && mkdir -p $sharedOutputDirectory")
 
         val screens = listOf(
             DestinedFXScreen.Analyzer,
@@ -48,6 +50,11 @@ class CoreWorkspaceScreenshotTest {
                     }
                     assertEquals("Unexpected screenshot width", widthDp, image.width)
                     assertTrue("Screenshot is unexpectedly small: $fileName", screenshot.length() > 2_000L)
+                    val copied = runShell(
+                        instrumentation,
+                        "run-as ${instrumentation.targetContext.packageName} cat files/ui-review/$fileName > $sharedOutputDirectory/$fileName && echo PNG_COPY_OK"
+                    )
+                    assertTrue("Could not export $fileName from the target app: $copied", copied.contains("PNG_COPY_OK"))
                     image.recycle()
                 }
             }
@@ -65,8 +72,8 @@ class CoreWorkspaceScreenshotTest {
         SystemClock.sleep(200)
     }
 
-    private fun runShell(instrumentation: android.app.Instrumentation, command: String) {
+    private fun runShell(instrumentation: android.app.Instrumentation, command: String): String {
         val descriptor = instrumentation.uiAutomation.executeShellCommand(command)
-        ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
+        return ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
     }
 }
