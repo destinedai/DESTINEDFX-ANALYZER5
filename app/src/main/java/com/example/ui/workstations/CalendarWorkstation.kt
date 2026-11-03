@@ -65,24 +65,29 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
         if (preview) return
         scope.launch {
             isLoading = true
+            events = emptyList()
+            sourceRetrieved = null
+            newsStatus = NewsStatus.UNKNOWN
+            detail = "Refreshing verified calendar coverage…"
             try {
-                // Retain the genuine repository fetch; verified CalendarResult records supply
-                // the rendered fields (including actual/source/retrieved metadata).
-                withContext(Dispatchers.IO) { viewModel.app.newsRepository.fetchUpcomingEvents() }
+                // One snapshot drives both the event rows and the execution-safety verdict.
                 val result = withContext(Dispatchers.IO) { viewModel.app.newsRepository.calendar() }
                 val verdict = NewsFilter.evaluate(result, AssetClassifier.newsCurrencies(symbol), System.currentTimeMillis())
                 newsStatus = verdict.status
                 if (result is CalendarResult.Ok) {
                     events = result.events.sortedBy { it.timeMs }
-                    val source = result.events.firstOrNull()?.source?.takeIf { it.isNotBlank() } ?: "provider (unspecified)"
                     val retrieved = SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'", Locale.US).apply { timeZone = utcZone }.format(Date(result.retrievedAtMs))
-                    sourceRetrieved = "Source: $source · Retrieved: $retrieved"
+                    sourceRetrieved = "Source: ${result.source} · Retrieved: $retrieved"
                 } else {
                     events = emptyList()
                     sourceRetrieved = null
                 }
                 detail = verdict.detail
             } catch (e: kotlinx.coroutines.CancellationException) {
+                events = emptyList()
+                sourceRetrieved = null
+                newsStatus = NewsStatus.UNKNOWN
+                detail = "Calendar refresh cancelled. Automated execution remains blocked until a verified result is loaded."
                 throw e
             } catch (e: Exception) {
                 events = emptyList()

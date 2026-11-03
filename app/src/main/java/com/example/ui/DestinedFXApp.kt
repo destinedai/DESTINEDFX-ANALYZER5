@@ -977,30 +977,55 @@ private fun PlanLevel(label: String, value: String, valueColor: Color, modifier:
     }
 }
 
-private val selectedIdVersion = "smc-confluence-1.0.0"
-
 @Composable
 fun StrategiesTab(viewModel: DestinedFXViewModel) {
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
+    StrategyWorkbench(
+        selectedStrategyId = selectedStrategyId,
+        onSelect = viewModel::selectStrategy,
+        onOpenAnalyzer = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
+        backtestContent = { BacktestSection(viewModel) }
+    )
+}
+
+@Composable
+internal fun StrategyWorkbench(
+    selectedStrategyId: String,
+    onSelect: (String) -> Unit,
+    onOpenAnalyzer: () -> Unit,
+    backtestContent: @Composable () -> Unit = {}
+) {
+    var search by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf("ALL") }
     val strategies = StrategyRegistry.allStrategies
     val selected = strategies.firstOrNull { it.id == selectedStrategyId }
+    val visible = strategies.filter { strategy ->
+        val matchesSearch = search.isBlank() || strategy.name.contains(search, true) ||
+            strategy.id.contains(search, true) || strategy.description.contains(search, true)
+        val matchesFilter = when (filter) {
+            "BOT READY" -> strategy.botExecutionEligible
+            "PYTHON CANDIDATES" -> strategy.pythonStatus == com.destinedfx.core.strategy.StrategyCapabilityStatus.CANDIDATE_ONLY
+            else -> true
+        }
+        matchesSearch && matchesFilter
+    }
 
     LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 18.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp)) {
         item {
             TerminalPageHeader(
-                eyebrow = "SYSTEMATIC PLAYBOOKS",
-                title = "Strategy desk",
-                subtitle = "Select an implemented ruleset to activate it."
+                eyebrow = "RULESET REGISTRY · EXECUTION PARITY",
+                title = "Strategy workbench",
+                subtitle = "Python outputs are candidates only. Bot routing requires a Kotlin strategy and final validation."
             )
         }
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatChip(label = "REGISTERED", value = strategies.size.toString(), modifier = Modifier.weight(1f))
-                StatChip(label = "IMPLEMENTED", value = strategies.count { it.isImplemented }.toString(),
+                StatChip(label = "KOTLIN READY", value = strategies.count { it.kotlinStatus == com.destinedfx.core.strategy.StrategyCapabilityStatus.IMPLEMENTED && it.kotlinFinalValidation }.toString(), modifier = Modifier.weight(1f), color = ProfitGreen)
+                StatChip(label = "PY CANDIDATES", value = strategies.count { it.pythonVersion != null }.toString(),
                     modifier = Modifier.weight(1f), color = ProfitGreen)
-                StatChip(label = "SELECTED", value = if (selected != null) "1" else "0",
+                StatChip(label = "BOT READY", value = strategies.count { it.botExecutionEligible }.toString(),
                     modifier = Modifier.weight(1f), color = ElectricCyan)
             }
         }
@@ -1008,66 +1033,113 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                 border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("ACTIVE RULESET", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text("CURRENT ANALYZER RULESET", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                     Text(selected?.name ?: "No registered strategy selected", fontSize = 18.sp,
                         color = TextPrimary, fontWeight = FontWeight.Black)
-                    Text(selected?.description ?: "Choose an implemented ruleset below.", fontSize = 11.sp,
+                    Text(selected?.description ?: "Choose a Kotlin-implemented ruleset below.", fontSize = 11.sp,
                         color = TextSecondary, lineHeight = 17.sp)
                     if (selected != null) {
                         Text(selected.rulesSummary, fontSize = 10.sp, color = ElectricCyan,
                             fontFamily = FontFamily.Monospace, lineHeight = 15.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            Box(Modifier.size(7.dp).clip(CircleShape).background(if (selected.isImplemented) ProfitGreen else WarningAmber))
-                            Text(if (selected.isImplemented) "IMPLEMENTED · ${selected.version}" else "REGISTERED BUT UNAVAILABLE",
-                                fontSize = 9.sp, color = if (selected.isImplemented) ProfitGreen else WarningAmber,
-                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        CapabilityLine("KOTLIN", capabilityLabel(selected.kotlinStatus, selected.kotlinFinalValidation), selected.kotlinStatus == com.destinedfx.core.strategy.StrategyCapabilityStatus.IMPLEMENTED && selected.kotlinFinalValidation)
+                        CapabilityLine("PYTHON", if (selected.pythonVersion == null) "NOT IMPLEMENTED" else "CANDIDATE ONLY · ${selected.pythonVersion}", false)
+                        CapabilityLine("BOT ROUTING", if (selected.botExecutionEligible) "ELIGIBLE · FINAL VALIDATION REQUIRED" else "NOT ELIGIBLE", selected.botExecutionEligible)
+                        Text("REQUIRED EVIDENCE", fontSize = 9.sp, color = TextSecondary, fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace, letterSpacing = .7.sp)
+                        selected.requiredEvidence.forEach { evidence ->
+                            Text("• $evidence", fontSize = 10.sp, color = TextPrimary, lineHeight = 15.sp)
                         }
+                        Text("COVERAGE: ${selected.testCoverage.joinToString(" · ")}", fontSize = 9.sp,
+                            color = TextMuted, fontFamily = FontFamily.Monospace, lineHeight = 14.sp)
                     }
-                    Button(onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
-                        modifier = Modifier.fillMaxWidth().height(42.dp), enabled = selected?.isImplemented == true,
+                    Button(onClick = onOpenAnalyzer,
+                        modifier = Modifier.fillMaxWidth().height(42.dp).testTag("strategy_open_analyzer"), enabled = selected?.isImplemented == true,
                         shape = RoundedCornerShape(9.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)) {
-                        Text("OPEN ANALYZER", fontSize = 10.sp,
+                        Text(if (selected?.isImplemented == true) "OPEN ANALYZER" else "KOTLIN PATH REQUIRED", fontSize = 10.sp,
                             fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                     }
                 }
             }
         }
         item {
-            Text("AVAILABLE RULESETS", fontSize = 10.sp, color = TextSecondary,
-                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                modifier = Modifier.fillMaxWidth().testTag("strategy_search"),
+                singleLine = true,
+                label = { Text("Find a strategy") },
+                placeholder = { Text("Name, rule ID or evidence") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = ElectricCyan,
+                    unfocusedBorderColor = CardBorder,
+                    focusedLabelColor = ElectricCyan,
+                    cursorColor = ElectricCyan
+                )
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("ALL", "BOT READY", "PYTHON CANDIDATES").forEach { option ->
+                    FilterChip(
+                        selected = filter == option,
+                        onClick = { filter = option },
+                        modifier = Modifier.weight(1f).testTag("strategy_filter_${option.lowercase().replace(' ', '_')}"),
+                        label = { Text(option, fontSize = 8.sp, maxLines = 1) }
+                    )
+                }
+            }
+            Text("${visible.size} OF ${strategies.size} RULESETS", fontSize = 9.sp, color = TextSecondary,
+                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = .8.sp)
         }
-        items(strategies) { strat ->
+        items(visible, key = { it.id }) { strat ->
             val active = strat.id == selectedStrategyId
+            val ready = strat.kotlinStatus == com.destinedfx.core.strategy.StrategyCapabilityStatus.IMPLEMENTED && strat.kotlinFinalValidation
             Card(modifier = Modifier.fillMaxWidth().testTag("strategy_card_${strat.id}")
-                .clickable(enabled = strat.isImplemented) { viewModel.selectStrategy(strat.id) },
+                .clickable(enabled = ready) { onSelect(strat.id) },
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = if (active) DarkSurfaceVariant else DarkSurface),
                 border = BorderStroke(if (active) 1.5.dp else 1.dp, if (active) ElectricCyan else CardBorder)) {
-                Row(modifier = Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Top) {
-                    Box(modifier = Modifier.width(4.dp).height(68.dp).clip(RoundedCornerShape(4.dp))
-                        .background(if (active) ElectricCyan else if (strat.isImplemented) ProfitGreen.copy(alpha = 0.75f) else WarningAmber))
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(strat.name, modifier = Modifier.weight(1f), fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                            if (active) Text("ACTIVE", fontSize = 8.sp, color = ElectricCyan,
-                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(strat.name, fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                            Text(strat.id, fontSize = 9.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
                         }
-                        Text(strat.description, fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
-                        Text(strat.rulesSummary, fontSize = 9.sp, color = if (strat.isImplemented) ElectricCyan else TextMuted,
-                            fontFamily = FontFamily.Monospace, lineHeight = 14.sp)
-                        Text(if (strat.isImplemented) "AVAILABLE · ${strat.version}" else "NOT IMPLEMENTED",
-                            fontSize = 8.sp, color = if (strat.isImplemented) ProfitGreen else WarningAmber,
+                        if (active) Text("ANALYZER", fontSize = 8.sp, color = ElectricCyan,
                             fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                     }
+                    Text(strat.description, fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+                    Text(strat.rulesSummary, fontSize = 9.sp, color = if (ready) ElectricCyan else TextMuted,
+                        fontFamily = FontFamily.Monospace, lineHeight = 14.sp)
+                    CapabilityLine("KOTLIN", capabilityLabel(strat.kotlinStatus, strat.kotlinFinalValidation), ready)
+                    CapabilityLine("PYTHON", if (strat.pythonVersion == null) "NOT IMPLEMENTED" else "CANDIDATE ONLY", false)
+                    CapabilityLine("BOT", if (strat.botExecutionEligible) "ELIGIBLE · VALIDATION REQUIRED" else "NOT ELIGIBLE", strat.botExecutionEligible)
+                    Text("EVIDENCE: ${strat.requiredEvidence.joinToString(" · ")}", fontSize = 9.sp,
+                        color = TextSecondary, lineHeight = 14.sp)
                 }
             }
         }
-        item { BacktestSection(viewModel) }
+        if (visible.isEmpty()) item { Text("No strategy matches this search/filter.", color = TextSecondary, fontSize = 11.sp) }
+        item { backtestContent() }
     }
+}
+
+@Composable
+private fun CapabilityLine(label: String, value: String, enabled: Boolean) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, modifier = Modifier.width(66.dp), fontSize = 8.sp, color = TextSecondary,
+            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+        Text(value, modifier = Modifier.weight(1f), fontSize = 8.sp,
+            color = if (enabled) ProfitGreen else WarningAmber,
+            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, lineHeight = 12.sp)
+    }
+}
+
+private fun capabilityLabel(status: com.destinedfx.core.strategy.StrategyCapabilityStatus, finalValidation: Boolean): String = when {
+    status == com.destinedfx.core.strategy.StrategyCapabilityStatus.IMPLEMENTED && finalValidation -> "IMPLEMENTED · FINAL VALIDATION PATH"
+    status == com.destinedfx.core.strategy.StrategyCapabilityStatus.CANDIDATE_ONLY -> "CANDIDATE ONLY · NOT EXECUTABLE"
+    else -> "NOT IMPLEMENTED · NOT EXECUTABLE"
 }
 
 @Composable

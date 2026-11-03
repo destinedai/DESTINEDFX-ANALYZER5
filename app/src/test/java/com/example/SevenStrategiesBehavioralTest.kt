@@ -8,7 +8,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * Dedicated Behavioral Unit Tests for the Seven Core Institutional Strategies:
+ * Behavioral tests for the Kotlin executable strategies plus the separately identified candidate strategy:
  * 1. Smart Money Concepts (SMC)
  * 2. ICT Silver Bullet
  * 3. Wyckoff Method & Schematics
@@ -107,7 +107,7 @@ class SevenStrategiesBehavioralTest {
 
     @Test
     fun testAllSevenStrategiesAreRegisteredAndRecognized() {
-        assertEquals(8, StrategyRegistry.allStrategies.size)
+        assertEquals(9, StrategyRegistry.allStrategies.size)
         val ids = StrategyRegistry.allStrategies.map { it.id }.toSet()
         assertTrue(ids.contains("smc-confluence-1.0.0"))
         assertTrue(ids.contains("liquidity-stop-hunts"))
@@ -115,6 +115,7 @@ class SevenStrategiesBehavioralTest {
         assertTrue(ids.contains("wyckoff-schematics"))
         assertTrue(ids.contains("supply-and-demand"))
         assertTrue(ids.contains("breakout-momentum"))
+        assertTrue(ids.contains("volatility-breakout"))
         assertTrue(ids.contains("mean-reversion"))
         assertTrue(ids.contains("trend-following"))
     }
@@ -207,7 +208,7 @@ class SevenStrategiesBehavioralTest {
     }
 
     @Test
-    fun testStrategy5_VolatilityBreakout_Components() {
+    fun testStrategy5_BreakoutMomentum_Components() {
         val candles = generateTrendingCandles(count = 120, isBullish = true)
         val lastPrice = candles.last().close
         val quote = MarketQuote.twoSided("EUR/USD", AssetClass.FOREX, lastPrice, lastPrice + 0.0001, System.currentTimeMillis(), System.currentTimeMillis(), "test")

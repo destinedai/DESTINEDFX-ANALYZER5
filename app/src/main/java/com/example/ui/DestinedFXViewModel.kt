@@ -294,7 +294,7 @@ open class DestinedFXViewModel(
 
     fun selectBotStrategy(strategyId: String) {
         val definition = com.destinedfx.core.strategy.StrategyRegistry.allStrategies
-            .firstOrNull { it.id == strategyId && it.isImplemented } ?: return
+            .firstOrNull { it.id == strategyId && it.botExecutionEligible } ?: return
         botSelectedStrategyId.value = definition.id
         if (!isPreview) app.secretsManager.saveBotStrategy(definition.id)
     }

@@ -875,7 +875,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Text("2. BOT STRATEGY • changes apply on the next explicit start", fontSize = 9.sp,
                         fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextSecondary)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(StrategyRegistry.allStrategies.filter { it.isImplemented }) { strategy ->
+                        items(StrategyRegistry.allStrategies.filter { it.botExecutionEligible }) { strategy ->
                             FilterChip(
                                 selected = selectedStrategyId == strategy.id,
                                 onClick = { viewModel.selectBotStrategy(strategy.id) },

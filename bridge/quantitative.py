@@ -23,8 +23,8 @@ STRATEGY_RULESETS = {
     "supply-and-demand": "python-supply-and-demand-1.0.0",
     "volatility-breakout": "python-volatility-breakout-1.0.0",
     "breakout-momentum": "python-breakout-momentum-1.0.0",
-    "statistical-mean-reversion": "python-statistical-mean-reversion-1.0.0",
-    "multi-ema-trend-following": "python-multi-ema-trend-following-1.0.0",
+    "mean-reversion": "python-mean-reversion-1.0.0",
+    "trend-following": "python-trend-following-1.0.0",
 }
 
 
@@ -232,8 +232,8 @@ def _evaluate_ruleset(series: ValidatedSeries, *, symbol: str, timeframe: str,
     minimum = {
         "ict-silver-bullet": 21, "wyckoff-schematics": 21,
         "supply-and-demand": 22, "volatility-breakout": 22,
-        "breakout-momentum": 22, "statistical-mean-reversion": 22,
-        "multi-ema-trend-following": 30,
+        "breakout-momentum": 22, "mean-reversion": 22,
+        "trend-following": 30,
     }[strategy_id]
     if len(candles) < minimum:
         return _waiting(series, symbol, timeframe, strategy_id, "INSUFFICIENT_CLOSED_CANDLES")
@@ -317,7 +317,7 @@ def _evaluate_ruleset(series: ValidatedSeries, *, symbol: str, timeframe: str,
         short = current.close < min(x.low for x in candles[-11:-1]) and body >= 0.5 * range_size
         evidence = (("TEN_CANDLE_BREAKOUT", "MOMENTUM_BODY") if long else
                     ("TEN_CANDLE_BREAKDOWN", "MOMENTUM_BODY"))
-    elif strategy_id == "statistical-mean-reversion":
+    elif strategy_id == "mean-reversion":
         window = closes[-21:-1]
         mean = _mean(window)
         deviation = _std(window, mean)
@@ -325,7 +325,7 @@ def _evaluate_ruleset(series: ValidatedSeries, *, symbol: str, timeframe: str,
         short = deviation > 0 and current.close > mean + 1.5 * deviation and current.close < current.open
         evidence = (("LOWER_BAND_DEVIATION", "REVERSAL_CLOSE") if long else
                     ("UPPER_BAND_DEVIATION", "REVERSAL_CLOSE"))
-    elif strategy_id == "multi-ema-trend-following":
+    elif strategy_id == "trend-following":
         ema9, ema21 = _ema(closes, 9), _ema(closes, 21)
         long = ema9 is not None and ema21 is not None and ema9 > ema21 and current.close > ema9
         short = ema9 is not None and ema21 is not None and ema9 < ema21 and current.close < ema9

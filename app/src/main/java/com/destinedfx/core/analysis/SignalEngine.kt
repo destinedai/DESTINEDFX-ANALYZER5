@@ -54,6 +54,18 @@ data class SignalReport(
 }
 
 object SignalEngine {
+    /** Strategy IDs with a Kotlin scoring/plan path; execution still requires downstream final validation. */
+    val finalValidatedStrategyIds: Set<String> = setOf(
+        "smc-confluence-1.0.0",
+        "liquidity-stop-hunts",
+        "ict-silver-bullet",
+        "wyckoff-schematics",
+        "supply-and-demand",
+        "breakout-momentum",
+        "mean-reversion",
+        "trend-following"
+    )
+
     internal val structureComputations = java.util.concurrent.atomic.AtomicInteger(0)
     internal fun clearCacheForTest() {
         cache.clear()
@@ -458,17 +470,7 @@ object SignalEngine {
             }
         }
 
-        val recognizedStrategies = setOf(
-            "smc-confluence-1.0.0",
-            "liquidity-stop-hunts",
-            "ict-silver-bullet",
-            "wyckoff-schematics",
-            "supply-and-demand",
-            "breakout-momentum",
-            "mean-reversion",
-            "trend-following"
-        )
-        if (!recognizedStrategies.contains(i.strategyId)) {
+        if (i.strategyId !in finalValidatedStrategyIds) {
             return unavailable(i, "STRATEGY_NOT_IMPLEMENTED: '${i.strategyId}'", SignalState.DATA_UNAVAILABLE, mtf = mtf)
         }
 

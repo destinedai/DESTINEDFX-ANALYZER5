@@ -9,7 +9,13 @@ data class EconomicEvent(val name: String, val country: String, val currency: St
 
 /** Result of a calendar fetch. Failure is explicit; it is never converted to an empty list. */
 sealed interface CalendarResult {
-    data class Ok(val events: List<EconomicEvent>, val retrievedAtMs: Long, val coverageFromMs: Long, val coverageToMs: Long) : CalendarResult
+    data class Ok(
+        val events: List<EconomicEvent>,
+        val retrievedAtMs: Long,
+        val coverageFromMs: Long,
+        val coverageToMs: Long,
+        val source: String = "provider"
+    ) : CalendarResult
     data class Failed(val reason: String) : CalendarResult
 }
 
@@ -29,6 +35,6 @@ object NewsFilter {
         val hit = result.events.filter { it.impact == NewsImpact.HIGH && it.currency.uppercase() in relevantCurrencies }
             .firstOrNull { nowMs >= it.timeMs - beforeMs && nowMs <= it.timeMs + afterMs }
         return if (hit != null) NewsVerdict(NewsStatus.HIGH_IMPACT_WINDOW, "High-impact ${hit.currency} event: ${hit.name}", hit)
-        else NewsVerdict(NewsStatus.CLEAR, "No high-impact events for ${relevantCurrencies.joinToString()} in window (source: ${result.events.firstOrNull()?.source ?: "provider"})")
+        else NewsVerdict(NewsStatus.CLEAR, "No high-impact events for ${relevantCurrencies.joinToString()} in window (source: ${result.source})")
     }
 }

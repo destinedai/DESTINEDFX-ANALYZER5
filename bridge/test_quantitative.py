@@ -164,7 +164,7 @@ def _strategy_rows(strategy, count=35):
         rows[-1] = OHLCV(last.timestamp_ms, 100.0, 108.0, 99.0, 107.0, 100.0, True, "fixture-provider", NOW)
     elif strategy == "volatility-breakout":
         rows[-1] = OHLCV(last.timestamp_ms, 100.0, 110.0, 99.0, 109.0, 100.0, True, "fixture-provider", NOW)
-    elif strategy == "statistical-mean-reversion":
+    elif strategy == "mean-reversion":
         rows = []
         for index in range(count):
             close = 100.0 + (0.15 if index % 2 else -0.15)

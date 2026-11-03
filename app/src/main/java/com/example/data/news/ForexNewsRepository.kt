@@ -16,18 +16,20 @@ import java.util.concurrent.TimeUnit
 
 class ForexNewsRepository(
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
+        .connectTimeout(10, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build(),
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val cacheTtlMs: Long = 30 * 60 * 1000L
 ) : NewsRepository {
 
     private var cache: List<NewsEvent> = emptyList()
     private var lastFetch = 0L
-    private val CACHE_TTL = 30 * 60 * 1000L
     private var fetchFailed = false
     @Volatile private var lastCalendar: com.destinedfx.core.news.CalendarResult? = null
     override suspend fun calendar(): com.destinedfx.core.news.CalendarResult? { fetchUpcomingEvents(); return lastCalendar }
 
     override suspend fun fetchUpcomingEvents(): List<NewsEvent> = withContext(Dispatchers.IO) {
-        if (cache.isNotEmpty() && System.currentTimeMillis() - lastFetch < CACHE_TTL && !fetchFailed) {
+        val requestStartedAt = clock()
+        if (lastFetch > 0L && requestStartedAt >= lastFetch && requestStartedAt - lastFetch < cacheTtlMs && !fetchFailed) {
             return@withContext cache
         }
         try {
@@ -43,7 +45,7 @@ class ForexNewsRepository(
                 }
                 val body = resp.body?.string()
                     ?: return@withContext failCalendar("Empty calendar response")
-                val now = System.currentTimeMillis()
+                val now = clock()
                 val evts = parseFeedPayload(body, now)
                 cache = evts
                 lastCalendar = com.destinedfx.core.news.CalendarResult.Ok(evts.map {
@@ -55,7 +57,7 @@ class ForexNewsRepository(
                             else -> throw JSONException("Unknown impact")
                         }, it.dateTimeUtcMs, null, it.forecast, it.previous,
                         "ForexFactory weekly feed (faireconomy)", now)
-                }, now, now - 3_600_000L, now + 6 * 86_400_000L)
+                }, now, now - 3_600_000L, now + 6 * 86_400_000L, CALENDAR_SOURCE)
                 lastFetch = now
                 fetchFailed = false
                 cache
@@ -77,7 +79,6 @@ class ForexNewsRepository(
 
     internal fun parseFeedPayload(body: String, now: Long): List<NewsEvent> {
         val arr = JSONArray(body)
-        if (arr.length() == 0) throw JSONException("Empty calendar payload")
         val out = mutableListOf<NewsEvent>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: throw JSONException("Malformed calendar event at index $i")
@@ -97,7 +98,6 @@ class ForexNewsRepository(
                 o.optString("forecast").takeUnless { it.isBlank() || it == "null" },
                 o.optString("previous").takeUnless { it.isBlank() || it == "null" })
         }
-        if (out.isEmpty()) throw JSONException("No current or upcoming events; coverage cannot be confirmed")
         return out
     }
 
@@ -105,7 +105,7 @@ class ForexNewsRepository(
         value.takeUnless { it.isBlank() || it == "null" } ?: throw JSONException("Calendar $label is missing")
 
     override suspend fun isHighImpactWindowActive(currencies: List<String>, bufferMinutes: Int): Boolean {
-        val now = System.currentTimeMillis()
+        val now = clock()
         val sixHoursMs = 6 * 60 * 60 * 1000L
         
         val events = try {
@@ -127,7 +127,7 @@ class ForexNewsRepository(
     }
 
     override suspend fun getNextHighImpactEvent(currency: String): NewsEvent? {
-        val now = System.currentTimeMillis()
+        val now = clock()
         return fetchUpcomingEvents()
             .filter { it.impact == "High" && it.currency == currency && it.dateTimeUtcMs > now }
             .minByOrNull { it.dateTimeUtcMs }
@@ -150,5 +150,9 @@ class ForexNewsRepository(
                 -1L   // unparseable time: the event is skipped, never assigned "now"
             }
         }
+    }
+
+    private companion object {
+        const val CALENDAR_SOURCE = "ForexFactory weekly feed (faireconomy)"
     }
 }

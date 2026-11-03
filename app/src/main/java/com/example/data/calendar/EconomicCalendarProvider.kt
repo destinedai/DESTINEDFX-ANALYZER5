@@ -29,6 +29,13 @@ class EconomicCalendarProvider(private val client: OkHttpClient, private val fmp
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext CalendarResult.Failed("Calendar HTTP ${resp.code}")
                 val arr = JSONArray(resp.body?.string() ?: return@withContext CalendarResult.Failed("Empty calendar body"))
+                val coverageFrom = nowMs - 86_400_000L
+                val coverageTo = nowMs + 7 * 86_400_000L
+                if (arr.length() == 0) {
+                    return@withContext CalendarResult.Ok(
+                        emptyList(), nowMs, coverageFrom, coverageTo, "FinancialModelingPrep"
+                    )
+                }
                 val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
                 val out = ArrayList<VerifiedEvent>()
                 for (i in 0 until arr.length()) {
@@ -39,8 +46,8 @@ class EconomicCalendarProvider(private val client: OkHttpClient, private val fmp
                         t, o.optString("actual").takeUnless { it.isBlank() || it == "null" }, o.optString("estimate").takeUnless { it.isBlank() || it == "null" },
                         o.optString("previous").takeUnless { it.isBlank() || it == "null" }, "FinancialModelingPrep", nowMs)
                 }
-                if (out.isEmpty()) CalendarResult.Failed("Calendar returned no events (cannot confirm absence of news)")
-                else CalendarResult.Ok(out, nowMs, nowMs - 86_400_000L, nowMs + 7 * 86_400_000L)
+                if (out.isEmpty()) CalendarResult.Failed("Calendar returned no valid events")
+                else CalendarResult.Ok(out, nowMs, coverageFrom, coverageTo, "FinancialModelingPrep")
             }
         } catch (e: IOException) { CalendarResult.Failed("Network error: ${e.javaClass.simpleName}") }
         catch (e: JSONException) { CalendarResult.Failed("Malformed calendar response") }

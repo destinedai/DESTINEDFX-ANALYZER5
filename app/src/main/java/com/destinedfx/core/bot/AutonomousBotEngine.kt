@@ -96,7 +96,7 @@ class AutonomousBotEngine(
         }
         // Gate 1: Strategy implementation
         val strat = StrategyRegistry.allStrategies.find { it.id == strategyId }
-        if (strat == null || !strat.isImplemented) {
+        if (strat == null || !strat.botExecutionEligible) {
             val err = "STRATEGY_NOT_IMPLEMENTED: Strategy '$strategyId' is not implemented."
             _status.value = _status.value.copy(state = BotLifecycleState.ERROR, lastError = err, lastAction = "Activation rejected: strategy unimplemented")
             return@withContext Result.failure(Exception(err))
