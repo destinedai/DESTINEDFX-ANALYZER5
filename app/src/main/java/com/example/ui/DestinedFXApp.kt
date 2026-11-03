@@ -128,7 +128,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                             )
                         )
                         .statusBarsPadding()
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     // Row 1: Logo & App Name (left) | PulsingDot + Status + Actions (right)
@@ -309,9 +309,9 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                         Column(
                             modifier = Modifier.weight(1f)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(if (isSelected) ElectricCyan.copy(alpha = 0.13f) else Color.Transparent)
+                                .background(if (isSelected) GoldPrimary.copy(alpha = 0.10f) else Color.Transparent)
                                 .border(
-                                    BorderStroke(1.dp, if (isSelected) GoldPrimary.copy(alpha = 0.62f) else Color.Transparent),
+                                    BorderStroke(1.dp, if (isSelected) GoldPrimary.copy(alpha = 0.72f) else Color.Transparent),
                                     RoundedCornerShape(10.dp)
                                 )
                                 .selectable(
@@ -328,7 +328,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                             Icon(
                                 screen.icon,
                                 contentDescription = screen.title,
-                                tint = if (isSelected) ElectricCyan else TextSecondary,
+                                tint = if (isSelected) GoldPrimary else TextSecondary,
                                 modifier = Modifier.size(19.dp)
                             )
                             Text(
@@ -336,7 +336,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                 maxLines = 1,
                                 fontSize = 10.sp,
                                 fontWeight = if (isSelected) FontWeight.Black else FontWeight.Medium,
-                                color = if (isSelected) ElectricCyan else TextSecondary
+                                color = if (isSelected) GoldPrimary else TextSecondary
                             )
                         }
                     }
@@ -444,8 +444,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(DarkBackground),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
@@ -453,8 +453,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text("LIVE ALGORITHMIC ANALYZER", fontSize = 9.sp, color = ElectricCyan,
                         fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                    Text(activeSymbol, fontSize = 25.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                    Text("Chart display: TradingView • Analysis: algorithmic rules", fontSize = 10.sp, color = TextSecondary)
+                    Text(activeSymbol, fontSize = 23.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                    Text("TradingView chart · rule-based analysis", fontSize = 10.sp, color = TextSecondary)
                 }
                 SignalBadge(state = analysis?.signalState ?: "WAIT")
             }
@@ -986,13 +986,13 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
     val selected = strategies.firstOrNull { it.id == selectedStrategyId }
 
     LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 22.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp)) {
         item {
             TerminalPageHeader(
-                eyebrow = "SYSTEMATIC PLAYBOOKS / RULE-BASED",
+                eyebrow = "SYSTEMATIC PLAYBOOKS",
                 title = "Strategy desk",
-                subtitle = "Choose a registered ruleset. Only implemented strategies can be activated."
+                subtitle = "Select an implemented ruleset to activate it."
             )
         }
         item {
@@ -1008,7 +1008,7 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                 border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
-                Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("ACTIVE RULESET", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                     Text(selected?.name ?: "No registered strategy selected", fontSize = 18.sp,
@@ -1029,7 +1029,7 @@ fun StrategiesTab(viewModel: DestinedFXViewModel) {
                         modifier = Modifier.fillMaxWidth().height(42.dp), enabled = selected?.isImplemented == true,
                         shape = RoundedCornerShape(9.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)) {
-                        Text("OPEN ANALYZER WITH SELECTED RULESET", fontSize = 10.sp,
+                        Text("OPEN ANALYZER", fontSize = 10.sp,
                             fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                     }
                 }
@@ -1080,9 +1080,9 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             TerminalPageHeader(
-                eyebrow = "ACCOUNT DEFENCE / POSITION CONTROL",
+                eyebrow = "ACCOUNT DEFENCE",
                 title = "Risk control",
-                subtitle = "RiskEngine remains the authority for sizing and trade-plan validation."
+                subtitle = "Sizing and plan validation remain subject to RiskEngine."
             )
         }
         item {
@@ -1141,8 +1141,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     var savedMessage by remember { mutableStateOf("") }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().background(DarkBackground).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        modifier = Modifier.fillMaxSize().background(DarkBackground).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
             Card(
@@ -1151,7 +1151,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                 border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(modifier = Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
                         Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp))
                             .background(ElectricCyan.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
@@ -1161,7 +1161,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                             Text("TERMINAL CONTROL", fontSize = 9.sp, color = ElectricCyan,
                                 fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.1.sp)
                             Text("Settings", fontSize = 25.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                            Text("Accounts, execution and notifications", fontSize = 10.sp, color = TextSecondary)
+                            Text("Feed status and notifications", fontSize = 10.sp, color = TextSecondary)
                         }
                     }
                     HorizontalDivider(color = CardBorder)
@@ -1182,9 +1182,9 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Default.QueryStats, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("TRADINGVIEW 24/7 SCANNING ENGINE", fontSize = 11.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                            Text("BACKGROUND MARKET SCANNER", fontSize = 10.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace, letterSpacing = 0.8.sp)
-                            Text("Continuous multi-pair scanner powered by TradingView feeds.", fontSize = 10.sp, color = TextSecondary)
+                            Text("Multi-pair scan using TradingView feeds.", fontSize = 10.sp, color = TextSecondary)
                         }
                     }
                     Card(
@@ -1213,8 +1213,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
         item {
             HorizontalDivider(color = TabBorder)
             Spacer(modifier = Modifier.height(8.dp))
-            Text("TELEGRAM NOTIFICATIONS & ONBOARDING", fontWeight = FontWeight.Black, fontSize = 14.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-            Text("Configure real-time Telegram trade alerts and bot connectivity.", fontSize = 11.sp, color = TextSecondary)
+            Text("TELEGRAM ALERTS", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
+            Text("Connection, delivery test and alert controls.", fontSize = 10.sp, color = TextSecondary)
         }
 
         item {

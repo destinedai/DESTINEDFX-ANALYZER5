@@ -550,24 +550,24 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                 BotLifecycleState.ERROR -> LossRed
                 else -> if (isConnected) ProfitGreen else WarningAmber
             }
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                 border = BorderStroke(1.dp, statusColor.copy(alpha = 0.42f))) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(statusColor.copy(alpha = 0.13f)),
+                        Box(Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).background(statusColor.copy(alpha = 0.13f)),
                             contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Memory, contentDescription = null, tint = statusColor, modifier = Modifier.size(23.dp))
+                            Icon(Icons.Default.Memory, contentDescription = null, tint = statusColor, modifier = Modifier.size(19.dp))
                         }
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("AUTOMATION / EXECUTION", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("BOT TERMINAL", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                            Text("Bot command desk", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                            Text("${if (bridgeMode) "MT5 EA" else activeBrokerType.name} · ${if (bridgeMode) selectedAccountMode else "LOCAL"}", fontSize = 16.sp, color = TextPrimary, fontWeight = FontWeight.Black)
                             Text("$activeSymbol · $selectedTimeframe · $selectedStrategyId",
                                 fontSize = 9.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
                         }
                         Box(Modifier.clip(RoundedCornerShape(7.dp)).background(statusColor.copy(alpha = 0.14f))
-                            .padding(horizontal = 8.dp, vertical = 6.dp)) {
+                            .padding(horizontal = 7.dp, vertical = 4.dp)) {
                             Text(if (isConnected) "CONNECTED" else "OFFLINE", fontSize = 8.sp, color = statusColor,
                                 fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                         }
@@ -590,36 +590,15 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                         }
                     }
-                    Text(if (bridgeMode) "Remote terminal state comes from EA heartbeat; phone analysis does not execute trades."
-                        else if (isConnected) "Execution gateway connected; verify all orders before use."
-                        else "Execution is disconnected. Analysis and chart display are separate from broker execution.",
-                        fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+                    Text(if (bridgeMode) "Account: ${bridgeSnapshot?.actualLogin?.takeIf { bridgeIdentityFresh } ?: "—"} · ${bridgeSnapshot?.actualServer?.takeIf { bridgeIdentityFresh } ?: "server unverified"}"
+                        else "Connection: ${brokerConnStatus.name.replace('_', ' ')} · metrics appear when available",
+                        fontSize = 9.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
                 }
             }
         }
         item {
             DerivDemoAccountCard(viewModel)
         }
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                StatChip(
-                    label = "BOT STATE",
-                    value = if (bridgeMode) bridgeDisplayState else if (activeBrokerType == BrokerType.DERIV) derivServiceState else botSummary.state.name.replace('_', ' '),
-                    modifier = Modifier.weight(1f),
-                    color = if (bridgeMode) bridgeStatusColor else if (botSummary.isRunning || botActive) ProfitGreen else WarningAmber
-                )
-                StatChip(
-                    label = "RISK CAP",
-                    value = "${riskPercent}% (max 1%)",
-                    modifier = Modifier.weight(1f),
-                    color = WarningAmber
-                )
-            }
-        }
-
         // Master Bot Control Card
         item {
             val derivServiceActive = DerivBotServiceStatePolicy.isSwitchChecked(derivServiceState)
