@@ -189,8 +189,8 @@ class ChaquopyPythonAnalyzer(context: Context) : PythonAnalyzer {
             "supply-and-demand" to "python-supply-and-demand-1.0.0",
             "volatility-breakout" to "python-volatility-breakout-1.0.0",
             "breakout-momentum" to "python-breakout-momentum-1.0.0",
-            "statistical-mean-reversion" to "python-statistical-mean-reversion-1.0.0",
-            "multi-ema-trend-following" to "python-multi-ema-trend-following-1.0.0"
+            "mean-reversion" to "python-mean-reversion-1.0.0",
+            "trend-following" to "python-trend-following-1.0.0"
         )
     }
 }

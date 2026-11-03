@@ -13,7 +13,7 @@ import org.junit.Test
  * 2. ICT Silver Bullet
  * 3. Wyckoff Method & Schematics
  * 4. Supply & Demand Zones
- * 5. Volatility Breakout
+ * 5. Breakout Momentum (Volatility Breakout is tested as Python-candidate-only)
  * 6. Statistical Mean Reversion
  * 7. Multi-EMA Trend Following
  *
@@ -106,8 +106,9 @@ class SevenStrategiesBehavioralTest {
     }
 
     @Test
-    fun testAllSevenStrategiesAreRegisteredAndRecognized() {
+    fun testAllRegisteredStrategiesAreRecognizedWithoutDuplicateNames() {
         assertEquals(9, StrategyRegistry.allStrategies.size)
+        assertEquals(StrategyRegistry.allStrategies.size, StrategyRegistry.allStrategies.map { it.name.lowercase() }.toSet().size)
         val ids = StrategyRegistry.allStrategies.map { it.id }.toSet()
         assertTrue(ids.contains("smc-confluence-1.0.0"))
         assertTrue(ids.contains("liquidity-stop-hunts"))

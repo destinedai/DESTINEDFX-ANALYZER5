@@ -244,12 +244,12 @@ jobs:
           script: |
             set -Eeuo pipefail
             collect_ui_screenshots() {
-              local app_id="com.aistudio.destinedfx.qwvzxp"
-              local destination="app/build/reports/ui-screenshots"
+              app_id="com.aistudio.destinedfx.qwvzxp"
+              destination="app/build/reports/ui-screenshots"
               mkdir -p "$destination"
               for width in 320 430; do
                 for screen in analyzer strategies calendar bot risk settings; do
-                  local name="${screen}_${width}dp.png"
+                  name="${screen}_${width}dp.png"
                   adb exec-out run-as "$app_id" cat "files/ui-review/$name" > "$destination/$name" 2>/dev/null || rm -f "$destination/$name"
                 done
               done

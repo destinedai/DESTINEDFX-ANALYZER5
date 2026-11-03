@@ -4,10 +4,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -43,10 +42,10 @@ class StrategyWorkbenchResponsiveTest {
         }
 
         composeRule.onNodeWithTag("strategy_open_analyzer").assertIsNotEnabled()
-        composeRule.onNodeWithTag("strategy_card_volatility-breakout").performScrollTo().assertExists()
-        composeRule.onNodeWithText("CANDIDATE ONLY · NOT EXECUTABLE").assertExists()
-        composeRule.onNodeWithText("NOT ELIGIBLE").assertExists()
-        composeRule.onNodeWithText("Volatility Breakout").assertExists()
+        composeRule.onNodeWithTag("strategy_card_volatility-breakout").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("CANDIDATE ONLY · NOT EXECUTABLE").assertIsDisplayed()
+        composeRule.onNodeWithText("NOT ELIGIBLE").assertIsDisplayed()
+        composeRule.onNodeWithText("Volatility Breakout").assertIsDisplayed()
     }
 
     @Test
@@ -65,7 +64,7 @@ class StrategyWorkbenchResponsiveTest {
 
         composeRule.onNodeWithTag("strategy_open_analyzer").assertIsEnabled()
         composeRule.onNodeWithTag("strategy_search").performTextInput("mean-reversion")
-        composeRule.onNodeWithTag("strategy_card_mean-reversion").performScrollTo().assertExists()
-        composeRule.onNodeWithText(hasText("Statistical Mean Reversion")).assertExists()
+        composeRule.onNodeWithTag("strategy_card_mean-reversion").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Statistical Mean Reversion").assertIsDisplayed()
     }
 }

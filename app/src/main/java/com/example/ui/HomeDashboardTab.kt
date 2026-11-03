@@ -280,7 +280,7 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
             Text("BUILT FOR A CLEAR DECISION", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Black)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FeatureRow(Icons.Default.ShowChart, "Live charting", "Responsive TradingView chart with symbol and timeframe controls.")
-                FeatureRow(Icons.Default.Timeline, "Algorithmic strategy engine", "SMC, ICT Silver Bullet, Wyckoff, Supply & Demand, Volatility Breakout, Mean Reversion and Multi-EMA Trend Following.")
+                FeatureRow(Icons.Default.Timeline, "Kotlin-validated strategy engine", "SMC, ICT Silver Bullet, Wyckoff, Supply & Demand, Breakout Momentum, Mean Reversion and Multi-EMA Trend Following. Volatility Breakout remains a non-executable Python candidate.")
                 FeatureRow(Icons.Default.Security, "Risk-first trade plans", "RiskEngine is the sizing authority; invalid or incomplete setups stay WAIT.")
                 FeatureRow(Icons.Default.CalendarMonth, "News & session context", "Economic-calendar checks can block automation when the status is high-impact or unknown.")
             }

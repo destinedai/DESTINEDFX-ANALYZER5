@@ -3,6 +3,7 @@ package com.example
 import com.destinedfx.core.analysis.SignalEngine
 import com.destinedfx.core.strategy.StrategyCapabilityStatus
 import com.destinedfx.core.strategy.StrategyRegistry
+import com.example.domain.usecase.impl.OnDevicePythonAnalyzer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -10,6 +11,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StrategyCapabilityMatrixTest {
+    @Test
+    fun strategyIdsAndDisplayNamesAreUnique() {
+        val strategies = StrategyRegistry.allStrategies
+        assertEquals(strategies.size, strategies.map { it.id }.toSet().size)
+        assertEquals(strategies.size, strategies.map { it.name.lowercase() }.toSet().size)
+    }
+
     @Test
     fun botEligibleStrategiesHaveKotlinFinalValidationAndSignalEnginePaths() {
         val matrixBotIds = StrategyRegistry.allStrategies
@@ -35,6 +43,8 @@ class StrategyCapabilityMatrixTest {
         assertNotNull(StrategyRegistry.allStrategies.singleOrNull { it.id == "trend-following" })
         assertEquals("python-mean-reversion-1.0.0", StrategyRegistry.MEAN_REVERSION.pythonVersion)
         assertEquals("python-trend-following-1.0.0", StrategyRegistry.TREND_FOLLOWING.pythonVersion)
+        val registryPythonVersions = pythonCandidates.associate { it.id to requireNotNull(it.pythonVersion) }
+        assertEquals(registryPythonVersions, OnDevicePythonAnalyzer.RULESET_VERSIONS)
     }
 
     @Test
