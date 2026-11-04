@@ -14,6 +14,13 @@ data class DerivDailyRiskSnapshot(
 }
 
 object DerivDailyRiskMonitor {
+    /** A missing daily baseline may only be initialized in the first two minutes of a UTC day. */
+    fun canInitializeDailyBaseline(nowMs: Long, graceMs: Long = 120_000L): Boolean {
+        if (nowMs <= 0L || graceMs !in 1L..300_000L) return false
+        val elapsed = nowMs % 86_400_000L
+        return elapsed in 0L..graceMs
+    }
+
     /**
      * The caller supplies verified balance plus broker-reported floating contract P/L,
      * and persists the first authenticated equity observation of the UTC day.
