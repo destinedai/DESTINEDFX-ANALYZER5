@@ -33,12 +33,14 @@ import com.destinedfx.core.news.NewsStatus
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.theme.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicLong
 
 private val utcZone: TimeZone get() = TimeZone.getTimeZone("UTC")
 private fun dateKey(ms: Long) = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = utcZone }.format(Date(ms))
@@ -60,10 +62,15 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
     var currencyMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val symbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
+    val refreshGeneration = remember { AtomicLong(0L) }
+    var refreshJob by remember { mutableStateOf<Job?>(null) }
 
     fun refreshCalendar() {
         if (preview) return
-        scope.launch {
+        refreshJob?.cancel()
+        val requestId = refreshGeneration.incrementAndGet()
+        val requestedSymbol = symbol
+        refreshJob = scope.launch {
             isLoading = true
             events = emptyList()
             sourceRetrieved = null
@@ -72,8 +79,9 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
             try {
                 // One snapshot drives both the event rows and the execution-safety verdict.
                 val result = withContext(Dispatchers.IO) { viewModel.app.newsRepository.calendar() }
-                val verdict = NewsFilter.evaluate(result, AssetClassifier.newsCurrencies(symbol), System.currentTimeMillis())
-                newsStatus = verdict.status
+                if (requestId != refreshGeneration.get()) return@launch
+                val verdict = NewsFilter.evaluate(result, AssetClassifier.newsCurrencies(requestedSymbol), System.currentTimeMillis())
+                if (requestId == refreshGeneration.get()) newsStatus = verdict.status
                 if (result is CalendarResult.Ok) {
                     events = result.events.sortedBy { it.timeMs }
                     val retrieved = SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'", Locale.US).apply { timeZone = utcZone }.format(Date(result.retrievedAtMs))
@@ -82,25 +90,44 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                     events = emptyList()
                     sourceRetrieved = null
                 }
-                detail = verdict.detail
+                if (requestId == refreshGeneration.get()) detail = "Evaluated for $requestedSymbol · ${verdict.detail}"
             } catch (e: kotlinx.coroutines.CancellationException) {
-                events = emptyList()
-                sourceRetrieved = null
-                newsStatus = NewsStatus.UNKNOWN
-                detail = "Calendar refresh cancelled. Automated execution remains blocked until a verified result is loaded."
+                if (requestId == refreshGeneration.get()) {
+                    events = emptyList()
+                    sourceRetrieved = null
+                    newsStatus = NewsStatus.UNKNOWN
+                    detail = "Calendar refresh cancelled. Automated execution remains blocked until a verified result is loaded."
+                }
                 throw e
             } catch (e: Exception) {
-                events = emptyList()
-                sourceRetrieved = null
-                newsStatus = NewsStatus.UNKNOWN
-                detail = "Calendar unavailable (${e.javaClass.simpleName}). Automated execution remains blocked until verified news data is available."
-            } finally { isLoading = false }
+                if (requestId == refreshGeneration.get()) {
+                    events = emptyList()
+                    sourceRetrieved = null
+                    newsStatus = NewsStatus.UNKNOWN
+                    detail = "Calendar unavailable (${e.javaClass.simpleName}). Automated execution remains blocked until verified news data is available."
+                }
+            } finally {
+                if (requestId == refreshGeneration.get()) {
+                    isLoading = false
+                    refreshJob = null
+                }
+            }
         }
     }
     LaunchedEffect(symbol) { if (!preview) refreshCalendar() }
+    DisposableEffect(Unit) {
+        onDispose {
+            refreshGeneration.incrementAndGet()
+            refreshJob?.cancel()
+        }
+    }
 
     val dates = remember(events) { listOf("All dates") + events.map { dateKey(it.timeMs) }.distinct().sorted() }
     val currencies = remember(events) { listOf("All") + events.map { it.currency }.distinct().sorted() }
+    LaunchedEffect(dates, currencies) {
+        if (selectedDate !in dates) selectedDate = "All dates"
+        if (selectedCurrency !in currencies) selectedCurrency = "All"
+    }
     val shown = remember(events, selectedDate, selectedCurrency, selectedImpact) {
         events.filter { event ->
             (selectedDate == "All dates" || dateKey(event.timeMs) == selectedDate) &&
@@ -127,7 +154,7 @@ fun CalendarTab(viewModel: DestinedFXViewModel) {
                     }
                     HorizontalDivider(color = CardBorder)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column { Text(SimpleDateFormat("EEE, dd MMM yyyy", Locale.US).format(Date()), fontSize = 11.sp, color = TextPrimary, fontWeight = FontWeight.Bold); Text("All event times in UTC", fontSize = 9.sp, color = TextSecondary) }
+                        Column { Text(SimpleDateFormat("EEE, dd MMM yyyy", Locale.US).apply { timeZone = utcZone }.format(Date()), fontSize = 11.sp, color = TextPrimary, fontWeight = FontWeight.Bold); Text("All event times in UTC", fontSize = 9.sp, color = TextSecondary) }
                         Surface(color = color.copy(alpha = .13f), shape = RoundedCornerShape(6.dp)) {
                             Text(when (newsStatus) { NewsStatus.CLEAR -> "CLEAR"; NewsStatus.HIGH_IMPACT_WINDOW -> "HIGH IMPACT"; NewsStatus.UNKNOWN -> if (isLoading) "CHECKING" else "UNKNOWN" }, Modifier.padding(horizontal = 8.dp, vertical = 5.dp), fontSize = 9.sp, color = color, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                         }

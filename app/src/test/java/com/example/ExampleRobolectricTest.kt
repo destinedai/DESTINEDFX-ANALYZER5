@@ -85,6 +85,17 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `appearance preference accepts supported modes and rejects arbitrary values`() {
+    val context = ApplicationProvider.getApplicationContext<MyApplication>()
+    val secrets = context.secretsManager
+    assertTrue(secrets.saveThemeMode("Light"))
+    assertEquals("Light", secrets.getThemeMode())
+    assertFalse(secrets.saveThemeMode("neon"))
+    assertEquals("Light", secrets.getThemeMode())
+    assertTrue(secrets.saveThemeMode("System"))
+  }
+
+  @Test
   fun `verify Telegram settings state persistence and unlinking`() {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
     if (!context.secretsManager.isSecureStorageAvailable) return

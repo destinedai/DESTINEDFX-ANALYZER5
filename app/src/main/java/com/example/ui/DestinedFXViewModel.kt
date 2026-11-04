@@ -326,12 +326,15 @@ open class DestinedFXViewModel(
         if (tf !in allowed) return
         val current = selectedMtfTimeframes.value
         if (tf !in current) {
-            selectedMtfTimeframes.value = current + tf
+            val updated = current + tf
+            selectedMtfTimeframes.value = updated
+            runSignalScan(selectedTicker.value, selectedTimeframe.value, updated)
             return
         }
         val without = current - tf
         if (without.isEmpty() || without.none { it != selectedTimeframe.value }) return
         selectedMtfTimeframes.value = without
+        runSignalScan(selectedTicker.value, selectedTimeframe.value, without)
     }
 
     /** Returns false for invalid risk rather than silently altering the requested value. */
@@ -697,7 +700,14 @@ open class DestinedFXViewModel(
     val showHaltNotification = MutableStateFlow(false)
 
     // Shared app appearance settings
-    val themeMode = MutableStateFlow("System") // "System", "Light", "Dark"
+    val themeMode = MutableStateFlow(if (isPreview) "System" else app.secretsManager.getThemeMode())
+
+    fun setThemeMode(mode: String): Boolean {
+        if (mode !in setOf("System", "Light", "Dark")) return false
+        if (!isPreview && !app.secretsManager.saveThemeMode(mode)) return false
+        themeMode.value = mode
+        return true
+    }
 
     // Text To Speech Voice System
     private var tts: TextToSpeech? = null
@@ -1126,8 +1136,7 @@ open class DestinedFXViewModel(
             } catch (e: Throwable) {
                 Log.w("DestinedFXViewModel", "readLastCrash failed: ${e.message}")
             }
-        }
-        startMultiPairScanning()
+            startMultiPairScanning()
 
         // Sync broker connection, quote, and account capital for selectedTicker
         viewModelScope.launch {
@@ -1304,7 +1313,6 @@ open class DestinedFXViewModel(
                 Log.e("DestinedFXViewModel", "init collector failed: ${e.javaClass.simpleName}")
             }
         }
-        startMultiPairScanning()
     }
 
     val botStatusSummary = app.autonomousBotEngine.status
@@ -1341,8 +1349,11 @@ open class DestinedFXViewModel(
         }
     }
 
-    val isBackgroundScanningActive = MutableStateFlow(true)
-    val backgroundScanStatus = MutableStateFlow("Initializing surveillance...")
+    val isBackgroundScanningActive = MutableStateFlow(!isPreview)
+    val backgroundScanStatus = MutableStateFlow(
+        if (isPreview) "Preview only — no market scanning is running."
+        else "App-session scanning; not a persistent 24/7 service."
+    )
     private val notifiedSignals = mutableSetOf<String>()
 
     private fun startMultiPairScanning() {
@@ -1393,7 +1404,7 @@ open class DestinedFXViewModel(
                         delay(3000L)
                     }
                     
-                    backgroundScanStatus.value = "Surveillance Active • 24/7 scanning enabled"
+                    backgroundScanStatus.value = "App-session scan cycle complete; monitoring continues while this process is active."
                 } catch (e: Exception) {
                     Log.e("DestinedFXViewModel", "Background scanner error: ${e.message}")
                     backgroundScanStatus.value = "Surveillance Error: Retrying..."

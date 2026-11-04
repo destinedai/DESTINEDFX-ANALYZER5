@@ -123,6 +123,10 @@ class SecretsManager internal constructor(
     }
     fun getBotRiskPercent(): Double = botConfigPrefs.getString("risk_percent", "0.25")?.toDoubleOrNull()
         ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 } ?: 0.25
+    fun getThemeMode(): String = botConfigPrefs.getString("theme_mode", "System")
+        ?.takeIf { it in setOf("System", "Light", "Dark") } ?: "System"
+    fun saveThemeMode(mode: String): Boolean = mode in setOf("System", "Light", "Dark") &&
+        botConfigPrefs.edit().putString("theme_mode", mode).commit()
     /** Deriv credentials are persisted only after encrypted Keystore storage is initialized. */
     fun saveDerivApiToken(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank()) return false

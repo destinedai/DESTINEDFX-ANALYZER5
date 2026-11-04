@@ -45,8 +45,9 @@ class CoreWorkspaceScreenshotTest {
         )
         val scenario = ActivityScenario.launch(WorkspaceScreenshotActivity::class.java)
         try {
-            for (widthDp in listOf(320, 430)) {
-                setLogicalDisplay(instrumentation, widthDp, if (widthDp == 320) 800 else 900)
+            val widthsAndHeights = listOf(320 to 800, 360 to 800, 390 to 844, 430 to 900)
+            for ((widthDp, heightDp) in widthsAndHeights) {
+                setLogicalDisplay(instrumentation, widthDp, heightDp)
                 for (screen in screens) {
                     scenario.onActivity { it.showWorkspace(screen) }
                     instrumentation.waitForIdleSync()
@@ -89,7 +90,7 @@ class CoreWorkspaceScreenshotTest {
                     image.recycle()
                 }
             }
-            assertEquals("Expected a screenshot for all six workspaces at both widths", 12, outputDirectory.listFiles()?.size)
+            assertEquals("Expected each of six workspaces at all four phone widths", 24, outputDirectory.listFiles()?.size)
             val exportedFileNames = mutableSetOf<String>()
             resolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -101,7 +102,7 @@ class CoreWorkspaceScreenshotTest {
                 val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
                 while (cursor.moveToNext()) exportedFileNames += cursor.getString(nameColumn)
             }
-            assertEquals("Expected all 12 screenshots exported through MediaStore", 12, exportedFileNames.size)
+            assertEquals("Expected all 24 screenshots exported through MediaStore", 24, exportedFileNames.size)
         } finally {
             runShell(instrumentation, "wm size reset")
             runShell(instrumentation, "wm density reset")

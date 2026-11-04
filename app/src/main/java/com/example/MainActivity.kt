@@ -47,7 +47,6 @@ import com.example.ui.DestinedFXApp
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.BrandWelcome
 import com.example.ui.theme.*
-import com.example.ui.viewmodel.RiskViewModel
 import com.example.security.AppSecurityGuard
 
 class MainActivity : FragmentActivity() {
@@ -79,8 +78,7 @@ class MainActivity : FragmentActivity() {
             } else if (isReady) {
                 val mainVm: DestinedFXViewModel = viewModel(factory = AppContainer.Factory)
                 mainViewModel = mainVm
-                val riskVm: RiskViewModel = viewModel(factory = AppContainer.Factory)
-                val themeMode by riskVm.themeMode.collectAsStateWithLifecycle()
+                val themeMode by mainVm.themeMode.collectAsStateWithLifecycle()
 
                 DestinedFXTheme(themeMode = themeMode) {
                     Surface(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {

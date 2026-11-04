@@ -32,6 +32,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.bot.BotLifecycleState
 import com.example.data.broker.BrokerType
 import com.example.data.broker.BrokerConnectionStatus
+import com.example.data.broker.BrokerCapabilityMatrix
+import com.example.data.broker.CapabilityStatus
 import com.example.MainActivity
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.InsightCard
@@ -80,6 +82,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgeExpectedState by remember(selectedAccountMode) { mutableStateOf(when (bridgePendingAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; "STOP", "EMERGENCY_STOP" -> "STOPPED"; else -> "" }) }
     var showLiveAuthorizationDialog by remember { mutableStateOf(false) }
     var showCloseAllDialog by remember { mutableStateOf(false) }
+    var showBridgeDetails by remember { mutableStateOf(false) }
     val bridgeToken = bridgeSecrets.getMT5BridgeAppToken(selectedAccountMode)
     // Shared fresh/profile-bound snapshot; Compose LazyColumn items have separate local scopes.
     val verifiedRemoteSnapshotForBot = bridgeSnapshot?.takeIf { snapshot ->
@@ -295,6 +298,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
                     Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && bridgeSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) bridgeSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    OutlinedButton(onClick = { showBridgeDetails = !showBridgeDetails }, modifier = Modifier.fillMaxWidth().testTag("bridge_setup_details_toggle")) {
+                        Text(if (showBridgeDetails) "HIDE CONNECTION DETAILS" else "CONNECTION SETUP & POSITION DETAILS", fontSize = 10.sp)
+                    }
+                    if (showBridgeDetails) {
                     val news = bridgeSnapshot?.newsVerdict.takeIf { verifiedRemoteSnapshotForBot != null }
                     val newsStatus = news?.optString("status", "UNKNOWN")?.uppercase() ?: "UNKNOWN"
                     Text(if (newsStatus == "CLEAR") "NEWS CLEAR · ${news?.optString("source", "provider")}" else if (newsStatus == "HIGH_IMPACT_WINDOW") "HIGH-IMPACT NEWS — TRADING BLOCKED" else "NEWS UNKNOWN — TRADING BLOCKED", color = if (newsStatus == "CLEAR") ProfitGreen else LossRed, fontWeight = FontWeight.Bold, fontSize = 11.sp)
@@ -538,6 +545,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     if (bridgeMode && !validBridgeRisk) Text("START BLOCKED — risk must be finite and greater than 0 and no more than 1%; no clamping is applied.", color = LossRed, fontSize = 10.sp)
                     if (bridgeCommandPending && bridgeMessage.contains("No confirmed response")) Text("UNKNOWN request $bridgePendingId — do not resend. Refresh/reconcile this ID with bridge last_command or recover manually; no duplicate was sent.", color = LossRed, fontSize = 10.sp)
                     Text(if (bridgeMode) "Bridge control operates on the remote terminal; the terminal must stay online independently." else "Bridge mode off; current broker mode unchanged.", color = TextSecondary, fontSize = 10.sp)
+                    }
                 }
             }
         }
@@ -593,6 +601,23 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Text(if (bridgeMode) "Account: ${bridgeSnapshot?.actualLogin?.takeIf { bridgeIdentityFresh } ?: "—"} · ${bridgeSnapshot?.actualServer?.takeIf { bridgeIdentityFresh } ?: "server unverified"}"
                         else "Connection: ${brokerConnStatus.name.replace('_', ' ')} · metrics appear when available",
                         fontSize = 9.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                    val verifiedLocalMetrics = accountMetrics.takeIf { !bridgeMode && isConnected }
+                    val verifiedBridgeMetrics = verifiedRemoteSnapshotForBot.takeIf { bridgeMode }
+                    val currency = verifiedBridgeMetrics?.currency ?: verifiedLocalMetrics?.currency.orEmpty()
+                    val balance = verifiedBridgeMetrics?.balance ?: verifiedLocalMetrics?.balance
+                    val equity = verifiedBridgeMetrics?.equity ?: verifiedLocalMetrics?.equity
+                    val freeMargin = verifiedBridgeMetrics?.freeMargin ?: verifiedLocalMetrics?.freeMargin
+                    val positionCount = if (bridgeMode) verifiedBridgeMetrics?.positions?.size else openPositions.size.takeIf { isConnected }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        StatChip("BALANCE", balance?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
+                            Modifier.weight(1f), TextPrimary)
+                        StatChip("EQUITY", equity?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
+                            Modifier.weight(1f), TextPrimary)
+                        StatChip("FREE MARGIN", freeMargin?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
+                            Modifier.weight(1f), TextPrimary)
+                        StatChip("POSITIONS", positionCount?.toString() ?: "—",
+                            Modifier.weight(0.8f), ElectricCyan)
+                    }
                 }
             }
         }
@@ -2239,23 +2264,25 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         )
                     }
 
-                    if (activeBrokerType == com.example.data.broker.BrokerType.MT5) {
-                        Text("Direct MT5 orders are disabled. Use the managed EA controls above; only broker-confirmed terminal telemetry can confirm an execution.", color = WarningAmber, fontSize = 10.sp)
-                    }
-                    if (activeBrokerType == BrokerType.DERIV) {
-                        Text("Deriv Multiplier entries are blocked here: this control uses Forex-style lots and price stops, not a validated Multiplier stake/contract workflow.", color = WarningAmber, fontSize = 10.sp)
-                    }
-                    // Direct MT5 order routing is disabled; MT5 execution is managed-terminal only.
+                    val directDemoOrderCapability = BrokerCapabilityMatrix.forBroker(activeBrokerType)
+                        .capability("demo_orders")?.status == CapabilityStatus.IMPLEMENTED
+                    Text(
+                        if (directDemoOrderCapability) "Broker reports a demo-order route; live quote, account identity, risk, and final gateway validation are still required."
+                        else "Instant orders unavailable: this broker has no implemented and verified direct demo-order capability. Use only its supported, separately validated workflow.",
+                        color = if (directDemoOrderCapability) WarningAmber else LossRed, fontSize = 10.sp
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         // SELL BUTTON
                         Button(
-                            enabled = activeBrokerType != BrokerType.MT5 && activeBrokerType != BrokerType.DERIV,
+                            enabled = directDemoOrderCapability && isConnected,
                             onClick = {
-                                if (!isConnected) {
-                                    instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
+                                if (!directDemoOrderCapability) {
+                                    instantExecutionStatus = "Blocked: no implemented and verified direct demo-order capability for ${activeBrokerType.name}."
+                                } else if (!isConnected) {
+                                    instantExecutionStatus = "Blocked: selected broker is not connected."
                                 } else if (bidPrice <= 0.0) {
                                     instantExecutionStatus = "⚠️ Waiting for live bid quote on $activeSymbol..."
                                 } else {
@@ -2290,10 +2317,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         // BUY BUTTON
                         Button(
-                            enabled = activeBrokerType != BrokerType.MT5 && activeBrokerType != BrokerType.DERIV,
+                            enabled = directDemoOrderCapability && isConnected,
                             onClick = {
-                                if (!isConnected) {
-                                    instantExecutionStatus = "⚠️ MT5 Terminal is offline. Connect your broker above before executing orders."
+                                if (!directDemoOrderCapability) {
+                                    instantExecutionStatus = "Blocked: no implemented and verified direct demo-order capability for ${activeBrokerType.name}."
+                                } else if (!isConnected) {
+                                    instantExecutionStatus = "Blocked: selected broker is not connected."
                                 } else if (askPrice <= 0.0) {
                                     instantExecutionStatus = "⚠️ Waiting for live ask quote on $activeSymbol..."
                                 } else {
