@@ -276,15 +276,15 @@ def test_reconciliation_publishes_monotonic_ack_updates():
     assert "if(!created[t]){ReconcileOperation(oi);continue;}" in source
 
 
-def test_daily_risk_guard_is_account_wide_persistent_and_closes_only_managed_exposure():
+def test_daily_risk_guard_is_account_equity_wide_persistent_and_closes_only_managed_exposure():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     snapshot = source[source.index("bool DailyRiskSnapshot") : source.index("bool RiskDayOK()")]
     emergency = source[source.index("void DailyEmergencyExit()") : source.index("void Heartbeat()")]
-    assert "HistorySelect(dayStart,nowServer)" in snapshot
-    assert "DEAL_MAGIC" not in snapshot and "POSITION_MAGIC" not in snapshot
-    assert "DEAL_COMMISSION" in snapshot and "DEAL_FEE" in snapshot
-    assert "POSITION_PROFIT" in snapshot and "POSITION_SWAP" in snapshot
     assert "DailyRiskBaselineKey" in snapshot and "(nowServer-dayStart)>120" in snapshot
+    assert "AccountInfoDouble(ACCOUNT_EQUITY)" in snapshot
+    assert "netPnl=currentEquity-g_dayStartEquity" in snapshot
+    assert "HistorySelect" not in snapshot
+    assert "DEAL_MAGIC" not in snapshot and "POSITION_MAGIC" not in snapshot
     assert "DailyRiskWarningKey" in source and 'NotifyDailyRisk("80% WARNING"' in source
     assert 'NotifyDailyRisk("90% CRITICAL WARNING"' in source
     assert 'NotifyDailyRisk("100% LIMIT BREACHED"' in source
