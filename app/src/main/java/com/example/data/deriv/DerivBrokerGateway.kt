@@ -83,7 +83,7 @@ class DerivBrokerGateway(
         .readTimeout(30, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
-) {
+) : DerivMultiplierGateway {
     companion object {
         private const val TAG = "DerivBrokerGW"
         private const val REST_BASE = "https://api.derivws.com"
@@ -91,15 +91,15 @@ class DerivBrokerGateway(
     }
 
     private val _connectionState = MutableStateFlow(DerivConnectionState.DISCONNECTED)
-    val connectionState: StateFlow<DerivConnectionState> = _connectionState.asStateFlow()
+    override val connectionState: StateFlow<DerivConnectionState> = _connectionState.asStateFlow()
 
     private val _accountMetrics = MutableStateFlow<AccountMetrics?>(null)
-    val accountMetrics: StateFlow<AccountMetrics?> = _accountMetrics.asStateFlow()
+    override val accountMetrics: StateFlow<AccountMetrics?> = _accountMetrics.asStateFlow()
     private val _accountMetricsUpdatedAtMs = MutableStateFlow(0L)
-    val accountMetricsUpdatedAtMs: StateFlow<Long> = _accountMetricsUpdatedAtMs.asStateFlow()
+    override val accountMetricsUpdatedAtMs: StateFlow<Long> = _accountMetricsUpdatedAtMs.asStateFlow()
 
     private val _accountInfo = MutableStateFlow<DerivAccountInfo?>(null)
-    val accountInfo: StateFlow<DerivAccountInfo?> = _accountInfo.asStateFlow()
+    override val accountInfo: StateFlow<DerivAccountInfo?> = _accountInfo.asStateFlow()
     private val _availableAccounts = MutableStateFlow<List<DerivAccountOption>>(emptyList())
     val availableAccounts: StateFlow<List<DerivAccountOption>> = _availableAccounts.asStateFlow()
 
@@ -107,10 +107,10 @@ class DerivBrokerGateway(
     val openPositions: StateFlow<List<Position>> = _openPositions.asStateFlow()
 
     private val _activeContracts = MutableStateFlow<Map<Long, DerivContractInfo>>(emptyMap())
-    val activeContracts: StateFlow<Map<Long, DerivContractInfo>> = _activeContracts.asStateFlow()
+    override val activeContracts: StateFlow<Map<Long, DerivContractInfo>> = _activeContracts.asStateFlow()
 
     private val _portfolioSnapshot = MutableStateFlow<DerivPortfolioSnapshot?>(null)
-    val portfolioSnapshot: StateFlow<DerivPortfolioSnapshot?> = _portfolioSnapshot.asStateFlow()
+    override val portfolioSnapshot: StateFlow<DerivPortfolioSnapshot?> = _portfolioSnapshot.asStateFlow()
 
     fun isAccountReadyForTrading(
         account: DerivAccountInfo?,
@@ -432,7 +432,7 @@ class DerivBrokerGateway(
         webSocket?.send(json.toString())
     }
 
-    suspend fun fetchPortfolio(): List<Position> = withContext(Dispatchers.IO) {
+    override suspend fun fetchPortfolio(): List<Position> = withContext(Dispatchers.IO) {
         val current = _accountInfo.value
         if (_connectionState.value !in setOf(DerivConnectionState.SYNCHRONIZING, DerivConnectionState.READY) || current == null) {
             _portfolioSnapshot.value = DerivPortfolioSnapshot(false, current?.loginId.orEmpty(), current?.mode.orEmpty(), System.currentTimeMillis(), error = "BROKER_DISCONNECTED")
@@ -629,10 +629,10 @@ class DerivBrokerGateway(
         } catch (_: Exception) { false } finally { pendingRequests.remove(reqId) }
     }
 
-    suspend fun executeMultiplier(
+    override suspend fun executeMultiplier(
         intent: DerivMultiplierIntent,
-        allowPurchase: suspend () -> Boolean = { false },
-        onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit = { _, _, _ -> }
+        allowPurchase: suspend () -> Boolean,
+        onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit
     ): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.READY) {
             return@withContext Result.failure(Exception("Deriv broker is not connected. Please connect in the Bot tab."))
@@ -858,7 +858,7 @@ class DerivBrokerGateway(
         return false
     }
 
-    suspend fun sellContract(contractId: Long): Result<DerivSellResult> = withContext(Dispatchers.IO) {
+    override suspend fun sellContract(contractId: Long): Result<DerivSellResult> = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.READY || contractId <= 0L) {
             return@withContext Result.failure(Exception("Deriv broker is not connected."))
         }
@@ -915,7 +915,7 @@ class DerivBrokerGateway(
         }
     }
 
-    suspend fun lookupHistoricalContract(contractId: Long, sinceMs: Long): DerivContractInfo? = withContext(Dispatchers.IO) {
+    override suspend fun lookupHistoricalContract(contractId: Long, sinceMs: Long): DerivContractInfo? = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.READY || contractId <= 0L) return@withContext null
         val reqId = reqIdCounter.getAndIncrement()
         val deferred = CompletableDeferred<JSONObject>()
