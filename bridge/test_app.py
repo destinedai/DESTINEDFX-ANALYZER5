@@ -287,6 +287,23 @@ def test_mt5_broker_company_aliases_are_verified_not_guessed():
     assert not app.broker_server_matches('FBS','FBS-Demo01','FBS-Real01')
     assert not app.broker_server_matches('UNKNOWN','FBS-Demo01','FBS-Demo01')
 
+def test_worker_at_capacity_claims_no_new_provisioning_job(monkeypatch):
+    managed_env(monkeypatch)
+    p,ah=managed_pair()
+    assert client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'123','server':'S','password':'secret','access_type':'MASTER',
+        'account_mode':'DEMO','broker_brand':'FBS','consent':True
+    }).status_code==202
+    with app.tx(True) as c:
+        c.execute("UPDATE worker_jobs SET status='QUEUED' WHERE pairing_id=?",(p['pairing_id'],))
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    response=client.post('/v1/worker/jobs/claim',headers=wh,json={
+        'worker_id':'worker','active_terminals':1,'max_terminals':1
+    })
+    assert response.status_code==200
+    assert response.json()=={'job':None}
+
+
 def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
     managed_env(monkeypatch)
     p,ah=managed_pair()
