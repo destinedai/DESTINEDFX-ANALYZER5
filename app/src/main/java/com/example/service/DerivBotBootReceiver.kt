@@ -12,11 +12,23 @@ import com.example.security.SecretsManager
  */
 class DerivBotBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
+        if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+
+        // Resume telemetry-only monitoring for saved MT5 profiles after a reboot.
+        // This never starts an MT5 terminal or authorizes a trade; the Windows worker/EA
+        // remains the execution authority and every profile is independently verified.
+        val secure = runCatching { SecretsManager(context) }.getOrNull() ?: return
+        if (secure.isSecureStorageAvailable &&
+            secure.getManagedMT5ServiceUrl().isNotBlank() &&
+            secure.getConfiguredMT5AccountProfileKeys().isNotEmpty()
+        ) {
+            runCatching { MT5AccountSessionService.start(context) }
+        }
+
         val prefs = context.getSharedPreferences("deriv_bot_config", Context.MODE_PRIVATE)
         val symbol = prefs.getString(DerivDemoBotService.EXTRA_SYMBOL, null)?.trim().orEmpty()
         val strategy = prefs.getString(DerivDemoBotService.EXTRA_STRATEGY, null)?.trim().orEmpty()
         val timeframe = prefs.getString(DerivDemoBotService.EXTRA_TIMEFRAME, null)?.trim().orEmpty()
-        val secure = runCatching { SecretsManager(context) }.getOrNull() ?: return
         val hasCredentials = secure.isSecureStorageAvailable &&
             secure.getDerivApiToken().isNotBlank() && secure.getDerivAppId().isNotBlank()
         if (!DerivBotRecoveryPolicy.shouldRecover(
