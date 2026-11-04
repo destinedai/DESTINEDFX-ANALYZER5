@@ -76,7 +76,7 @@ class WorkerTests(unittest.TestCase):
             'single_broker_brand = "FBS"',
             'max_terminals = 1',
         ]
-        config.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+        config.write_text("\n".join(lines) + "\n", encoding="utf-8")
         loaded = worker.load_settings(config)
         self.assertEqual(loaded["single_broker_brand"], "FBS")
         config.write_text(
