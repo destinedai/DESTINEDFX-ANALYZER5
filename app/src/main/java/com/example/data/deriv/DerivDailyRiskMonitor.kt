@@ -52,9 +52,9 @@ object DerivDailyRiskMonitor {
         val lossPercent = ((start - current).coerceAtLeast(0.0) / start) * 100.0
         val usedPercent = lossPercent / maximumDailyLossPercent * 100.0
         val status = when {
-            alreadyLocked || usedPercent >= 100.0 -> DerivDailyRiskSnapshot.Status.LOCKED
-            usedPercent >= TradingSafetyLimits.DAILY_WARNING_90_PERCENT -> DerivDailyRiskSnapshot.Status.WARNING_90
-            usedPercent >= TradingSafetyLimits.DAILY_WARNING_80_PERCENT -> DerivDailyRiskSnapshot.Status.WARNING_80
+            alreadyLocked || usedPercent + 1e-9 >= 100.0 -> DerivDailyRiskSnapshot.Status.LOCKED
+            usedPercent + 1e-9 >= TradingSafetyLimits.DAILY_WARNING_90_PERCENT -> DerivDailyRiskSnapshot.Status.WARNING_90
+            usedPercent + 1e-9 >= TradingSafetyLimits.DAILY_WARNING_80_PERCENT -> DerivDailyRiskSnapshot.Status.WARNING_80
             else -> DerivDailyRiskSnapshot.Status.NORMAL
         }
         return DerivDailyRiskSnapshot(start, current, lossPercent, usedPercent, status)
