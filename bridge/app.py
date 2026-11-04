@@ -35,6 +35,7 @@ ANALYSIS_SYMBOL_POLICY={
     'USD/JPY':('FOREX',3,0.5,0.01),'XAU/USD':('METAL',2,5.0,0.02),
     'BTC/USD':('CRYPTO',2,200.0,0.05),
 }
+ANALYSIS_SESSION_POLICY={'FOREX':True,'METAL':True,'CRYPTO':False}
 _NEWS_CACHE={}
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
 
@@ -431,17 +432,42 @@ def durable_execution_enabled():
 def trusted_analysis_sources():
     return {value.strip() for value in os.getenv('ANALYSIS_TRUSTED_SOURCES','').split(',') if value.strip()}
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, 'provider redirect rejected', headers, fp)
+
+def validate_provider_url(raw):
+    value=(raw or '').strip().rstrip('/')
+    try:
+        parsed=urlparse(value); host=(parsed.hostname or '').lower().rstrip('.'); port=parsed.port
+    except (ValueError,UnicodeError):
+        return None
+    if parsed.scheme!='https' or not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return None
+    if host in {'localhost','testserver'} or host.endswith(('.local','.localhost','.internal','.invalid','.test')):
+        return None
+    if port is not None and not (1<=port<=65535): return None
+    try:
+        address=ipaddress.ip_address(host.strip('[]'))
+        if not address.is_global: return None
+    except ValueError:
+        if ':' in host or all(ch in '0123456789.' for ch in host): return None
+    serialized_host=f'[{host}]' if ':' in host else host
+    return f'https://{serialized_host}' + (f':{port}' if port else '') + (parsed.path or '')
+
 def fetch_provider_snapshot(symbol, timeframe):
     provider_url=os.getenv('ANALYSIS_PROVIDER_URL','').strip()
-    if not provider_url or not validate_origin(provider_url):
+    safe_url=validate_provider_url(provider_url)
+    if not safe_url:
         raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_CONFIGURED','message':'No usable trusted analysis provider is configured'})
     query=urlencode({'symbol':symbol,'timeframe':timeframe})
     headers={'Accept':'application/json'}
     provider_token=os.getenv('ANALYSIS_PROVIDER_TOKEN','').strip()
     if provider_token: headers['Authorization']='Bearer '+provider_token
     try:
-        request=urllib.request.Request(provider_url+'?'+query,headers=headers)
-        with urllib.request.urlopen(request,timeout=5) as response:
+        request=urllib.request.Request(safe_url+('?' if '?' not in safe_url else '&')+query,headers=headers)
+        opener=urllib.request.build_opener(_NoRedirectHandler())
+        with opener.open(request,timeout=5) as response:
             if response.headers.get_content_type()!='application/json':
                 raise ValueError('NON_JSON_PROVIDER_RESPONSE')
             raw=response.read(512*1024+1)
@@ -494,9 +520,9 @@ def validate_analysis_snapshot(x, provider):
     interval_ms,max_age_ms=policy
     if x.strategy_id not in STRATEGY_RULESETS:
         raise HTTPException(422,'Unsupported strategy ID')
-    if provider['asset_class'] not in ('FOREX','METAL','CRYPTO'):
+    if provider['asset_class'] not in ANALYSIS_SESSION_POLICY:
         raise HTTPException(422,'Unsupported instrument session metadata')
-    return server_now_ms,timeframe,interval_ms,max_age_ms,provider['asset_class']=='FOREX'
+    return server_now_ms,timeframe,interval_ms,max_age_ms,ANALYSIS_SESSION_POLICY[provider['asset_class']]
 
 def require_durable_execution():
     if not durable_execution_enabled():
@@ -890,7 +916,8 @@ def app_analysis(x:AnalysisRequest,authorization:str|None=Header(default=None)):
         'source':provider['provider_id'],'now_ms':server_now_ms,
         'provider_retrieved_at_ms':provider['observed_ms'],
         'expected_interval_ms':interval_ms,'max_candle_age_ms':max_age_ms,
-        'allow_session_gaps':allow_session_gaps,'quote_bid':quote.bid,'quote_ask':quote.ask,
+        'asset_class':provider['asset_class'],'allow_session_gaps':allow_session_gaps,
+        'quote_bid':quote.bid,'quote_ask':quote.ask,
         'candles':[c.model_dump(mode='json') for c in provider['candles']],
     }
     raw=json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False)

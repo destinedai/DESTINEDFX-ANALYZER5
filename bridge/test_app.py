@@ -36,11 +36,14 @@ class ProviderResponse:
     def __enter__(self): return self
     def __exit__(self,*args): return False
     def read(self,_limit): return app.json.dumps(self.payload).encode()
+class ProviderOpener:
+    def __init__(self,payload): self.payload=payload
+    def open(self,request,timeout): return ProviderResponse(self.payload)
 
 def configure_provider(monkeypatch,payload=None):
     monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
     monkeypatch.setenv('ANALYSIS_PROVIDER_URL','https://provider.destinedfx.com')
-    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: ProviderResponse(payload or provider_payload()))
+    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(payload or provider_payload()))
 
 def test_authenticated_analysis_is_typed_non_executable_and_idempotent(monkeypatch):
     configure_provider(monkeypatch)
@@ -66,14 +69,14 @@ def test_concurrent_identical_analysis_retries_replay_one_stored_response(monkey
 def test_analysis_fails_closed_for_stale_future_override_and_quote_mismatch(monkeypatch):
     configure_provider(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
-    stale=analysis_payload('stale-analysis'); monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: ProviderResponse(provider_payload(quote_age_ms=app.ANALYSIS_QUOTE_MAX_AGE_MS+1)))
+    stale=analysis_payload('stale-analysis'); monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(provider_payload(quote_age_ms=app.ANALYSIS_QUOTE_MAX_AGE_MS+1)))
     assert client.post('/v1/app/analysis',headers=headers,json=stale).status_code==503
     future={**analysis_payload('future-analysis'),'now_ms':int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000}
     assert client.post('/v1/app/analysis',headers=headers,json=future).status_code==422
     override={**analysis_payload('override-analysis'),'max_candle_age_ms':604_800_000}
     assert client.post('/v1/app/analysis',headers=headers,json=override).status_code==422
     mismatch=analysis_payload('quote-mismatch'); bad=provider_payload(); bad['quote']['bid']*=2; bad['quote']['ask']*=2
-    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: ProviderResponse(bad))
+    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler,bad=bad: ProviderOpener(bad))
     assert client.post('/v1/app/analysis',headers=headers,json=mismatch).status_code==503
 
 def test_analysis_requires_app_token_trusted_source_and_supported_timeframe(monkeypatch):
@@ -114,7 +117,7 @@ def test_provider_quote_identity_spread_precision_and_gap_are_fail_closed(monkey
     configure_provider(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('provider-adversarial')
     other_instrument=provider_payload(symbol='GBP/USD')
-    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: ProviderResponse(other_instrument))
+    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(other_instrument))
     assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==503
     cases=[]
     bad_provider=provider_payload(); bad_provider['provider_id']='other-provider'; cases.append(bad_provider)
@@ -124,8 +127,17 @@ def test_provider_quote_identity_spread_precision_and_gap_are_fail_closed(monkey
     intraday_gap=provider_payload(); intraday_gap['candles'][10]['timestamp_ms']+=3_600_000; cases.append(intraday_gap)
     for index,bad in enumerate(cases):
         bad_request={**payload,'request_id':f'provider-adversarial-{index}'}
-        monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout,bad=bad: ProviderResponse(bad))
+        monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler,bad=bad: ProviderOpener(bad))
         assert client.post('/v1/app/analysis',headers=headers,json=bad_request).status_code==503
+
+def test_provider_endpoint_validation_allows_path_but_rejects_unsafe_targets():
+    assert app.validate_provider_url('https://data.example-provider.com/v1/quotes') == 'https://data.example-provider.com/v1/quotes'
+    assert app.validate_provider_url('http://data.example-provider.com/v1/quotes') is None
+    assert app.validate_provider_url('https://127.0.0.1/v1/quotes') is None
+    assert app.validate_provider_url('https://data.example-provider.com/v1/quotes?token=secret') is None
+    handler=app._NoRedirectHandler()
+    with __import__('pytest').raises(app.urllib.error.HTTPError):
+        handler.redirect_request(type('Req',(),{'full_url':'https://data.example-provider.com/v1/quotes'})(),None,302,'Found',{},'https://other.example-provider.com')
 def test_pairing_single_use_and_token_auth_boundaries():
     p=pair(); assert client.get('/v1/app/state',headers={'Authorization':'Bearer '+p['app_token']}).json()['pairing_status']=='PAIRING'; t=claimed(p)
     assert client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'another','account':ACCOUNT}).status_code==401

@@ -26,6 +26,7 @@ STRATEGY_RULESETS = {
     "mean-reversion": "python-mean-reversion-1.0.0",
     "trend-following": "python-trend-following-1.0.0",
 }
+SESSION_GAP_POLICY = {"FOREX": True, "METAL": True, "CRYPTO": False}
 
 
 class DataIntegrityError(ValueError):
@@ -378,6 +379,13 @@ def analyze_json(payload: str) -> str:
             expected_interval_ms = int(expected_interval_ms)
         max_candle_age_ms = int(request.get("max_candle_age_ms", MAX_CANDLE_AGE_MS))
         provider_retrieved_at_ms = int(request.get("provider_retrieved_at_ms", 0))
+        asset_class = request.get("asset_class")
+        if asset_class is not None:
+            asset_class = str(asset_class).strip().upper()
+            if asset_class not in SESSION_GAP_POLICY:
+                raise DataIntegrityError("UNSUPPORTED_SESSION_METADATA")
+            if bool(request.get("allow_session_gaps", False)) != SESSION_GAP_POLICY[asset_class]:
+                raise DataIntegrityError("SESSION_POLICY_MISMATCH")
         legacy_quote_price = request.get("quote_price")
         if legacy_quote_price is not None:
             try:
@@ -405,7 +413,7 @@ def analyze_json(payload: str) -> str:
         series = validate_ohlcv(
             candles, now_ms=now_ms, source=source,
             expected_interval_ms=expected_interval_ms,
-            allow_session_gaps=bool(request.get("allow_session_gaps", False)),
+            allow_session_gaps=SESSION_GAP_POLICY[asset_class] if asset_class is not None else bool(request.get("allow_session_gaps", False)),
             max_age_ms=max_candle_age_ms,
         )
         result = evaluate_strategy(series, strategy_id=strategy_id, symbol=symbol, timeframe=timeframe,
