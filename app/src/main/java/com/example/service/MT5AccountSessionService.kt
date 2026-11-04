@@ -83,7 +83,7 @@ object AccountSessionRegistry {
                             tradeAllowed = false,
                             terminalConnected = false,
                             accountVerified = false
-                        ) ?: return@async null
+                        )?.let { profileKey to it } ?: return@async null
                     }
                 }
             }.awaitAll()
