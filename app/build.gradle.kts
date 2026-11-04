@@ -35,8 +35,8 @@ android {
     applicationId = "com.aistudio.destinedfx.qwvzxp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 9
-    versionName = "1.0.9"
+    versionCode = 10
+    versionName = "1.0.10"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     ndk { abiFilters += listOf("arm64-v8a", "x86_64") }

@@ -180,8 +180,8 @@ jobs:
           metadata="$("$aapt_path" dump badging "$apk")"
           printf '%s\n' "$metadata" | grep -F "package: name='com.aistudio.destinedfx.qwvzxp'"
           printf '%s\n' "$metadata" | grep -E "sdkVersion:|targetSdkVersion:|native-code:"
-          printf '%s\n' "$metadata" | grep -F "versionCode='9'"
-          printf '%s\n' "$metadata" | grep -F "versionName='1.0.9'"
+          printf '%s\n' "$metadata" | grep -F "versionCode='10'"
+          printf '%s\n' "$metadata" | grep -F "versionName='1.0.10'"
           unzip -l "$apk" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
             echo "Chaquopy native library listing was not found for configured ABIs." >&2
             exit 1
@@ -190,7 +190,7 @@ jobs:
           {
             echo "### Debug APK verification"
             echo 'Package: `com.aistudio.destinedfx.qwvzxp`'
-            echo 'Version: `1.0.9` (code `9`)'
+            echo 'Version: `1.0.10` (code `10`)'
             echo 'Signature verified by apksigner; supported ABI metadata and Chaquopy native payload inspected.'
             echo 'SHA-256:'
             echo '```text'
