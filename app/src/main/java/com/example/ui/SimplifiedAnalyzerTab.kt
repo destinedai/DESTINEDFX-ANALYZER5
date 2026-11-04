@@ -33,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,16 +79,18 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     var chartDisplayed by remember { mutableStateOf(true) }
 
     val activeTicker = ticker[symbol]
+    val currentSignal = signal
+    val currentAnalysis = analysis
     val strategyName = StrategyRegistry.allStrategies.firstOrNull { it.id == strategyId }?.name ?: strategyId
-    val displayState = userFacingSignalLabel(signal?.signalState, signal?.direction)
-    val rr = analysis?.let { validatedDisplayRewardRisk(it.signalState, it.direction, it.entry, it.stopLoss, it.tp1) }
-    val hasPlan = rr != null && signal?.entryPrice?.let { it > 0.0 } == true
+    val displayState = userFacingSignalLabel(currentSignal?.signalState, currentSignal?.direction)
+    val rr = currentAnalysis?.let { validatedDisplayRewardRisk(it.signalState, it.direction, it.entry, it.stopLoss, it.tp1) }
+    val hasPlan = rr != null && currentSignal?.entryPrice?.let { it > 0.0 } == true
     val readiness = deriveMarketReadiness(
         ticker = activeTicker,
         candleSource = viewModel.marketDataSource(symbol, timeframe),
         candlesAvailable = viewModel.candlesForChart(symbol, timeframe).isNotEmpty(),
         chartDisplayed = chartDisplayed,
-        signal = signal
+        signal = currentSignal
     )
     val stateColor = when (displayState) {
         "BUY" -> ProfitGreen
@@ -134,14 +137,14 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                     if (scanning) {
                         Text("Analysing market structure…", color = ElectricCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Text(plainTradingReason(scanStage), color = TextSecondary, fontSize = 11.sp)
-                    } else if (signal == null) {
+                    } else if (currentSignal == null) {
                         Text("Run analysis to check for a qualified opportunity.", color = TextSecondary, fontSize = 12.sp)
                     } else {
                         Text("Strategy: $strategyName", color = TextSecondary, fontSize = 11.sp)
                         if (hasPlan) {
-                            TradePlanSummary(analysis!!, symbol, rr!!)
+                            TradePlanSummary(currentAnalysis!!, symbol, rr!!)
                         } else {
-                            Text(conciseReasons(signal).first(), color = WarningAmber, fontSize = 12.sp, lineHeight = 18.sp)
+                            Text(conciseReasons(currentSignal!!).first(), color = WarningAmber, fontSize = 12.sp, lineHeight = 18.sp)
                         }
                     }
                 }
