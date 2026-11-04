@@ -2,6 +2,7 @@ package com.example.ui.workstations
 
 import com.example.domain.risk.TradingSafetyLimits
 import com.example.service.MT5AccountSessionService
+import com.example.service.AccountSessionRegistry
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -208,10 +209,22 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     LaunchedEffect(bridgeMode, bridgeToken, bridgeProfileKey, selectedAccountMode, bridgeClient.baseUrl()) {
         if (bridgeMode && bridgeClient.baseUrl().isNotBlank() && bridgeToken.isNotBlank()) {
             runCatching { MT5AccountSessionService.start(reportContext) }
+            var lastProcessedSessionSnapshot = ""
             while (true) {
                 try {
-                    val fresh = bridgeClient.state()
+                    val fresh = AccountSessionRegistry.snapshots.value[bridgeProfileKey]
+                    if (fresh == null) {
+                        delay(1_000)
+                        continue
+                    }
                     bridgeSnapshot = fresh
+                    val sessionSnapshotKey = fresh.raw.optString("last_heartbeat_at", "") + ":" +
+                        (fresh.raw.optJSONObject("last_command")?.toString() ?: "")
+                    if (sessionSnapshotKey.isBlank() || sessionSnapshotKey == lastProcessedSessionSnapshot) {
+                        delay(1_000)
+                        continue
+                    }
+                    lastProcessedSessionSnapshot = sessionSnapshotKey
                     runCatching {
                         val syncPrefs = reportContext.getSharedPreferences("destinedfx_trade_sync", android.content.Context.MODE_PRIVATE)
                         val syncKey = bridgeProfileKey.lowercase()
