@@ -287,6 +287,77 @@ def test_mt5_broker_company_aliases_are_verified_not_guessed():
     assert not app.broker_server_matches('FBS','FBS-Demo01','FBS-Real01')
     assert not app.broker_server_matches('UNKNOWN','FBS-Demo01','FBS-Demo01')
 
+def test_simultaneous_fbs_and_exness_demo_pairings_keep_tokens_telemetry_and_ledgers_isolated(monkeypatch):
+    managed_env(monkeypatch)
+    fbs, fbs_headers = managed_pair()
+    exness, exness_headers = managed_pair()
+    registrations = [
+        (fbs_headers, {'login':'100111','server':'FBS-Demo01','password':'fbs-demo-secret',
+                       'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}),
+        (exness_headers, {'login':'200222','server':'Exness-MT5Trial','password':'exness-demo-secret',
+                          'access_type':'MASTER','account_mode':'DEMO','broker_brand':'EXNESS','consent':True}),
+    ]
+    for headers, payload in registrations:
+        assert client.post('/v1/app/managed-account', headers=headers, json=payload).status_code == 202
+
+    worker_headers = {'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    first_job = client.post('/v1/worker/jobs/claim', headers=worker_headers,
+                            json={'worker_id':'multi-broker-host','active_terminals':0,'max_terminals':2})
+    second_job = client.post('/v1/worker/jobs/claim', headers=worker_headers,
+                             json={'worker_id':'multi-broker-host','active_terminals':1,'max_terminals':2})
+    assert first_job.status_code == second_job.status_code == 200
+    jobs = [first_job.json(), second_job.json()]
+    by_brand = {job['account']['broker_brand']: job for job in jobs}
+    assert set(by_brand) == {'FBS','EXNESS'}
+
+    fbs_account = {'login':'100111','server':'FBS-Demo01','company':'FBS Markets Inc.',
+                   'currency':'USD','account_mode':'DEMO'}
+    exness_account = {'login':'200222','server':'Exness-MT5Trial','company':'Exness Technologies Ltd',
+                      'currency':'USD','account_mode':'DEMO'}
+    terminals = {}
+    for brand, account in (('FBS', fbs_account), ('EXNESS', exness_account)):
+        claimed_terminal = client.post('/v1/terminal/claim', json={
+            'pairing_code':by_brand[brand]['pairing_code'],
+            'terminal_instance_id':brand.lower()+'-terminal',
+            'account':account
+        })
+        assert claimed_terminal.status_code == 200
+        terminals[brand] = claimed_terminal.json()
+
+    fbs_beat = heartbeat_data(
+        account={**fbs_account,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},
+        configuration={'strategy':'smc-confluence-1.0.0','daily_risk_status':'NORMAL','daily_loss_used_percent':12.0},
+        closed_deals=[{'ticket':51001,'position_id':61001,'symbol':'EURUSD','closed_at':app.iso(),
+                       'profit':11.0,'commission':-0.5,'swap':0.0}]
+    )
+    exness_beat = heartbeat_data(
+        account={**exness_account,'balance':20000,'equity':19800,'margin':200,'free_margin':19600,'margin_level':9900,'leverage':100},
+        configuration={'strategy':'ict-silver-bullet','daily_risk_status':'WARNING_90','daily_loss_used_percent':91.0},
+        closed_deals=[{'ticket':52001,'position_id':62001,'symbol':'GBPUSD','closed_at':app.iso(),
+                       'profit':-40.0,'commission':-1.0,'swap':-0.2}]
+    )
+    for brand, beat in (('FBS', fbs_beat), ('EXNESS', exness_beat)):
+        response = client.post('/v1/terminal/heartbeat', json=beat,
+                               headers={'Authorization':'Bearer '+terminals[brand]['terminal_token']})
+        assert response.status_code == 200
+
+    fbs_state = client.get('/v1/app/state', headers=fbs_headers).json()
+    exness_state = client.get('/v1/app/state', headers=exness_headers).json()
+    assert fbs_state['account']['login'] == '100111'
+    assert exness_state['account']['login'] == '200222'
+    assert fbs_state['configuration']['daily_risk_status'] == 'NORMAL'
+    assert exness_state['configuration']['daily_risk_status'] == 'WARNING_90'
+    assert fbs_state['account']['company'] == 'FBS Markets Inc.'
+    assert exness_state['account']['company'] == 'Exness Technologies Ltd'
+
+    fbs_trades = client.get('/v1/app/trades', headers=fbs_headers).json()['trades']
+    exness_trades = client.get('/v1/app/trades', headers=exness_headers).json()['trades']
+    assert any(row['payload'].get('deals', [{}])[0].get('ticket') == 51001 for row in fbs_trades)
+    assert any(row['payload'].get('deals', [{}])[0].get('ticket') == 52001 for row in exness_trades)
+    assert all(row['payload'].get('deals', [{}])[0].get('ticket') != 52001 for row in fbs_trades)
+    assert all(row['payload'].get('deals', [{}])[0].get('ticket') != 51001 for row in exness_trades)
+
+
 def test_worker_at_capacity_claims_no_new_provisioning_job(monkeypatch):
     managed_env(monkeypatch)
     p,ah=managed_pair()
