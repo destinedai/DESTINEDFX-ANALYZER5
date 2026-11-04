@@ -347,11 +347,11 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedScreen) {
                     DestinedFXScreen.Home -> HomeDashboardTab(viewModel)
-                    DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel, onExportAnalysis = { showExportDialog = true })
+                    DestinedFXScreen.Analyzer -> SimplifiedAnalyzerTab(viewModel, onExportAnalysis = { showExportDialog = true })
                     DestinedFXScreen.ImageAnalyzer -> ChartImageAnalyzerTab(viewModel)
                     DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
                     DestinedFXScreen.Calendar -> CalendarTab(viewModel)
-                    DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
+                    DestinedFXScreen.Bot -> SimplifiedBotWorkstation(viewModel)
                     DestinedFXScreen.Watchlist -> WatchlistTab(viewModel)
                     DestinedFXScreen.More -> MoreTab(viewModel)
                     DestinedFXScreen.Chat -> ChatWorkstationTab(viewModel)
