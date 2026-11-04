@@ -375,6 +375,28 @@ def test_worker_at_capacity_claims_no_new_provisioning_job(monkeypatch):
     assert response.json()=={'job':None}
 
 
+def test_worker_lease_capacity_blocks_second_simultaneous_claim(monkeypatch):
+    managed_env(monkeypatch)
+    p1, h1 = managed_pair()
+    p2, h2 = managed_pair()
+    for headers, login in ((h1,'123111'), (h2,'123222')):
+        response = client.post('/v1/app/managed-account', headers=headers, json={
+            'login':login,'server':'FBS-Demo01','password':'secret',
+            'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+        })
+        assert response.status_code == 202
+    worker_headers = {'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    first = client.post('/v1/worker/jobs/claim', headers=worker_headers,
+                        json={'worker_id':'single-terminal-worker','active_terminals':0,'max_terminals':1})
+    assert first.status_code == 200 and first.json().get('job_id')
+    # The second request deliberately reports zero local terminals: the bridge lease
+    # check must still see the first in-flight provision and hold the second job queued.
+    second = client.post('/v1/worker/jobs/claim', headers=worker_headers,
+                         json={'worker_id':'single-terminal-worker','active_terminals':0,'max_terminals':1})
+    assert second.status_code == 200
+    assert second.json() == {'job':None}
+
+
 def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
     managed_env(monkeypatch)
     p,ah=managed_pair()
