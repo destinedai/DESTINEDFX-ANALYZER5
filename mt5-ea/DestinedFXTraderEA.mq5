@@ -151,8 +151,8 @@ bool RiskDayOK(){
       return false;
    }
    g_dailyRiskStatus=usedPct>=90.0?"WARNING_90":(usedPct>=80.0?"WARNING_80":"NORMAL");
+   if(usedPct>=80.0)NotifyDailyRisk("80% WARNING",netPnl,limit,usedPct);
    if(usedPct>=90.0)NotifyDailyRisk("90% CRITICAL WARNING",netPnl,limit,usedPct);
-   else if(usedPct>=80.0)NotifyDailyRisk("80% WARNING",netPnl,limit,usedPct);
    return true;
 }
 void DailyEmergencyExit(){
