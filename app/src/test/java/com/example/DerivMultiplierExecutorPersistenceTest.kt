@@ -200,7 +200,7 @@ class DerivMultiplierExecutorPersistenceTest {
 
         val result = executor.reconcileBeforeNewEntriesResult()
         val restored = dao.findBySignalId("D123", "DEMO", "history-match")!!
-        assertEquals(DerivExecutionStatus.READY, result.status)
+        assertEquals(DerivReconciliationStatus.READY, result.status)
         assertEquals(DerivExecutionStatus.CONTRACT_SETTLED.name, restored.status)
         assertEquals(7001L, restored.buyTransactionId)
         assertEquals(0.5, restored.settlementProfit!!, 0.0)
