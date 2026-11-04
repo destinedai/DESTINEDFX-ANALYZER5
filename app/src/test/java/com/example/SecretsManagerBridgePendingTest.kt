@@ -44,6 +44,17 @@ class SecretsManagerBridgePendingTest {
         assertEquals("", manager.getMT5BridgePendingCommandAction())
     }
 
+    @Test fun configuredMT5AccountProfilesAreEnumeratedWithoutExposingTokens() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+        assertTrue(manager.saveMT5BridgeAccountAppToken("FBS_DEMO", "opaque-demo-token"))
+        assertTrue(manager.saveMT5BridgeAccountAppToken("EXNESS_LIVE", "opaque-live-token"))
+        val profiles = manager.getConfiguredMT5AccountProfileKeys()
+        assertTrue(profiles.contains("FBS_DEMO"))
+        assertTrue(profiles.contains("EXNESS_LIVE"))
+        assertTrue(!profiles.contains("HFM_DEMO"))
+    }
+
     @Test fun manuallyChangedManagedBridgeUrlPersistsAcrossManagerRestart() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         if (!manager.isSecureStorageAvailable) return
