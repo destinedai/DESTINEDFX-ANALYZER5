@@ -143,14 +143,60 @@ class DerivDemoBotService : Service() {
                 return
             }
         }
+        suspend fun verifyDerivDailyRiskAtEntryBoundary(accountId: String, mode: String): Boolean {
+            val utcDay = derivUtcDayKey()
+            if (app.secretsManager.isDerivDailyRiskLocked(accountId, mode, utcDay)) return false
+            val currentAccount = gateway.accountInfo.value ?: return false
+            if (currentAccount.loginId != accountId || currentAccount.mode.uppercase() != mode.uppercase()) return false
+            if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY) return false
+            gateway.fetchPortfolio()
+            val metrics = gateway.accountMetrics.value ?: return false
+            val balanceAge = System.currentTimeMillis() - gateway.accountMetricsUpdatedAtMs.value
+            val portfolio = gateway.portfolioSnapshot.value ?: return false
+            val portfolioAge = System.currentTimeMillis() - portfolio.retrievedAtMs
+            if (!metrics.balance.isFinite() || metrics.balance < 0.0 ||
+                !metrics.currency.equals(currentAccount.currency, ignoreCase = true) ||
+                balanceAge !in 0..8_000L ||
+                !portfolio.successful || portfolio.accountId != accountId ||
+                portfolio.accountMode != mode.uppercase() ||
+                !portfolio.currency.equals(currentAccount.currency, ignoreCase = true) ||
+                portfolioAge !in 0..8_000L || !portfolio.exposure.isFinite() ||
+                portfolio.contracts.any { !it.profit.isFinite() }
+            ) return false
+            val currentEquity = metrics.balance + portfolio.contracts.filterNot { it.isSold }.sumOf { it.profit }
+            val baseline = app.secretsManager.getDerivDailyRiskStartingEquity(accountId, mode, utcDay) ?: return false
+            val snapshot = DerivDailyRiskMonitor.evaluate(
+                baseline, currentEquity, TradingSafetyLimits.MAX_DAILY_LOSS_PERCENT,
+                app.secretsManager.isDerivDailyRiskLocked(accountId, mode, utcDay)
+            )
+            return when (snapshot.status) {
+                com.example.data.deriv.DerivDailyRiskSnapshot.Status.NORMAL -> true
+                com.example.data.deriv.DerivDailyRiskSnapshot.Status.WARNING_80 -> {
+                    if (app.secretsManager.markDerivDailyRiskWarningSent(accountId, mode, utcDay, 80)) {
+                        update("Running — 80% daily-loss warning; ${"%.1f".format(snapshot.limitUsedPercent)}% of daily limit consumed")
+                    }
+                    true
+                }
+                com.example.data.deriv.DerivDailyRiskSnapshot.Status.WARNING_90 -> {
+                    app.secretsManager.markDerivDailyRiskWarningSent(accountId, mode, utcDay, 80)
+                    if (app.secretsManager.markDerivDailyRiskWarningSent(accountId, mode, utcDay, 90)) {
+                        update("Running — 90% daily-loss critical warning; ${"%.1f".format(snapshot.limitUsedPercent)}% of daily limit consumed")
+                    }
+                    true
+                }
+                com.example.data.deriv.DerivDailyRiskSnapshot.Status.LOCKED -> {
+                    app.secretsManager.lockDerivDailyRisk(accountId, mode, utcDay)
+                    false
+                }
+                com.example.data.deriv.DerivDailyRiskSnapshot.Status.DATA_UNAVAILABLE -> false
+            }
+        }
+
         val executor = DerivMultiplierExecutor(
             gateway,
             app.db.derivExecutionDao(),
             sensitiveActionAuthorized = { com.example.security.AppSecurityGuard.authorizeSensitiveAction() },
-            dailyRiskEntryAllowed = { accountId, mode ->
-                val utcDay = derivUtcDayKey()
-                !app.secretsManager.isDerivDailyRiskLocked(accountId, mode, utcDay)
-            }
+            dailyRiskEntryAllowed = ::verifyDerivDailyRiskAtEntryBoundary
         )
         if (!reconcileWithRecovery(executor, gateway)) return
         update("Running — scanning $symbol; no order is assumed confirmed")
@@ -312,6 +358,23 @@ class DerivDemoBotService : Service() {
                                 update("RECONNECTING — $reason; purchases paused")
                                 if (!connectWithBoundedRetry(gateway)) {
                                     stopSafely("ERROR — reconnect exhausted after portfolio validation failure; trading remains stopped")
+                                    return
+                                }
+                            }
+                            reason.contains("DAILY_RISK_RECHECK_FAILED") -> {
+                                val utcDay = derivUtcDayKey()
+                                val dailyLocked = app.secretsManager.isDerivDailyRiskLocked(account.loginId, account.mode, utcDay)
+                                if (dailyLocked) {
+                                    update("Safety blocked — Deriv daily-loss limit locked at the purchase boundary; attempting to close DestinedFX-managed contracts")
+                                    val closed = executor.closeBotOwnedContracts()
+                                    update(if (closed) {
+                                        "Safety blocked — daily lock remains active; broker confirms DestinedFX-managed contracts settled"
+                                    } else {
+                                        "Safety blocked — daily lock remains active; broker has not confirmed all DestinedFX-managed contracts settled"
+                                    })
+                                    delay(10_000)
+                                } else {
+                                    stopSafely("Safety blocked — Deriv risk could not be reverified immediately before purchase; trading remains stopped")
                                     return
                                 }
                             }
