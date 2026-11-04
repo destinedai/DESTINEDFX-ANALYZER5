@@ -26,6 +26,13 @@ class DerivDailyRiskMonitorTest {
         assertEquals(DerivDailyRiskSnapshot.Status.LOCKED, recovered.status)
     }
 
+    @Test fun missingBaselineMayOnlyBeCapturedNearUtcDayStart() {
+        assertEquals(true, DerivDailyRiskMonitor.canInitializeDailyBaseline(60_000L))
+        assertEquals(true, DerivDailyRiskMonitor.canInitializeDailyBaseline(120_000L))
+        assertEquals(false, DerivDailyRiskMonitor.canInitializeDailyBaseline(121_000L))
+        assertEquals(false, DerivDailyRiskMonitor.canInitializeDailyBaseline(12 * 60 * 60 * 1000L))
+    }
+
     @Test fun missingOrInvalidBaselineFailsClosed() {
         assertEquals(DerivDailyRiskSnapshot.Status.DATA_UNAVAILABLE,
             DerivDailyRiskMonitor.evaluate(null, 100.0).status)
