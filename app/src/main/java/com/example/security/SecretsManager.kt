@@ -39,7 +39,9 @@ class SecretsManager internal constructor(
         private const val CONFIGURED_EQUITY = "configured_equity"
         private const val SELECTED_STRATEGY = "selected_strategy_id"
         private const val BROKER_SYMBOL_OVERRIDES = "broker_symbol_overrides"
-        private const val DERIV_API_TOKEN = "deriv_api_token"
+        private const val DERIV_API_TOKEN = "deriv_api_token" // legacy, migrated on first read
+        private const val DERIV_API_TOKEN_DEMO = "deriv_api_token_demo"
+        private const val DERIV_API_TOKEN_REAL = "deriv_api_token_real"
         private const val DERIV_APP_ID = "deriv_app_id"
         private const val DERIV_ACCOUNT_MODE = "deriv_account_mode"
         private const val DERIV_REAL_EXECUTION_ENABLED = "deriv_real_execution_enabled"
@@ -128,10 +130,12 @@ class SecretsManager internal constructor(
     fun saveThemeMode(mode: String): Boolean = mode in setOf("System", "Light", "Dark") &&
         botConfigPrefs.edit().putString("theme_mode", mode).commit()
     /** Deriv credentials are persisted only after encrypted Keystore storage is initialized. */
-    fun saveDerivApiToken(v: String): Boolean {
-        if (!isSecureStorageAvailable || v.isBlank()) return false
+    fun saveDerivApiToken(v: String, mode: String = getDerivAccountMode()): Boolean {
+        val normalizedMode = mode.trim().lowercase()
+        if (!isSecureStorageAvailable || v.isBlank() || normalizedMode !in setOf("demo", "real")) return false
         invalidateDerivRealAuthorization()
-        return prefs.edit().putString(DERIV_API_TOKEN, v.trim()).commit()
+        val key = if (normalizedMode == "real") DERIV_API_TOKEN_REAL else DERIV_API_TOKEN_DEMO
+        return prefs.edit().putString(key, v.trim()).remove(DERIV_API_TOKEN).commit()
     }
     fun saveDerivAppId(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
@@ -214,8 +218,8 @@ class SecretsManager internal constructor(
     fun clearDerivCredentials(): Boolean {
         if (!isSecureStorageAvailable) return false
         invalidateDerivRealAuthorization()
-        return prefs.edit().remove(DERIV_API_TOKEN).remove(DERIV_APP_ID)
-            .remove(DERIV_ACCOUNT_MODE).commit()
+        return prefs.edit().remove(DERIV_API_TOKEN).remove(DERIV_API_TOKEN_DEMO).remove(DERIV_API_TOKEN_REAL)
+            .remove(DERIV_APP_ID).remove(DERIV_ACCOUNT_MODE).commit()
     }
     fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
@@ -435,7 +439,73 @@ class SecretsManager internal constructor(
     fun getSupabaseRefreshToken(): String = ""
     fun getSupabaseEmailConfirmedAt(): String = ""
 
-    fun getDerivApiToken(): String     = if (isSecureStorageAvailable) prefs.getString(DERIV_API_TOKEN, "") ?: "" else ""
+    private fun derivDailyRiskPrefix(accountId: String, mode: String): String {
+        val normalizedMode = mode.trim().uppercase()
+        require(normalizedMode in setOf("DEMO", "REAL")) { "Deriv account mode must be DEMO or REAL" }
+        val safeAccount = accountId.trim().replace(Regex("[^A-Za-z0-9_-]"), "_").take(64)
+        require(safeAccount.isNotBlank()) { "Deriv account ID is required" }
+        return "deriv_daily_risk_${normalizedMode}_${safeAccount}"
+    }
+
+    fun initializeDerivDailyRiskDay(accountId: String, mode: String, utcDay: String, startingEquity: Double): Boolean {
+        if (!isSecureStorageAvailable || utcDay.isBlank() || !startingEquity.isFinite() || startingEquity <= 0.0) return false
+        val prefix = derivDailyRiskPrefix(accountId, mode)
+        val dayKey = "${prefix}_day"
+        if (prefs.getString(dayKey, null) == utcDay) {
+            return prefs.getString("${prefix}_baseline", null)?.toDoubleOrNull()?.let { it.isFinite() && it > 0.0 } == true
+        }
+        return prefs.edit()
+            .putString(dayKey, utcDay)
+            .putString("${prefix}_baseline", startingEquity.toString())
+            .putBoolean("${prefix}_locked", false)
+            .putBoolean("${prefix}_warn80", false)
+            .putBoolean("${prefix}_warn90", false)
+            .commit()
+    }
+
+    fun getDerivDailyRiskStartingEquity(accountId: String, mode: String, utcDay: String): Double? {
+        if (!isSecureStorageAvailable) return null
+        val prefix = derivDailyRiskPrefix(accountId, mode)
+        if (prefs.getString("${prefix}_day", null) != utcDay) return null
+        return prefs.getString("${prefix}_baseline", null)?.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 }
+    }
+
+    fun isDerivDailyRiskLocked(accountId: String, mode: String, utcDay: String): Boolean {
+        if (!isSecureStorageAvailable) return true
+        val prefix = derivDailyRiskPrefix(accountId, mode)
+        return prefs.getString("${prefix}_day", null) == utcDay && prefs.getBoolean("${prefix}_locked", false)
+    }
+
+    fun lockDerivDailyRisk(accountId: String, mode: String, utcDay: String): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val prefix = derivDailyRiskPrefix(accountId, mode)
+        if (prefs.getString("${prefix}_day", null) != utcDay) return false
+        return prefs.edit().putBoolean("${prefix}_locked", true).commit()
+    }
+
+    fun markDerivDailyRiskWarningSent(accountId: String, mode: String, utcDay: String, threshold: Int): Boolean {
+        if (!isSecureStorageAvailable || threshold !in setOf(80, 90)) return false
+        val prefix = derivDailyRiskPrefix(accountId, mode)
+        if (prefs.getString("${prefix}_day", null) != utcDay) return false
+        val key = "${prefix}_warn${threshold}"
+        if (prefs.getBoolean(key, false)) return false
+        return prefs.edit().putBoolean(key, true).commit()
+    }
+
+    fun getDerivApiToken(mode: String = getDerivAccountMode()): String {
+        if (!isSecureStorageAvailable) return ""
+        val normalizedMode = mode.trim().lowercase().takeIf { it == "demo" || it == "real" } ?: return ""
+        val key = if (normalizedMode == "real") DERIV_API_TOKEN_REAL else DERIV_API_TOKEN_DEMO
+        val scoped = prefs.getString(key, "").orEmpty()
+        if (scoped.isNotBlank()) return scoped
+        // Migrate the unscoped token only into the account mode selected when it is first read.
+        val legacy = prefs.getString(DERIV_API_TOKEN, "").orEmpty()
+        if (legacy.isNotBlank() && normalizedMode == getDerivAccountMode()) {
+            prefs.edit().putString(key, legacy).remove(DERIV_API_TOKEN).commit()
+            return legacy
+        }
+        return ""
+    }
     // New Deriv REST/Options API rejects legacy App ID 1089; don't prefill a stale stored default.
     fun getDerivAppId(): String = if (!isSecureStorageAvailable) "" else (prefs.getString(DERIV_APP_ID, "") ?: "")
         .trim()
