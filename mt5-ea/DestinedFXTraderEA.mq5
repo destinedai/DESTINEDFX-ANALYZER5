@@ -39,7 +39,7 @@ input string InpCostEvidence="";
 #define FVG_MAX_AGE 15
 #define SWING_LOOKBACK 8
 string g_state="READY",g_terminalToken="",g_terminalId="",g_lastSignal="",g_lastReason="Not started",g_lastError="";
-string g_symbols[],g_tfs[]; string g_strategy="ict-silver-bullet"; double g_riskPercent=0.25,g_dailyLossPercent=2.0,g_initialVolume=0.01,g_maxVolume=0.01; bool g_scalingEnabled=false; int g_scalingMinClosedTrades=20,g_maxConcurrent=2; string g_sigState="WAIT",g_sigExecutionState="NONE",g_sigSymbol="",g_sigTf="",g_sigDirection="",g_sigRationale="Not scanned",g_sigRetcode="",g_sigDeal="",g_sigOrder="",g_sigPosition=""; double g_sigEntry=0,g_sigSL=0,g_sigTP=0,g_sigRisk=0,g_sigRequestedVolume=0,g_sigExecutedVolume=0,g_sigActualEntry=0; datetime g_sigSubmittedAt=0,g_sigOpenedAt=0; string g_newsStatus="UNKNOWN",g_newsDetail="NEWS UNKNOWN: no authenticated verdict",g_newsSource="",g_newsEvent="",g_newsCurrency=""; long g_newsRetrievedMs=0,g_newsCoverageFromMs=0,g_newsCoverageToMs=0,g_newsEventMs=0,g_newsBlackoutStartMs=0,g_newsBlackoutEndMs=0; int g_cursor=0; datetime g_lastScan=0,g_lastHeartbeat=0,g_lastAuthenticatedBridgeUtc=0,g_lastHeartbeatAcceptedUtc=0; double g_dayStartEquity=0; int g_day=-1; datetime g_liveAuthorizedUntil=0;
+string g_symbols[],g_tfs[]; string g_strategy="ict-silver-bullet"; double g_riskPercent=0.25,g_dailyLossPercent=2.0,g_initialVolume=0.01,g_maxVolume=0.01; bool g_scalingEnabled=false; int g_scalingMinClosedTrades=20,g_maxConcurrent=2; string g_sigState="WAIT",g_sigExecutionState="NONE",g_sigSymbol="",g_sigTf="",g_sigDirection="",g_sigRationale="Not scanned",g_sigRetcode="",g_sigDeal="",g_sigOrder="",g_sigPosition=""; double g_sigEntry=0,g_sigSL=0,g_sigTP=0,g_sigRisk=0,g_sigRequestedVolume=0,g_sigExecutedVolume=0,g_sigActualEntry=0; datetime g_sigSubmittedAt=0,g_sigOpenedAt=0; string g_newsStatus="UNKNOWN",g_newsDetail="NEWS UNKNOWN: no authenticated verdict",g_newsSource="",g_newsEvent="",g_newsCurrency=""; long g_newsRetrievedMs=0,g_newsCoverageFromMs=0,g_newsCoverageToMs=0,g_newsEventMs=0,g_newsBlackoutStartMs=0,g_newsBlackoutEndMs=0; int g_cursor=0; datetime g_lastScan=0,g_lastHeartbeat=0,g_lastAuthenticatedBridgeUtc=0,g_lastHeartbeatAcceptedUtc=0; double g_dayStartEquity=0; int g_day=-1; datetime g_liveAuthorizedUntil=0; bool g_dailyLossLocked=false; string g_dailyRiskStatus="UNKNOWN";
 string g_processed[],g_ackOutcomes[],g_ackMessages[],g_ackResults[]; string g_seenSignals[]; string g_lastCommand="";
 string g_opRequest[],g_opAction[],g_opTicket[],g_opStatus[],g_opPhase[],g_opMessage[]; datetime g_opStarted[];
 
@@ -76,8 +76,125 @@ void SplitCsv(string src,string &out[]){StringSplit(src,',',out);for(int i=0;i<A
 bool IsKillzone(datetime utc){MqlDateTime x;TimeToStruct(utc,x);int m=x.hour*60+x.min;return (m>=420&&m<540)||(m>=810&&m<930)||(m>=1080&&m<1200);}
 int CountPositions(){int n=0;for(int i=PositionsTotal()-1;i>=0;i--){ulong t=PositionGetTicket(i);if(t>0)n++;}return n;}
 int CountOurPositions(){int n=0;for(int i=PositionsTotal()-1;i>=0;i--){ulong t=PositionGetTicket(i);if(t>0&&PositionGetInteger(POSITION_MAGIC)==(long)InpMagic)n++;}return n;}
-double TodayClosedPnl(){MqlDateTime z;TimeToStruct(TimeCurrent(),z);z.hour=0;z.min=0;z.sec=0;datetime from=StructToTime(z);if(!HistorySelect(from,TimeCurrent()))return 0;double p=0;for(int i=HistoryDealsTotal()-1;i>=0;i--){ulong d=HistoryDealGetTicket(i);if(d>0)p+=HistoryDealGetDouble(d,DEAL_PROFIT)+HistoryDealGetDouble(d,DEAL_COMMISSION)+HistoryDealGetDouble(d,DEAL_SWAP)+HistoryDealGetDouble(d,DEAL_FEE);}return p;}
-bool RiskDayOK(){ string key=DayKey(); if(!GlobalVariableCheck(key)){ if(!GlobalVariableSet(key,AccountInfoDouble(ACCOUNT_EQUITY)))return false; } g_dayStartEquity=GlobalVariableGet(key); MqlDateTime z;TimeToStruct(TimeCurrent(),z);g_day=z.day_of_year;double lim=g_dayStartEquity*g_dailyLossPercent/100.0;return g_dayStartEquity>0&&TodayClosedPnl()>-lim&&AccountInfoDouble(ACCOUNT_EQUITY)>g_dayStartEquity-lim; }
+string DailyRiskLockKey(){return DayKey()+"_"+IntegerToString((int)InpMagic)+"_LOCK";}
+string DailyRiskWarningKey(string threshold){return DayKey()+"_"+IntegerToString((int)InpMagic)+"_WARN_"+threshold;}
+bool DailyRiskLocked(){string key=DailyRiskLockKey();if(GlobalVariableCheck(key))g_dailyLossLocked=GlobalVariableGet(key)>0.5;return g_dailyLossLocked;}
+void NotifyDailyRisk(string threshold,double netPnl,double limit,double usedPct){
+   string key=DailyRiskWarningKey(threshold);
+   if(GlobalVariableCheck(key))return;
+   if(GlobalVariableSet(key,(double)TimeCurrent())==0){Print("DAILY RISK WARNING persistence failed: ",threshold);return;}
+   GlobalVariablesFlush();
+   string msg=StringFormat("DestinedFX %s: daily net P/L %.2f; loss limit %.2f; %.1f%% consumed. New entries are blocked at 100%%.",threshold,netPnl,limit,usedPct);
+   ResetLastError();
+   if(!SendNotification(msg))Print(msg," Push notification unavailable; MT5 error=",GetLastError());
+}
+bool DailyRiskSnapshot(double &closedPnl,double &floatingPnl,double &netPnl,double &limit,double &usedPct){
+   closedPnl=0;floatingPnl=0;netPnl=0;limit=0;usedPct=0;
+   datetime nowServer=TimeCurrent();
+   MqlDateTime dayParts;TimeToStruct(nowServer,dayParts);dayParts.hour=0;dayParts.min=0;dayParts.sec=0;
+   datetime dayStart=StructToTime(dayParts);
+   string equityKey=DayKey();
+   if(!GlobalVariableCheck(equityKey)){
+      double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+      if(!Finite(equity)||equity<=0||GlobalVariableSet(equityKey,equity)==0)return false;
+      GlobalVariablesFlush();
+   }
+   g_dayStartEquity=GlobalVariableGet(equityKey);
+   g_day=dayParts.day_of_year;
+   if(!Finite(g_dayStartEquity)||g_dayStartEquity<=0||!Finite(g_dailyLossPercent)||g_dailyLossPercent<=0||g_dailyLossPercent>2.0)return false;
+   if(!HistorySelect(dayStart,nowServer))return false;
+   for(int i=HistoryDealsTotal()-1;i>=0;i--){
+      ulong deal=HistoryDealGetTicket(i);
+      if(deal==0||(long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=(long)InpMagic)continue;
+      double commission=HistoryDealGetDouble(deal,DEAL_COMMISSION);
+      double fee=HistoryDealGetDouble(deal,DEAL_FEE);
+      if(!Finite(commission)||!Finite(fee))return false;
+      closedPnl+=commission+fee;
+      long entry=(long)HistoryDealGetInteger(deal,DEAL_ENTRY);
+      if(entry==DEAL_ENTRY_OUT||entry==DEAL_ENTRY_OUT_BY||entry==DEAL_ENTRY_INOUT){
+         double profit=HistoryDealGetDouble(deal,DEAL_PROFIT),swap=HistoryDealGetDouble(deal,DEAL_SWAP);
+         if(!Finite(profit)||!Finite(swap))return false;
+         closedPnl+=profit+swap;
+      }
+   }
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0||(long)PositionGetInteger(POSITION_MAGIC)!=(long)InpMagic)continue;
+      double profit=PositionGetDouble(POSITION_PROFIT),swap=PositionGetDouble(POSITION_SWAP);
+      if(!Finite(profit)||!Finite(swap))return false;
+      floatingPnl+=profit+swap;
+   }
+   netPnl=closedPnl+floatingPnl;
+   limit=g_dayStartEquity*g_dailyLossPercent/100.0;
+   if(!Finite(netPnl)||!Finite(limit)||limit<=0)return false;
+   usedPct=MathMax(0.0,-netPnl)/limit*100.0;
+   return Finite(usedPct);
+}
+bool RiskDayOK(){
+   if(DailyRiskLocked()){g_dailyRiskStatus="BREACHED_LOCKED";return false;}
+   double closedPnl,floatingPnl,netPnl,limit,usedPct;
+   if(!DailyRiskSnapshot(closedPnl,floatingPnl,netPnl,limit,usedPct)){
+      g_dailyRiskStatus="DATA_UNAVAILABLE";
+      g_lastError="DAILY RISK DATA UNAVAILABLE — new entries blocked until broker history and equity baseline can be verified";
+      g_lastReason=g_lastError;
+      return false;
+   }
+   if(usedPct>=100.0){
+      string lockKey=DailyRiskLockKey();
+      g_dailyLossLocked=true;g_dailyRiskStatus="BREACHED_LOCKED";
+      if(GlobalVariableSet(lockKey,1.0)==0)Print("CRITICAL: daily loss lock could not be persisted; keeping this EA instance stopped");
+      GlobalVariablesFlush();
+      g_state="STOPPED";
+      g_lastError=StringFormat("DAILY LOSS LIMIT BREACHED — net P/L %.2f; limit %.2f; automatic bot-owned close-out started",netPnl,limit);
+      g_lastReason=g_lastError;
+      NotifyDailyRisk("100% LIMIT BREACHED",netPnl,limit,usedPct);
+      return false;
+   }
+   g_dailyRiskStatus=usedPct>=90.0?"WARNING_90":(usedPct>=80.0?"WARNING_80":"NORMAL");
+   if(usedPct>=90.0)NotifyDailyRisk("90% CRITICAL WARNING",netPnl,limit,usedPct);
+   else if(usedPct>=80.0)NotifyDailyRisk("80% WARNING",netPnl,limit,usedPct);
+   return true;
+}
+void DailyEmergencyExit(){
+   if(!DailyRiskLocked())return;
+   g_state="STOPPED";
+   if(!AccountIdentityMatches()||!TerminalInfoInteger(TERMINAL_CONNECTED)||!MQLInfoInteger(MQL_TRADE_ALLOWED)||!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)){
+      g_dailyRiskStatus="EXIT_BLOCKED";
+      g_lastError="DAILY LOSS LIMIT BREACHED — terminal disconnected, identity mismatched or trading permission unavailable; bot-owned exposure remains unresolved and needs immediate attention";
+      g_lastReason=g_lastError;
+      return;
+   }
+   int cancelled=0,cancelUnresolved=0,closed=0,closeUnresolved=0;
+   for(int i=OrdersTotal()-1;i>=0;i--){
+      ulong ticket=OrderGetTicket(i);
+      if(ticket==0||(long)OrderGetInteger(ORDER_MAGIC)!=(long)InpMagic)continue;
+      ENUM_ORDER_TYPE type=(ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      if(type!=ORDER_TYPE_BUY_LIMIT&&type!=ORDER_TYPE_SELL_LIMIT&&type!=ORDER_TYPE_BUY_STOP&&type!=ORDER_TYPE_SELL_STOP&&type!=ORDER_TYPE_BUY_STOP_LIMIT&&type!=ORDER_TYPE_SELL_STOP_LIMIT)continue;
+      trade.OrderDelete(ticket);
+      if(OrderSelect(ticket))cancelUnresolved++;
+      else if(HistoryOrderSelect(ticket)){
+         ENUM_ORDER_STATE state=(ENUM_ORDER_STATE)HistoryOrderGetInteger(ticket,ORDER_STATE);
+         if(state==ORDER_STATE_CANCELED||state==ORDER_STATE_EXPIRED)cancelled++;
+         else cancelUnresolved++;
+      }else cancelUnresolved++;
+   }
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0||(long)PositionGetInteger(POSITION_MAGIC)!=(long)InpMagic)continue;
+      trade.PositionClose(ticket);
+      if(PositionSelectByTicket(ticket))closeUnresolved++;
+      else closed++;
+   }
+   if(cancelUnresolved==0&&closeUnresolved==0){
+      g_dailyRiskStatus="EXIT_CONFIRMED";
+      g_lastError=StringFormat("DAILY LOSS LIMIT BREACHED — broker snapshots confirm %d bot-owned pending orders cancelled and %d bot-owned positions closed; trading remains locked for this broker day",cancelled,closed);
+      g_lastReason=g_lastError;
+   }else{
+      g_dailyRiskStatus="EXIT_PENDING";
+      g_lastError=StringFormat("DAILY LOSS LIMIT BREACHED — %d pending-order cancellations and %d position closures remain unconfirmed; trading locked; reconnect/reconcile and intervene if required",cancelUnresolved,closeUnresolved);
+      g_lastReason=g_lastError;
+   }
+}
 string TFLabel(ENUM_TIMEFRAMES tf){return EnumToString(tf);}
 string SignalKey(string sym,ENUM_TIMEFRAMES tf,datetime bar){return g_strategy+"|"+sym+"|"+TFLabel(tf)+"|"+IntegerToString((int)bar);}
 bool Seen(string k){for(int i=0;i<ArraySize(g_seenSignals);i++)if(g_seenSignals[i]==k)return true;return false;}
@@ -160,7 +277,7 @@ void PublishReconciledOperationAcks(){for(int i=0;i<ArraySize(g_opRequest);i++){
 void ReconcileOperations(){for(int i=0;i<ArraySize(g_opRequest);i++)if(g_opPhase[i]!="TERMINAL")ReconcileOperation(i);PublishReconciledOperationAcks();}
 
 void ProcessCommands(){if(g_terminalToken=="")return;string r=Api("GET","/v1/terminal/commands?cursor="+IntegerToString(g_cursor));if(r=="")return;int c=(int)JNum(r,"cursor",g_cursor); // parse documented command objects with bounded extraction
- int pos=StringFind(r,"\"commands\"");if(pos>=0){pos=StringFind(r,"{",pos);while(pos>=0){string obj=ObjectAt(r,pos);if(obj=="")break;int end=pos+StringLen(obj)-1;string id=JStr(obj,"id"),action=JStr(obj,"action");if(id=="")break;bool done=false;for(int i=0;i<ArraySize(g_processed);i++)if(g_processed[i]==id)done=true;if(done){for(int ai=0;ai<ArraySize(g_processed);ai++)if(g_processed[ai]==id){if(action=="CANCEL_PENDING_SELECTED"||action=="CANCEL_EA_PENDING"||action=="CLOSE_POSITION_SELECTED"||action=="CLOSE_ALL")RefreshOperationAck(id);Ack(id,g_ackOutcomes[ai],g_ackMessages[ai]);}}else{string outcome="APPLIED",msg="Command applied",results="[]";if(action=="CANCEL_PENDING_SELECTED"||action=="CANCEL_EA_PENDING"||action=="CLOSE_POSITION_SELECTED"||action=="CLOSE_ALL"){ExecuteTicketOperation(id,action,obj,outcome,msg,results);}else if(action=="START"){string cfgobj=ConfigObject(obj),why;string syms[],tfs[];double risk,daily;int concurrent;if(!ValidConfig(cfgobj,syms,tfs,risk,daily,concurrent,why)){g_state="STOPPED";outcome="REJECTED";msg=why;}else if(!AccountIdentityMatches()||!TerminalInfoInteger(TERMINAL_CONNECTED)||!MQLInfoInteger(MQL_TRADE_ALLOWED)||!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)){g_state="STOPPED";outcome="REJECTED";msg="Terminal connectivity/trade permission check failed";}else if(AccountInfoDouble(ACCOUNT_BALANCE)<=0||AccountInfoDouble(ACCOUNT_EQUITY)<=0){g_state="STOPPED";outcome="REJECTED";msg="Invalid account snapshot";}else{bool ready=true;for(int si=0;si<ArraySize(syms);si++){if(!SymbolSelect(syms[si],true))ready=false;for(int ti=0;ti<ArraySize(tfs);ti++){ENUM_TIMEFRAMES mtf=ParseTF(tfs[ti]);MqlRates hr[];ArraySetAsSeries(hr,true);MqlTick tq;if(mtf==PERIOD_CURRENT||!MarketReady(syms[si],mtf)||CopyRates(syms[si],mtf,0,80,hr)<50||!SymbolInfoTick(syms[si],tq)||tq.bid<=0||tq.ask<=tq.bid||TimeCurrent()-tq.time>120)ready=false;}}if(!ready){g_state="STOPPED";outcome="REJECTED";msg="Requested symbols/timeframes lack fresh quotes or sufficient history";}else{ArrayCopy(g_symbols,syms);ArrayCopy(g_tfs,tfs);g_riskPercent=risk;g_dailyLossPercent=daily;g_maxConcurrent=concurrent;g_state="RUNNING";msg="Started with validated runtime configuration";}}}else if(action=="STOP"||action=="EMERGENCY_STOP"){g_state="STOPPED";msg="New entries stopped; open positions and broker SL/TP left untouched";}else if(action=="PAUSE"){g_state="PAUSED";msg="Paused; open positions untouched";}else if(action=="RESUME"){if(AccountIdentityMatches()&&TerminalInfoInteger(TERMINAL_CONNECTED)&&MQLInfoInteger(MQL_TRADE_ALLOWED)&&AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)){g_state="RUNNING";msg="Resumed";}else{outcome="REJECTED";msg="Terminal checks failed";}}else{outcome="REJECTED";msg="Unknown action";}int n=ArraySize(g_processed);ArrayResize(g_processed,n+1);ArrayResize(g_ackOutcomes,n+1);ArrayResize(g_ackMessages,n+1);g_processed[n]=id;g_ackOutcomes[n]=outcome;g_ackMessages[n]=msg;ArrayResize(g_ackResults,n+1);g_ackResults[n]=results;PersistProcessed();Ack(id,outcome,msg,results);}pos=StringFind(r,"{",end+1);if(pos<0)break;}}
+ int pos=StringFind(r,"\"commands\"");if(pos>=0){pos=StringFind(r,"{",pos);while(pos>=0){string obj=ObjectAt(r,pos);if(obj=="")break;int end=pos+StringLen(obj)-1;string id=JStr(obj,"id"),action=JStr(obj,"action");if(id=="")break;bool done=false;for(int i=0;i<ArraySize(g_processed);i++)if(g_processed[i]==id)done=true;if(done){for(int ai=0;ai<ArraySize(g_processed);ai++)if(g_processed[ai]==id){if(action=="CANCEL_PENDING_SELECTED"||action=="CANCEL_EA_PENDING"||action=="CLOSE_POSITION_SELECTED"||action=="CLOSE_ALL")RefreshOperationAck(id);Ack(id,g_ackOutcomes[ai],g_ackMessages[ai]);}}else{string outcome="APPLIED",msg="Command applied",results="[]";if(action=="CANCEL_PENDING_SELECTED"||action=="CANCEL_EA_PENDING"||action=="CLOSE_POSITION_SELECTED"||action=="CLOSE_ALL"){ExecuteTicketOperation(id,action,obj,outcome,msg,results);}else if(action=="START"){string cfgobj=ConfigObject(obj),why;string syms[],tfs[];double risk,daily;int concurrent;if(!ValidConfig(cfgobj,syms,tfs,risk,daily,concurrent,why)){g_state="STOPPED";outcome="REJECTED";msg=why;}else if(!AccountIdentityMatches()||!TerminalInfoInteger(TERMINAL_CONNECTED)||!MQLInfoInteger(MQL_TRADE_ALLOWED)||!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)){g_state="STOPPED";outcome="REJECTED";msg="Terminal connectivity/trade permission check failed";}else if(AccountInfoDouble(ACCOUNT_BALANCE)<=0||AccountInfoDouble(ACCOUNT_EQUITY)<=0){g_state="STOPPED";outcome="REJECTED";msg="Invalid account snapshot";}else{bool ready=true;for(int si=0;si<ArraySize(syms);si++){if(!SymbolSelect(syms[si],true))ready=false;for(int ti=0;ti<ArraySize(tfs);ti++){ENUM_TIMEFRAMES mtf=ParseTF(tfs[ti]);MqlRates hr[];ArraySetAsSeries(hr,true);MqlTick tq;if(mtf==PERIOD_CURRENT||!MarketReady(syms[si],mtf)||CopyRates(syms[si],mtf,0,80,hr)<50||!SymbolInfoTick(syms[si],tq)||tq.bid<=0||tq.ask<=tq.bid||TimeCurrent()-tq.time>120)ready=false;}}if(!ready){g_state="STOPPED";outcome="REJECTED";msg="Requested symbols/timeframes lack fresh quotes or sufficient history";}else{g_dailyLossPercent=daily;if(!RiskDayOK()){g_state="STOPPED";outcome="REJECTED";msg="DAILY RISK GUARD: START blocked by breached daily limit or unavailable broker P&L history";}else{ArrayCopy(g_symbols,syms);ArrayCopy(g_tfs,tfs);g_riskPercent=risk;g_maxConcurrent=concurrent;g_state="RUNNING";msg="Started with validated runtime configuration";}}}}else if(action=="STOP"||action=="EMERGENCY_STOP"){g_state="STOPPED";msg="New entries stopped; open positions and broker SL/TP left untouched";}else if(action=="PAUSE"){g_state="PAUSED";msg="Paused; open positions untouched";}else if(action=="RESUME"){if(RiskDayOK()&&AccountIdentityMatches()&&TerminalInfoInteger(TERMINAL_CONNECTED)&&MQLInfoInteger(MQL_TRADE_ALLOWED)&&AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)){g_state="RUNNING";msg="Resumed after daily risk and terminal checks";}else{g_state="STOPPED";outcome="REJECTED";msg="Daily risk guard or terminal checks failed; inspect account P&L and lockout";}}else{outcome="REJECTED";msg="Unknown action";}int n=ArraySize(g_processed);ArrayResize(g_processed,n+1);ArrayResize(g_ackOutcomes,n+1);ArrayResize(g_ackMessages,n+1);g_processed[n]=id;g_ackOutcomes[n]=outcome;g_ackMessages[n]=msg;ArrayResize(g_ackResults,n+1);g_ackResults[n]=results;PersistProcessed();Ack(id,outcome,msg,results);}pos=StringFind(r,"{",end+1);if(pos<0)break;}}
  if(c>g_cursor){g_cursor=c;SaveCursor();}}
 void ReconcileOrder(){if(g_sigOrder==""||g_sigRequestedVolume<=0)return;ulong order=(ulong)StringToInteger(g_sigOrder),position=0;double executed=0,weightedEntry=0;datetime openedAt=0;bool closed=false;if(HistorySelect(TimeCurrent()-86400*30,TimeCurrent())){for(int i=HistoryDealsTotal()-1;i>=0;i--){ulong d=HistoryDealGetTicket(i);if(!d||(ulong)HistoryDealGetInteger(d,DEAL_MAGIC)!=(ulong)InpMagic||HistoryDealGetString(d,DEAL_SYMBOL)!=g_sigSymbol)continue;ulong dealOrder=(ulong)HistoryDealGetInteger(d,DEAL_ORDER);ulong dealPosition=(ulong)HistoryDealGetInteger(d,DEAL_POSITION_ID);if(dealOrder!=order&&!(g_sigPosition!=""&&dealPosition==(ulong)StringToInteger(g_sigPosition)))continue;long entry=HistoryDealGetInteger(d,DEAL_ENTRY);if(entry==DEAL_ENTRY_IN){double dv=HistoryDealGetDouble(d,DEAL_VOLUME),dp=HistoryDealGetDouble(d,DEAL_PRICE);if(!Finite(dv)||dv<=0||!Finite(dp)||dp<=0)continue;executed+=dv;weightedEntry+=dp*dv;if(position==0)position=dealPosition;datetime dt=(datetime)HistoryDealGetInteger(d,DEAL_TIME);if(openedAt==0||dt<openedAt)openedAt=dt;}else if(entry==DEAL_ENTRY_INOUT){closed=true;}if(entry==DEAL_ENTRY_OUT||entry==DEAL_ENTRY_OUT_BY)closed=true;}}g_sigExecutedVolume=executed;if(executed>0){g_sigActualEntry=weightedEntry/executed;g_sigOpenedAt=openedAt;}if(position>0)g_sigPosition=(string)position;if(executed>0&&executed+0.0000001<g_sigRequestedVolume){g_sigExecutionState="PARTIALLY_FILLED";g_sigRationale="Cumulative broker deals reconciled; partial fill";}else if(executed+0.0000001>=g_sigRequestedVolume){bool positionFound=false;for(int i=PositionsTotal()-1;i>=0;i--){ulong ticket=PositionGetTicket(i);if(ticket>0&&(ulong)PositionGetInteger(POSITION_IDENTIFIER)==position&&(ulong)PositionGetInteger(POSITION_MAGIC)==(ulong)InpMagic){positionFound=true;double actualSl=PositionGetDouble(POSITION_SL),actualTp=PositionGetDouble(POSITION_TP);if((g_sigSL>0&&MathAbs(actualSl-g_sigSL)>SymbolInfoDouble(g_sigSymbol,SYMBOL_POINT)*2)||(g_sigTP>0&&MathAbs(actualTp-g_sigTP)>SymbolInfoDouble(g_sigSymbol,SYMBOL_POINT)*2)){g_sigExecutionState="POSITION_RECONCILED_SLTP_UNVERIFIED";g_sigRationale="Fill reconciled but broker SL/TP differs from requested protection";}else{g_sigExecutionState="POSITION_RECONCILED_SLTP_VERIFIED";g_sigRationale="Fill and broker position protection reconciled";}break;}}if(!positionFound)g_sigExecutionState=closed?"CLOSED_DEAL_RECONCILED":"FILLED_POSITION_NOT_FOUND";}else if(HistoryOrderSelect(order)){ENUM_ORDER_STATE os=(ENUM_ORDER_STATE)HistoryOrderGetInteger(order,ORDER_STATE);if(os==ORDER_STATE_CANCELED||os==ORDER_STATE_EXPIRED)g_sigExecutionState="CANCELLED_OR_EXPIRED";else if(os==ORDER_STATE_REJECTED)g_sigExecutionState="REJECTED";else if(os==ORDER_STATE_PLACED||os==ORDER_STATE_PARTIAL)g_sigExecutionState="ORDER_SUBMITTED";else g_sigExecutionState="UNKNOWN_REQUIRES_RECONCILIATION";}else g_sigExecutionState="UNKNOWN_REQUIRES_RECONCILIATION";}
 void CancelNewsBlockedPendingOrders(){for(int i=OrdersTotal()-1;i>=0;i--){ulong ticket=OrderGetTicket(i);if(!ticket||OrderGetInteger(ORDER_MAGIC)!=(long)InpMagic)continue;string sym=OrderGetString(ORDER_SYMBOL);if(NewsClear(sym)){continue;}long typ=OrderGetInteger(ORDER_TYPE);if(typ!=ORDER_TYPE_BUY_LIMIT&&typ!=ORDER_TYPE_SELL_LIMIT&&typ!=ORDER_TYPE_BUY_STOP&&typ!=ORDER_TYPE_SELL_STOP&&typ!=ORDER_TYPE_BUY_STOP_LIMIT&&typ!=ORDER_TYPE_SELL_STOP_LIMIT)continue;if(trade.OrderDelete(ticket)){if(HistoryOrderSelect(ticket)){ENUM_ORDER_STATE state=(ENUM_ORDER_STATE)HistoryOrderGetInteger(ticket,ORDER_STATE);if(state!=ORDER_STATE_CANCELED&&state!=ORDER_STATE_EXPIRED)g_lastError="News blackout cancellation was not confirmed in broker history";}}else g_lastError="News blackout pending-order cancellation request failed";}}
@@ -236,5 +353,5 @@ string NewsJson(){return StringFormat("{\"status\":\"%s\",\"detail\":\"%s\",\"so
 void Heartbeat(){if(g_terminalToken=="")return;string cfg=StringFormat("{\"strategy\":\"%s\",\"symbols\":%s,\"timeframes\":%s,\"risk_percent\":%.4f,\"max_daily_loss_percent\":%.4f,\"max_concurrent_positions\":%d,\"initial_volume\":%.4f,\"max_volume\":%.4f,\"scaling_enabled\":%s,\"scaling_min_closed_trades\":%d,\"cost_model\":\"%s\",\"commission_per_lot\":%.8f}",Esc(g_strategy),JsonArray(g_symbols),JsonArray(g_tfs),g_riskPercent,g_dailyLossPercent,g_maxConcurrent,g_initialVolume,g_maxVolume,g_scalingEnabled?"true":"false",g_scalingMinClosedTrades,Esc(InpCostModel),InpCommissionPerLot);double bal=AccountInfoDouble(ACCOUNT_BALANCE),eq=AccountInfoDouble(ACCOUNT_EQUITY),mar=AccountInfoDouble(ACCOUNT_MARGIN),free=AccountInfoDouble(ACCOUNT_MARGIN_FREE),ml=AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);string b=StringFormat("{\"state\":\"%s\",\"timestamp\":\"%s\",\"terminal_connected\":%s,\"trade_allowed\":%s,\"news_verdict\":%s,\"account\":{\"login\":\"%I64d\",\"server\":\"%s\",\"company\":\"%s\",\"currency\":\"%s\",\"account_mode\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"margin_level\":%.2f,\"leverage\":%d},\"configuration\":%s,\"last_signal\":%s,\"last_error\":\"%s\",\"open_positions\":%s,\"active_orders\":%s,\"closed_deals\":%s}",StateJson(),IsoUtc(TimeGMT()),TerminalInfoInteger(TERMINAL_CONNECTED)?"true":"false",(MQLInfoInteger(MQL_TRADE_ALLOWED)&&AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))?"true":"false",NewsJson(),AccountInfoInteger(ACCOUNT_LOGIN),Esc(AccountInfoString(ACCOUNT_SERVER)),Esc(AccountInfoString(ACCOUNT_COMPANY)),Esc(AccountInfoString(ACCOUNT_CURRENCY)),BrokerAccountMode(),bal,eq,mar,free,ml,AccountInfoInteger(ACCOUNT_LEVERAGE),cfg,LastSignalJson(),Esc(g_lastError),PositionsJson(),OrdersJson(),DealsJson());string response=Api("POST","/v1/terminal/heartbeat",b);if(response!=""){g_liveAuthorizedUntil=(datetime)JNum(response,"live_authorized_until",0);g_lastHeartbeatAcceptedUtc=TimeGMT();}}
 int OnInit(){if(StringFind(InpBridgeBaseURL,"https://")!=0||StringFind(InpBridgeBaseURL,".example")>=0||StringFind(InpBridgeBaseURL,"example.com")>=0||StringGetCharacter(InpBridgeBaseURL,StringLen(InpBridgeBaseURL)-1)=='/'){Print("Bridge URL must be a real HTTPS origin without a placeholder host or trailing slash");return INIT_PARAMETERS_INCORRECT;}if(InpStrategy!="smc-confluence-1.0.0"&&InpStrategy!="ict-silver-bullet"&&InpStrategy!="wyckoff-schematics"&&InpStrategy!="supply-and-demand"&&InpStrategy!="breakout-momentum"&&InpStrategy!="mean-reversion"&&InpStrategy!="trend-following"&&InpStrategy!="liquidity-stop-hunts"){Print("Unsupported strategy identifier");return INIT_PARAMETERS_INCORRECT;}g_strategy=InpStrategy;if(InpNewsFreshnessSeconds<1||InpNewsFreshnessSeconds>120||InpSlippageAllowancePoints<1||InpSlippageAllowancePoints>1000||!Finite(InpInitialVolume)||!Finite(InpMaxVolume)||InpInitialVolume<=0||InpMaxVolume<InpInitialVolume||InpScalingMinClosedTrades<20)return INIT_PARAMETERS_INCORRECT;g_initialVolume=InpInitialVolume;g_maxVolume=InpMaxVolume;g_scalingEnabled=InpScalingEnabled;g_scalingMinClosedTrades=InpScalingMinClosedTrades;if(!CostConfigurationValid()){Print("Cost model requires representative observed history or positive operator-verified cost plus evidence");return INIT_PARAMETERS_INCORRECT;}if(!Finite(InpRiskPercent)||InpRiskPercent<=0||InpRiskPercent>1||!Finite(InpMaxDailyLossPercent)||InpMaxDailyLossPercent<=0||InpMaxDailyLossPercent>2.0||InpMaxConcurrentPositions<1)return INIT_PARAMETERS_INCORRECT;SplitCsv(InpSymbols,g_symbols);SplitCsv(InpTimeframes,g_tfs);g_riskPercent=InpRiskPercent;g_dailyLossPercent=InpMaxDailyLossPercent;g_maxConcurrent=InpMaxConcurrentPositions;LoadState();if(g_terminalToken=="")Claim();EventSetTimer(MathMax(1,InpPollSeconds));g_lastReason="Initialized; state READY, not trading until START";return INIT_SUCCEEDED;}
 void OnDeinit(const int reason){EventKillTimer();}
-void OnTimer(){if(g_terminalToken==""){if(g_state!="STOPPED")Claim();return;}if(ArraySize(g_symbols)>0)NewsClear(g_symbols[0]);CancelNewsBlockedPendingOrders();ProcessCommands();ReconcileOrder();PersistOrderState();datetime now=TimeCurrent();if(now-g_lastHeartbeat>=MathMax(5,InpHeartbeatSeconds)){Heartbeat();g_lastHeartbeat=now;}ReconcileOperations();if(g_state=="RUNNING"&&(g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS)){g_state="STOPPED";g_lastError="No accepted heartbeat within HEARTBEAT_STALE_SECONDS=15; stopped without liquidation";g_lastReason=g_lastError;}if(g_state=="RUNNING"&&now-g_lastScan>=MathMax(1,InpScanSeconds)){Scan();g_lastScan=now;}}
+void OnTimer(){if(g_terminalToken==""){if(g_state!="STOPPED")Claim();return;}if(ArraySize(g_symbols)>0)NewsClear(g_symbols[0]);CancelNewsBlockedPendingOrders();ProcessCommands();if(!RiskDayOK()){if(DailyRiskLocked())DailyEmergencyExit();else if(g_state=="RUNNING"){g_state="STOPPED";g_lastError="DAILY RISK DATA UNAVAILABLE — trading stopped; broker P&L could not be verified";g_lastReason=g_lastError;}}ReconcileOrder();PersistOrderState();datetime now=TimeCurrent();if(now-g_lastHeartbeat>=MathMax(5,InpHeartbeatSeconds)){Heartbeat();g_lastHeartbeat=now;}ReconcileOperations();if(g_state=="RUNNING"&&(g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS)){g_state="STOPPED";g_lastError="No accepted heartbeat within HEARTBEAT_STALE_SECONDS=15; stopped without liquidation";g_lastReason=g_lastError;}if(g_state=="RUNNING"&&now-g_lastScan>=MathMax(1,InpScanSeconds)){Scan();g_lastScan=now;}}
 void OnTick(){/* Timed multi-symbol scanner; intentionally no chart-only trade logic. */}

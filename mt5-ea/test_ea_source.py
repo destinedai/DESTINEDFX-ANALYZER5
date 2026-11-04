@@ -274,3 +274,31 @@ def test_reconciliation_publishes_monotonic_ack_updates():
     assert "Ack(request,newOutcome,newMessage,newResults)" in publish
     assert "PublishReconciledOperationAcks();" in source[source.index("void ReconcileOperations()") :]
     assert "if(!created[t]){ReconcileOperation(oi);continue;}" in source
+
+
+def test_daily_risk_guard_is_bot_scoped_persistent_and_closes_only_managed_exposure():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert "DailyRiskSnapshot" in source and "HistorySelect(dayStart,nowServer)" in source
+    assert "DEAL_MAGIC)!=(long)InpMagic" in source
+    assert "DEAL_COMMISSION" in source and "DEAL_FEE" in source and "POSITION_PROFIT" in source and "POSITION_SWAP" in source
+    assert "DailyRiskWarningKey" in source and 'NotifyDailyRisk("80% WARNING"' in source
+    assert 'NotifyDailyRisk("90% CRITICAL WARNING"' in source
+    assert 'NotifyDailyRisk("100% LIMIT BREACHED"' in source
+    assert "GlobalVariableSet(lockKey,1.0)" in source and "GlobalVariablesFlush()" in source
+    assert "DailyEmergencyExit()" in source and "trade.OrderDelete(ticket)" in source
+    assert "trade.PositionClose(ticket)" in source
+    assert "ORDER_MAGIC)!=(long)InpMagic" in source
+    assert "POSITION_MAGIC)!=(long)InpMagic" in source
+    assert "OrderSelect(ticket)" in source and "HistoryOrderSelect(ticket)" in source
+    assert "PositionSelectByTicket(ticket)" in source
+    assert "g_dailyRiskStatus=\"EXIT_CONFIRMED\"" in source
+    assert "g_dailyRiskStatus=\"EXIT_PENDING\"" in source
+    assert "DAILY RISK DATA UNAVAILABLE" in source
+    assert "RiskDayOK()&&AccountIdentityMatches()" in source
+
+
+def test_daily_limit_blocks_start_resume_and_timer_keeps_exit_retrying():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert 'if(!RiskDayOK()){g_state="STOPPED";outcome="REJECTED";msg="DAILY RISK GUARD' in source
+    assert 'if(RiskDayOK()&&AccountIdentityMatches()' in source
+    assert 'if(!RiskDayOK()){if(DailyRiskLocked())DailyEmergencyExit();' in source
