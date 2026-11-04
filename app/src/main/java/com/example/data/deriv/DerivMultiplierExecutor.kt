@@ -2,15 +2,17 @@ package com.example.data.deriv
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.domain.risk.TradingSafetyLimits
 
 class DerivMultiplierExecutor(
     private val gateway: DerivBrokerGateway,
     private val dao: DerivExecutionDao,
-    private val sensitiveActionAuthorized: () -> Boolean = { false }
+    private val sensitiveActionAuthorized: () -> Boolean = { false },
+    private val dailyRiskEntryAllowed: suspend (String, String) -> Boolean = { _, _ -> true }
 ) {
     companion object {
         private const val PORTFOLIO_MAX_AGE_MS = 8_000L
-        private const val MAX_OPEN_RISK_PERCENT = 1.0
+        private const val MAX_OPEN_RISK_PERCENT = TradingSafetyLimits.MAX_TRADE_RISK_PERCENT
     }
     private val account get() = gateway.accountInfo.value
     private val accountId get() = account?.loginId.orEmpty()
@@ -131,12 +133,40 @@ class DerivMultiplierExecutor(
         ))
     }
 
+    /**
+     * Attempt to sell only contracts created and persisted by this app for the selected account.
+     * Returns true only after broker portfolio/history reconciliation proves all are settled.
+     */
+    suspend fun closeBotOwnedContracts(): Boolean = withContext(Dispatchers.IO) {
+        val current = account ?: return@withContext false
+        if (gateway.connectionState.value != DerivConnectionState.READY) return@withContext false
+        if (!syncKnownContracts()) return@withContext false
+        val records = dao.knownContracts(current.loginId, current.mode.uppercase())
+        for (record in records) {
+            val id = record.contractId ?: return@withContext false
+            val contract = gateway.activeContracts.value[id] ?: return@withContext false
+            if (contract.isSold) {
+                updateSettled(record, contract)
+                continue
+            }
+            if (!contract.isValidToSell) return@withContext false
+            val sold = gateway.sellContract(id)
+            if (sold.isFailure) return@withContext false
+        }
+        if (!syncKnownContracts()) return@withContext false
+        dao.knownContracts(current.loginId, current.mode.uppercase()).isEmpty() &&
+            dao.unresolved(current.loginId, current.mode.uppercase()).isEmpty()
+    }
+
     suspend fun submit(intent: DerivMultiplierIntent): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
         if (!sensitiveActionAuthorized()) {
             return@withContext Result.failure(Exception("REAUTHENTICATION_REQUIRED: authenticate again before authorizing or submitting a purchase"))
         }
         val current = account ?: return@withContext Result.failure(Exception("ACCOUNT_UNVERIFIED: verify the selected Deriv account before submitting"))
         if (current.loginId.isBlank() || current.mode !in setOf("demo", "real")) return@withContext Result.failure(Exception("ACCOUNT_INVALID: broker account identity is unavailable"))
+        if (!dailyRiskEntryAllowed(current.loginId, current.mode.uppercase())) {
+            return@withContext Result.failure(Exception("DAILY_LOSS_LOCKED: the persisted Deriv daily loss limit is locked for this account and mode; no purchase was sent"))
+        }
         val existing = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId)
         if (existing != null) return@withContext Result.failure(Exception("DUPLICATE_SIGNAL: ${intent.signalId} already exists for ${current.mode.uppercase()} account ${current.loginId} in ${existing.status}"))
         val reconciliation = reconcileBeforeNewEntriesResult()
