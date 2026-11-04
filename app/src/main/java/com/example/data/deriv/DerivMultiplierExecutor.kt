@@ -67,16 +67,24 @@ class DerivMultiplierExecutor(
             } else {
                 val currentContract = gateway.activeContracts.value[contractId]
                 val historical = if (currentContract == null) gateway.lookupHistoricalContract(contractId, record.createdAtMs) else null
+                val currentEvidenceMatches = currentContract != null &&
+                    (record.buyTransactionId == null || currentContract.transactionId == record.buyTransactionId)
+                val historicalEvidenceMatches = historical != null &&
+                    (record.buyTransactionId == null || historical.transactionId == record.buyTransactionId)
                 when {
-                    currentContract != null && currentContract.isSold &&
+                    currentContract != null && currentEvidenceMatches && currentContract.isSold &&
                         currentContract.profit.isFinite() && currentContract.bidPrice.isFinite() && currentContract.bidPrice >= 0.0 ->
                         updateSettled(record, currentContract)
+                    currentContract != null && !currentEvidenceMatches ->
+                        dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker portfolio contract evidence did not match the persisted buy transaction ID.", updatedAtMs = now))
                     currentContract != null && currentContract.isSold ->
                         dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker contract is sold but settlement profit/value is missing or invalid.", updatedAtMs = now))
-                    currentContract != null -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
-                    historical != null && historical.isSold && historical.profit.isFinite() && historical.bidPrice.isFinite() && historical.bidPrice >= 0.0 ->
+                    currentEvidenceMatches -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
+                    historicalEvidenceMatches && historical!!.isSold && historical.profit.isFinite() && historical.bidPrice.isFinite() && historical.bidPrice >= 0.0 ->
                         updateSettled(record, historical)
-                    historical != null && !historical.isSold ->
+                    historical != null && !historicalEvidenceMatches ->
+                        dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker history contract evidence did not match the persisted buy transaction ID.", updatedAtMs = now))
+                    historicalEvidenceMatches && historical != null && !historical.isSold ->
                         dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
                     else -> dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker history did not establish the contract outcome; manual reconciliation is required.", updatedAtMs = now))
                 }
@@ -233,7 +241,17 @@ class DerivMultiplierExecutor(
                 DerivExecutionFailureKind.PURCHASE_AMBIGUOUS, DerivExecutionFailureKind.RECONCILIATION_REQUIRED, null -> DerivExecutionStatus.EXECUTION_UNKNOWN
             }
             val saved = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId) ?: initial
-            dao.update(saved.copy(status = status.name, requestId = typed?.requestId ?: saved.requestId, proposalId = typed?.proposalId ?: saved.proposalId, submissionStage = typed?.submissionStage?.name ?: saved.submissionStage, lastError = failure?.message?.take(500), updatedAtMs = System.currentTimeMillis()))
+            dao.update(saved.copy(
+                status = status.name,
+                requestId = typed?.requestId ?: saved.requestId,
+                proposalId = typed?.proposalId ?: saved.proposalId,
+                submissionStage = typed?.submissionStage?.name ?: saved.submissionStage,
+                contractId = typed?.contractId ?: saved.contractId,
+                buyTransactionId = typed?.buyTransactionId ?: saved.buyTransactionId,
+                purchasePrice = typed?.purchasePrice ?: saved.purchasePrice,
+                lastError = failure?.message?.take(500),
+                updatedAtMs = System.currentTimeMillis()
+            ))
             Result.failure(Exception("${status.name}: ${failure?.message ?: "Broker execution failed"}"))
         }
     }

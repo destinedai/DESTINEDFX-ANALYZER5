@@ -58,13 +58,16 @@ internal fun isMatchingDerivPurchaseEvidence(
     snapshot: DerivPortfolioSnapshot?,
     account: DerivAccountInfo?,
     contractId: Long,
-    transactionId: Long
+    transactionId: Long,
+    nowMs: Long = System.currentTimeMillis(),
+    maxAgeMs: Long = 8_000L
 ): Boolean {
     if (snapshot == null || account == null || !snapshot.successful ||
         snapshot.accountId != account.loginId ||
         snapshot.accountMode != account.mode.uppercase() ||
         !snapshot.currency.equals(account.currency, ignoreCase = true) ||
-        contractId <= 0L || transactionId <= 0L) return false
+        contractId <= 0L || transactionId <= 0L ||
+        snapshot.retrievedAtMs > nowMs || nowMs - snapshot.retrievedAtMs !in 0..maxAgeMs) return false
     return snapshot.contracts.singleOrNull { it.contractId == contractId }?.transactionId == transactionId
 }
 
@@ -825,7 +828,12 @@ class DerivBrokerGateway(
                         "PURCHASE_AMBIGUOUS: broker buy confirmation was received but a fresh matching portfolio record was not observed; do not retry.",
                         buyReqId,
                         proposalId,
-                        DerivSubmissionStage.PURCHASE_SENT
+                        DerivSubmissionStage.PURCHASE_SENT,
+                        account.loginId,
+                        account.mode.uppercase(),
+                        contractId,
+                        txId,
+                        boughtPrice
                     )
                 )
             }

@@ -62,13 +62,48 @@ class DerivAccountModeAndExecutionStateTest {
         )
         val snapshot = DerivPortfolioSnapshot(
             successful = true, accountId = "D123", accountMode = "DEMO",
-            retrievedAtMs = System.currentTimeMillis(), contracts = listOf(contract), currency = "USD"
+            retrievedAtMs = 100_000L, contracts = listOf(contract), currency = "USD"
         )
-        assertTrue(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7001L))
-        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7002L))
-        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(accountId = "D999"), account, 9001L, 7001L))
-        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(accountMode = "REAL"), account, 9001L, 7001L))
-        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(currency = "EUR"), account, 9001L, 7001L))
+        assertTrue(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7001L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7002L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(accountId = "D999"), account, 9001L, 7001L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(accountMode = "REAL"), account, 9001L, 7001L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(currency = "EUR"), account, 9001L, 7001L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7001L, nowMs = 109_001L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7001L, nowMs = 99_999L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 0L, 7001L, nowMs = 105_000L))
+    }
+
+    @Test
+    fun ambiguousFailureRetainsOnlyIdentifiersKnownFromBrokerResponse() {
+        val known = DerivExecutionFailure(
+            kind = DerivExecutionFailureKind.PURCHASE_AMBIGUOUS,
+            message = "portfolio delayed",
+            requestId = 12,
+            proposalId = "proposal-1",
+            submissionStage = DerivSubmissionStage.PURCHASE_SENT,
+            accountId = "D123",
+            accountMode = "DEMO",
+            contractId = 9001L,
+            buyTransactionId = 7001L,
+            purchasePrice = 1.25
+        )
+        assertEquals("D123", known.accountId)
+        assertEquals("DEMO", known.accountMode)
+        assertEquals(9001L, known.contractId)
+        assertEquals(7001L, known.buyTransactionId)
+        assertEquals(1.25, known.purchasePrice!!, 0.0)
+
+        val noBrokerResponse = DerivExecutionFailure(
+            DerivExecutionFailureKind.PURCHASE_AMBIGUOUS,
+            "buy response timed out",
+            requestId = 13,
+            proposalId = "proposal-2",
+            submissionStage = DerivSubmissionStage.PURCHASE_SENT
+        )
+        assertEquals(null, noBrokerResponse.contractId)
+        assertEquals(null, noBrokerResponse.buyTransactionId)
+        assertEquals(null, noBrokerResponse.purchasePrice)
     }
 
     @Test
