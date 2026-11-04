@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -21,6 +20,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,25 +56,39 @@ object AccountSessionRegistry {
         val origin = secrets.getManagedMT5ServiceUrl()
         if (origin.isBlank()) return _snapshots.value
         val profiles = secrets.getConfiguredMT5AccountProfileKeys()
-        val current = _snapshots.value.toMutableMap()
-        for (profileKey in profiles) {
-            val (brand, mode) = brandAndMode(profileKey) ?: continue
-            val client = runCatching {
-                MT5RemoteBridgeClient(
-                    secrets = secrets,
-                    profile = profileKey,
-                    sensitiveActionAuthorized = { false },
-                    accountMode = mode,
-                    brokerBrand = brand
-                )
-            }.getOrNull() ?: continue
-            try {
-                current[profileKey] = client.state()
-            } catch (_: Exception) {
-                // Preserve the last snapshot; heartbeat freshness inside the snapshot ages out.
-            }
+        val previous = _snapshots.value
+        val refreshed = coroutineScope {
+            profiles.map { profileKey ->
+                async(Dispatchers.IO) {
+                    val profileResult = runCatching {
+                        val (brand, mode) = brandAndMode(profileKey)
+                            ?: throw IllegalArgumentException("Invalid broker account profile")
+                        val client = MT5RemoteBridgeClient(
+                            secrets = secrets,
+                            profile = profileKey,
+                            sensitiveActionAuthorized = { false },
+                            accountMode = mode,
+                            brokerBrand = brand
+                        )
+                        profileKey to client.state()
+                    }
+                    profileResult.getOrElse { error ->
+                        if (error is CancellationException) throw error
+                        previous[profileKey]?.copy(
+                            connected = false,
+                            terminalOnline = false,
+                            heartbeatFresh = false,
+                            state = "UNKNOWN",
+                            liveAuthorized = false,
+                            tradeAllowed = false,
+                            terminalConnected = false,
+                            accountVerified = false
+                        ) ?: return@async null
+                    }
+                }
+            }.awaitAll()
         }
-        _snapshots.value = current.filterKeys { it in profiles }
+        _snapshots.value = refreshed.filterNotNull().toMap()
         return _snapshots.value
     }
 }
