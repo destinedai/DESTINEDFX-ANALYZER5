@@ -78,7 +78,7 @@ int CountPositions(){int n=0;for(int i=PositionsTotal()-1;i>=0;i--){ulong t=Posi
 int CountOurPositions(){int n=0;for(int i=PositionsTotal()-1;i>=0;i--){ulong t=PositionGetTicket(i);if(t>0&&PositionGetInteger(POSITION_MAGIC)==(long)InpMagic)n++;}return n;}
 string DailyRiskLockKey(){return DayKey()+"_"+IntegerToString((int)InpMagic)+"_LOCK";}
 string DailyRiskWarningKey(string threshold){return DayKey()+"_"+IntegerToString((int)InpMagic)+"_WARN_"+threshold;}
-bool DailyRiskLocked(){string key=DailyRiskLockKey();if(GlobalVariableCheck(key))g_dailyLossLocked=GlobalVariableGet(key)>0.5;return g_dailyLossLocked;}
+bool DailyRiskLocked(){string key=DailyRiskLockKey();g_dailyLossLocked=GlobalVariableCheck(key)&&GlobalVariableGet(key)>0.5;return g_dailyLossLocked;}
 void NotifyDailyRisk(string threshold,double netPnl,double limit,double usedPct){
    string key=DailyRiskWarningKey(threshold);
    if(GlobalVariableCheck(key))return;
