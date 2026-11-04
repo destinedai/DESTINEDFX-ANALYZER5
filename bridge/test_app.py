@@ -2,6 +2,7 @@ import os, time, uuid
 from concurrent.futures import ThreadPoolExecutor
 os.environ['ALLOW_LOOPBACK_HTTP']='true'
 os.environ['BRIDGE_DB_PATH']='/tmp/destinedfx-bridge-test.sqlite3'
+os.environ['PAIR_RATE_LIMIT']='1000'
 try: os.unlink(os.environ['BRIDGE_DB_PATH'])
 except FileNotFoundError: pass
 from fastapi.testclient import TestClient
@@ -17,17 +18,32 @@ def heartbeat_data(**kwargs):
     x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo'},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[]}; x.update(kwargs); return x
 
 def analysis_payload(request_id='analysis-1'):
-    now_ms=int(time.time()*1000)
+    return {'request_id':request_id,'symbol':'EUR/USD','timeframe':'M1','strategy_id':'smc-confluence-1.0.0'}
+
+def provider_payload(symbol='EUR/USD',timeframe='M1',quote_age_ms=0):
+    now_ms=int(time.time()*1000)-quote_age_ms
     candles=[]
     for index in range(30):
         close=100.0+index*0.2
-        candles.append({'timestamp_ms':now_ms-(30-index)*60_000,'open':close-0.05,'high':close+0.30,'low':close-0.30,'close':close,'volume':100.0,'complete':True,'source':'fixture-provider','retrieved_at_ms':now_ms})
+        candles.append({'timestamp_ms':now_ms-(30-index)*60_000,'open':close-0.05,'high':close+0.30,'low':close-0.30,'close':close,'volume':100.0,'complete':True})
     previous=candles[-2]
-    candles[-1]={'timestamp_ms':candles[-1]['timestamp_ms'],'open':previous['high']+0.2,'high':previous['high']+0.6,'low':previous['high']+0.1,'close':previous['high']+0.5,'volume':100.0,'complete':True,'source':'fixture-provider','retrieved_at_ms':now_ms}
-    return {'request_id':request_id,'symbol':'EUR/USD','timeframe':'M1','strategy_id':'smc-confluence-1.0.0','source':'fixture-provider','now_ms':now_ms,'provider_retrieved_at_ms':now_ms,'quote_price':candles[-1]['close'],'quote_retrieved_at_ms':now_ms,'quote_source':'fixture-provider','candles':candles}
+    candles[-1]={'timestamp_ms':candles[-1]['timestamp_ms'],'open':previous['high']+0.2,'high':previous['high']+0.6,'low':previous['high']+0.1,'close':previous['high']+0.5,'volume':100.0,'complete':True}
+    return {'provider_id':'fixture-provider','symbol':symbol,'timeframe':timeframe,'quote':{'symbol':symbol,'bid':float(candles[-1]['close']-0.0001),'ask':float(candles[-1]['close']+0.0001),'timestamp_ms':now_ms},'candles':candles}
+
+class ProviderResponse:
+    headers=type('Headers',(),{'get_content_type':lambda self:'application/json'})()
+    def __init__(self,payload): self.payload=payload
+    def __enter__(self): return self
+    def __exit__(self,*args): return False
+    def read(self,_limit): return app.json.dumps(self.payload).encode()
+
+def configure_provider(monkeypatch,payload=None):
+    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
+    monkeypatch.setenv('ANALYSIS_PROVIDER_URL','https://provider.destinedfx.com')
+    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: ProviderResponse(payload or provider_payload()))
 
 def test_authenticated_analysis_is_typed_non_executable_and_idempotent(monkeypatch):
-    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
+    configure_provider(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload()
     first=client.post('/v1/app/analysis',headers=headers,json=payload)
     assert first.status_code==200
@@ -39,7 +55,7 @@ def test_authenticated_analysis_is_typed_non_executable_and_idempotent(monkeypat
     assert client.post('/v1/app/analysis',headers=headers,json=changed).status_code==409
 
 def test_concurrent_identical_analysis_retries_replay_one_stored_response(monkeypatch):
-    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
+    configure_provider(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('concurrent-analysis')
     with ThreadPoolExecutor(max_workers=8) as pool:
         responses=list(pool.map(lambda _: client.post('/v1/app/analysis',headers=headers,json=payload), range(8)))
@@ -48,26 +64,68 @@ def test_concurrent_identical_analysis_retries_replay_one_stored_response(monkey
     assert all(body==bodies[0] for body in bodies)
 
 def test_analysis_fails_closed_for_stale_future_override_and_quote_mismatch(monkeypatch):
-    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
+    configure_provider(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
-    stale=analysis_payload('stale-analysis'); stale.update({'now_ms':1_699_975_860_000,'provider_retrieved_at_ms':1_699_975_860_000,'quote_retrieved_at_ms':1_699_975_860_000})
-    assert client.post('/v1/app/analysis',headers=headers,json=stale).status_code==422
-    future=analysis_payload('future-analysis'); future['now_ms']=int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000
+    stale=analysis_payload('stale-analysis'); monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: ProviderResponse(provider_payload(quote_age_ms=app.ANALYSIS_QUOTE_MAX_AGE_MS+1)))
+    assert client.post('/v1/app/analysis',headers=headers,json=stale).status_code==503
+    future={**analysis_payload('future-analysis'),'now_ms':int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000}
     assert client.post('/v1/app/analysis',headers=headers,json=future).status_code==422
-    override=analysis_payload('override-analysis'); override['max_candle_age_ms']=604_800_000
+    override={**analysis_payload('override-analysis'),'max_candle_age_ms':604_800_000}
     assert client.post('/v1/app/analysis',headers=headers,json=override).status_code==422
-    mismatch=analysis_payload('quote-mismatch'); mismatch['quote_price']*=2
-    assert client.post('/v1/app/analysis',headers=headers,json=mismatch).status_code==422
+    mismatch=analysis_payload('quote-mismatch'); bad=provider_payload(); bad['quote']['bid']*=2; bad['quote']['ask']*=2
+    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: ProviderResponse(bad))
+    assert client.post('/v1/app/analysis',headers=headers,json=mismatch).status_code==503
 
 def test_analysis_requires_app_token_trusted_source_and_supported_timeframe(monkeypatch):
     payload=analysis_payload()
     assert client.post('/v1/app/analysis',json=payload).status_code==401
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    configure_provider(monkeypatch)
     monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','other-provider')
-    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==422
+    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==503
     monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
     assert client.post('/v1/app/analysis',headers=headers,json={**payload,'timeframe':'INVALID'}).status_code==422
     assert client.post('/v1/app/analysis',headers=headers,json={**payload,'expected_interval_ms':60_000}).status_code==422
+
+def test_client_cannot_claim_provider_identity_with_fabricated_candles(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload={**analysis_payload('fabricated'), 'candles':provider_payload()['candles']}
+    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==422
+
+def test_identical_replay_survives_provider_expiry_but_conflict_is_409(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('replay-after-expiry')
+    first=client.post('/v1/app/analysis',headers=headers,json=payload); assert first.status_code==200
+    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: (_ for _ in ()).throw(TimeoutError('provider expired')))
+    replay=client.post('/v1/app/analysis',headers=headers,json=payload)
+    assert replay.status_code==200 and replay.json()==first.json()
+    conflict={**payload,'strategy_id':'wyckoff-schematics'}
+    assert client.post('/v1/app/analysis',headers=headers,json=conflict).status_code==409
+
+def test_concurrent_conflicting_payloads_have_one_winner(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    left=analysis_payload('concurrent-conflict'); right={**left,'strategy_id':'wyckoff-schematics'}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses=list(pool.map(lambda body: client.post('/v1/app/analysis',headers=headers,json=body), (left,right)))
+    assert sorted(r.status_code for r in responses)==[200,409]
+
+def test_provider_quote_identity_spread_precision_and_gap_are_fail_closed(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('provider-adversarial')
+    other_instrument=provider_payload(symbol='GBP/USD')
+    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: ProviderResponse(other_instrument))
+    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==503
+    cases=[]
+    bad_provider=provider_payload(); bad_provider['provider_id']='other-provider'; cases.append(bad_provider)
+    future_quote=provider_payload(); future_quote['quote']['timestamp_ms']=int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000; cases.append(future_quote)
+    wide=provider_payload(); wide['quote']['ask']=wide['quote']['bid']+1; cases.append(wide)
+    imprecise=provider_payload(); imprecise['quote']['bid']=imprecise['quote']['bid']+0.0000015; cases.append(imprecise)
+    intraday_gap=provider_payload(); intraday_gap['candles'][10]['timestamp_ms']+=3_600_000; cases.append(intraday_gap)
+    for index,bad in enumerate(cases):
+        bad_request={**payload,'request_id':f'provider-adversarial-{index}'}
+        monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout,bad=bad: ProviderResponse(bad))
+        assert client.post('/v1/app/analysis',headers=headers,json=bad_request).status_code==503
 def test_pairing_single_use_and_token_auth_boundaries():
     p=pair(); assert client.get('/v1/app/state',headers={'Authorization':'Bearer '+p['app_token']}).json()['pairing_status']=='PAIRING'; t=claimed(p)
     assert client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'another','account':ACCOUNT}).status_code==401

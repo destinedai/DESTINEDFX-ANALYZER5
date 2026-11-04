@@ -184,11 +184,14 @@ def _waiting(series: ValidatedSeries, symbol: str, timeframe: str,
 
 
 def _candidate(series: ValidatedSeries, symbol: str, timeframe: str,
-               strategy_id: str, direction: str, evidence: Sequence[str]) -> SignalCandidate:
+               strategy_id: str, direction: str, evidence: Sequence[str],
+               quote_bid: float | None = None, quote_ask: float | None = None) -> SignalCandidate:
     atr = _atr(series.candles)
     if atr is None or atr <= 0:
         return _waiting(series, symbol, timeframe, strategy_id, "INSUFFICIENT_STRUCTURE_OR_ATR")
-    entry = series.candles[-1].close
+    entry = (quote_ask if direction == "LONG" else quote_bid) if (
+        quote_bid is not None and quote_ask is not None
+    ) else series.candles[-1].close
     prior = series.candles[-5:-1]
     stop = (min(x.low for x in prior) - 0.25 * atr if direction == "LONG"
             else max(x.high for x in prior) + 0.25 * atr)
@@ -207,7 +210,8 @@ def _candidate(series: ValidatedSeries, symbol: str, timeframe: str,
 
 
 def evaluate_smc(series: ValidatedSeries, *, symbol: str, timeframe: str,
-                 quote_price: float | None = None) -> SignalCandidate:
+                 quote_price: float | None = None, quote_bid: float | None = None,
+                 quote_ask: float | None = None) -> SignalCandidate:
     candles = series.candles
     if len(candles) < 22:
         return _waiting(series, symbol, timeframe, STRATEGY_ID, "INSUFFICIENT_CLOSED_CANDLES")
@@ -219,15 +223,16 @@ def evaluate_smc(series: ValidatedSeries, *, symbol: str, timeframe: str,
     current, previous = candles[-1], candles[-2]
     if current.close > previous.high and current.close > ema20:
         return _candidate(series, symbol, timeframe, STRATEGY_ID, "LONG",
-                          ("BOS_UP_CLOSED_CANDLE", "CLOSE_ABOVE_EMA20"))
+                          ("BOS_UP_CLOSED_CANDLE", "CLOSE_ABOVE_EMA20"), quote_bid, quote_ask)
     if current.close < previous.low and current.close < ema20:
         return _candidate(series, symbol, timeframe, STRATEGY_ID, "SHORT",
-                          ("BOS_DOWN_CLOSED_CANDLE", "CLOSE_BELOW_EMA20"))
+                          ("BOS_DOWN_CLOSED_CANDLE", "CLOSE_BELOW_EMA20"), quote_bid, quote_ask)
     return _waiting(series, symbol, timeframe, STRATEGY_ID, "NO_CONFIRMED_BOS")
 
 
 def _evaluate_ruleset(series: ValidatedSeries, *, symbol: str, timeframe: str,
-                      strategy_id: str) -> SignalCandidate:
+                      strategy_id: str, quote_bid: float | None = None,
+                      quote_ask: float | None = None) -> SignalCandidate:
     candles = series.candles
     minimum = {
         "ict-silver-bullet": 21, "wyckoff-schematics": 21,
@@ -289,7 +294,7 @@ def _evaluate_ruleset(series: ValidatedSeries, *, symbol: str, timeframe: str,
                 return _waiting(series, symbol, timeframe, strategy_id, "FVG_CONSEQUENT_ENCROACHMENT_NOT_CONFIRMED")
             evidence = ("LIQUIDITY_SWEEP_HIGH", "DISPLACEMENT_CLOSE_DOWN", "BEARISH_FVG",
                         "FVG_CONSEQUENT_ENCROACHMENT", f"SILVER_BULLET_{session}")
-        return _candidate(series, symbol, timeframe, strategy_id, direction, evidence)
+        return _candidate(series, symbol, timeframe, strategy_id, direction, evidence, quote_bid, quote_ask)
     elif strategy_id == "wyckoff-schematics":
         average_volume = _mean([x.volume for x in candles[-11:-1]])
         long = current.close > max(x.high for x in candles[-11:-1]) and current.volume >= average_volume
@@ -332,20 +337,21 @@ def _evaluate_ruleset(series: ValidatedSeries, *, symbol: str, timeframe: str,
         evidence = (("EMA9_ABOVE_EMA21", "CLOSE_ABOVE_EMA9") if long else
                     ("EMA9_BELOW_EMA21", "CLOSE_BELOW_EMA9"))
     if long:
-        return _candidate(series, symbol, timeframe, strategy_id, "LONG", evidence)
+        return _candidate(series, symbol, timeframe, strategy_id, "LONG", evidence, quote_bid, quote_ask)
     if short:
-        return _candidate(series, symbol, timeframe, strategy_id, "SHORT", evidence)
+        return _candidate(series, symbol, timeframe, strategy_id, "SHORT", evidence, quote_bid, quote_ask)
     return _waiting(series, symbol, timeframe, strategy_id, "NO_CONFIRMED_RULESET_EVENT")
 
 
 def evaluate_strategy(series: ValidatedSeries, *, strategy_id: str,
-                      symbol: str, timeframe: str) -> SignalCandidate:
+                      symbol: str, timeframe: str, quote_bid: float | None = None,
+                      quote_ask: float | None = None) -> SignalCandidate:
     """Dispatch known rulesets; unknown IDs fail closed as NOT_IMPLEMENTED."""
     if strategy_id not in STRATEGY_RULESETS:
         return _waiting(series, symbol, timeframe, strategy_id, "NOT_IMPLEMENTED")
     if strategy_id == STRATEGY_ID:
-        return evaluate_smc(series, symbol=symbol, timeframe=timeframe)
-    return _evaluate_ruleset(series, symbol=symbol, timeframe=timeframe, strategy_id=strategy_id)
+        return evaluate_smc(series, symbol=symbol, timeframe=timeframe, quote_bid=quote_bid, quote_ask=quote_ask)
+    return _evaluate_ruleset(series, symbol=symbol, timeframe=timeframe, strategy_id=strategy_id, quote_bid=quote_bid, quote_ask=quote_ask)
 
 
 def evaluate_smc_confluence(series: ValidatedSeries, *, symbol: str,
@@ -372,11 +378,20 @@ def analyze_json(payload: str) -> str:
             expected_interval_ms = int(expected_interval_ms)
         max_candle_age_ms = int(request.get("max_candle_age_ms", MAX_CANDLE_AGE_MS))
         provider_retrieved_at_ms = int(request.get("provider_retrieved_at_ms", 0))
-        quote_price = request.get("quote_price")
-        if quote_price is not None:
-            quote_price = float(quote_price)
-            if not isfinite(quote_price) or quote_price <= 0:
+        legacy_quote_price = request.get("quote_price")
+        if legacy_quote_price is not None:
+            try:
+                legacy_quote_price = float(legacy_quote_price)
+            except (TypeError, ValueError, OverflowError):
                 raise DataIntegrityError("INVALID_QUOTE_PRICE")
+            if not isfinite(legacy_quote_price) or legacy_quote_price <= 0:
+                raise DataIntegrityError("INVALID_QUOTE_PRICE")
+        quote_bid = request.get("quote_bid")
+        quote_ask = request.get("quote_ask")
+        if quote_bid is not None or quote_ask is not None:
+            quote_bid = float(quote_bid); quote_ask = float(quote_ask)
+            if not isfinite(quote_bid) or not isfinite(quote_ask) or quote_bid <= 0 or quote_ask <= quote_bid:
+                raise DataIntegrityError("INVALID_QUOTE")
         rows = request.get("candles")
         if not symbol or not timeframe or not strategy_id or not isinstance(rows, list):
             raise DataIntegrityError("INVALID_REQUEST")
@@ -393,7 +408,8 @@ def analyze_json(payload: str) -> str:
             allow_session_gaps=bool(request.get("allow_session_gaps", False)),
             max_age_ms=max_candle_age_ms,
         )
-        result = evaluate_strategy(series, strategy_id=strategy_id, symbol=symbol, timeframe=timeframe)
+        result = evaluate_strategy(series, strategy_id=strategy_id, symbol=symbol, timeframe=timeframe,
+                                   quote_bid=quote_bid, quote_ask=quote_ask)
         response = result.__dict__.copy()
         response["evidence"] = list(result.evidence)
         response["score_basis"] = list(result.score_basis)

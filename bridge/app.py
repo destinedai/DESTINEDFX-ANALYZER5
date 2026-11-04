@@ -5,9 +5,9 @@ from typing import Any
 from urllib.parse import urlparse, quote, urlencode
 from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr
 from cryptography.fernet import Fernet, InvalidToken
-from quantitative import analyze_json
+from quantitative import STRATEGY_RULESETS, analyze_json
 
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
@@ -23,11 +23,17 @@ NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
 ANALYSIS_CLOCK_SKEW_MS=max(0,int(os.getenv('ANALYSIS_CLOCK_SKEW_SECONDS','120')))*1000
+ANALYSIS_QUOTE_MAX_AGE_MS=max(1,int(os.getenv('ANALYSIS_QUOTE_MAX_AGE_SECONDS','15')))*1000
 ANALYSIS_TIMEFRAME_POLICY={
     'M1':(60_000,300_000),'M5':(300_000,900_000),'M15':(900_000,2_700_000),
     'M30':(1_800_000,5_400_000),'H1':(3_600_000,10_800_000),
     'H4':(14_400_000,43_200_000),'D1':(86_400_000,172_800_000),
     'W1':(604_800_000,1_209_600_000),
+}
+ANALYSIS_SYMBOL_POLICY={
+    'EUR/USD':('FOREX',5,0.005,0.01),'GBP/USD':('FOREX',5,0.005,0.01),
+    'USD/JPY':('FOREX',3,0.5,0.01),'XAU/USD':('METAL',2,5.0,0.02),
+    'BTC/USD':('CRYPTO',2,200.0,0.05),
 }
 _NEWS_CACHE={}
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
@@ -138,14 +144,28 @@ class AnalysisRequest(BaseModel):
     symbol:StrictStr=Field(min_length=1,max_length=64)
     timeframe:StrictStr=Field(min_length=1,max_length=16)
     strategy_id:StrictStr=Field(min_length=1,max_length=64)
-    source:StrictStr=Field(min_length=1,max_length=128)
-    now_ms:StrictInt=Field(gt=0)
-    provider_retrieved_at_ms:StrictInt=Field(gt=0)
-    quote_price:float=Field(gt=0,allow_inf_nan=False)
-    quote_retrieved_at_ms:StrictInt=Field(gt=0)
-    quote_source:StrictStr=Field(min_length=1,max_length=128)
-    allow_session_gaps:StrictBool=False
-    candles:list[AnalysisCandle]=Field(min_length=1,max_length=500)
+class ProviderCandle(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    timestamp_ms:StrictInt=Field(gt=0)
+    open:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    high:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    low:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    close:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    volume:StrictFloat=Field(ge=0,allow_inf_nan=False)
+    complete:StrictBool
+class ProviderQuote(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    symbol:StrictStr=Field(min_length=1,max_length=64)
+    bid:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    ask:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    timestamp_ms:StrictInt=Field(gt=0)
+class ProviderSnapshot(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    provider_id:StrictStr=Field(min_length=1,max_length=128)
+    symbol:StrictStr=Field(min_length=1,max_length=64)
+    timeframe:StrictStr=Field(min_length=1,max_length=16)
+    quote:ProviderQuote
+    candles:list[ProviderCandle]=Field(min_length=1,max_length=500)
 class AnalysisResponse(BaseModel):
     model_config=ConfigDict(extra='forbid')
     symbol:StrictStr
@@ -166,7 +186,8 @@ class AnalysisResponse(BaseModel):
     source:StrictStr
     candle_timestamp_ms:StrictInt
     provider_retrieved_at_ms:StrictInt
-    quote_price:float
+    quote_bid:float
+    quote_ask:float
     quote_retrieved_at_ms:StrictInt
     quote_source:StrictStr
     server_now_ms:StrictInt
@@ -410,29 +431,72 @@ def durable_execution_enabled():
 def trusted_analysis_sources():
     return {value.strip() for value in os.getenv('ANALYSIS_TRUSTED_SOURCES','').split(',') if value.strip()}
 
-def validate_analysis_snapshot(x):
-    server_now_ms=int(time.time()*1000)
-    if abs(x.now_ms-server_now_ms)>ANALYSIS_CLOCK_SKEW_MS:
-        raise HTTPException(422,'Client clock is outside the permitted analysis skew')
+def fetch_provider_snapshot(symbol, timeframe):
+    provider_url=os.getenv('ANALYSIS_PROVIDER_URL','').strip()
+    if not provider_url or not validate_origin(provider_url):
+        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_CONFIGURED','message':'No usable trusted analysis provider is configured'})
+    query=urlencode({'symbol':symbol,'timeframe':timeframe})
+    headers={'Accept':'application/json'}
+    provider_token=os.getenv('ANALYSIS_PROVIDER_TOKEN','').strip()
+    if provider_token: headers['Authorization']='Bearer '+provider_token
+    try:
+        request=urllib.request.Request(provider_url+'?'+query,headers=headers)
+        with urllib.request.urlopen(request,timeout=5) as response:
+            if response.headers.get_content_type()!='application/json':
+                raise ValueError('NON_JSON_PROVIDER_RESPONSE')
+            raw=response.read(512*1024+1)
+        if len(raw)>512*1024: raise ValueError('PROVIDER_RESPONSE_TOO_LARGE')
+        snapshot=ProviderSnapshot.model_validate(json.loads(raw.decode('utf-8')))
+    except HTTPException: raise
+    except Exception as error:
+        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_UNAVAILABLE','message':'Trusted provider data is unavailable or malformed'}) from error
+    observed_ms=int(time.time()*1000)
+    if snapshot.provider_id not in trusted_analysis_sources():
+        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_TRUSTED','message':'Provider identity is not configured as trusted'})
+    if snapshot.symbol.strip().upper()!=symbol or snapshot.timeframe.strip().upper()!=timeframe:
+        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_MISMATCH','message':'Provider returned a different instrument or timeframe'})
+    quote=snapshot.quote
+    if quote.symbol.strip().upper()!=symbol:
+        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_MISMATCH','message':'Provider quote instrument does not match the request'})
+    if quote.ask<=quote.bid:
+        raise HTTPException(503,detail={'code':'ANALYSIS_INVALID_SPREAD','message':'Provider returned an invalid bid/ask spread'})
+    asset_class,decimals,max_spread,max_deviation=ANALYSIS_SYMBOL_POLICY[symbol]
+    precision=10**(-decimals)
+    if any(abs(value-round(value,decimals))>precision/10 for value in (quote.bid,quote.ask)):
+        raise HTTPException(503,detail={'code':'ANALYSIS_INVALID_PRECISION','message':'Provider quote exceeds instrument precision'})
+    if quote.ask-quote.bid>max_spread:
+        raise HTTPException(503,detail={'code':'ANALYSIS_SPREAD_TOO_WIDE','message':'Provider spread exceeds the instrument policy'})
+    if quote.timestamp_ms>observed_ms+ANALYSIS_CLOCK_SKEW_MS or observed_ms-quote.timestamp_ms>ANALYSIS_QUOTE_MAX_AGE_MS:
+        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_STALE','message':'Provider quote is stale or future-dated'})
+    if not snapshot.candles or any(not candle.complete for candle in snapshot.candles):
+        raise HTTPException(503,detail={'code':'ANALYSIS_CANDLES_INCOMPLETE','message':'Provider returned incomplete candles'})
+    if any(a.timestamp_ms>=b.timestamp_ms for a,b in zip(snapshot.candles,snapshot.candles[1:])):
+        raise HTTPException(503,detail={'code':'ANALYSIS_CANDLES_UNORDERED','message':'Provider returned unordered candles'})
+    interval_ms=ANALYSIS_TIMEFRAME_POLICY[timeframe][0]
+    for previous,current in zip(snapshot.candles,snapshot.candles[1:]):
+        delta=current.timestamp_ms-previous.timestamp_ms
+        if delta==interval_ms: continue
+        weekend_gap=asset_class in ('FOREX','METAL') and 2*86_400_000<=delta<=72*60*60*1000
+        if not weekend_gap:
+            raise HTTPException(503,detail={'code':'ANALYSIS_CANDLE_GAP','message':'Provider returned an unexplained candle-session gap'})
+    latest=snapshot.candles[-1]
+    if max(abs(quote.bid-latest.close),abs(quote.ask-latest.close))/latest.close>max_deviation:
+        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_DEVIATION','message':'Provider quote is inconsistent with the candle snapshot'})
+    candles=[AnalysisCandle(timestamp_ms=c.timestamp_ms,open=c.open,high=c.high,low=c.low,close=c.close,volume=c.volume,complete=c.complete,source=snapshot.provider_id,retrieved_at_ms=observed_ms) for c in snapshot.candles]
+    return {'provider_id':snapshot.provider_id,'observed_ms':observed_ms,'quote':quote,'candles':candles,'asset_class':asset_class}
+
+def validate_analysis_snapshot(x, provider):
+    server_now_ms=provider['observed_ms']
     timeframe=x.timeframe.strip().upper()
     policy=ANALYSIS_TIMEFRAME_POLICY.get(timeframe)
     if policy is None:
         raise HTTPException(422,'Unsupported timeframe; expected one of M1, M5, M15, M30, H1, H4, D1, W1')
     interval_ms,max_age_ms=policy
-    trusted=trusted_analysis_sources()
-    if not trusted:
-        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_CONFIGURED','message':'No trusted analysis provider is configured'})
-    if x.source not in trusted or x.quote_source!=x.source:
-        raise HTTPException(422,'Analysis source is not an authenticated trusted provider')
-    for timestamp in (x.provider_retrieved_at_ms,x.quote_retrieved_at_ms):
-        if timestamp>server_now_ms+ANALYSIS_CLOCK_SKEW_MS or server_now_ms-timestamp>max_age_ms:
-            raise HTTPException(422,'Provider quote or candle provenance is stale or future-dated')
-    latest=x.candles[-1]
-    if latest.source!=x.source:
-        raise HTTPException(422,'Candle provenance does not match the trusted provider')
-    if abs(x.quote_price-latest.close)/latest.close>0.01:
-        raise HTTPException(422,'Quote is inconsistent with the submitted closed-candle snapshot')
-    return server_now_ms,timeframe,interval_ms,max_age_ms
+    if x.strategy_id not in STRATEGY_RULESETS:
+        raise HTTPException(422,'Unsupported strategy ID')
+    if provider['asset_class'] not in ('FOREX','METAL','CRYPTO'):
+        raise HTTPException(422,'Unsupported instrument session metadata')
+    return server_now_ms,timeframe,interval_ms,max_age_ms,provider['asset_class']=='FOREX'
 
 def require_durable_execution():
     if not durable_execution_enabled():
@@ -796,7 +860,7 @@ def state(authorization:str|None=Header(default=None)):
 
 @app.post('/v1/app/analysis',response_model=AnalysisResponse)
 def app_analysis(x:AnalysisRequest,authorization:str|None=Header(default=None)):
-    """Run deterministic analysis on an authenticated immutable candle snapshot.
+    """Run deterministic analysis on an authenticated server-fetched snapshot.
 
     This endpoint is deliberately analysis-only: the response is always marked
     non-executable by the quantitative module and is never translated into a
@@ -804,17 +868,8 @@ def app_analysis(x:AnalysisRequest,authorization:str|None=Header(default=None)):
     its payload is rejected to prevent accidental duplicate work.
     """
     p=auth(authorization,'app')
-    server_now_ms,timeframe,interval_ms,max_age_ms=validate_analysis_snapshot(x)
     identity_payload=x.model_dump(mode='json')
-    identity_payload['candles']=[c.model_dump(mode='json') for c in x.candles]
     identity_raw=json.dumps(identity_payload,sort_keys=True,separators=(',',':'),allow_nan=False)
-    payload=x.model_dump(mode='json')
-    payload['timeframe']=timeframe
-    payload['now_ms']=server_now_ms
-    payload['expected_interval_ms']=interval_ms
-    payload['max_candle_age_ms']=max_age_ms
-    payload['candles']=[c.model_dump(mode='json') for c in x.candles]
-    raw=json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False)
     payload_hash=digest(identity_raw)
     with tx() as c:
         prior=c.execute('SELECT payload_hash,response FROM analysis_requests WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
@@ -822,13 +877,31 @@ def app_analysis(x:AnalysisRequest,authorization:str|None=Header(default=None)):
         if not hmac.compare_digest(prior['payload_hash'],payload_hash):
             raise HTTPException(409,'request_id was already used for a different analysis payload')
         return json.loads(prior['response'])
+    symbol=x.symbol.strip().upper(); timeframe=x.timeframe.strip().upper()
+    if symbol not in ANALYSIS_SYMBOL_POLICY:
+        raise HTTPException(422,'Unsupported symbol')
+    if timeframe not in ANALYSIS_TIMEFRAME_POLICY:
+        raise HTTPException(422,'Unsupported timeframe; expected one of M1, M5, M15, M30, H1, H4, D1, W1')
+    provider=fetch_provider_snapshot(symbol,timeframe)
+    server_now_ms,timeframe,interval_ms,max_age_ms,allow_session_gaps=validate_analysis_snapshot(x,provider)
+    quote=provider['quote']
+    payload={
+        'symbol':symbol,'timeframe':timeframe,'strategy_id':x.strategy_id,
+        'source':provider['provider_id'],'now_ms':server_now_ms,
+        'provider_retrieved_at_ms':provider['observed_ms'],
+        'expected_interval_ms':interval_ms,'max_candle_age_ms':max_age_ms,
+        'allow_session_gaps':allow_session_gaps,'quote_bid':quote.bid,'quote_ask':quote.ask,
+        'candles':[c.model_dump(mode='json') for c in provider['candles']],
+    }
+    raw=json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False)
     response=json.loads(analyze_json(raw))
     # The quantitative contract is the final safety boundary for this route.
     response.update({
-        'provider_retrieved_at_ms':x.provider_retrieved_at_ms,
-        'quote_price':x.quote_price,
-        'quote_retrieved_at_ms':x.quote_retrieved_at_ms,
-        'quote_source':x.quote_source,
+        'provider_retrieved_at_ms':provider['observed_ms'],
+        'quote_bid':quote.bid,
+        'quote_ask':quote.ask,
+        'quote_retrieved_at_ms':quote.timestamp_ms,
+        'quote_source':provider['provider_id'],
         'server_now_ms':server_now_ms,
         'executable':False,
     })
