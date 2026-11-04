@@ -137,12 +137,17 @@ class DerivDemoBotService : Service() {
             stopSafely("Safety blocked — $symbol is not a supported Deriv Multiplier underlying")
             return
         }
-        if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY) {
-            if (!connectWithBoundedRetry(gateway)) {
-                stopSafely("ERROR — authentication or reconnect attempts exhausted; trading remains stopped")
-                return
-            }
+        // Keep the user-started foreground service alive through transient broker outages.
+        // This is especially important after a persisted daily-loss lock: reconnect and retry
+        // broker-confirmed closure rather than silently abandoning an unresolved managed contract.
+        while (currentCoroutineContext().isActive && !stopRequested &&
+            gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY
+        ) {
+            if (connectWithBoundedRetry(gateway)) break
+            update("RECONNECTING — Deriv connection retries continue; no new purchases are permitted")
+            delay(15_000L)
         }
+        if (!currentCoroutineContext().isActive || stopRequested) return
         suspend fun verifyDerivDailyRiskAtEntryBoundary(accountId: String, mode: String): Boolean {
             val utcDay = derivUtcDayKey()
             if (app.secretsManager.isDerivDailyRiskLocked(accountId, mode, utcDay)) return false
@@ -401,8 +406,10 @@ class DerivDemoBotService : Service() {
         executor: DerivMultiplierExecutor,
         gateway: com.example.data.deriv.DerivBrokerGateway
     ): Boolean {
-        repeat(3) { cycle ->
-            if (stopRequested || !currentCoroutineContext().isActive) return false
+        // Retryable transport/portfolio failures are not terminal service failures. Keep the
+        // foreground monitor alive, preserve the account/mode daily lock, and retry until the
+        // broker is reachable. A manual reconciliation requirement remains a hard stop.
+        while (currentCoroutineContext().isActive && !stopRequested) {
             val result = executor.reconcileBeforeNewEntriesResult()
             when (result.status) {
                 DerivReconciliationStatus.READY -> {
@@ -417,12 +424,15 @@ class DerivDemoBotService : Service() {
                     update("RECONNECTING — ${result.reason.take(140)}; purchases remain paused")
                 }
             }
-            if (cycle < 2 && !connectWithBoundedRetry(gateway)) {
-                stopSafely("ERROR — bounded reconnect attempts exhausted; trading remains stopped pending reconciliation")
-                return false
+            if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY) {
+                if (!connectWithBoundedRetry(gateway)) {
+                    update("RECONNECTING — bounded attempt batch exhausted; the foreground service will retry")
+                    delay(15_000L)
+                }
+            } else {
+                delay(5_000L)
             }
         }
-        stopSafely("ERROR — fresh portfolio could not be re-established; trading remains stopped")
         return false
     }
 
