@@ -1313,6 +1313,7 @@ open class DestinedFXViewModel(
                 Log.e("DestinedFXViewModel", "init collector failed: ${e.javaClass.simpleName}")
             }
         }
+        }
     }
 
     val botStatusSummary = app.autonomousBotEngine.status

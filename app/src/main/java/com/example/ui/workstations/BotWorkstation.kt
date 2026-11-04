@@ -2286,16 +2286,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 } else if (bidPrice <= 0.0) {
                                     instantExecutionStatus = "⚠️ Waiting for live bid quote on $activeSymbol..."
                                 } else {
-                                    viewModel.executeTrade(
-                                        symbol = activeSymbol,
-                                        positionType = "SELL",
-                                        entryPrice = bidPrice,
-                                        stopLoss = sellSl,
-                                        takeProfit = sellTp,
-                                        rationale = "MT5 1-Tap Execution (${String.format(java.util.Locale.US, "%.2f", instantLotSize)} lots)",
-                                        lotSize = instantLotSize
-                                    )
-                                    instantExecutionStatus = "Order request submitted to the local trade workflow; fill is not confirmed. Check broker order/deal history."
+                                    instantExecutionStatus = "Unavailable: no verified direct demo-order submission route exists for ${activeBrokerType.name}."
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = LossRed),
@@ -2326,16 +2317,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 } else if (askPrice <= 0.0) {
                                     instantExecutionStatus = "⚠️ Waiting for live ask quote on $activeSymbol..."
                                 } else {
-                                    viewModel.executeTrade(
-                                        symbol = activeSymbol,
-                                        positionType = "BUY",
-                                        entryPrice = askPrice,
-                                        stopLoss = buySl,
-                                        takeProfit = buyTp,
-                                        rationale = "MT5 1-Tap Execution (${String.format(java.util.Locale.US, "%.2f", instantLotSize)} lots)",
-                                        lotSize = instantLotSize
-                                    )
-                                    instantExecutionStatus = "Order request submitted to the local trade workflow; fill is not confirmed. Check broker order/deal history."
+                                    instantExecutionStatus = "Unavailable: no verified direct demo-order submission route exists for ${activeBrokerType.name}."
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen),
