@@ -33,6 +33,14 @@ object DerivDailyRiskMonitor {
     ): DerivDailyRiskSnapshot {
         val start = startingEquity ?: Double.NaN
         val current = currentEquity ?: Double.NaN
+        // A persisted breach is authoritative even when the latest broker snapshot
+        // is unavailable; keep the account locked so the service retries close-out.
+        if (alreadyLocked) {
+            return DerivDailyRiskSnapshot(
+                start, current, Double.NaN, Double.NaN,
+                DerivDailyRiskSnapshot.Status.LOCKED
+            )
+        }
         if (!start.isFinite() || start <= 0.0 || !current.isFinite() ||
             !maximumDailyLossPercent.isFinite() || maximumDailyLossPercent <= 0.0
         ) {
