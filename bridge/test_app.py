@@ -14,6 +14,33 @@ def claimed(p):
 def heartbeat_data(**kwargs):
     now_ms=int(time.time()*1000)
     x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo'},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[]}; x.update(kwargs); return x
+
+def analysis_payload(request_id='analysis-1'):
+    now_ms=1_699_975_860_000
+    candles=[]
+    for index in range(30):
+        close=100.0+index*0.2
+        candles.append({'timestamp_ms':now_ms-(30-index)*60_000,'open':close-0.05,'high':close+0.30,'low':close-0.30,'close':close,'volume':100.0,'complete':True,'source':'fixture-provider','retrieved_at_ms':now_ms})
+    previous=candles[-2]
+    candles[-1]={'timestamp_ms':candles[-1]['timestamp_ms'],'open':previous['high']+0.2,'high':previous['high']+0.6,'low':previous['high']+0.1,'close':previous['high']+0.5,'volume':100.0,'complete':True,'source':'fixture-provider','retrieved_at_ms':now_ms}
+    return {'request_id':request_id,'symbol':'EUR/USD','timeframe':'M1','strategy_id':'smc-confluence-1.0.0','source':'fixture-provider','now_ms':now_ms,'provider_retrieved_at_ms':now_ms,'expected_interval_ms':60_000,'candles':candles}
+
+def test_authenticated_analysis_is_typed_non_executable_and_idempotent():
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload()
+    first=client.post('/v1/app/analysis',headers=headers,json=payload)
+    assert first.status_code==200
+    body=first.json(); assert body['state']=='CANDIDATE' and body['executable'] is False
+    assert body['source']=='fixture-provider' and body['strategy_version']=='python-smc-confluence-1.0.0'
+    replay=client.post('/v1/app/analysis',headers=headers,json=payload)
+    assert replay.status_code==200 and replay.json()==body
+    changed={**payload,'symbol':'GBP/USD'}
+    assert client.post('/v1/app/analysis',headers=headers,json=changed).status_code==409
+
+def test_analysis_requires_app_token_and_rejects_extra_fields():
+    payload=analysis_payload()
+    assert client.post('/v1/app/analysis',json=payload).status_code==401
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    assert client.post('/v1/app/analysis',headers=headers,json={**payload,'unexpected':'not-accepted'}).status_code==422
 def test_pairing_single_use_and_token_auth_boundaries():
     p=pair(); assert client.get('/v1/app/state',headers={'Authorization':'Bearer '+p['app_token']}).json()['pairing_status']=='PAIRING'; t=claimed(p)
     assert client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'another','account':ACCOUNT}).status_code==401

@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, StrictStr
 from cryptography.fernet import Fernet, InvalidToken
+from quantitative import analyze_json
 
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
@@ -42,7 +43,8 @@ def db():
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
     CREATE TABLE IF NOT EXISTS trade_ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, created REAL NOT NULL);
-    CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);''')
+    CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);
+    CREATE TABLE IF NOT EXISTS analysis_requests(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, response TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(pairing_id,request_id));''')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
     for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT'),('heartbeat_seq','INTEGER NOT NULL DEFAULT 0')):
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
@@ -112,6 +114,51 @@ class AckResult(BaseModel): model_config=ConfigDict(extra='forbid'); ticket:str;
 class Ack(BaseModel): model_config=ConfigDict(extra='forbid'); outcome:str; state:str; message:str=Field(default='',max_length=1000); results:list[AckResult]|None=None
 class LiveAuthorization(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_live_trading:bool
 class CloseAllConfirmation(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_close_all:StrictBool
+class AnalysisCandle(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    timestamp_ms:StrictInt=Field(gt=0)
+    open:float=Field(gt=0,allow_inf_nan=False)
+    high:float=Field(gt=0,allow_inf_nan=False)
+    low:float=Field(gt=0,allow_inf_nan=False)
+    close:float=Field(gt=0,allow_inf_nan=False)
+    volume:float=Field(default=0.0,ge=0,allow_inf_nan=False)
+    complete:StrictBool=True
+    source:StrictStr=Field(min_length=1,max_length=128)
+    retrieved_at_ms:StrictInt=Field(gt=0)
+class AnalysisRequest(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    request_id:StrictStr=Field(min_length=1,max_length=64)
+    symbol:StrictStr=Field(min_length=1,max_length=64)
+    timeframe:StrictStr=Field(min_length=1,max_length=16)
+    strategy_id:StrictStr=Field(min_length=1,max_length=64)
+    source:StrictStr=Field(min_length=1,max_length=128)
+    now_ms:StrictInt=Field(gt=0)
+    provider_retrieved_at_ms:StrictInt=Field(gt=0)
+    expected_interval_ms:StrictInt|None=Field(default=None,gt=0)
+    max_candle_age_ms:StrictInt=Field(default=300000,gt=0,le=604800000)
+    allow_session_gaps:StrictBool=False
+    quote_price:float|None=Field(default=None,gt=0,allow_inf_nan=False)
+    candles:list[AnalysisCandle]=Field(min_length=1,max_length=500)
+class AnalysisResponse(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    symbol:StrictStr
+    strategy_id:StrictStr
+    strategy_version:StrictStr
+    timeframe:StrictStr
+    state:StrictStr
+    direction:StrictStr
+    entry:float|None=None
+    stop_loss:float|None=None
+    take_profit:float|None=None
+    reward_to_risk:float|None=None
+    confidence_score:StrictInt
+    score_basis:list[StrictStr]
+    evidence:list[StrictStr]
+    reason:StrictStr
+    rejection_reasons:list[StrictStr]
+    source:StrictStr
+    candle_timestamp_ms:StrictInt
+    executable:StrictBool
 class Position(BaseModel):
     model_config=ConfigDict(extra='forbid')
     ticket:StrictInt|StrictStr; position_id:StrictInt|StrictStr; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); volume:float=Field(gt=0,allow_inf_nan=False); open_price:float=Field(gt=0,allow_inf_nan=False); stop_loss:float=Field(ge=0,allow_inf_nan=False); take_profit:float=Field(ge=0,allow_inf_nan=False); floating_profit:float=Field(allow_inf_nan=False); commission:float|None=Field(default=None,allow_inf_nan=False); swap:float=Field(allow_inf_nan=False); fees:float|None=Field(default=None,allow_inf_nan=False)
@@ -707,6 +754,42 @@ def state(authorization:str|None=Header(default=None)):
     result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
+
+@app.post('/v1/app/analysis',response_model=AnalysisResponse)
+def app_analysis(x:AnalysisRequest,authorization:str|None=Header(default=None)):
+    """Run deterministic analysis on an authenticated immutable candle snapshot.
+
+    This endpoint is deliberately analysis-only: the response is always marked
+    non-executable by the quantitative module and is never translated into a
+    broker command. Reusing a request ID returns the original response; changing
+    its payload is rejected to prevent accidental duplicate work.
+    """
+    p=auth(authorization,'app')
+    payload=x.model_dump(mode='json')
+    payload['candles']=[c.model_dump(mode='json') for c in x.candles]
+    raw=json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False)
+    payload_hash=digest(raw)
+    with tx() as c:
+        prior=c.execute('SELECT payload_hash,response FROM analysis_requests WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
+    if prior:
+        if not hmac.compare_digest(prior['payload_hash'],payload_hash):
+            raise HTTPException(409,'request_id was already used for a different analysis payload')
+        return json.loads(prior['response'])
+    response=json.loads(analyze_json(raw))
+    # The quantitative contract is the final safety boundary for this route.
+    response['executable']=False
+    validated=AnalysisResponse.model_validate(response)
+    serialized=json.dumps(validated.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
+    with tx(True) as c:
+        try:
+            c.execute('INSERT INTO analysis_requests(pairing_id,request_id,payload_hash,response,created) VALUES(?,?,?,?,?)',(p['id'],x.request_id,payload_hash,serialized,time.time()))
+        except sqlite3.IntegrityError:
+            prior=c.execute('SELECT payload_hash,response FROM analysis_requests WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
+            if not prior or not hmac.compare_digest(prior['payload_hash'],payload_hash):
+                raise HTTPException(409,'request_id was already used for a different analysis payload')
+            serialized=prior['response']
+    return json.loads(serialized)
+
 @app.get('/v1/terminal/news-verdict')
 def terminal_news_verdict(symbol:str=Query(min_length=1,max_length=64),authorization:str|None=Header(default=None)):
     auth(authorization,'terminal')

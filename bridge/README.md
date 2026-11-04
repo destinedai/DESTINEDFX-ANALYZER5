@@ -37,6 +37,10 @@ Use the exact public origin, e.g. `https://bridge.your-real-domain.example`, as 
 5. Confirm risk guards and broker-side SL/TP behavior in the EA. STOP/EMERGENCY_STOP block new entries and do not close positions. Do not proceed to a live account without independent testing and authorization.
 6. Use authenticated `GET /v1/app/trades?cursor=...&limit=...` to synchronize the durable account-scoped ledger. Repeated heartbeats are idempotent and DEMO/LIVE records remain separated by pairing/profile.
 
+## Quantitative analysis route
+
+`POST /v1/app/analysis` accepts an app bearer token and a versioned, provider-sourced closed-candle snapshot (`request_id`, symbol, timeframe, strategy ID, source, timestamps, and candles). The bridge validates the request, runs the deterministic Python ruleset, and returns typed provenance, evidence, rejection details, and candidate fields. Request IDs are durable per pairing: an identical replay returns the original response, while a changed payload is rejected with `409`. The response is always `executable: false`; it is analysis-only and is never converted into a broker command or used to bypass Kotlin/EA risk controls. Unknown, stale, malformed, or incomplete data returns a fail-closed `DATA_UNAVAILABLE`/`WAITING` result rather than a trade.
+
 ## Security behavior
 
 Pairing codes expire after ten minutes and are single-use; app and terminal credentials are generated with OS cryptographic randomness and only SHA-256 digests are stored. Bearer comparisons use constant-time digest comparison. App revocation invalidates both token paths and clears telemetry/queued commands. SQLite transactions and WAL protect concurrent changes. Pairing creation is rate-limited per client IP. Requests have body, field count, field name, nesting, list, string, and finite-number checks. Secrets are never logged by the application. Deploy behind a trusted TLS proxy and avoid application access logs that include authorization headers or request bodies.
