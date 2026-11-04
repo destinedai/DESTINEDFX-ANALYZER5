@@ -22,6 +22,12 @@ Set **max_terminals** to an integer from 1 to 16 that the host can actually supp
 
 The Android foreground account monitor reads each saved broker/mode profile independently and reports per-profile heartbeat freshness and risk warnings. It does not replace the Windows EA or host: autonomous MT5 trading still requires the dedicated Windows terminal to remain running and connected. Android notifications require the user to allow the app's notification/foreground-service operation. The generic Android BrokerManager is not evidence of concurrent broker execution.
 
+## MT5 daily-loss baseline capture
+
+The MT5 EA calculates daily account loss from **current account equity minus the persisted account equity captured for that broker-server day**. This is account-wide, not limited to DestinedFX's magic number, so manual trades and other EAs affect the daily loss measurement. At the 100% limit, the EA blocks new entries and attempts to close only DestinedFX-owned positions and pending orders; manual and other EA exposure is intentionally not closed.
+
+The EA can initialize a missing baseline only during the first **120 seconds after the broker server's midnight**. It does not silently treat a midday equity observation as the start-of-day balance. If the EA was not running or could not safely capture equity in that window, daily-risk data is unavailable and new entries remain blocked until the next broker-server day. Keep the EA attached and its terminal connected through the broker's daily rollover. This is deliberately fail-closed; it is not a historical statement reconstruction.
+
 ## Hosting cost constraint
 
 No paid VPS, MetaQuotes VPS trial, Render upgrade, persistent disk, or cloud subscription is required to install and inspect the Android APK or use local Analyzer functionality. The current free Render Blueprint is diagnostics/liveness-only and blocks execution-sensitive operations. A durable managed MT5 bridge and genuine Windows terminal are separate infrastructure requirements; under a no-spend constraint, leave managed MT5 in CONFIGURATION REQUIRED / NOT READY rather than creating a paid dependency or claiming it is active.
