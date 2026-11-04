@@ -451,7 +451,7 @@ def test_ready_requires_fresh_actual_heartbeat_and_worker_ready(monkeypatch):
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker','status':'AUTHENTICATING'})
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['managed_execution']['status']!='READY'
     status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker',headers=wh).json()
@@ -475,7 +475,7 @@ def test_ready_job_is_downgraded_when_heartbeat_goes_stale(monkeypatch):
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-stale','status':'AUTHENTICATING'})
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'stale-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-stale',headers=wh).json()['status']=='READY'
     with app.tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
@@ -490,7 +490,7 @@ def test_ready_job_recovers_within_grace_and_fails_after_recovery_deadline(monke
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-recovery','status':'AUTHENTICATING'})
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'recovery-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='READY'
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='AUTHENTICATING'
@@ -509,7 +509,7 @@ def test_error_heartbeat_blocks_start_but_stop_remains_available(monkeypatch):
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-error','status':'AUTHENTICATING'})
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'error-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='ERROR',last_error='EA failed'))
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='ERROR',last_error='EA failed',account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-error',headers=wh).json()['status']=='AUTHENTICATING'
     assert client.post('/v1/app/commands',headers=ah,json=command_req('START')).status_code==409
     assert client.post('/v1/app/commands',headers=ah,json=command_req('STOP')).status_code==202
