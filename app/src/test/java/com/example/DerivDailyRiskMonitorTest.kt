@@ -33,6 +33,15 @@ class DerivDailyRiskMonitorTest {
         assertEquals(false, DerivDailyRiskMonitor.canInitializeDailyBaseline(12 * 60 * 60 * 1000L))
     }
 
+    @Test fun persistedLockTakesPriorityOverUnavailableBrokerData() {
+        val locked = DerivDailyRiskMonitor.evaluate(
+            startingEquity = null,
+            currentEquity = null,
+            alreadyLocked = true
+        )
+        assertEquals(DerivDailyRiskSnapshot.Status.LOCKED, locked.status)
+    }
+
     @Test fun missingOrInvalidBaselineFailsClosed() {
         assertEquals(DerivDailyRiskSnapshot.Status.DATA_UNAVAILABLE,
             DerivDailyRiskMonitor.evaluate(null, 100.0).status)
