@@ -1,5 +1,7 @@
 package com.example.ui.workstations
 
+import com.example.domain.risk.TradingSafetyLimits
+
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyRow
@@ -706,8 +708,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         .put("symbols", JSONArray().put(terminalSymbol))
                                         .put("timeframes", JSONArray().put(selectedTimeframe))
                                         .put("risk_percent", riskPercent)
-                                        .put("max_daily_loss_percent", 2.0)
-                                        .put("max_concurrent_positions", 2)
+                                        .put("max_daily_loss_percent", TradingSafetyLimits.MAX_DAILY_LOSS_PERCENT)
+                                        .put("max_concurrent_positions", TradingSafetyLimits.MAX_CONCURRENT_POSITIONS)
                                     if (active && !supportedStrategy) { bridgeMessage = "Blocked: selected strategy is not in the managed EA registry."; bridgeBusy = false; return@launch }
                                     if (active && (!MT5RemoteBridgeClient.isValidRiskPercent(riskPercent))) { bridgeMessage = "Blocked: risk must be finite and in (0, 1]%; no clamping applied."; bridgeBusy = false; return@launch }
                                     if (active && !bridgeCanStart) { bridgeMessage = "Blocked: verified account must be READY or STOPPED with a fresh, trade-authorized heartbeat."; bridgeBusy = false; return@launch }
