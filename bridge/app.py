@@ -141,7 +141,11 @@ class ManagedAccount(BaseModel):
     cost_model:str=Field(default='OBSERVED_ROUND_TURN',min_length=1,max_length=40)
     commission_per_lot:float=Field(default=0.0,ge=0,allow_inf_nan=False)
     cost_evidence:str=Field(default='',max_length=512)
-class WorkerClaim(BaseModel): model_config=ConfigDict(extra='forbid'); worker_id:str=Field(min_length=1,max_length=128)
+class WorkerClaim(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    worker_id:str=Field(min_length=1,max_length=128)
+    active_terminals:int=Field(default=0,ge=0,le=16)
+    max_terminals:int=Field(default=1,ge=1,le=16)
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
     status:str; worker_id:str=Field(min_length=1,max_length=128); error_code:str|None=Field(default=None,max_length=64); error_message:str|None=Field(default=None,max_length=200)
@@ -661,7 +665,10 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
     require_durable_execution()
     worker_auth(authorization); fernet,_=managed_config(); t=time.time()
     with tx(True) as c:
-        r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
+        if x.active_terminals >= x.max_terminals:
+            r=c.execute("SELECT * FROM worker_jobs WHERE kind='REVOKE' AND (status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?)) ORDER BY created LIMIT 1",(t,)).fetchone()
+        else:
+            r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
         if not r: return {'job':None}
         c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=?,lease_started=? WHERE id=?",(x.worker_id,t+120,t,r['id']))
         if r['kind']=='REVOKE': return {'job_id':r['id'],'kind':'REVOKE','pairing_id':r['pairing_id'],'worker_id':x.worker_id}
@@ -673,7 +680,7 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
         if m['account_mode'] not in ('DEMO','LIVE'):
             c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_MODE_UNVERIFIED',error_message='Account mode must be re-verified before provisioning' WHERE id=?",(r['id'],))
             return {'job':None}
-        account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']; account['account_mode']=m['account_mode']
+        account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']; account['account_mode']=m['account_mode']; account['broker_brand']=m['broker_brand']
         account['cost_model']=m['cost_model']; account['commission_per_lot']=float(m['commission_per_lot']); account['cost_evidence']=m['cost_evidence']
         try:
             claimed_account=json.loads(p['account']) if p['account'] else {}
