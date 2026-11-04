@@ -2,6 +2,7 @@ package com.example.data.deriv
 
 import com.example.domain.model.SignalDirection
 import com.destinedfx.core.broker.DerivContractLimits
+import com.example.domain.risk.TradingSafetyLimits
 
 /** The only direct Deriv products supported by this app's phone execution mode. */
 enum class DerivMultiplierProduct(val contractType: String) {
@@ -31,7 +32,8 @@ data class DerivMultiplierValidation(
 )
 
 object DerivMultiplierRules {
-    const val MAX_RISK_PERCENT = 1.0
+    const val MAX_RISK_PERCENT = TradingSafetyLimits.MAX_TRADE_RISK_PERCENT
+    const val MIN_REWARD_TO_RISK = TradingSafetyLimits.MIN_REWARD_TO_RISK
     const val MIN_MULTIPLIER = 1
     const val MAX_MULTIPLIER = 1000
     const val MAX_SIGNAL_AGE_MS = 30_000L
@@ -72,7 +74,7 @@ object DerivMultiplierRules {
             SignalDirection.SHORT -> { if (!(stopLoss > entry && takeProfit < entry)) return "PLAN_INVALID: SHORT needs stop above entry and target below"; risk = stopLoss - entry; reward = entry - takeProfit }
             else -> return "SIGNAL_INVALID: WAIT is not executable"
         }
-        if (reward / risk + 1e-9 < 2.0) return "RR_TOO_LOW: reward/risk is below the 2.0R minimum"
+        if (reward / risk + 1e-9 < MIN_REWARD_TO_RISK) return "RR_TOO_LOW: reward/risk is below the ${MIN_REWARD_TO_RISK}R minimum"
         return null
     }
 
@@ -106,7 +108,7 @@ object DerivMultiplierRules {
         if (intent.stake > accountBalance * MAX_RISK_PERCENT / 100.0 + 1e-9) return invalid("RISK_LIMIT: maximum loss exceeds 1% of the verified account balance")
         if (intent.multiplier !in MIN_MULTIPLIER..MAX_MULTIPLIER) return invalid("MULTIPLIER_INVALID: unsupported multiplier")
         if (!intent.stopLossAmount.isFinite() || intent.stopLossAmount <= 0.0 || intent.stopLossAmount > intent.stake + 1e-9) return invalid("PROTECTION_INVALID: stop_loss must be a positive cash amount no greater than stake")
-        if (!intent.takeProfitAmount.isFinite() || intent.takeProfitAmount < intent.stopLossAmount * 2.0 - 1e-9) return invalid("PROTECTION_INVALID: take_profit must represent at least 2x the cash loss limit")
+        if (!intent.takeProfitAmount.isFinite() || intent.takeProfitAmount < intent.stopLossAmount * MIN_REWARD_TO_RISK - 1e-9) return invalid("PROTECTION_INVALID: take_profit must represent at least 2x the cash loss limit")
         if (intent.signalTimestampMs <= 0L || nowMs - intent.signalTimestampMs !in 0..MAX_SIGNAL_AGE_MS) return invalid("SIGNAL_STALE: signal is missing or older than 30 seconds")
         return DerivMultiplierValidation(true)
     }
