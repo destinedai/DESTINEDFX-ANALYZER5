@@ -85,7 +85,12 @@ class DerivExecutionFailure(
     message: String,
     val requestId: Int? = null,
     val proposalId: String? = null,
-    val submissionStage: DerivSubmissionStage = DerivSubmissionStage.VALIDATED
+    val submissionStage: DerivSubmissionStage = DerivSubmissionStage.VALIDATED,
+    val accountId: String? = null,
+    val accountMode: String? = null,
+    val contractId: Long? = null,
+    val buyTransactionId: Long? = null,
+    val purchasePrice: Double? = null
 ) : Exception(message)
 
 enum class DerivExecutionStatus {

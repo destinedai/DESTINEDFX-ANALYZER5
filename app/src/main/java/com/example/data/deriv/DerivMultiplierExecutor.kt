@@ -3,9 +3,30 @@ package com.example.data.deriv
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.domain.risk.TradingSafetyLimits
+import com.example.domain.model.Position
+import com.example.domain.repository.AccountMetrics
+import kotlinx.coroutines.flow.StateFlow
+
+/** Narrow broker contract consumed by the execution authority; production uses DerivBrokerGateway. */
+interface DerivMultiplierGateway {
+    val accountInfo: StateFlow<DerivAccountInfo?>
+    val accountMetrics: StateFlow<AccountMetrics?>
+    val accountMetricsUpdatedAtMs: StateFlow<Long>
+    val activeContracts: StateFlow<Map<Long, DerivContractInfo>>
+    val portfolioSnapshot: StateFlow<DerivPortfolioSnapshot?>
+    val connectionState: StateFlow<DerivConnectionState>
+    suspend fun fetchPortfolio(): List<Position>
+    suspend fun lookupHistoricalContract(contractId: Long, sinceMs: Long): DerivContractInfo?
+    suspend fun executeMultiplier(
+        intent: DerivMultiplierIntent,
+        allowPurchase: suspend () -> Boolean,
+        onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit
+    ): Result<DerivBuyResult>
+    suspend fun sellContract(contractId: Long): Result<DerivSellResult>
+}
 
 class DerivMultiplierExecutor(
-    private val gateway: DerivBrokerGateway,
+    private val gateway: DerivMultiplierGateway,
     private val dao: DerivExecutionDao,
     private val sensitiveActionAuthorized: () -> Boolean = { false },
     private val dailyRiskEntryAllowed: suspend (String, String) -> Boolean = { _, _ -> false }
@@ -67,16 +88,22 @@ class DerivMultiplierExecutor(
             } else {
                 val currentContract = gateway.activeContracts.value[contractId]
                 val historical = if (currentContract == null) gateway.lookupHistoricalContract(contractId, record.createdAtMs) else null
+                val currentEvidenceMatches = currentContract != null && matchesPersistedBuy(record, currentContract)
+                val historicalEvidenceMatches = historical != null && matchesPersistedBuy(record, historical)
                 when {
-                    currentContract != null && currentContract.isSold &&
+                    currentContract != null && currentEvidenceMatches && currentContract.isSold &&
                         currentContract.profit.isFinite() && currentContract.bidPrice.isFinite() && currentContract.bidPrice >= 0.0 ->
                         updateSettled(record, currentContract)
+                    currentContract != null && !currentEvidenceMatches ->
+                        dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker portfolio contract evidence did not match the persisted buy transaction ID.", updatedAtMs = now))
                     currentContract != null && currentContract.isSold ->
                         dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker contract is sold but settlement profit/value is missing or invalid.", updatedAtMs = now))
-                    currentContract != null -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
-                    historical != null && historical.isSold && historical.profit.isFinite() && historical.bidPrice.isFinite() && historical.bidPrice >= 0.0 ->
+                    currentEvidenceMatches -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
+                    historicalEvidenceMatches && historical!!.isSold && historical.profit.isFinite() && historical.bidPrice.isFinite() && historical.bidPrice >= 0.0 ->
                         updateSettled(record, historical)
-                    historical != null && !historical.isSold ->
+                    historical != null && !historicalEvidenceMatches ->
+                        dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker history contract evidence did not match the persisted buy transaction ID.", updatedAtMs = now))
+                    historicalEvidenceMatches && historical != null && !historical.isSold ->
                         dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
                     else -> dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker history did not establish the contract outcome; manual reconciliation is required.", updatedAtMs = now))
                 }
@@ -108,20 +135,42 @@ class DerivMultiplierExecutor(
             age !in 0..PORTFOLIO_MAX_AGE_MS || !snapshot.exposure.isFinite()) {
             return@withContext false
         }
+        var allMatched = true
         dao.knownContracts(current.loginId, current.mode.uppercase()).forEach { record ->
-            val id = record.contractId ?: return@forEach
+            val id = record.contractId
+            if (id == null || id <= 0L || record.buyTransactionId == null || record.buyTransactionId <= 0L) {
+                allMatched = false
+                dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Persisted contract or buy transaction ID is missing; manual reconciliation is required.", updatedAtMs = now))
+                return@forEach
+            }
             val contract = gateway.activeContracts.value[id] ?: gateway.lookupHistoricalContract(id, record.createdAtMs)
-            if (contract == null) {
-                dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Contract is not open and supported broker history has not established its outcome.", updatedAtMs = now))
-            } else if (contract.isSold || contract.status.lowercase() in setOf("sold", "won", "lost", "expired")) {
-                if (contract.profit.isFinite() && contract.bidPrice.isFinite()) updateSettled(record, contract)
-                else dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker settlement response omitted a valid profit or settlement value.", updatedAtMs = now))
-            } else {
-                dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
+            when {
+                contract == null -> {
+                    allMatched = false
+                    dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Contract is not open and supported broker history has not established its outcome.", updatedAtMs = now))
+                }
+                !matchesPersistedBuy(record, contract) -> {
+                    allMatched = false
+                    dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker contract ID or buy transaction ID did not exactly match persisted execution evidence.", updatedAtMs = now))
+                }
+                contract.isSold || contract.status.lowercase() in setOf("sold", "won", "lost", "expired") -> {
+                    if (contract.profit.isFinite() && contract.bidPrice.isFinite() && contract.bidPrice >= 0.0) updateSettled(record, contract)
+                    else {
+                        allMatched = false
+                        dao.update(record.copy(status = DerivExecutionStatus.RECONCILIATION_REQUIRED.name, lastError = "Broker settlement response omitted a valid profit or settlement value.", updatedAtMs = now))
+                    }
+                }
+                else -> dao.update(record.copy(status = DerivExecutionStatus.CONTRACT_OPEN.name, updatedAtMs = now))
             }
         }
-        true
+        allMatched
     }
+
+    private fun matchesPersistedBuy(record: DerivExecutionEntity, broker: DerivContractInfo): Boolean =
+        record.contractId != null && record.contractId > 0L &&
+            record.buyTransactionId != null && record.buyTransactionId > 0L &&
+            broker.contractId == record.contractId &&
+            broker.transactionId > 0L && broker.transactionId == record.buyTransactionId
 
     private suspend fun updateSettled(record: DerivExecutionEntity, contract: DerivContractInfo) {
         dao.update(record.copy(
@@ -233,7 +282,17 @@ class DerivMultiplierExecutor(
                 DerivExecutionFailureKind.PURCHASE_AMBIGUOUS, DerivExecutionFailureKind.RECONCILIATION_REQUIRED, null -> DerivExecutionStatus.EXECUTION_UNKNOWN
             }
             val saved = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId) ?: initial
-            dao.update(saved.copy(status = status.name, requestId = typed?.requestId ?: saved.requestId, proposalId = typed?.proposalId ?: saved.proposalId, submissionStage = typed?.submissionStage?.name ?: saved.submissionStage, lastError = failure?.message?.take(500), updatedAtMs = System.currentTimeMillis()))
+            dao.update(saved.copy(
+                status = status.name,
+                requestId = typed?.requestId ?: saved.requestId,
+                proposalId = typed?.proposalId ?: saved.proposalId,
+                submissionStage = typed?.submissionStage?.name ?: saved.submissionStage,
+                contractId = typed?.contractId ?: saved.contractId,
+                buyTransactionId = typed?.buyTransactionId ?: saved.buyTransactionId,
+                purchasePrice = typed?.purchasePrice ?: saved.purchasePrice,
+                lastError = failure?.message?.take(500),
+                updatedAtMs = System.currentTimeMillis()
+            ))
             Result.failure(Exception("${status.name}: ${failure?.message ?: "Broker execution failed"}"))
         }
     }

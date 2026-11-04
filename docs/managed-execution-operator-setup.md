@@ -45,6 +45,22 @@ MetaQuotes documents a desktop-terminal startup INI that can contain login, serv
 
 A worker is READY only after the genuine EA sends a fresh heartbeat matching broker login, exact server, company, currency and account mode. Start with a dedicated DEMO MASTER profile. LIVE remains separate and requires the existing explicit 15-minute authorization.
 
+## First one-broker DEMO checklist
+
+Do not configure FBS, Exness, HFM and Deriv MT5 together for the first acceptance. The operator must choose one broker and fill in the broker-issued values below from the genuine terminal login screen; this repository deliberately does not guess server names, company identity or credentials.
+
+- Selected broker brand: `FBS` / `EXNESS` / `HFM` / `DERIV` (choose exactly one)
+- Exact broker company shown by the terminal: `________________`
+- Exact DEMO server string: `________________`
+- DEMO master login: entered directly into the app/terminal, never committed or pasted into chat
+- Isolated portable terminal directory: `________________`
+- Worker ID: stable unique `DESTINEDFX_WORKER_ID`, persisted across restarts
+- Bridge origin: real public HTTPS origin, with `/health/ready` returning `status=ready`, `database=ok`, and `managed_execution=configured`
+
+Acceptance order: install the broker's genuine MT5 terminal and MetaEditor on an already-owned Windows PC; create the isolated portable terminal tree; compile and attach the EA; add only the bridge origin to the EA WebRequest allowlist; start the worker with the server-side worker token; verify the authenticated heartbeat shows the exact company, server, login, currency and `DEMO` mode; issue `START`; authorize one smallest-broker-accepted DEMO order; verify broker-confirmed order and SL/TP protection; issue `STOP`; and reconcile the order, position and history from the broker terminal. If any identity, heartbeat, protection, STOP or history check is ambiguous, leave the profile stopped and do not retry the order.
+
+The first checklist can be completed on an already-owned Windows PC for local acceptance. Durable public HTTPS, persistent database/WAL storage, backups and a continuously reachable worker require separately authorized durable infrastructure. Do not use the free Render profile for execution and do not create paid infrastructure without explicit approval.
+
 The 15-minute authorization above is specific to the managed MT5 path. Direct Deriv uses a separate, account/session-bound, process-memory REAL lease that expires after 60 minutes; see the Deriv runbook. Neither authorization policy means a REAL order has been broker-tested.
 
 ## Broker support boundaries

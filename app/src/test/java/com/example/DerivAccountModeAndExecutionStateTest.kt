@@ -6,8 +6,10 @@ import com.example.data.deriv.DerivSubmissionStage
 import com.example.data.deriv.DerivAccountInfo
 import com.example.data.deriv.DerivAccountReadiness
 import com.example.data.deriv.DerivConnectionState
+import com.example.data.deriv.DerivContractInfo
 import com.example.data.deriv.DerivPortfolioSnapshot
 import com.example.data.deriv.DerivRealAuthorizationLease
+import com.example.data.deriv.isMatchingDerivPurchaseEvidence
 import com.example.data.deriv.selectDerivOptionsAccount
 import com.example.security.SecretsManager
 import org.json.JSONArray
@@ -44,6 +46,64 @@ class DerivAccountModeAndExecutionStateTest {
         assertEquals(null, selectDerivOptionsAccount(accounts, "demo"))
         assertEquals("D456", selectDerivOptionsAccount(accounts, "demo", "D456")?.optString("account_id"))
         assertEquals(null, selectDerivOptionsAccount(accounts, "demo", "R456"))
+    }
+
+    @Test
+    fun purchaseEvidenceRequiresMatchingAccountModeCurrencyContractAndTransaction() {
+        val account = DerivAccountInfo(
+            loginId = "D123", currency = "USD", balance = 100.0, email = "",
+            accountType = "demo", demoVerified = true, mode = "demo"
+        )
+        val contract = DerivContractInfo(
+            contractId = 9001L, transactionId = 7001L, symbol = "1HZ100V",
+            contractType = "MULTUP", buyPrice = 1.0, bidPrice = 0.0, profit = 0.0,
+            isSold = false, isValidToSell = true, status = "open", purchaseTime = 1_700_000_000L,
+            expiryTime = null
+        )
+        val snapshot = DerivPortfolioSnapshot(
+            successful = true, accountId = "D123", accountMode = "DEMO",
+            retrievedAtMs = 100_000L, contracts = listOf(contract), currency = "USD"
+        )
+        assertTrue(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7001L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7002L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(accountId = "D999"), account, 9001L, 7001L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(accountMode = "REAL"), account, 9001L, 7001L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(currency = "EUR"), account, 9001L, 7001L, nowMs = 105_000L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7001L, nowMs = 109_001L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7001L, nowMs = 99_999L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 0L, 7001L, nowMs = 105_000L))
+    }
+
+    @Test
+    fun ambiguousFailureRetainsOnlyIdentifiersKnownFromBrokerResponse() {
+        val known = DerivExecutionFailure(
+            kind = DerivExecutionFailureKind.PURCHASE_AMBIGUOUS,
+            message = "portfolio delayed",
+            requestId = 12,
+            proposalId = "proposal-1",
+            submissionStage = DerivSubmissionStage.PURCHASE_SENT,
+            accountId = "D123",
+            accountMode = "DEMO",
+            contractId = 9001L,
+            buyTransactionId = 7001L,
+            purchasePrice = 1.25
+        )
+        assertEquals("D123", known.accountId)
+        assertEquals("DEMO", known.accountMode)
+        assertEquals(9001L, known.contractId)
+        assertEquals(7001L, known.buyTransactionId)
+        assertEquals(1.25, known.purchasePrice!!, 0.0)
+
+        val noBrokerResponse = DerivExecutionFailure(
+            DerivExecutionFailureKind.PURCHASE_AMBIGUOUS,
+            "buy response timed out",
+            requestId = 13,
+            proposalId = "proposal-2",
+            submissionStage = DerivSubmissionStage.PURCHASE_SENT
+        )
+        assertEquals(null, noBrokerResponse.contractId)
+        assertEquals(null, noBrokerResponse.buyTransactionId)
+        assertEquals(null, noBrokerResponse.purchasePrice)
     }
 
     @Test
