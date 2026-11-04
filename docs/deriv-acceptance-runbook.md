@@ -1,6 +1,12 @@
 # DestinedFX Direct Deriv Acceptance Runbook
 
-This runbook covers the Android app's direct Deriv Options WebSocket path and multiplier contracts. It is separate from the managed MT5 runbook. Account connection is not evidence of trading readiness, and code/CI success is not broker acceptance.
+This runbook covers the Android app's direct Deriv Options WebSocket path and multiplier contracts. It is separate from the managed MT5 runbook. Account connection is not evidence of trading readiness, and code/CI success is not broker acceptance. The implementation follows the current Deriv REST and Options WebSocket API documented at https://developers.deriv.com/docs/.
+
+## Current API contract implemented
+
+The app uses a registered numeric `Deriv-App-ID` and a user-entered Personal Access Token as `Authorization: Bearer ...` on `GET /trading/v1/options/accounts` and `POST /trading/v1/options/accounts/{accountId}/otp`. It selects exactly one active account whose `account_type` matches the selected DEMO/REAL mode. The OTP response URL is accepted only when it is a `wss://api.derivws.com/trading/v1/options/ws/demo` or `/real` URL with a nonblank one-time `otp` query parameter; the old v3 `authorize` message and legacy App ID are not used.
+
+The authenticated WebSocket performs fresh balance and portfolio synchronization, active-symbol discovery, live tick subscription, proposal validation, and `buy`. A buy is not reported as accepted from the proposal or buy response alone: the response must contain valid contract and transaction identifiers, then a fresh account-, mode-, currency-, contract-, and transaction-matched portfolio record must be observed. The contract is subscribed through `proposal_open_contract`; sell, expiry/settlement, and `profit_table` history are reconciled before the execution is considered complete. An ambiguous timeout remains unresolved and is never retried blindly.
 
 ## Scope and safety boundary
 
@@ -25,7 +31,7 @@ While any condition is incomplete, the UI reports `SYNCHRONIZING` (or `NOT READY
 2. Create or select a Deriv Personal Access Token with only the scopes required for the tested account and registered app. Enter it directly in the Android app. Start with DEMO mode and select the exact intended account if multiple active DEMO accounts are returned.
 3. Connect and confirm the UI remains `SYNCHRONIZING` until a fresh balance and matching successful portfolio are available. Confirm it reports `DEMO VERIFIED` only after the gateway is `READY`; confirm account ID, DEMO mode, and currency match the broker account. A stale/mismatched snapshot or unresolved prior execution must block readiness.
 4. Keep stake and multiplier at the smallest broker-accepted values and use a supported underlying/contract. Verify the app's proposal is validated before the purchase step. If a required validation, quote, portfolio, balance, or authorization check fails, confirm that no purchase is sent.
-5. For an explicitly approved DEMO order-path test, start the bot once and observe the request lifecycle. Confirm the broker's contract ID, transaction ID, purchase price, and account history match the app. Do not infer a fill from a proposal or a queued request. If the outcome is ambiguous, stop and reconcile; do not retry with a new signal or request ID.
+5. For an explicitly approved DEMO order-path test, start the bot once and observe the request lifecycle. Confirm the broker's contract ID, transaction ID, purchase price, and fresh portfolio record match the app before treating the purchase as accepted. Confirm the open-contract stream, expiry or sell result, and account history match the app. Do not infer a fill from a proposal, a queued request, or a buy response that has not been matched in the portfolio. If the outcome is ambiguous, stop and reconcile; do not retry with a new signal or request ID.
 6. Stop the bot. Reconcile active contracts and settlements against the Deriv account history, then confirm the app no longer submits entries while disconnected, stale, or unresolved. Retain only redacted evidence and revoke the test token when the authorized operator's test window ends.
 
 ## Daily loss guard

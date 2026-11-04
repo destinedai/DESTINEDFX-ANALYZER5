@@ -6,8 +6,10 @@ import com.example.data.deriv.DerivSubmissionStage
 import com.example.data.deriv.DerivAccountInfo
 import com.example.data.deriv.DerivAccountReadiness
 import com.example.data.deriv.DerivConnectionState
+import com.example.data.deriv.DerivContractInfo
 import com.example.data.deriv.DerivPortfolioSnapshot
 import com.example.data.deriv.DerivRealAuthorizationLease
+import com.example.data.deriv.isMatchingDerivPurchaseEvidence
 import com.example.data.deriv.selectDerivOptionsAccount
 import com.example.security.SecretsManager
 import org.json.JSONArray
@@ -44,6 +46,29 @@ class DerivAccountModeAndExecutionStateTest {
         assertEquals(null, selectDerivOptionsAccount(accounts, "demo"))
         assertEquals("D456", selectDerivOptionsAccount(accounts, "demo", "D456")?.optString("account_id"))
         assertEquals(null, selectDerivOptionsAccount(accounts, "demo", "R456"))
+    }
+
+    @Test
+    fun purchaseEvidenceRequiresMatchingAccountModeCurrencyContractAndTransaction() {
+        val account = DerivAccountInfo(
+            loginId = "D123", currency = "USD", balance = 100.0, email = "",
+            accountType = "demo", demoVerified = true, mode = "demo"
+        )
+        val contract = DerivContractInfo(
+            contractId = 9001L, transactionId = 7001L, symbol = "1HZ100V",
+            contractType = "MULTUP", buyPrice = 1.0, bidPrice = 0.0, profit = 0.0,
+            isSold = false, isValidToSell = true, status = "open", purchaseTime = 1_700_000_000L,
+            expiryTime = null
+        )
+        val snapshot = DerivPortfolioSnapshot(
+            successful = true, accountId = "D123", accountMode = "DEMO",
+            retrievedAtMs = System.currentTimeMillis(), contracts = listOf(contract), currency = "USD"
+        )
+        assertTrue(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7001L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot, account, 9001L, 7002L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(accountId = "D999"), account, 9001L, 7001L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(accountMode = "REAL"), account, 9001L, 7001L))
+        assertFalse(isMatchingDerivPurchaseEvidence(snapshot.copy(currency = "EUR"), account, 9001L, 7001L))
     }
 
     @Test

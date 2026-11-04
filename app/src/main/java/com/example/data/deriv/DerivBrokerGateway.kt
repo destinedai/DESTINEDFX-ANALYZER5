@@ -54,6 +54,20 @@ internal fun selectDerivOptionsAccount(accounts: org.json.JSONArray, requestedMo
 internal fun selectDerivDemoOptionsAccount(accounts: org.json.JSONArray): JSONObject? =
     selectDerivOptionsAccount(accounts, "demo")
 
+internal fun isMatchingDerivPurchaseEvidence(
+    snapshot: DerivPortfolioSnapshot?,
+    account: DerivAccountInfo?,
+    contractId: Long,
+    transactionId: Long
+): Boolean {
+    if (snapshot == null || account == null || !snapshot.successful ||
+        snapshot.accountId != account.loginId ||
+        snapshot.accountMode != account.mode.uppercase() ||
+        !snapshot.currency.equals(account.currency, ignoreCase = true) ||
+        contractId <= 0L || transactionId <= 0L) return false
+    return snapshot.contracts.singleOrNull { it.contractId == contractId }?.transactionId == transactionId
+}
+
 /**
  * Real Broker Gateway for Deriv.
  * Performs Deriv DEMO/REAL authorization, balance queries, and open-contract monitoring.
@@ -535,6 +549,7 @@ class DerivBrokerGateway(
 
         val json = JSONObject().apply {
             put("ticks", symbol)
+            put("subscribe", 1)
             put("req_id", reqId)
         }
         val sent = webSocket?.send(json.toString()) ?: false
@@ -601,7 +616,6 @@ class DerivBrokerGateway(
         pendingRequests[reqId] = deferred
         val payload = JSONObject().apply {
             put("active_symbols", "brief")
-            put("contract_type", org.json.JSONArray().put(product.contractType))
             put("req_id", reqId)
         }
         if (webSocket?.send(payload.toString()) != true) { pendingRequests.remove(reqId); return false }
@@ -804,7 +818,17 @@ class DerivBrokerGateway(
                 return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_AMBIGUOUS, "PURCHASE_AMBIGUOUS: buy response lacked valid contract, transaction, price, or proposal identity.", buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT))
             }
             subscribeOpenContract(contractId)
-            fetchPortfolio()
+            if (!awaitBrokerContractConfirmation(contractId, txId)) {
+                return@withContext Result.failure(
+                    DerivExecutionFailure(
+                        DerivExecutionFailureKind.PURCHASE_AMBIGUOUS,
+                        "PURCHASE_AMBIGUOUS: broker buy confirmation was received but a fresh matching portfolio record was not observed; do not retry.",
+                        buyReqId,
+                        proposalId,
+                        DerivSubmissionStage.PURCHASE_SENT
+                    )
+                )
+            }
             Result.success(DerivBuyResult(contractId, txId, boughtPrice, proposalId, buyReqId))
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -814,6 +838,16 @@ class DerivBrokerGateway(
         } finally {
             pendingRequests.remove(buyReqId)
         }
+    }
+
+    private suspend fun awaitBrokerContractConfirmation(contractId: Long, transactionId: Long): Boolean {
+        repeat(3) { attempt ->
+            fetchPortfolio()
+            val snapshot = _portfolioSnapshot.value
+            if (isMatchingDerivPurchaseEvidence(snapshot, _accountInfo.value, contractId, transactionId)) return true
+            if (attempt < 2) delay(500L)
+        }
+        return false
     }
 
     suspend fun sellContract(contractId: Long): Result<DerivSellResult> = withContext(Dispatchers.IO) {

@@ -52,7 +52,6 @@ data class DerivActiveSymbol(
  * Uses the public active_symbols, ticks, and ticks_history endpoints for market data.
  */
 class DerivMarketDataGateway(
-    @Suppress("UNUSED_PARAMETER") private val appId: String = "1089",
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
