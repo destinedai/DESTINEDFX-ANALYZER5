@@ -72,7 +72,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "runtime configuration applied": "ArrayCopy(g_symbols,syms)" in source and "g_maxConcurrent=concurrent" in source and "g_dailyLossPercent=daily" in source,
         "risk validated without clamping": "risk<=0||risk>1" in source and "g_riskPercent=risk" in source,
         "processed command retains original ack": "Ack(id,g_ackOutcomes[ai],g_ackMessages[ai])" in source and "g_ackOutcomes[n]=outcome" in source,
-        "persistent daily equity": "GlobalVariableSet(key,AccountInfoDouble(ACCOUNT_EQUITY))" in source,
+        "persistent daily equity": "GlobalVariableSet(equityKey,equity)" in source and "AccountInfoDouble(ACCOUNT_EQUITY)" in source,
         "rates readiness": "CopyRates(syms[si],mtf,0,80,hr)<50" in source and "MarketReady(syms[si],mtf)" in source,
         "trade permission readiness": "!MQLInfoInteger(MQL_TRADE_ALLOWED)||!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)" in source and "!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)" in source,
         "structured signal object": "LastSignalJson()" in source and '"last_signal\\":%s' in source and "ORDER_ACCEPTED" in source and "REJECTED" in source,
