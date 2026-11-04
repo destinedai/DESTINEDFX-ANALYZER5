@@ -227,6 +227,9 @@ def managed_pair():
     ah={'Authorization':'Bearer '+p['app_token']}
     return p,ah
 
+def fbs_terminal_account(**overrides):
+    return {**ACCOUNT,'company':'FBS Markets Inc.',**overrides}
+
 def test_managed_missing_configuration(monkeypatch):
     monkeypatch.delenv('CREDENTIALS_FERNET_KEY',raising=False)
     monkeypatch.delenv('WORKER_TOKEN',raising=False)
@@ -246,7 +249,7 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     assert client.post('/v1/worker/jobs/claim',json={'worker_id':'w1'}).status_code==401
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
-    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
+    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
 
 def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypatch):
@@ -417,11 +420,11 @@ def test_managed_tenant_auth_and_master_readiness_gate(monkeypatch):
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker'}).json()
     assert client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker','status':'AUTHENTICATING'}).status_code==200
     assert client.post('/v1/app/commands',headers=ah,json=command_req()).status_code==409
-    wrong_account={**ACCOUNT,'login':'999999','server':'Different-Server'}
+    wrong_account=fbs_terminal_account(login='999999',server='Different-Server')
     mismatch=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'wrong-account','account':wrong_account})
     assert mismatch.status_code==401
-    assert client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':ACCOUNT}).status_code==200
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'again','account':ACCOUNT})
+    assert client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':fbs_terminal_account()}).status_code==200
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'again','account':fbs_terminal_account()})
     assert terminal.status_code==401
     # The app state cannot report READY without an actual fresh heartbeat.
     assert client.get('/v1/app/state',headers=ah).json()['managed_execution']['status']!='READY'
@@ -446,7 +449,7 @@ def test_ready_requires_fresh_actual_heartbeat_and_worker_ready(monkeypatch):
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':ACCOUNT}).json()
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
     client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
     state=client.get('/v1/app/state',headers=ah).json()
@@ -470,7 +473,7 @@ def test_ready_job_is_downgraded_when_heartbeat_goes_stale(monkeypatch):
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-stale'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-stale','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'stale-terminal','account':ACCOUNT}).json()
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'stale-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
     client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-stale',headers=wh).json()['status']=='READY'
@@ -485,7 +488,7 @@ def test_ready_job_recovers_within_grace_and_fails_after_recovery_deadline(monke
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-recovery'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-recovery','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'recovery-terminal','account':ACCOUNT}).json()
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'recovery-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
     client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='READY'
@@ -504,7 +507,7 @@ def test_error_heartbeat_blocks_start_but_stop_remains_available(monkeypatch):
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-error'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-error','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'error-terminal','account':ACCOUNT}).json()
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'error-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
     client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='ERROR',last_error='EA failed'))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-error',headers=wh).json()['status']=='AUTHENTICATING'
@@ -517,7 +520,7 @@ def test_investor_can_be_ready_for_read_only_but_never_start(monkeypatch):
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-ro'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-ro','status':'AUTHENTICATING'})
-    investor_account={**ACCOUNT,'login':'77','server':'ReadOnly'}
+    investor_account=fbs_terminal_account(login='77',server='ReadOnly')
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed-ro','account':investor_account}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
     assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(trade_allowed=False,account={**investor_account,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100})).status_code==200
@@ -603,7 +606,7 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-live'}).json()
     assert client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-live','status':'AUTHENTICATING'}).status_code==200
-    actual={'login':login,'server':server,'company':'Live Broker','currency':'USD','account_mode':'LIVE'}
+    actual={'login':login,'server':server,'company':'FBS Markets Inc.','currency':'USD','account_mode':'LIVE'}
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'live-terminal','account':actual})
     assert terminal.status_code==200
     th={'Authorization':'Bearer '+terminal.json()['terminal_token']}
