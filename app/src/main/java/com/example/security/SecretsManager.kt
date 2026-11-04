@@ -461,8 +461,10 @@ class SecretsManager internal constructor(
     private fun derivDailyRiskPrefix(accountId: String, mode: String): String {
         val normalizedMode = mode.trim().uppercase()
         require(normalizedMode in setOf("DEMO", "REAL")) { "Deriv account mode must be DEMO or REAL" }
-        val safeAccount = accountId.trim().replace(Regex("[^A-Za-z0-9_-]"), "_").take(64)
-        require(safeAccount.isNotBlank()) { "Deriv account ID is required" }
+        val safeAccount = accountId.trim()
+        require(safeAccount.matches(Regex("[A-Za-z0-9_-]{1,64}"))) {
+            "Deriv account ID must be a stable broker identifier without separators"
+        }
         return "deriv_daily_risk_${normalizedMode}_${safeAccount}"
     }
 
