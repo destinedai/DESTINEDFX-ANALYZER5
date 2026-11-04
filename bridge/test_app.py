@@ -240,6 +240,48 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','consent':True}).status_code==409
 
+def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypatch):
+    managed_env(monkeypatch)
+    p,ah=managed_pair()
+    response=client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'556677','server':'FBS-Demo-Server','password':'demo-secret',
+        'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+    })
+    assert response.status_code==202
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'brand-worker'}).json()
+    assert job['pairing_code']
+    wrong={**ACCOUNT,'login':'556677','server':'FBS-Demo-Server','company':'Exness Technologies Ltd.'}
+    rejected=client.post('/v1/terminal/claim',json={
+        'pairing_code':job['pairing_code'],'terminal_instance_id':'wrong-brand','account':wrong
+    })
+    assert rejected.status_code==401
+    correct={**wrong,'company':'FBS Markets Inc.'}
+    accepted=client.post('/v1/terminal/claim',json={
+        'pairing_code':job['pairing_code'],'terminal_instance_id':'correct-brand','account':correct
+    })
+    assert accepted.status_code==200
+    state=client.get('/v1/app/state',headers=ah).json()
+    assert state['managed_execution']['broker_brand']=='FBS'
+
+def test_mt5_broker_company_aliases_are_verified_not_guessed():
+    assert app.broker_company_matches('FBS','FBS Markets Inc.')
+    assert app.broker_company_matches('EXNESS','Exness Technologies Ltd')
+    assert app.broker_company_matches('HFM','HF Markets (SV) Ltd')
+    assert app.broker_company_matches('DERIV','Deriv Limited')
+    assert not app.broker_company_matches('FBS','Exness Technologies Ltd')
+    assert not app.broker_company_matches('EXNESS','HF Markets (SV) Ltd')
+    assert not app.broker_company_matches('DERIV','Demo Broker')
+
+def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
+    managed_env(monkeypatch)
+    p,ah=managed_pair()
+    payload={'login':'123','server':'S','password':'secret','access_type':'MASTER',
+             'account_mode':'DEMO','broker_brand':'UNSUPPORTED','consent':True}
+    assert client.post('/v1/app/managed-account',headers=ah,json=payload).status_code==422
+    payload['broker_brand']='DERIV'
+    assert client.post('/v1/app/managed-account',headers=ah,json=payload).status_code==202
+
 def test_managed_tenant_auth_and_master_readiness_gate(monkeypatch):
     managed_env(monkeypatch)
     p,ah=managed_pair(); other,oh=managed_pair()

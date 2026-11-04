@@ -85,6 +85,41 @@ class SecretsManagerBridgePendingTest {
         assertFalse(manager.getMT5BridgeAppToken("LIVE").isNotBlank())
     }
 
+    @Test fun brokerQualifiedMt5ProfilesKeepTokensCredentialsAndPendingCommandsIndependent() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+
+        assertTrue(manager.saveManagedMT5AccountProfile("FBS_DEMO", "111", "FBS-Demo", "MASTER", "fbs-pw", true))
+        assertTrue(manager.saveManagedMT5AccountProfile("EXNESS_DEMO", "222", "Exness-Demo", "MASTER", "exness-pw", true))
+        assertTrue(manager.saveManagedMT5AccountProfile("HFM_LIVE", "333", "HFM-Live", "MASTER", "hfm-pw", true))
+
+        assertEquals("111", manager.getManagedMT5AccountLogin("FBS_DEMO"))
+        assertEquals("222", manager.getManagedMT5AccountLogin("EXNESS_DEMO"))
+        assertEquals("333", manager.getManagedMT5AccountLogin("HFM_LIVE"))
+        assertEquals("exness-pw", manager.getManagedMT5AccountPassword("EXNESS_DEMO"))
+        assertTrue(manager.saveMT5BridgeAccountAppToken("FBS_DEMO", "fbs-token"))
+        assertTrue(manager.saveMT5BridgeAccountAppToken("EXNESS_DEMO", "exness-token"))
+        assertTrue(manager.saveMT5BridgeAccountPendingCommand("fbs-id", "STOP", "FBS_DEMO"))
+        assertTrue(manager.saveMT5BridgeAccountPendingCommand("exness-id", "START", "EXNESS_DEMO"))
+        assertEquals("fbs-token", manager.getMT5BridgeAccountAppToken("FBS_DEMO"))
+        assertEquals("exness-token", manager.getMT5BridgeAccountAppToken("EXNESS_DEMO"))
+        assertEquals("fbs-id", manager.getMT5BridgeAccountPendingCommandId("FBS_DEMO"))
+        assertEquals("exness-id", manager.getMT5BridgeAccountPendingCommandId("EXNESS_DEMO"))
+
+        manager.clearMT5BridgeAccountAppToken("EXNESS_DEMO")
+        manager.clearMT5BridgeAccountPendingCommand("EXNESS_DEMO")
+        assertEquals("", manager.getMT5BridgeAccountAppToken("EXNESS_DEMO"))
+        assertEquals("", manager.getMT5BridgeAccountPendingCommandId("EXNESS_DEMO"))
+        assertEquals("fbs-token", manager.getMT5BridgeAccountAppToken("FBS_DEMO"))
+        assertEquals("fbs-id", manager.getMT5BridgeAccountPendingCommandId("FBS_DEMO"))
+
+        assertTrue(manager.saveSelectedMT5BrokerBrand("EXNESS"))
+        assertEquals("EXNESS", manager.getSelectedMT5BrokerBrand())
+        assertTrue(manager.saveSelectedMT5BrokerBrand("DERIV"))
+        assertEquals("DERIV", manager.getSelectedMT5BrokerBrand())
+        assertFalse(manager.saveSelectedMT5BrokerBrand("UNKNOWN"))
+    }
+
     @Test fun managedMt5ProfileRefusesUnavailableStorageAndDefaultsPasswordSavingOff() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val unavailable = SecretsManager(context) { throw IllegalStateException("simulated Android Keystore failure") }

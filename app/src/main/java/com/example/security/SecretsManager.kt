@@ -303,6 +303,120 @@ class SecretsManager internal constructor(
         }
     }
     
+    fun getSelectedMT5BrokerBrand(): String =
+        (prefs.getString("mt5_selected_broker_brand", "FBS") ?: "FBS").uppercase()
+            .takeIf { it in setOf("FBS", "EXNESS", "HFM", "DERIV") } ?: "FBS"
+
+    fun saveSelectedMT5BrokerBrand(brand: String): Boolean {
+        val normalized = brand.trim().uppercase()
+        if (!isSecureStorageAvailable || normalized !in setOf("FBS", "EXNESS", "HFM", "DERIV")) return false
+        return prefs.edit().putString("mt5_selected_broker_brand", normalized).commit()
+    }
+
+    /**
+     * Broker-qualified MT5 profiles keep each broker/mode pairing independent.
+     * Example keys: FBS_DEMO, EXNESS_LIVE, HFM_DEMO. Legacy DEMO/LIVE
+     * methods below remain available for existing callers, but new broker
+     * connections must use these account-scoped methods.
+     */
+    private fun mt5AccountProfile(profileKey: String): String =
+        profileKey.trim().uppercase().also {
+            require(it.matches(Regex("[A-Z0-9_-]{1,80}"))) { "Invalid broker account profile key" }
+        }
+
+    private fun mt5AccountKey(kind: String, profileKey: String): String =
+        "mt5_account_${mt5AccountProfile(profileKey).lowercase()}_${kind}"
+
+    fun saveMT5BridgeAccountAppToken(profileKey: String, value: String): Boolean =
+        isSecureStorageAvailable && value.isNotBlank() &&
+            prefs.edit().putString(mt5AccountKey("bridge_token", profileKey), value).commit()
+
+    fun getMT5BridgeAccountAppToken(profileKey: String): String =
+        if (isSecureStorageAvailable) prefs.getString(mt5AccountKey("bridge_token", profileKey), "") ?: "" else ""
+
+    fun clearMT5BridgeAccountAppToken(profileKey: String): Boolean =
+        isSecureStorageAvailable && prefs.edit().remove(mt5AccountKey("bridge_token", profileKey)).commit()
+
+    fun saveManagedMT5AccountProfile(
+        profileKey: String, login: String, server: String, accessType: String,
+        password: String, savePassword: Boolean = false
+    ): Boolean {
+        if (!isSecureStorageAvailable || !login.matches(Regex("[0-9]{1,20}")) ||
+            server.isBlank() || server.any { it.code < 32 || it.code == 127 } ||
+            accessType !in setOf("MASTER", "INVESTOR") || (savePassword && password.isBlank())
+        ) return false
+        val prefix = mt5AccountKey("profile", profileKey).removeSuffix("_profile")
+        val edit = prefs.edit()
+            .putString("${prefix}_login", login.trim())
+            .putString("${prefix}_server", server.trim())
+            .putString("${prefix}_access", accessType)
+            .putBoolean("${prefix}_save_password", savePassword)
+        if (savePassword) edit.putString("${prefix}_password", password)
+        else edit.remove("${prefix}_password")
+        return edit.commit()
+    }
+
+    private fun mt5AccountValue(kind: String, profileKey: String): String =
+        if (isSecureStorageAvailable) prefs.getString(mt5AccountKey(kind, profileKey), "") ?: "" else ""
+
+    fun getManagedMT5AccountLogin(profileKey: String): String = mt5AccountValue("login", profileKey)
+    fun getManagedMT5AccountServer(profileKey: String): String = mt5AccountValue("server", profileKey)
+    fun getManagedMT5AccountAccessType(profileKey: String): String =
+        if (isSecureStorageAvailable) prefs.getString(mt5AccountKey("access", profileKey), "MASTER") ?: "MASTER" else "MASTER"
+    fun getManagedMT5AccountPassword(profileKey: String): String = mt5AccountValue("password", profileKey)
+    fun isManagedMT5AccountPasswordSaveEnabled(profileKey: String): Boolean =
+        isSecureStorageAvailable && prefs.getBoolean(mt5AccountKey("save_password", profileKey), false)
+
+    fun clearManagedMT5AccountProfile(profileKey: String): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val prefix = mt5AccountKey("profile", profileKey).removeSuffix("_profile")
+        return prefs.edit().remove("${prefix}_login").remove("${prefix}_server")
+            .remove("${prefix}_access").remove("${prefix}_password")
+            .remove("${prefix}_save_password").commit()
+    }
+
+    fun saveMT5BridgeAccountPendingCommand(requestId: String, action: String, profileKey: String): Boolean {
+        if (!isSecureStorageAvailable || requestId.isBlank() || action.isBlank()) return false
+        val prefix = mt5AccountKey("pending", profileKey).removeSuffix("_pending")
+        return prefs.edit().putString("${prefix}_pending_id", requestId)
+            .putString("${prefix}_pending_action", action).commit()
+    }
+
+    fun getMT5BridgeAccountPendingCommandId(profileKey: String): String =
+        mt5AccountValue("pending_id", profileKey)
+    fun getMT5BridgeAccountPendingCommandAction(profileKey: String): String =
+        mt5AccountValue("pending_action", profileKey)
+
+    fun clearMT5BridgeAccountPendingCommand(profileKey: String): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val prefix = mt5AccountKey("pending", profileKey).removeSuffix("_pending")
+        return prefs.edit().remove("${prefix}_pending_id").remove("${prefix}_pending_action").commit()
+    }
+
+    fun saveMT5BridgeAccountSafetyStop(
+        originalId: String, originalAction: String, stopId: String, profileKey: String
+    ): Boolean {
+        if (!isSecureStorageAvailable || originalId.isBlank() || originalAction.isBlank() || stopId.isBlank()) return false
+        val prefix = mt5AccountKey("safety", profileKey).removeSuffix("_safety")
+        return prefs.edit().putString("${prefix}_safety_original_id", originalId)
+            .putString("${prefix}_safety_original_action", originalAction)
+            .putString("${prefix}_safety_stop_id", stopId).commit()
+    }
+
+    fun getMT5BridgeAccountSafetyOriginalId(profileKey: String): String =
+        mt5AccountValue("safety_original_id", profileKey)
+    fun getMT5BridgeAccountSafetyOriginalAction(profileKey: String): String =
+        mt5AccountValue("safety_original_action", profileKey)
+    fun getMT5BridgeAccountSafetyStopId(profileKey: String): String =
+        mt5AccountValue("safety_stop_id", profileKey)
+
+    fun clearMT5BridgeAccountSafetyStop(profileKey: String): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val prefix = mt5AccountKey("safety", profileKey).removeSuffix("_safety")
+        return prefs.edit().remove("${prefix}_safety_original_id")
+            .remove("${prefix}_safety_original_action").remove("${prefix}_safety_stop_id").commit()
+    }
+
     fun getSupabaseUrl(): String = ""
     fun getSupabaseAnonKey(): String = ""
     fun getSupabaseAccessToken(): String = ""

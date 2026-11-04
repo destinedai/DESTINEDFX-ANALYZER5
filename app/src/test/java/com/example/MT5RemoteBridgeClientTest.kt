@@ -32,6 +32,43 @@ class MT5RemoteBridgeClientTest {
         assertTrue(failure?.message.orEmpty().contains("Secure storage is unavailable"))
     }
 
+    @Test fun allFourRequestedBrokerBrandsAreValidForTheirMT5AccountRoute() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
+        listOf("FBS", "EXNESS", "DERIV", "HFM").forEach { brand ->
+            val client = MT5RemoteBridgeClient(
+                secrets, "${brand}_DEMO", { true }, accountMode = "DEMO", brokerBrand = brand
+            )
+            assertEquals(brand, client.brokerBrand)
+            assertEquals("DEMO", client.accountMode)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient(secrets, "UNKNOWN_DEMO", { true }, accountMode = "DEMO", brokerBrand = "UNKNOWN")
+        }
+    }
+
+    @Test fun brokerQualifiedProfileSeparatesStorageNamespaceFromVerifiedAccountMode() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
+        val client = MT5RemoteBridgeClient(
+            secrets,
+            "EXNESS_DEMO",
+            { true },
+            accountMode = "DEMO",
+            brokerBrand = "EXNESS"
+        )
+        assertEquals("EXNESS_DEMO", client.profile)
+        assertEquals("DEMO", client.accountMode)
+        assertEquals("EXNESS", client.brokerBrand)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient(secrets, "EXNESS_DEMO", { true }, accountMode = "PAPER", brokerBrand = "EXNESS")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient(secrets, "DERIV_DEMO", { true }, accountMode = "DEMO", brokerBrand = "UNKNOWN")
+        }
+    }
+
     @Test fun riskMustBeFiniteAndWithinTheExactSupportedInterval() {
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(0.25))
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(1.0))
