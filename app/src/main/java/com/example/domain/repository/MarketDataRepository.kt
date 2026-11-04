@@ -16,5 +16,7 @@ interface MarketDataRepository {
     val candleFetchErrors: StateFlow<Map<String, String>>
     val selectedApiSource: MutableStateFlow<String>
     val candleSources: Map<String, String> get() = emptyMap()
+    /** Provider-fetch timestamp for each current/cached candle snapshot, keyed like candleSources. */
+    val candleRetrievedAtMs: Map<String, Long> get() = emptyMap()
     fun updateLiveQuoteFromFeed(symbol: String, price: Double) {}
 }

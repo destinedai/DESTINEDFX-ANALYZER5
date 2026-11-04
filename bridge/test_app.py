@@ -1,6 +1,10 @@
 import os, time, uuid
+from concurrent.futures import ThreadPoolExecutor
+import pytest
+from pydantic import ValidationError
 os.environ['ALLOW_LOOPBACK_HTTP']='true'
 os.environ['BRIDGE_DB_PATH']='/tmp/destinedfx-bridge-test.sqlite3'
+os.environ['PAIR_RATE_LIMIT']='1000'
 try: os.unlink(os.environ['BRIDGE_DB_PATH'])
 except FileNotFoundError: pass
 from fastapi.testclient import TestClient
@@ -14,6 +18,141 @@ def claimed(p):
 def heartbeat_data(**kwargs):
     now_ms=int(time.time()*1000)
     x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo'},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[]}; x.update(kwargs); return x
+
+def analysis_payload(request_id='analysis-1'):
+    return {'request_id':request_id,'symbol':'EUR/USD','timeframe':'M1','strategy_id':'smc-confluence-1.0.0'}
+
+def provider_payload(symbol='EUR/USD',timeframe='M1',quote_age_ms=0):
+    now_ms=int(time.time()*1000)-quote_age_ms
+    candles=[]
+    for index in range(30):
+        close=100.0+index*0.2
+        candles.append({'timestamp_ms':now_ms-(30-index)*60_000,'open':close-0.05,'high':close+0.30,'low':close-0.30,'close':close,'volume':100.0,'complete':True})
+    previous=candles[-2]
+    candles[-1]={'timestamp_ms':candles[-1]['timestamp_ms'],'open':previous['high']+0.2,'high':previous['high']+0.6,'low':previous['high']+0.1,'close':previous['high']+0.5,'volume':100.0,'complete':True}
+    return {'provider_id':'fixture-provider','symbol':symbol,'timeframe':timeframe,'quote':{'symbol':symbol,'bid':float(candles[-1]['close']-0.0001),'ask':float(candles[-1]['close']+0.0001),'timestamp_ms':now_ms},'candles':candles}
+
+class ProviderResponse:
+    headers=type('Headers',(),{'get_content_type':lambda self:'application/json'})()
+    def __init__(self,payload): self.payload=payload
+    def __enter__(self): return self
+    def __exit__(self,*args): return False
+    def read(self,_limit): return app.json.dumps(self.payload).encode()
+class ProviderOpener:
+    def __init__(self,payload): self.payload=payload
+    def open(self,request,timeout): return ProviderResponse(self.payload)
+
+def configure_provider(monkeypatch,payload=None):
+    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
+    monkeypatch.setenv('ANALYSIS_PROVIDER_URL','https://provider.destinedfx.com')
+    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(payload or provider_payload()))
+
+def test_authenticated_analysis_is_typed_non_executable_and_idempotent(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload()
+    first=client.post('/v1/app/analysis',headers=headers,json=payload)
+    assert first.status_code==200
+    body=first.json(); assert body['state']=='CANDIDATE' and body['executable'] is False
+    assert body['source']=='fixture-provider' and body['strategy_version']=='python-smc-confluence-1.0.0'
+    replay=client.post('/v1/app/analysis',headers=headers,json=payload)
+    assert replay.status_code==200 and replay.json()==body
+    changed={**payload,'symbol':'GBP/USD'}
+    assert client.post('/v1/app/analysis',headers=headers,json=changed).status_code==409
+
+
+def test_analysis_response_model_rejects_directionally_invalid_candidate_geometry():
+    invalid = {
+        'symbol':'EUR/USD','strategy_id':'smc-confluence-1.0.0','strategy_version':'python-smc-confluence-1.0.0',
+        'timeframe':'M1','state':'CANDIDATE','direction':'LONG','entry':1.0,'stop_loss':1.1,
+        'take_profit':1.2,'reward_to_risk':2.0,'confidence_score':0,'score_basis':['rule-condition match only'],
+        'evidence':['BOS_UP_CLOSED_CANDLE'],'reason':'candidate','rejection_reasons':[],'source':'fixture-provider',
+        'candle_timestamp_ms':1,'provider_retrieved_at_ms':1,'quote_bid':1.0,'quote_ask':1.0001,
+        'quote_retrieved_at_ms':1,'quote_source':'fixture-provider','server_now_ms':1,'executable':False,
+    }
+    with pytest.raises(ValidationError, match='Candidate stop/target geometry is invalid'):
+        app.AnalysisResponse.model_validate(invalid)
+
+def test_concurrent_identical_analysis_retries_replay_one_stored_response(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('concurrent-analysis')
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        responses=list(pool.map(lambda _: client.post('/v1/app/analysis',headers=headers,json=payload), range(8)))
+    assert all(r.status_code==200 for r in responses)
+    bodies=[r.json() for r in responses]
+    assert all(body==bodies[0] for body in bodies)
+
+def test_analysis_fails_closed_for_stale_future_override_and_quote_mismatch(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    stale=analysis_payload('stale-analysis'); monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(provider_payload(quote_age_ms=app.ANALYSIS_QUOTE_MAX_AGE_MS+1)))
+    assert client.post('/v1/app/analysis',headers=headers,json=stale).status_code==503
+    future={**analysis_payload('future-analysis'),'now_ms':int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000}
+    assert client.post('/v1/app/analysis',headers=headers,json=future).status_code==422
+    override={**analysis_payload('override-analysis'),'max_candle_age_ms':604_800_000}
+    assert client.post('/v1/app/analysis',headers=headers,json=override).status_code==422
+    mismatch=analysis_payload('quote-mismatch'); bad=provider_payload(); bad['quote']['bid']*=2; bad['quote']['ask']*=2
+    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler,bad=bad: ProviderOpener(bad))
+    assert client.post('/v1/app/analysis',headers=headers,json=mismatch).status_code==503
+
+def test_analysis_requires_app_token_trusted_source_and_supported_timeframe(monkeypatch):
+    payload=analysis_payload()
+    assert client.post('/v1/app/analysis',json=payload).status_code==401
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    configure_provider(monkeypatch)
+    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','other-provider')
+    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==503
+    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
+    assert client.post('/v1/app/analysis',headers=headers,json={**payload,'timeframe':'INVALID'}).status_code==422
+    assert client.post('/v1/app/analysis',headers=headers,json={**payload,'expected_interval_ms':60_000}).status_code==422
+
+def test_client_cannot_claim_provider_identity_with_fabricated_candles(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload={**analysis_payload('fabricated'), 'candles':provider_payload()['candles']}
+    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==422
+
+def test_identical_replay_survives_provider_expiry_but_conflict_is_409(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('replay-after-expiry')
+    first=client.post('/v1/app/analysis',headers=headers,json=payload); assert first.status_code==200
+    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: (_ for _ in ()).throw(TimeoutError('provider expired')))
+    replay=client.post('/v1/app/analysis',headers=headers,json=payload)
+    assert replay.status_code==200 and replay.json()==first.json()
+    conflict={**payload,'strategy_id':'wyckoff-schematics'}
+    assert client.post('/v1/app/analysis',headers=headers,json=conflict).status_code==409
+
+def test_concurrent_conflicting_payloads_have_one_winner(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    left=analysis_payload('concurrent-conflict'); right={**left,'strategy_id':'wyckoff-schematics'}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses=list(pool.map(lambda body: client.post('/v1/app/analysis',headers=headers,json=body), (left,right)))
+    assert sorted(r.status_code for r in responses)==[200,409]
+
+def test_provider_quote_identity_spread_precision_and_gap_are_fail_closed(monkeypatch):
+    configure_provider(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('provider-adversarial')
+    other_instrument=provider_payload(symbol='GBP/USD')
+    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(other_instrument))
+    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==503
+    cases=[]
+    bad_provider=provider_payload(); bad_provider['provider_id']='other-provider'; cases.append(bad_provider)
+    future_quote=provider_payload(); future_quote['quote']['timestamp_ms']=int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000; cases.append(future_quote)
+    wide=provider_payload(); wide['quote']['ask']=wide['quote']['bid']+1; cases.append(wide)
+    imprecise=provider_payload(); imprecise['quote']['bid']=imprecise['quote']['bid']+0.0000015; cases.append(imprecise)
+    intraday_gap=provider_payload(); intraday_gap['candles'][10]['timestamp_ms']+=3_600_000; cases.append(intraday_gap)
+    for index,bad in enumerate(cases):
+        bad_request={**payload,'request_id':f'provider-adversarial-{index}'}
+        monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler,bad=bad: ProviderOpener(bad))
+        assert client.post('/v1/app/analysis',headers=headers,json=bad_request).status_code==503
+
+def test_provider_endpoint_validation_allows_path_but_rejects_unsafe_targets():
+    assert app.validate_provider_url('https://data.example-provider.com/v1/quotes') == 'https://data.example-provider.com/v1/quotes'
+    assert app.validate_provider_url('http://data.example-provider.com/v1/quotes') is None
+    assert app.validate_provider_url('https://127.0.0.1/v1/quotes') is None
+    assert app.validate_provider_url('https://data.example-provider.com/v1/quotes?token=secret') is None
+    handler=app._NoRedirectHandler()
+    with __import__('pytest').raises(app.urllib.error.HTTPError):
+        handler.redirect_request(type('Req',(),{'full_url':'https://data.example-provider.com/v1/quotes'})(),None,302,'Found',{},'https://other.example-provider.com')
 def test_pairing_single_use_and_token_auth_boundaries():
     p=pair(); assert client.get('/v1/app/state',headers={'Authorization':'Bearer '+p['app_token']}).json()['pairing_status']=='PAIRING'; t=claimed(p)
     assert client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'another','account':ACCOUNT}).status_code==401
@@ -44,6 +183,15 @@ def test_duplicate_request_ids_delivery_ack_and_replay():
     assert state['last_command']['request_id']==req['request_id'] and state['last_command']['status']=='ACKNOWLEDGED'
     assert state['last_command']['outcome']=='APPLIED'
     assert client.get('/v1/terminal/commands?cursor='+str(delivered['cursor']),headers=th).json()['commands']==[]
+
+def test_zero_balance_and_equity_heartbeat_remains_visible_after_account_blowout():
+    p=pair(); t=claimed(p); th={'Authorization':'Bearer '+t['terminal_token']}
+    blown=heartbeat_data(account={**ACCOUNT,'balance':0,'equity':0,'margin':0,'free_margin':0,'margin_level':0})
+    response=client.post('/v1/terminal/heartbeat',json=blown,headers=th)
+    assert response.status_code==200
+    state=client.get('/v1/app/state',headers={'Authorization':'Bearer '+p['app_token']}).json()
+    assert state['account']['balance']==0
+    assert state['account']['equity']==0
 
 def test_heartbeat_status_identity_and_offline():
     p=pair(); t=claimed(p); ah={'Authorization':'Bearer '+p['app_token']}; th={'Authorization':'Bearer '+t['terminal_token']}
@@ -94,17 +242,21 @@ def managed_pair():
     ah={'Authorization':'Bearer '+p['app_token']}
     return p,ah
 
+def fbs_terminal_account(**overrides):
+    return {**ACCOUNT,'company':'FBS Markets Inc.',**overrides}
+
 def test_managed_missing_configuration(monkeypatch):
     monkeypatch.delenv('CREDENTIALS_FERNET_KEY',raising=False)
     monkeypatch.delenv('WORKER_TOKEN',raising=False)
     monkeypatch.delenv('BRIDGE_BASE_URL',raising=False)
+    with app.tx(True) as c: c.execute('DELETE FROM rate')
     p,ah=managed_pair()
-    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     assert r.status_code==503 and r.json()['detail']['code']=='CONFIGURATION_REQUIRED'
 
 def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     assert r.status_code==202
     with app.tx() as c:
         row=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
@@ -112,30 +264,189 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     assert client.post('/v1/worker/jobs/claim',json={'worker_id':'w1'}).status_code==401
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
-    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
-    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','consent':True}).status_code==409
+    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
+    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
+
+def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypatch):
+    managed_env(monkeypatch)
+    p,ah=managed_pair()
+    response=client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'556677','server':'FBS-Demo-Server','password':'demo-secret',
+        'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+    })
+    assert response.status_code==202
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'brand-worker'}).json()
+    assert job['pairing_code']
+    wrong={**ACCOUNT,'login':'556677','server':'FBS-Demo-Server','company':'Exness Technologies Ltd.'}
+    rejected=client.post('/v1/terminal/claim',json={
+        'pairing_code':job['pairing_code'],'terminal_instance_id':'wrong-brand','account':wrong
+    })
+    assert rejected.status_code==401
+    correct={**wrong,'company':'FBS Markets Inc.'}
+    accepted=client.post('/v1/terminal/claim',json={
+        'pairing_code':job['pairing_code'],'terminal_instance_id':'correct-brand','account':correct
+    })
+    assert accepted.status_code==200
+    state=client.get('/v1/app/state',headers=ah).json()
+    assert state['managed_execution']['broker_brand']=='FBS'
+
+def test_mt5_broker_company_aliases_are_verified_not_guessed():
+    assert app.broker_company_matches('FBS','FBS Markets Inc.')
+    assert app.broker_company_matches('EXNESS','Exness Technologies Ltd')
+    assert app.broker_company_matches('HFM','HF Markets (SV) Ltd')
+    assert app.broker_company_matches('DERIV','Deriv Limited')
+    assert not app.broker_company_matches('FBS','Exness Technologies Ltd')
+    assert not app.broker_company_matches('EXNESS','HF Markets (SV) Ltd')
+    assert not app.broker_company_matches('DERIV','Demo Broker')
+    assert not app.broker_company_matches('UNKNOWN','FBS Markets Inc.')
+    assert app.broker_server_matches('FBS','FBS-Demo01','FBS-Demo01')
+    assert app.broker_server_matches('EXNESS','Exness-MT5Trial','Exness-MT5Trial')
+    assert not app.broker_server_matches('FBS','FBS-Demo01','FBS-Real01')
+    assert not app.broker_server_matches('UNKNOWN','FBS-Demo01','FBS-Demo01')
+
+def test_simultaneous_fbs_and_exness_demo_pairings_keep_tokens_telemetry_and_ledgers_isolated(monkeypatch):
+    managed_env(monkeypatch)
+    fbs, fbs_headers = managed_pair()
+    exness, exness_headers = managed_pair()
+    registrations = [
+        (fbs_headers, {'login':'100111','server':'FBS-Demo01','password':'fbs-demo-secret',
+                       'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}),
+        (exness_headers, {'login':'200222','server':'Exness-MT5Trial','password':'exness-demo-secret',
+                          'access_type':'MASTER','account_mode':'DEMO','broker_brand':'EXNESS','consent':True}),
+    ]
+    for headers, payload in registrations:
+        assert client.post('/v1/app/managed-account', headers=headers, json=payload).status_code == 202
+
+    worker_headers = {'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    first_job = client.post('/v1/worker/jobs/claim', headers=worker_headers,
+                            json={'worker_id':'multi-broker-host','active_terminals':0,'max_terminals':2})
+    second_job = client.post('/v1/worker/jobs/claim', headers=worker_headers,
+                             json={'worker_id':'multi-broker-host','active_terminals':1,'max_terminals':2})
+    assert first_job.status_code == second_job.status_code == 200
+    jobs = [first_job.json(), second_job.json()]
+    by_brand = {job['account']['broker_brand']: job for job in jobs}
+    assert set(by_brand) == {'FBS','EXNESS'}
+
+    fbs_account = {'login':'100111','server':'FBS-Demo01','company':'FBS Markets Inc.',
+                   'currency':'USD','account_mode':'DEMO'}
+    exness_account = {'login':'200222','server':'Exness-MT5Trial','company':'Exness Technologies Ltd',
+                      'currency':'USD','account_mode':'DEMO'}
+    terminals = {}
+    for brand, account in (('FBS', fbs_account), ('EXNESS', exness_account)):
+        claimed_terminal = client.post('/v1/terminal/claim', json={
+            'pairing_code':by_brand[brand]['pairing_code'],
+            'terminal_instance_id':brand.lower()+'-terminal',
+            'account':account
+        })
+        assert claimed_terminal.status_code == 200
+        terminals[brand] = claimed_terminal.json()
+
+    fbs_beat = heartbeat_data(
+        account={**fbs_account,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},
+        configuration={'strategy':'smc-confluence-1.0.0','daily_risk_status':'NORMAL','daily_loss_used_percent':12.0},
+        closed_deals=[{'ticket':51001,'position_id':61001,'symbol':'EURUSD','closed_at':app.iso(),
+                       'profit':11.0,'commission':-0.5,'swap':0.0}]
+    )
+    exness_beat = heartbeat_data(
+        account={**exness_account,'balance':20000,'equity':19800,'margin':200,'free_margin':19600,'margin_level':9900,'leverage':100},
+        configuration={'strategy':'ict-silver-bullet','daily_risk_status':'WARNING_90','daily_loss_used_percent':91.0},
+        closed_deals=[{'ticket':52001,'position_id':62001,'symbol':'GBPUSD','closed_at':app.iso(),
+                       'profit':-40.0,'commission':-1.0,'swap':-0.2}]
+    )
+    for brand, beat in (('FBS', fbs_beat), ('EXNESS', exness_beat)):
+        response = client.post('/v1/terminal/heartbeat', json=beat,
+                               headers={'Authorization':'Bearer '+terminals[brand]['terminal_token']})
+        assert response.status_code == 200
+
+    fbs_state = client.get('/v1/app/state', headers=fbs_headers).json()
+    exness_state = client.get('/v1/app/state', headers=exness_headers).json()
+    assert fbs_state['account']['login'] == '100111'
+    assert exness_state['account']['login'] == '200222'
+    assert fbs_state['configuration']['daily_risk_status'] == 'NORMAL'
+    assert exness_state['configuration']['daily_risk_status'] == 'WARNING_90'
+    assert fbs_state['account']['company'] == 'FBS Markets Inc.'
+    assert exness_state['account']['company'] == 'Exness Technologies Ltd'
+
+    fbs_trades = client.get('/v1/app/trades', headers=fbs_headers).json()['trades']
+    exness_trades = client.get('/v1/app/trades', headers=exness_headers).json()['trades']
+    assert any(row['payload'].get('deals', [{}])[0].get('ticket') == 51001 for row in fbs_trades)
+    assert any(row['payload'].get('deals', [{}])[0].get('ticket') == 52001 for row in exness_trades)
+    assert all(row['payload'].get('deals', [{}])[0].get('ticket') != 52001 for row in fbs_trades)
+    assert all(row['payload'].get('deals', [{}])[0].get('ticket') != 51001 for row in exness_trades)
+
+
+def test_worker_at_capacity_claims_no_new_provisioning_job(monkeypatch):
+    managed_env(monkeypatch)
+    p,ah=managed_pair()
+    assert client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'123','server':'S','password':'secret','access_type':'MASTER',
+        'account_mode':'DEMO','broker_brand':'FBS','consent':True
+    }).status_code==202
+    with app.tx(True) as c:
+        c.execute("UPDATE worker_jobs SET status='QUEUED' WHERE pairing_id=?",(p['pairing_id'],))
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    response=client.post('/v1/worker/jobs/claim',headers=wh,json={
+        'worker_id':'worker','active_terminals':1,'max_terminals':1
+    })
+    assert response.status_code==200
+    assert response.json()=={'job':None}
+
+
+def test_worker_lease_capacity_blocks_second_simultaneous_claim(monkeypatch):
+    managed_env(monkeypatch)
+    p1, h1 = managed_pair()
+    p2, h2 = managed_pair()
+    for headers, login in ((h1,'123111'), (h2,'123222')):
+        response = client.post('/v1/app/managed-account', headers=headers, json={
+            'login':login,'server':'FBS-Demo01','password':'secret',
+            'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+        })
+        assert response.status_code == 202
+    worker_headers = {'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    first = client.post('/v1/worker/jobs/claim', headers=worker_headers,
+                        json={'worker_id':'single-terminal-worker','active_terminals':0,'max_terminals':1})
+    assert first.status_code == 200 and first.json().get('job_id')
+    # The second request deliberately reports zero local terminals: the bridge lease
+    # check must still see the first in-flight provision and hold the second job queued.
+    second = client.post('/v1/worker/jobs/claim', headers=worker_headers,
+                         json={'worker_id':'single-terminal-worker','active_terminals':0,'max_terminals':1})
+    assert second.status_code == 200
+    assert second.json() == {'job':None}
+
+
+def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
+    managed_env(monkeypatch)
+    p,ah=managed_pair()
+    payload={'login':'123','server':'S','password':'secret','access_type':'MASTER',
+             'account_mode':'DEMO','broker_brand':'UNSUPPORTED','consent':True}
+    assert client.post('/v1/app/managed-account',headers=ah,json=payload).status_code==422
+    payload['broker_brand']='UNKNOWN'
+    assert client.post('/v1/app/managed-account',headers=ah,json=payload).status_code==422
+    payload['broker_brand']='DERIV'
+    assert client.post('/v1/app/managed-account',headers=ah,json=payload).status_code==202
 
 def test_managed_tenant_auth_and_master_readiness_gate(monkeypatch):
     managed_env(monkeypatch)
     p,ah=managed_pair(); other,oh=managed_pair()
     for h in (ah,oh):
-        assert client.post('/v1/app/managed-account',headers=h,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True}).status_code==202
+        assert client.post('/v1/app/managed-account',headers=h,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==202
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker'}).json()
     assert client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker','status':'AUTHENTICATING'}).status_code==200
     assert client.post('/v1/app/commands',headers=ah,json=command_req()).status_code==409
-    wrong_account={**ACCOUNT,'login':'999999','server':'Different-Server'}
+    wrong_account=fbs_terminal_account(login='999999',server='Different-Server')
     mismatch=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'wrong-account','account':wrong_account})
     assert mismatch.status_code==401
-    assert client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':ACCOUNT}).status_code==200
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'again','account':ACCOUNT})
+    assert client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':fbs_terminal_account()}).status_code==200
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'again','account':fbs_terminal_account()})
     assert terminal.status_code==401
     # The app state cannot report READY without an actual fresh heartbeat.
     assert client.get('/v1/app/state',headers=ah).json()['managed_execution']['status']!='READY'
 
 def test_investor_start_rejected_stop_allowed_and_revoke_clears_secret(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'7','server':'S','password':'secret','access_type':'INVESTOR','account_mode':'DEMO','consent':True}).status_code==202
+    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'7','server':'S','password':'secret','access_type':'INVESTOR','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==202
     assert client.post('/v1/app/commands',headers=ah,json=command_req('START')).status_code==409
     assert client.post('/v1/app/commands',headers=ah,json=command_req('RESUME')).status_code==409
     assert client.post('/v1/app/commands',headers=ah,json=command_req('STOP')).status_code==202
@@ -149,13 +460,13 @@ def test_investor_start_rejected_stop_allowed_and_revoke_clears_secret(monkeypat
 
 def test_ready_requires_fresh_actual_heartbeat_and_worker_ready(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':ACCOUNT}).json()
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['managed_execution']['status']!='READY'
     status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker',headers=wh).json()
@@ -163,7 +474,7 @@ def test_ready_requires_fresh_actual_heartbeat_and_worker_ready(monkeypatch):
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['managed_execution']['status']=='READY'
     assert client.post('/v1/app/commands',headers=ah,json=command_req()).status_code==202
-    assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='RUNNING')).status_code==200
+    assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='RUNNING',account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100})).status_code==200
     running=client.get('/v1/app/state',headers=ah).json()
     assert running['managed_execution']['status']=='READY' and running['ea_state']=='RUNNING'
     with app.tx(True) as c:
@@ -173,13 +484,13 @@ def test_ready_requires_fresh_actual_heartbeat_and_worker_ready(monkeypatch):
 
 def test_ready_job_is_downgraded_when_heartbeat_goes_stale(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-stale'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-stale','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'stale-terminal','account':ACCOUNT}).json()
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'stale-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-stale',headers=wh).json()['status']=='READY'
     with app.tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
@@ -188,17 +499,17 @@ def test_ready_job_is_downgraded_when_heartbeat_goes_stale(monkeypatch):
 
 def test_ready_job_recovers_within_grace_and_fails_after_recovery_deadline(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-recovery'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-recovery','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'recovery-terminal','account':ACCOUNT}).json()
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'recovery-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data())
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='READY'
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='AUTHENTICATING'
-    assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data()).status_code==200
+    assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100})).status_code==200
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-recovery',headers=wh).json()['status']=='READY'
     with app.tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
@@ -207,24 +518,24 @@ def test_ready_job_recovers_within_grace_and_fails_after_recovery_deadline(monke
 
 def test_error_heartbeat_blocks_start_but_stop_remains_available(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-error'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-error','status':'AUTHENTICATING'})
-    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'error-terminal','account':ACCOUNT}).json()
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'error-terminal','account':fbs_terminal_account()}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
-    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='ERROR',last_error='EA failed'))
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(state='ERROR',last_error='EA failed',account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-error',headers=wh).json()['status']=='AUTHENTICATING'
     assert client.post('/v1/app/commands',headers=ah,json=command_req('START')).status_code==409
     assert client.post('/v1/app/commands',headers=ah,json=command_req('STOP')).status_code==202
 
 def test_investor_can_be_ready_for_read_only_but_never_start(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    client.post('/v1/app/managed-account',headers=ah,json={'login':'77','server':'ReadOnly','password':'investor','access_type':'INVESTOR','account_mode':'DEMO','consent':True})
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'77','server':'ReadOnly','password':'investor','access_type':'INVESTOR','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-ro'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-ro','status':'AUTHENTICATING'})
-    investor_account={**ACCOUNT,'login':'77','server':'ReadOnly'}
+    investor_account=fbs_terminal_account(login='77',server='ReadOnly')
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'managed-ro','account':investor_account}).json()
     th={'Authorization':'Bearer '+terminal['terminal_token']}
     assert client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(trade_allowed=False,account={**investor_account,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100})).status_code==200
@@ -235,7 +546,7 @@ def test_investor_can_be_ready_for_read_only_but_never_start(monkeypatch):
 
 def test_worker_lease_owner_and_terminal_auth_timeout(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    client.post('/v1/app/managed-account',headers=ah,json={'login':'88','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'88','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'owner'}).json()
     wrong=client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'other','status':'AUTHENTICATING'})
@@ -256,7 +567,7 @@ def test_placeholder_managed_origin_is_configuration_required(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setenv('BRIDGE_BASE_URL','https://your-bridge.example/')
     p,ah=managed_pair()
-    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     assert r.status_code==503 and r.json()['detail']['code']=='CONFIGURATION_REQUIRED'
 
 def test_start_requires_managed_account_and_fresh_authorized_terminal():
@@ -273,7 +584,7 @@ def test_heartbeat_rejects_impossible_numeric_telemetry():
 
 def test_expired_active_worker_lease_is_reclaimable_and_old_owner_is_fenced(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    client.post('/v1/app/managed-account',headers=ah,json={'login':'99','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'99','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'first'}).json()
     client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'first','status':'AUTHENTICATING'})
@@ -287,7 +598,7 @@ def test_expired_active_worker_lease_is_reclaimable_and_old_owner_is_fenced(monk
 
 def test_revocation_failure_is_reported_and_queued_provision_is_not_mislabeled(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
-    client.post('/v1/app/managed-account',headers=ah,json={'login':'111','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    client.post('/v1/app/managed-account',headers=ah,json={'login':'111','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     assert client.delete('/v1/app/pairing',headers=ah).status_code==200
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     # The older PROVISION job is marked failed; only the actual REVOKE job is returned.
@@ -305,12 +616,12 @@ def test_revocation_failure_is_reported_and_queued_provision_is_not_mislabeled(m
 def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker-Live'):
     managed_env(monkeypatch)
     p,ah=managed_pair()
-    body={'login':login,'server':server,'password':'live-test-password','access_type':access_type,'account_mode':'LIVE','consent':True}
+    body={'login':login,'server':server,'password':'live-test-password','access_type':access_type,'account_mode':'LIVE','broker_brand':'FBS','consent':True}
     assert client.post('/v1/app/managed-account',headers=ah,json=body).status_code==202
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-live'}).json()
     assert client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-live','status':'AUTHENTICATING'}).status_code==200
-    actual={'login':login,'server':server,'company':'Live Broker','currency':'USD','account_mode':'LIVE'}
+    actual={'login':login,'server':server,'company':'FBS Markets Inc.','currency':'USD','account_mode':'LIVE'}
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'live-terminal','account':actual})
     assert terminal.status_code==200
     th={'Authorization':'Bearer '+terminal.json()['terminal_token']}
@@ -360,7 +671,7 @@ def test_live_profile_rejects_demo_terminal_and_expired_authorization(monkeypatc
         c.execute('UPDATE pairings SET live_authorized_until=? WHERE id=?',(time.time()-1,p['pairing_id']))
     assert client.post('/v1/app/commands',headers=ah,json=command_req('START')).status_code==409
     p2,ah2=managed_pair()
-    assert client.post('/v1/app/managed-account',headers=ah2,json={'login':'700003','server':'Broker-Live','password':'x','access_type':'MASTER','account_mode':'LIVE','consent':True}).status_code==202
+    assert client.post('/v1/app/managed-account',headers=ah2,json={'login':'700003','server':'Broker-Live','password':'x','access_type':'MASTER','account_mode':'LIVE','broker_brand':'FBS','consent':True}).status_code==202
     wh2={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job2=client.post('/v1/worker/jobs/claim',headers=wh2,json={'worker_id':'worker-live2'}).json()
     demo={**actual,'login':'700003','account_mode':'DEMO'}
@@ -382,7 +693,7 @@ def test_live_authorization_revocation_and_profile_pairing_isolation(monkeypatch
     live_p,live_ah=live[0],live[1]
     assert client.post('/v1/app/live-authorization',headers=live_ah,json={'confirm_live_trading':True}).status_code==200
     demo_p,demo_ah=managed_pair()
-    assert client.post('/v1/app/managed-account',headers=demo_ah,json={'login':'800001','server':'Demo','password':'demo-test','access_type':'MASTER','account_mode':'DEMO','consent':True}).status_code==202
+    assert client.post('/v1/app/managed-account',headers=demo_ah,json={'login':'800001','server':'Demo','password':'demo-test','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==202
     demo_state=client.get('/v1/app/state',headers=demo_ah).json()
     assert demo_state.get('managed_execution',{}).get('live_authorized') is False
     assert client.delete('/v1/app/live-authorization',headers=live_ah).json()['revoked'] is True
@@ -419,7 +730,7 @@ def test_malformed_managed_origin_fails_closed(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.invalid:99999')
     p,ah=managed_pair()
-    response=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'x','access_type':'MASTER','account_mode':'DEMO','consent':True})
+    response=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'x','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     assert response.status_code==503
     assert response.json()['detail']['code']=='CONFIGURATION_REQUIRED'
 
@@ -621,7 +932,7 @@ def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(mon
 def test_configured_round_turn_cost_model_is_persisted_and_passed_to_worker(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
     evidence='Official broker pricing schedule section 4'
-    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'77881','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True,'cost_model':'CONFIGURED_ROUND_TURN','commission_per_lot':7.5,'cost_evidence':evidence})
+    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'77881','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True,'cost_model':'CONFIGURED_ROUND_TURN','commission_per_lot':7.5,'cost_evidence':evidence})
     assert r.status_code==202, r.text
     with app.tx() as c:
         row=c.execute('SELECT cost_model,commission_per_lot,cost_evidence FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
@@ -635,7 +946,7 @@ def test_configured_round_turn_cost_model_is_persisted_and_passed_to_worker(monk
 def test_zero_commission_spread_only_cost_model_is_explicit_and_passed_to_worker(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
     evidence='Official broker schedule: zero commission for FX'
-    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'77882','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True,'cost_model':'ZERO_COMMISSION_SPREAD_ONLY','commission_per_lot':0.0,'cost_evidence':evidence})
+    r=client.post('/v1/app/managed-account',headers=ah,json={'login':'77882','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True,'cost_model':'ZERO_COMMISSION_SPREAD_ONLY','commission_per_lot':0.0,'cost_evidence':evidence})
     assert r.status_code==202, r.text
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'spread-worker'}).json()
@@ -655,7 +966,7 @@ def test_invalid_managed_cost_configurations_are_rejected(monkeypatch):
     ]
     for cost in invalid_costs:
         p,ah=managed_pair()
-        payload={'login':'77883','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','consent':True,**cost}
+        payload={'login':'77883','server':'Broker-Demo','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True,**cost}
         assert client.post('/v1/app/managed-account',headers=ah,json=payload).status_code==422, cost
 
 

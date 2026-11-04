@@ -9,11 +9,21 @@ import com.destinedfx.core.trade.*
 import com.destinedfx.core.news.*
 import com.destinedfx.core.strategy.*
 import com.example.domain.engine.QuantitativeEngine
+import com.example.ui.manualPlanRewardToRisk
 import org.junit.Assert.*
 import org.junit.Test
 import kotlin.math.abs
 
 class TradingCoreValidationTest {
+
+    @Test
+    fun manualRiskCalculatorRejectsWrongSideTargetsAndEnforcesDirectionalReward() {
+        assertEquals(2.0, manualPlanRewardToRisk(100.0, 99.0, 102.0)!!, 1e-9)
+        assertEquals(2.0, manualPlanRewardToRisk(100.0, 101.0, 98.0)!!, 1e-9)
+        assertNull(manualPlanRewardToRisk(100.0, 99.0, 98.0))
+        assertNull(manualPlanRewardToRisk(100.0, 101.0, 102.0))
+        assertNull(manualPlanRewardToRisk(100.0, 100.0, 102.0))
+    }
 
     private val eurUsdSpec = InstrumentSpec(
         symbol = "EUR/USD",
@@ -302,8 +312,16 @@ class TradingCoreValidationTest {
         assertNotNull(ictDef)
         assertTrue(ictDef!!.isImplemented)
 
+        val volatilityBreakout = StrategyRegistry.allStrategies.single { it.id == "volatility-breakout" }
+        assertEquals(StrategyCapabilityStatus.CANDIDATE_ONLY, volatilityBreakout.kotlinStatus)
+        assertFalse(volatilityBreakout.isImplemented)
+        assertFalse(volatilityBreakout.botExecutionEligible)
+
         StrategyRegistry.allStrategies.forEach { strat ->
-            assertTrue("Strategy ${strat.name} (${strat.id}) must be implemented", strat.isImplemented)
+            assertTrue(
+                "Bot-eligible strategy ${strat.name} (${strat.id}) must be Kotlin implemented and final validated",
+                !strat.botExecutionEligible || (strat.isImplemented && strat.kotlinFinalValidation)
+            )
         }
     }
 

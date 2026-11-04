@@ -47,7 +47,8 @@ class TradeUseCaseImpl(
     private val config: suspend () -> TradingConfig = { TradingConfig() },
     private val guard: DuplicateGuard = DuplicateGuard(),
     private val clock: () -> Long = System::currentTimeMillis,
-    private val pollIntervalMs: Long = 45_000L
+    private val pollIntervalMs: Long = 45_000L,
+    private val sensitiveActionAuthorized: () -> Boolean = { false }
 ) : TradeUseCase {
 
     // Backward-compatible secondary constructor for MT5-only invocations
@@ -60,7 +61,8 @@ class TradeUseCaseImpl(
         config: suspend () -> TradingConfig = { TradingConfig() },
         guard: DuplicateGuard = DuplicateGuard(),
         clock: () -> Long = System::currentTimeMillis,
-        pollIntervalMs: Long = 45_000L
+        pollIntervalMs: Long = 45_000L,
+        sensitiveActionAuthorized: () -> Boolean = { false }
     ) : this(
         market = market,
         brokerProvider = {
@@ -76,10 +78,14 @@ class TradeUseCaseImpl(
         config = config,
         guard = guard,
         clock = clock,
-        pollIntervalMs = pollIntervalMs
+        pollIntervalMs = pollIntervalMs,
+        sensitiveActionAuthorized = sensitiveActionAuthorized
     )
 
     override suspend fun executeTrade(signal: TradeSignal) {
+        if (!sensitiveActionAuthorized()) {
+            throw IllegalStateException("REAUTHENTICATION_REQUIRED: authenticate again before submitting a trading action")
+        }
         val now = clock(); val cfg = config(); val symbol = signal.symbol
         val broker = brokerProvider()
         val ticker = market.tickerFlow.value[symbol]

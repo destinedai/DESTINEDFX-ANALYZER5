@@ -49,6 +49,7 @@ import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import java.util.Locale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
 import com.example.R
 import com.example.BuildConfig
 import com.example.MyApplication
@@ -89,7 +90,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val currentTicker = tickers[activeSymbol]
-    val hasFreshQuote = currentTicker?.price?.let { it.isFinite() && it > 0.0 } == true &&
+    val hasFreshQuote = currentTicker?.let { it.isLive && it.price.isFinite() && it.price > 0.0 } == true &&
         viewModel.isDataFresh(activeSymbol)
     val headerPrice = currentTicker?.price?.takeIf { it.isFinite() && it > 0.0 && hasFreshQuote }
     val priceChange = currentTicker?.changePercent
@@ -100,9 +101,9 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
         else -> WarningAmber
     }
     val feedStatusLabel = when {
-        hasFreshQuote && candlesAvailable -> "Live quote • candle history available"
-        hasFreshQuote && marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "Live quote • candle history unavailable"
-        hasFreshQuote -> "Live quote • candle history pending"
+        hasFreshQuote && candlesAvailable -> "Fresh live quote • OHLC history available"
+        hasFreshQuote && marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "Fresh live quote • OHLC unavailable"
+        hasFreshQuote -> "Fresh live quote • OHLC history pending"
         candlesAvailable -> quoteDiagnostics[activeSymbol]?.let { "Candle history available • $it" }
             ?: "Candle history available • no fresh quote"
         quoteDiagnostics[activeSymbol] != null -> quoteDiagnostics.getValue(activeSymbol)
@@ -127,7 +128,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                             )
                         )
                         .statusBarsPadding()
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     // Row 1: Logo & App Name (left) | PulsingDot + Status + Actions (right)
@@ -308,9 +309,9 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                         Column(
                             modifier = Modifier.weight(1f)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(if (isSelected) ElectricCyan.copy(alpha = 0.13f) else Color.Transparent)
+                                .background(if (isSelected) GoldPrimary.copy(alpha = 0.10f) else Color.Transparent)
                                 .border(
-                                    BorderStroke(1.dp, if (isSelected) GoldPrimary.copy(alpha = 0.62f) else Color.Transparent),
+                                    BorderStroke(1.dp, if (isSelected) GoldPrimary.copy(alpha = 0.72f) else Color.Transparent),
                                     RoundedCornerShape(10.dp)
                                 )
                                 .selectable(
@@ -327,7 +328,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                             Icon(
                                 screen.icon,
                                 contentDescription = screen.title,
-                                tint = if (isSelected) ElectricCyan else TextSecondary,
+                                tint = if (isSelected) GoldPrimary else TextSecondary,
                                 modifier = Modifier.size(19.dp)
                             )
                             Text(
@@ -335,7 +336,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                 maxLines = 1,
                                 fontSize = 10.sp,
                                 fontWeight = if (isSelected) FontWeight.Black else FontWeight.Medium,
-                                color = if (isSelected) ElectricCyan else TextSecondary
+                                color = if (isSelected) GoldPrimary else TextSecondary
                             )
                         }
                     }
@@ -443,8 +444,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(DarkBackground),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
@@ -452,8 +453,8 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text("LIVE ALGORITHMIC ANALYZER", fontSize = 9.sp, color = ElectricCyan,
                         fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                    Text(activeSymbol, fontSize = 25.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                    Text("Chart display: TradingView • Analysis: algorithmic rules", fontSize = 10.sp, color = TextSecondary)
+                    Text(activeSymbol, fontSize = 23.sp, color = TextPrimary, fontWeight = FontWeight.Black)
+                    Text("TradingView chart · rule-based analysis", fontSize = 10.sp, color = TextSecondary)
                 }
                 SignalBadge(state = analysis?.signalState ?: "WAIT")
             }
@@ -718,10 +719,15 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
         }
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val tickerIsFreshLive = ticker?.let {
+                    it.isLive && com.example.data.market.classifyQuoteFreshness(it, System.currentTimeMillis()) ==
+                        com.example.data.market.QuoteFreshness.LIVE
+                } == true
                 StatChip(label = "QUOTE",
-                    value = ticker?.price?.takeIf { it > 0.0 }?.let { formatPrice(it, activeSymbol) } ?: "—",
+                    value = ticker?.price?.takeIf { tickerIsFreshLive && it.isFinite() && it > 0.0 }
+                        ?.let { formatPrice(it, activeSymbol) } ?: "STALE / —",
                     modifier = Modifier.weight(1f), color = TextPrimary)
-                StatChip(label = "STRUCTURE", value = ticker?.bias ?: analysis?.direction ?: "UNKNOWN",
+                StatChip(label = "STRUCTURE", value = if (tickerIsFreshLive) ticker?.bias ?: "UNKNOWN" else "UNKNOWN",
                     modifier = Modifier.weight(1f),
                     color = when {
                         (ticker?.bias ?: analysis?.direction.orEmpty()).contains("BULL", true) || analysis?.direction == "BUY" -> ProfitGreen
@@ -863,6 +869,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
         }
         item { MarketStructureReport(analysis) }
         item { FullAnalysisReport(analysis) }
+        item { PythonQuantitativeAnalysisPanel(analysis?.pythonAnalysis) }
         item { EngineInsightsPanel(viewModel) }
     }
 }
@@ -975,412 +982,16 @@ private fun PlanLevel(label: String, value: String, valueColor: Color, modifier:
     }
 }
 
-private val selectedIdVersion = "smc-confluence-1.0.0"
-
 @Composable
 fun StrategiesTab(viewModel: DestinedFXViewModel) {
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
-    val strategies = StrategyRegistry.allStrategies
-    val selected = strategies.firstOrNull { it.id == selectedStrategyId }
-
-    LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 22.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            TerminalPageHeader(
-                eyebrow = "SYSTEMATIC PLAYBOOKS / RULE-BASED",
-                title = "Strategy desk",
-                subtitle = "Choose a registered ruleset. Only implemented strategies can be activated."
-            )
-        }
-        item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatChip(label = "REGISTERED", value = strategies.size.toString(), modifier = Modifier.weight(1f))
-                StatChip(label = "IMPLEMENTED", value = strategies.count { it.isImplemented }.toString(),
-                    modifier = Modifier.weight(1f), color = ProfitGreen)
-                StatChip(label = "SELECTED", value = if (selected != null) "1" else "0",
-                    modifier = Modifier.weight(1f), color = ElectricCyan)
-            }
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))) {
-                Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("ACTIVE RULESET", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                    Text(selected?.name ?: "No registered strategy selected", fontSize = 18.sp,
-                        color = TextPrimary, fontWeight = FontWeight.Black)
-                    Text(selected?.description ?: "Choose an implemented ruleset below.", fontSize = 11.sp,
-                        color = TextSecondary, lineHeight = 17.sp)
-                    if (selected != null) {
-                        Text(selected.rulesSummary, fontSize = 10.sp, color = ElectricCyan,
-                            fontFamily = FontFamily.Monospace, lineHeight = 15.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            Box(Modifier.size(7.dp).clip(CircleShape).background(if (selected.isImplemented) ProfitGreen else WarningAmber))
-                            Text(if (selected.isImplemented) "IMPLEMENTED · ${selected.version}" else "REGISTERED BUT UNAVAILABLE",
-                                fontSize = 9.sp, color = if (selected.isImplemented) ProfitGreen else WarningAmber,
-                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                    Button(onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
-                        modifier = Modifier.fillMaxWidth().height(42.dp), enabled = selected?.isImplemented == true,
-                        shape = RoundedCornerShape(9.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)) {
-                        Text("OPEN ANALYZER WITH SELECTED RULESET", fontSize = 10.sp,
-                            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                    }
-                }
-            }
-        }
-        item {
-            Text("AVAILABLE RULESETS", fontSize = 10.sp, color = TextSecondary,
-                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-        }
-        items(strategies) { strat ->
-            val active = strat.id == selectedStrategyId
-            Card(modifier = Modifier.fillMaxWidth().testTag("strategy_card_${strat.id}")
-                .clickable(enabled = strat.isImplemented) { viewModel.selectStrategy(strat.id) },
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = if (active) DarkSurfaceVariant else DarkSurface),
-                border = BorderStroke(if (active) 1.5.dp else 1.dp, if (active) ElectricCyan else CardBorder)) {
-                Row(modifier = Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Top) {
-                    Box(modifier = Modifier.width(4.dp).height(68.dp).clip(RoundedCornerShape(4.dp))
-                        .background(if (active) ElectricCyan else if (strat.isImplemented) ProfitGreen.copy(alpha = 0.75f) else WarningAmber))
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(strat.name, modifier = Modifier.weight(1f), fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                            if (active) Text("ACTIVE", fontSize = 8.sp, color = ElectricCyan,
-                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                        }
-                        Text(strat.description, fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
-                        Text(strat.rulesSummary, fontSize = 9.sp, color = if (strat.isImplemented) ElectricCyan else TextMuted,
-                            fontFamily = FontFamily.Monospace, lineHeight = 14.sp)
-                        Text(if (strat.isImplemented) "AVAILABLE · ${strat.version}" else "NOT IMPLEMENTED",
-                            fontSize = 8.sp, color = if (strat.isImplemented) ProfitGreen else WarningAmber,
-                            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                    }
-                }
-            }
-        }
-        item { BacktestSection(viewModel) }
-    }
+    StrategyWorkbench(
+        selectedStrategyId = selectedStrategyId,
+        onSelect = viewModel::selectStrategy,
+        onOpenAnalyzer = { viewModel.selectScreen(DestinedFXScreen.Analyzer) },
+        backtestContent = { BacktestSection(viewModel) }
+    )
 }
-
-@Composable
-fun RiskManagementTab(viewModel: DestinedFXViewModel) {
-    val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
-    val riskPercent by viewModel.riskPercent.collectAsStateWithLifecycle()
-
-    LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 22.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            TerminalPageHeader(
-                eyebrow = "ACCOUNT DEFENCE / POSITION CONTROL",
-                title = "Risk control",
-                subtitle = "RiskEngine remains the authority for sizing and trade-plan validation."
-            )
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface), border = BorderStroke(1.dp, CardBorder)) {
-                Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("CURRENT CONFIGURATION", fontSize = 9.sp, color = TextSecondary,
-                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                            Text("${riskPercent.coerceAtMost(1.0)}% risk configured", fontSize = 18.sp,
-                                color = if (riskPercent <= 1.0) ProfitGreen else LossRed, fontWeight = FontWeight.Black)
-                        }
-                        Box(Modifier.clip(RoundedCornerShape(8.dp))
-                            .background(if (riskPercent <= 1.0) ProfitGreen.copy(alpha = 0.12f) else LossRed.copy(alpha = 0.15f))
-                            .padding(horizontal = 10.dp, vertical = 7.dp)) {
-                            Text(if (riskPercent <= 1.0) "WITHIN CAP" else "BREACH", fontSize = 9.sp,
-                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace,
-                                color = if (riskPercent <= 1.0) ProfitGreen else LossRed)
-                        }
-                    }
-                    Box(Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(5.dp)).background(DarkSurfaceVariant)) {
-                        Box(Modifier.fillMaxHeight().fillMaxWidth(riskPercent.coerceIn(0.0, 1.0).toFloat())
-                            .clip(RoundedCornerShape(5.dp)).background(if (riskPercent <= 1.0) ElectricCyan else LossRed))
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        StatChip(label = "MAX PER TRADE", value = "1.0%", modifier = Modifier.weight(1f), color = WarningAmber)
-                        StatChip(label = "MIN PLAN RR", value = "2.0R", modifier = Modifier.weight(1f), color = ProfitGreen)
-                    }
-                    HorizontalDivider(color = CardBorder)
-                    Text("Hard limits", fontSize = 12.sp, fontWeight = FontWeight.Black, color = TextPrimary)
-                    Text("• Position sizing is calculated against configured equity.\n• Stops are not narrowed to force a valid trade.\n• Plans below 2.0R must remain WAIT / non-executable.\n• An invalidated setup cannot remain actionable.",
-                        fontSize = 11.sp, color = TextSecondary, lineHeight = 18.sp)
-                }
-            }
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.25f))) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("POSITION SIZING CALCULATOR", fontSize = 10.sp, color = ElectricCyan,
-                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                    Text("Instrument: $activeSymbol", fontSize = 11.sp, color = TextSecondary)
-                    RiskRewardCalculatorComponent(viewModel = viewModel, symbol = activeSymbol, modifier = Modifier.fillMaxWidth())
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsTab(viewModel: DestinedFXViewModel) {
-
-    var savedMessage by remember { mutableStateOf("") }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().background(DarkBackground).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-                        Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp))
-                            .background(ElectricCyan.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Settings, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(24.dp))
-                        }
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("TERMINAL CONTROL", fontSize = 9.sp, color = ElectricCyan,
-                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.1.sp)
-                            Text("Settings", fontSize = 25.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                            Text("Accounts, execution and notifications", fontSize = 10.sp, color = TextSecondary)
-                        }
-                    }
-                    HorizontalDivider(color = CardBorder)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Column(modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(DarkSurfaceVariant).padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("CHART ACCESS", fontSize = 8.sp, color = TextSecondary,
-                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                            Text("TradingView", fontSize = 12.sp, color = ProfitGreen, fontWeight = FontWeight.Black)
-                            Text("No market-data key needed", fontSize = 9.sp, color = TextSecondary)
-                        }
-                    }
-                    HorizontalDivider(color = CardBorder, modifier = Modifier.padding(vertical = 4.dp))
-
-                    val scanningActive by viewModel.isBackgroundScanningActive.collectAsStateWithLifecycle()
-                    val scanStatus by viewModel.backgroundScanStatus.collectAsStateWithLifecycle()
-
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.QueryStats, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("TRADINGVIEW 24/7 SCANNING ENGINE", fontSize = 11.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace, letterSpacing = 0.8.sp)
-                            Text("Continuous multi-pair scanner powered by TradingView feeds.", fontSize = 10.sp, color = TextSecondary)
-                        }
-                    }
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text("24/7 Background Market Scanner", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                Text(if (scanningActive) "ACTIVE" else "PAUSED",
-                                    fontSize = 9.sp, fontWeight = FontWeight.Black,
-                                    color = if (scanningActive) ProfitGreen else WarningAmber,
-                                    fontFamily = FontFamily.Monospace)
-                            }
-                            Text(scanStatus, fontSize = 10.sp, color = TextSecondary)
-                            HorizontalDivider(color = CardBorder)
-                            Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text("High-Confluence Alert Threshold", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                Text("85/100 SCORE", fontSize = 9.sp, fontWeight = FontWeight.Black, color = ElectricCyan, fontFamily = FontFamily.Monospace)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        item {
-            HorizontalDivider(color = TabBorder)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("TELEGRAM NOTIFICATIONS & ONBOARDING", fontWeight = FontWeight.Black, fontSize = 14.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-            Text("Configure real-time Telegram trade alerts and bot connectivity.", fontSize = 11.sp, color = TextSecondary)
-        }
-
-        item {
-            val telegramStatus by viewModel.telegramStatus.collectAsStateWithLifecycle()
-            val telegramNotifEnabled by viewModel.telegramNotificationsEnabled.collectAsStateWithLifecycle()
-            val telegramResult by viewModel.telegramTestMessageResult.collectAsStateWithLifecycle()
-            val isTelegramLoading by viewModel.isTelegramLoading.collectAsStateWithLifecycle()
-
-            var botTokenInput by remember { mutableStateOf(viewModel.getTelegramBotToken()) }
-            var chatIdInput by remember { mutableStateOf(viewModel.getTelegramChatId()) }
-            var showBotFatherGuide by remember { mutableStateOf(false) }
-
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, TabBorder),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("Connection Status", fontSize = 11.sp, color = TextSecondary)
-                            Text(
-                                text = telegramStatus,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                color = when (telegramStatus) {
-                                    "Connected" -> ProfitGreen
-                                    "Connection failed" -> LossRed
-                                    else -> OrangeAccent
-                                }
-                            )
-                        }
-                        TextButton(onClick = { showBotFatherGuide = !showBotFatherGuide }) {
-                            Text(if (showBotFatherGuide) "Hide BotFather Guide" else "How to Setup BotFather?", fontSize = 11.sp, color = CyanPrimary)
-                        }
-                    }
-
-                    if (showBotFatherGuide) {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = DarkBackground),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("BotFather Setup Guide:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CyanPrimary)
-                                Text("1. Open Telegram and search for official @BotFather.", fontSize = 10.sp, color = TextPrimary)
-                                Text("2. Send /newbot and follow instructions to name your bot.", fontSize = 10.sp, color = TextPrimary)
-                                Text("3. Copy the HTTP API Token provided by BotFather.", fontSize = 10.sp, color = TextPrimary)
-                                Text("4. Send a message to your bot in Telegram, then enter your Chat ID.", fontSize = 10.sp, color = TextPrimary)
-                                Text("5. Enter Bot Token and Chat ID below and tap Connect Telegram.", fontSize = 10.sp, color = TextPrimary)
-                                Text("6. Handshake verifies delivery and activates secure alerts.", fontSize = 10.sp, color = TextPrimary)
-                            }
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = botTokenInput,
-                        onValueChange = { botTokenInput = it },
-                        label = { Text("Telegram Bot Token") },
-                        modifier = Modifier.fillMaxWidth().testTag("telegram_token_input"),
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
-                    )
-
-                    OutlinedTextField(
-                        value = chatIdInput,
-                        onValueChange = { chatIdInput = it },
-                        label = { Text("Telegram Chat ID") },
-                        modifier = Modifier.fillMaxWidth().testTag("telegram_chat_id_input"),
-                        singleLine = true,
-                        trailingIcon = {
-                            TextButton(
-                                onClick = {
-                                    viewModel.autoDetectTelegramChatId(botTokenInput) { detected ->
-                                        if (detected != null) {
-                                            chatIdInput = detected
-                                        }
-                                    }
-                                },
-                                enabled = !isTelegramLoading && botTokenInput.isNotBlank()
-                            ) {
-                                Text("Auto-Detect", fontSize = 11.sp, color = CyanPrimary, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    )
-                    Text(
-                        text = "Tip: Send /start to your bot in Telegram, then tap Auto-Detect to fetch your numeric Chat ID instantly without third-party lookup tools.",
-                        fontSize = 10.sp,
-                        color = TextSecondary,
-                        lineHeight = 14.sp
-                    )
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { viewModel.connectTelegram(botTokenInput, chatIdInput) },
-                            enabled = !isTelegramLoading,
-                            colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
-                            modifier = Modifier.weight(1f).testTag("connect_telegram_button")
-                        ) {
-                            Text(if (isTelegramLoading) "Connecting..." else "Connect Telegram", color = DarkBackground, fontWeight = FontWeight.Bold)
-                        }
-
-                        Button(
-                            onClick = { viewModel.sendTelegramTestNotification() },
-                            enabled = !isTelegramLoading && telegramStatus == "Connected",
-                            colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen),
-                            modifier = Modifier.weight(1f).testTag("test_telegram_button")
-                        ) {
-                            Text("Test Message", color = DarkBackground, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { viewModel.refreshTelegramStatus() },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Refresh Status", color = TextPrimary, fontSize = 11.sp)
-                        }
-
-                        OutlinedButton(
-                            onClick = { viewModel.unlinkTelegram() },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = LossRed),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Unlink", fontSize = 11.sp)
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("Enable Automated Alerts", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            Text("Requires verified connection status", fontSize = 10.sp, color = TextSecondary)
-                        }
-                        Switch(
-                            checked = telegramNotifEnabled,
-                            onCheckedChange = { viewModel.setTelegramNotificationsEnabled(it) },
-                            enabled = telegramStatus == "Connected",
-                            modifier = Modifier.testTag("telegram_switch")
-                        )
-                    }
-
-                    val res = telegramResult
-                    if (res != null) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(res, fontSize = 11.sp, color = if (telegramStatus == "Connected") ProfitGreen else LossRed)
-                    }
-                }
-            }
-        }
-        
-        // Telegram Settings ... (will include here if needed, keeping it minimal as requested)
-    }
-}
-
-
 
 
 @Composable
@@ -1468,6 +1079,7 @@ fun SplashScreen(onFinished: () -> Unit, username: String) {
 
 @Composable
 fun BiometricLockScreen(viewModel: DestinedFXViewModel, onUnlocked: () -> Unit) {
+    val context = LocalContext.current
     Box(
         modifier = Modifier.fillMaxSize().background(DarkBackground),
         contentAlignment = Alignment.Center
@@ -1488,7 +1100,9 @@ fun BiometricLockScreen(viewModel: DestinedFXViewModel, onUnlocked: () -> Unit) 
                 Text("Authentication required to access institutional trading desk.", fontSize = 11.sp, color = TextSecondary, textAlign = TextAlign.Center)
 
                 Button(
-                    onClick = { onUnlocked() },
+                    onClick = {
+                        (context as? com.example.MainActivity)?.showBiometricPrompt()
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -1643,5 +1257,59 @@ private fun MoreTab(viewModel: DestinedFXViewModel) {
                 }
             }
         }
+    }
+}
+
+
+@Composable
+private fun PythonQuantitativeAnalysisPanel(result: com.example.domain.model.PythonAnalysisReport?) {
+    InsightCard("ON-DEVICE PYTHON QUANTITATIVE ANALYSIS") {
+        Text("Execution state: ANALYSIS ONLY — Python output is never execution approval.",
+            fontSize = 10.sp, color = WarningAmber, lineHeight = 15.sp)
+        val outcome = when {
+            result == null -> "PYTHON RUNTIME UNAVAILABLE"
+            result.conflict || result.state == "KOTLIN_PYTHON_CONFLICT" -> "KOTLIN/PYTHON CONFLICT"
+            result.state == "CANDIDATE" -> "PYTHON CANDIDATE"
+            result.state == "WAITING" -> "PYTHON WAITING"
+            result.state == "DATA_UNAVAILABLE" -> "PYTHON DATA UNAVAILABLE"
+            !result.runtimeAvailable -> "PYTHON RUNTIME UNAVAILABLE"
+            else -> "PYTHON RUNTIME UNAVAILABLE"
+        }
+        Text(outcome, fontSize = 11.sp,
+            color = if (outcome.contains("UNAVAILABLE") || outcome.contains("CONFLICT")) LossRed else ElectricCyan,
+            fontWeight = FontWeight.Black)
+        if (result == null) {
+            Text("No Python result was returned for this scan. The Kotlin SignalEngine is the identified analysis engine.",
+                fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+            return@InsightCard
+        }
+        InsightLine("Runtime availability", when {
+            result.runtimeAvailable -> "Chaquopy result received"
+            result.state == "DATA_UNAVAILABLE" -> "Not invoked or no valid Python response; data/provenance blocked analysis"
+            else -> "Unavailable; no Python result used"
+        })
+        InsightLine("Strategy", result.strategyId)
+        InsightLine("Ruleset version", result.strategyVersion)
+        InsightLine("Python state / direction", "${result.state} / ${result.direction}")
+        InsightLine("Provider source", result.source.ifBlank { "UNKNOWN" })
+        InsightLine("Closed-candle timestamp", if (result.candleTimestampMs > 0L)
+            java.time.Instant.ofEpochMilli(result.candleTimestampMs).toString() else "Unavailable")
+        InsightLine("Snapshot retrieved at", if (result.retrievedAtMs > 0L)
+            java.time.Instant.ofEpochMilli(result.retrievedAtMs).toString() else "Unavailable")
+        Text("EVIDENCE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        Text(result.evidence.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "No supporting Python evidence returned.",
+            fontSize = 10.sp, color = TextPrimary, lineHeight = 15.sp)
+        if (result.scoreBasis.isNotEmpty()) InsightLine("Score basis", result.scoreBasis.joinToString(" · "))
+        Text("REJECTION / WAITING REASONS", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        Text(result.rejectionReasons.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: result.reason.ifBlank { "None returned." },
+            fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+        if (result.state == "CANDIDATE" && result.entry != null && result.stopLoss != null && result.takeProfit != null) {
+            HorizontalDivider(color = CardBorder)
+            Text("RESEARCH CANDIDATE ONLY — NOT AN APPROVED TRADE", fontSize = 9.sp, color = WarningAmber, fontWeight = FontWeight.Black)
+            InsightLine("Entry / stop / target", "${formatPrice(result.entry, result.symbol)} / ${formatPrice(result.stopLoss, result.symbol)} / ${formatPrice(result.takeProfit, result.symbol)}")
+            InsightLine("Reward-to-risk proposal", result.rewardToRisk?.let { "${"%.2f".format(java.util.Locale.US, it)}R" } ?: "Not supplied")
+        }
+        if (result.conflict) Text("Automated execution is blocked until the configured engine-agreement policy resolves this conflict.",
+            fontSize = 10.sp, color = LossRed, lineHeight = 15.sp)
     }
 }

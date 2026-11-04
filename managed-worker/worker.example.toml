@@ -1,14 +1,38 @@
-# Copy to worker.toml on the dedicated Windows host. Do not commit local paths or secrets.
+# Copy to worker.toml on the dedicated Windows host. Never commit the real file or secrets.
 control_plane_url = "https://bridge.example.invalid"
 data_root = "D:\\DestinedFX\\accounts"
-mt5_install = "C:\\Program Files\\Broker MT5"
-terminal_exe = "C:\\Program Files\\Broker MT5\\terminal64.exe"
-metaeditor_exe = "C:\\Program Files\\Broker MT5\\metaeditor64.exe"
+single_broker_brand = "FBS"
+max_terminals = 1
+mt5_install = "C:\\Program Files\\FBS MT5"
+terminal_exe = "C:\\Program Files\\FBS MT5\\terminal64.exe"
+metaeditor_exe = "C:\\Program Files\\FBS MT5\\metaeditor64.exe"
 ea_source = "D:\\DestinedFX\\release\\DestinedFXTraderEA.mq5"
-# Optional trusted, precompiled file. When absent, MetaEditor must compile ea_source.
 compiled_ea = ""
 symbol = "EURUSD"
 poll_seconds = 5
 auth_timeout_seconds = 300
 max_restart_retries = 3
 restart_backoff_seconds = 30
+
+# For a multi-broker worker, remove the single_broker_brand and the three
+# top-level MT5 path fields above. Configure each genuine broker installation:
+#
+# [broker_terminals.FBS]
+# mt5_install = "C:\\Program Files\\FBS MT5"
+# terminal_exe = "C:\\Program Files\\FBS MT5\\terminal64.exe"
+# metaeditor_exe = "C:\\Program Files\\FBS MT5\\metaeditor64.exe"
+#
+# [broker_terminals.EXNESS]
+# mt5_install = "C:\\Program Files\\Exness MT5"
+# terminal_exe = "C:\\Program Files\\Exness MT5\\terminal64.exe"
+# metaeditor_exe = "C:\\Program Files\\Exness MT5\\metaeditor64.exe"
+#
+# [broker_terminals.HFM]
+# mt5_install = "C:\\Program Files\\HFM MT5"
+# terminal_exe = "C:\\Program Files\\HFM MT5\\terminal64.exe"
+# metaeditor_exe = "C:\\Program Files\\HFM MT5\\metaeditor64.exe"
+#
+# [broker_terminals.DERIV]
+# mt5_install = "C:\\Program Files\\Deriv MT5"
+# terminal_exe = "C:\\Program Files\\Deriv MT5\\terminal64.exe"
+# metaeditor_exe = "C:\\Program Files\\Deriv MT5\\metaeditor64.exe"

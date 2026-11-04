@@ -2,6 +2,30 @@ package com.example.domain.model
 
 enum class SignalDirection { LONG, SHORT, WAIT }
 
+/** Python-side research output only; it is never an execution or risk approval. */
+data class PythonAnalysisReport(
+    val state: String,
+    val runtimeAvailable: Boolean,
+    val direction: String,
+    val symbol: String,
+    val strategyId: String,
+    val strategyVersion: String,
+    val timeframe: String,
+    val candleTimestampMs: Long,
+    val source: String,
+    val retrievedAtMs: Long,
+    val entry: Double? = null,
+    val stopLoss: Double? = null,
+    val takeProfit: Double? = null,
+    val rewardToRisk: Double? = null,
+    val scoreBasis: List<String> = emptyList(),
+    val evidence: List<String> = emptyList(),
+    val rejectionReasons: List<String> = emptyList(),
+    val reason: String = "",
+    val conflict: Boolean = false,
+    val executable: Boolean = false
+)
+
 data class ProfitZone(
     val title: String,
     val price: Double,
@@ -52,5 +76,6 @@ data class TradeSignal(
     val analysisLoadMs: Long = 0L,
     val analysisComputeMs: Long = 0L,
     val analysisTotalMs: Long = 0L,
-    val cacheHit: Boolean = false
+    val cacheHit: Boolean = false,
+    val pythonAnalysis: PythonAnalysisReport? = null
 )

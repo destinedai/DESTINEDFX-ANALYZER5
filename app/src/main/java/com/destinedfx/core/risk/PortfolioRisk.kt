@@ -1,13 +1,16 @@
 package com.destinedfx.core.risk
 
+import com.example.domain.risk.TradingSafetyLimits
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.ZoneId
 import java.time.temporal.TemporalAdjusters
 
 data class PortfolioLimits(
-    val maxDailyLossPct: Double = 3.0, val maxWeeklyLossPct: Double = 6.0,
-    val maxTotalOpenRiskPct: Double = 5.0, val maxOpenTrades: Int = 5,
+    val maxDailyLossPct: Double = TradingSafetyLimits.MAX_DAILY_LOSS_PERCENT,
+    val maxWeeklyLossPct: Double = TradingSafetyLimits.MAX_WEEKLY_LOSS_PERCENT,
+    val maxTotalOpenRiskPct: Double = 5.0,
+    val maxOpenTrades: Int = TradingSafetyLimits.MAX_CONCURRENT_POSITIONS,
     val maxCurrencyExposurePct: Double = 3.0,          // net risk-% on any single currency (the correlation guard)
     val resetZone: ZoneId = ZoneId.of("America/New_York"), val resetHour: Int = 17   // FX day rolls 17:00 New York
 )

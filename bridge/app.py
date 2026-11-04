@@ -5,8 +5,9 @@ from typing import Any
 from urllib.parse import urlparse, quote, urlencode
 from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from cryptography.fernet import Fernet, InvalidToken
+from quantitative import STRATEGY_RULESETS, analyze_json
 
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
@@ -21,12 +22,48 @@ NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
 NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
+ANALYSIS_CLOCK_SKEW_MS=max(0,int(os.getenv('ANALYSIS_CLOCK_SKEW_SECONDS','120')))*1000
+ANALYSIS_QUOTE_MAX_AGE_MS=max(1,int(os.getenv('ANALYSIS_QUOTE_MAX_AGE_SECONDS','15')))*1000
+ANALYSIS_TIMEFRAME_POLICY={
+    'M1':(60_000,300_000),'M5':(300_000,900_000),'M15':(900_000,2_700_000),
+    'M30':(1_800_000,5_400_000),'H1':(3_600_000,10_800_000),
+    'H4':(14_400_000,43_200_000),'D1':(86_400_000,172_800_000),
+    'W1':(604_800_000,1_209_600_000),
+}
+ANALYSIS_SYMBOL_POLICY={
+    'EUR/USD':('FOREX',5,0.005,0.01),'GBP/USD':('FOREX',5,0.005,0.01),
+    'USD/JPY':('FOREX',3,0.5,0.01),'XAU/USD':('METAL',2,5.0,0.02),
+    'BTC/USD':('CRYPTO',2,200.0,0.05),
+}
+ANALYSIS_SESSION_POLICY={'FOREX':True,'METAL':True,'CRYPTO':False}
 _NEWS_CACHE={}
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
 
 def now(): return datetime.now(timezone.utc)
 def iso(dt=None): return (dt or now()).isoformat().replace('+00:00','Z')
 def digest(s): return hashlib.sha256(s.encode()).hexdigest()
+def broker_company_matches(brand, company):
+    """Bind an MT5 profile to the broker identity actually reported by its terminal."""
+    key=str(brand or 'UNKNOWN').strip().upper()
+    normalized=''.join(ch for ch in str(company or '').upper() if ch.isalnum())
+    if key not in ('FBS', 'EXNESS', 'HFM', 'DERIV'):
+        return False
+    aliases={
+        'FBS': ('FBS',),
+        'EXNESS': ('EXNESS',),
+        'HFM': ('HFMARKETS', 'HOTFOREX'),
+        'DERIV': ('DERIV',),
+    }
+    markers=aliases.get(key)
+    return bool(normalized and markers and any(marker in normalized for marker in markers))
+
+def broker_server_matches(brand, expected_server, actual_server):
+    """Require the authenticated terminal to use the exact server pinned for this broker profile."""
+    key=str(brand or 'UNKNOWN').strip().upper()
+    expected=str(expected_server or '').strip()
+    actual=str(actual_server or '').strip()
+    return key in ('FBS', 'EXNESS', 'HFM', 'DERIV') and bool(expected) and hmac.compare_digest(expected, actual)
+
 def token(): return secrets.token_urlsafe(32)
 def db():
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)),exist_ok=True)
@@ -38,11 +75,14 @@ def db():
     CREATE TABLE IF NOT EXISTS close_all_confirmations(token_hash TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, account_mode TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS command_items(command_id INTEGER NOT NULL REFERENCES commands(id) ON DELETE CASCADE, ticket TEXT NOT NULL, target_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_volume REAL NOT NULL DEFAULT 0.0, remaining_volume REAL, ack_status TEXT, message TEXT NOT NULL DEFAULT '', operational_status TEXT NOT NULL DEFAULT 'PENDING', ack_heartbeat_seq INTEGER, PRIMARY KEY(command_id,ticket));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED');
+    CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED', broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN');
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
     CREATE TABLE IF NOT EXISTS trade_ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, created REAL NOT NULL);
-    CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);''')
+    CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);
+    CREATE TABLE IF NOT EXISTS analysis_requests(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, response TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(pairing_id,request_id));''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_app_hash ON pairings(app_hash)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_terminal_hash ON pairings(terminal_hash)')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
     for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT'),('heartbeat_seq','INTEGER NOT NULL DEFAULT 0')):
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
@@ -54,6 +94,7 @@ def db():
         if name not in item_columns: c.execute(f'ALTER TABLE command_items ADD COLUMN {name} {definition}')
     managed_columns={r['name'] for r in c.execute('PRAGMA table_info(managed_accounts)').fetchall()}
     if 'account_mode' not in managed_columns: c.execute("ALTER TABLE managed_accounts ADD COLUMN account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED'")
+    if 'broker_brand' not in managed_columns: c.execute("ALTER TABLE managed_accounts ADD COLUMN broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN'")
     for name, definition in (('cost_model',"TEXT NOT NULL DEFAULT 'OBSERVED_ROUND_TURN'"),('commission_per_lot','REAL NOT NULL DEFAULT 0.0'),('cost_evidence',"TEXT NOT NULL DEFAULT ''")):
         if name not in managed_columns: c.execute(f'ALTER TABLE managed_accounts ADD COLUMN {name} {definition}')
     columns={r['name'] for r in c.execute('PRAGMA table_info(worker_jobs)').fetchall()}
@@ -98,10 +139,15 @@ class Pair(BaseModel): model_config=ConfigDict(extra='forbid')
 class ManagedAccount(BaseModel):
     model_config=ConfigDict(extra='forbid')
     login:str=Field(min_length=1,max_length=20); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; account_mode:str; consent:bool
+    broker_brand:str=Field(default='UNKNOWN',min_length=1,max_length=20)
     cost_model:str=Field(default='OBSERVED_ROUND_TURN',min_length=1,max_length=40)
     commission_per_lot:float=Field(default=0.0,ge=0,allow_inf_nan=False)
     cost_evidence:str=Field(default='',max_length=512)
-class WorkerClaim(BaseModel): model_config=ConfigDict(extra='forbid'); worker_id:str=Field(min_length=1,max_length=128)
+class WorkerClaim(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    worker_id:str=Field(min_length=1,max_length=128)
+    active_terminals:int=Field(default=0,ge=0,le=16)
+    max_terminals:int=Field(default=1,ge=1,le=16)
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
     status:str; worker_id:str=Field(min_length=1,max_length=128); error_code:str|None=Field(default=None,max_length=64); error_message:str|None=Field(default=None,max_length=200)
@@ -112,6 +158,89 @@ class AckResult(BaseModel): model_config=ConfigDict(extra='forbid'); ticket:str;
 class Ack(BaseModel): model_config=ConfigDict(extra='forbid'); outcome:str; state:str; message:str=Field(default='',max_length=1000); results:list[AckResult]|None=None
 class LiveAuthorization(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_live_trading:bool
 class CloseAllConfirmation(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_close_all:StrictBool
+class AnalysisCandle(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    timestamp_ms:StrictInt=Field(gt=0)
+    open:float=Field(gt=0,allow_inf_nan=False)
+    high:float=Field(gt=0,allow_inf_nan=False)
+    low:float=Field(gt=0,allow_inf_nan=False)
+    close:float=Field(gt=0,allow_inf_nan=False)
+    volume:float=Field(default=0.0,ge=0,allow_inf_nan=False)
+    complete:StrictBool=True
+    source:StrictStr=Field(min_length=1,max_length=128)
+    retrieved_at_ms:StrictInt=Field(gt=0)
+class AnalysisRequest(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    request_id:StrictStr=Field(min_length=1,max_length=64)
+    symbol:StrictStr=Field(min_length=1,max_length=64)
+    timeframe:StrictStr=Field(min_length=1,max_length=16)
+    strategy_id:StrictStr=Field(min_length=1,max_length=64)
+class ProviderCandle(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    timestamp_ms:StrictInt=Field(gt=0)
+    open:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    high:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    low:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    close:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    volume:StrictFloat=Field(ge=0,allow_inf_nan=False)
+    complete:StrictBool
+class ProviderQuote(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    symbol:StrictStr=Field(min_length=1,max_length=64)
+    bid:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    ask:StrictFloat=Field(gt=0,allow_inf_nan=False)
+    timestamp_ms:StrictInt=Field(gt=0)
+class ProviderSnapshot(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    provider_id:StrictStr=Field(min_length=1,max_length=128)
+    symbol:StrictStr=Field(min_length=1,max_length=64)
+    timeframe:StrictStr=Field(min_length=1,max_length=16)
+    quote:ProviderQuote
+    candles:list[ProviderCandle]=Field(min_length=1,max_length=500)
+class AnalysisResponse(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    symbol:StrictStr
+    strategy_id:StrictStr
+    strategy_version:StrictStr
+    timeframe:StrictStr
+    state:StrictStr
+    direction:StrictStr
+    entry:float|None=None
+    stop_loss:float|None=None
+    take_profit:float|None=None
+    reward_to_risk:float|None=None
+    confidence_score:StrictInt
+    score_basis:list[StrictStr]
+    evidence:list[StrictStr]
+    reason:StrictStr
+    rejection_reasons:list[StrictStr]
+    source:StrictStr
+    candle_timestamp_ms:StrictInt
+    provider_retrieved_at_ms:StrictInt
+    quote_bid:float
+    quote_ask:float
+    quote_retrieved_at_ms:StrictInt
+    quote_source:StrictStr
+    server_now_ms:StrictInt
+    executable:StrictBool
+
+    @model_validator(mode='after')
+    def validate_candidate_geometry(self):
+        if self.state != 'CANDIDATE':
+            return self
+        if self.direction not in ('LONG', 'SHORT') or None in (self.entry, self.stop_loss, self.take_profit, self.reward_to_risk):
+            raise ValueError('Candidate requires direction, entry, stop, target and reward-to-risk')
+        entry=float(self.entry); stop=float(self.stop_loss); target=float(self.take_profit)
+        if not all(math.isfinite(value) and value > 0 for value in (entry, stop, target)):
+            raise ValueError('Candidate prices must be finite and positive')
+        risk=entry-stop if self.direction=='LONG' else stop-entry
+        reward=target-entry if self.direction=='LONG' else entry-target
+        rr=float(self.reward_to_risk)
+        computed=reward/risk if risk>0 else float('nan')
+        if risk<=0 or reward<=0 or not math.isfinite(computed) or computed<2.0 or not math.isfinite(rr) or abs(computed-rr)>0.02:
+            raise ValueError('Candidate stop/target geometry is invalid for its direction')
+        return self
+
 class Position(BaseModel):
     model_config=ConfigDict(extra='forbid')
     ticket:StrictInt|StrictStr; position_id:StrictInt|StrictStr; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); volume:float=Field(gt=0,allow_inf_nan=False); open_price:float=Field(gt=0,allow_inf_nan=False); stop_loss:float=Field(ge=0,allow_inf_nan=False); take_profit:float=Field(ge=0,allow_inf_nan=False); floating_profit:float=Field(allow_inf_nan=False); commission:float|None=Field(default=None,allow_inf_nan=False); swap:float=Field(allow_inf_nan=False); fees:float|None=Field(default=None,allow_inf_nan=False)
@@ -128,7 +257,7 @@ class ActiveOrder(BaseModel):
 class Account(BaseModel):
     model_config=ConfigDict(extra='forbid')
     login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); company:str=Field(min_length=1,max_length=128); currency:str=Field(min_length=1,max_length=16); account_mode:str
-    balance:float|None=Field(default=None,gt=0,allow_inf_nan=False); equity:float|None=Field(default=None,gt=0,allow_inf_nan=False); margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); free_margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin_level:float|None=Field(default=None,ge=0,allow_inf_nan=False); leverage:int|None=Field(default=None,gt=0)
+    balance:float|None=Field(default=None,ge=0,allow_inf_nan=False); equity:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); free_margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin_level:float|None=Field(default=None,ge=0,allow_inf_nan=False); leverage:int|None=Field(default=None,gt=0)
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
     state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict); cancelled_order_tickets:list[str]=Field(default_factory=list)
@@ -287,13 +416,14 @@ def provider_news(symbol):
 def auth(header, kind):
     if not header or not header.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
     raw=header[7:]
-    if len(raw)>200: raise HTTPException(401,'Unauthorized')
+    if len(raw)>200 or kind not in ('app','terminal'): raise HTTPException(401,'Unauthorized')
     field='app_hash' if kind=='app' else 'terminal_hash'
+    wanted=digest(raw)
     with tx() as c:
-        rows=c.execute(f'SELECT * FROM pairings WHERE {field} IS NOT NULL').fetchall()
-    for r in rows:
-        if hmac.compare_digest(r[field],digest(raw)):
-            if kind=='app' or (r['consumed'] and r['terminal_hash']): return dict(r)
+        row=c.execute(f'SELECT * FROM pairings WHERE {field}=? LIMIT 1',(wanted,)).fetchone()
+    if row is not None and hmac.compare_digest(row[field] or '',wanted):
+        if kind=='app' or (row['consumed'] and row['terminal_hash']):
+            return dict(row)
     raise HTTPException(401,'Unauthorized')
 def check_json(v, depth=0):
     if depth>8: raise HTTPException(422,'Data nesting exceeds limit')
@@ -348,6 +478,101 @@ def managed_config():
 def durable_execution_enabled():
     return os.getenv('EXECUTION_STORAGE_DURABLE','true').lower() == 'true'
 
+def trusted_analysis_sources():
+    return {value.strip() for value in os.getenv('ANALYSIS_TRUSTED_SOURCES','').split(',') if value.strip()}
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, 'provider redirect rejected', headers, fp)
+
+def validate_provider_url(raw):
+    value=(raw or '').strip().rstrip('/')
+    try:
+        parsed=urlparse(value); host=(parsed.hostname or '').lower().rstrip('.'); port=parsed.port
+    except (ValueError,UnicodeError):
+        return None
+    if parsed.scheme!='https' or not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return None
+    if host in {'localhost','testserver'} or host.endswith(('.local','.localhost','.internal','.invalid','.test')):
+        return None
+    if port is not None and not (1<=port<=65535): return None
+    try:
+        address=ipaddress.ip_address(host.strip('[]'))
+        if not address.is_global: return None
+    except ValueError:
+        if ':' in host or all(ch in '0123456789.' for ch in host): return None
+    serialized_host=f'[{host}]' if ':' in host else host
+    return f'https://{serialized_host}' + (f':{port}' if port else '') + (parsed.path or '')
+
+def fetch_provider_snapshot(symbol, timeframe):
+    provider_url=os.getenv('ANALYSIS_PROVIDER_URL','').strip()
+    safe_url=validate_provider_url(provider_url)
+    if not safe_url:
+        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_CONFIGURED','message':'No usable trusted analysis provider is configured'})
+    query=urlencode({'symbol':symbol,'timeframe':timeframe})
+    headers={'Accept':'application/json'}
+    provider_token=os.getenv('ANALYSIS_PROVIDER_TOKEN','').strip()
+    if provider_token: headers['Authorization']='Bearer '+provider_token
+    try:
+        request=urllib.request.Request(safe_url+('?' if '?' not in safe_url else '&')+query,headers=headers)
+        opener=urllib.request.build_opener(_NoRedirectHandler())
+        with opener.open(request,timeout=5) as response:
+            if response.headers.get_content_type()!='application/json':
+                raise ValueError('NON_JSON_PROVIDER_RESPONSE')
+            raw=response.read(512*1024+1)
+        if len(raw)>512*1024: raise ValueError('PROVIDER_RESPONSE_TOO_LARGE')
+        snapshot=ProviderSnapshot.model_validate(json.loads(raw.decode('utf-8')))
+    except HTTPException: raise
+    except Exception as error:
+        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_UNAVAILABLE','message':'Trusted provider data is unavailable or malformed'}) from error
+    observed_ms=int(time.time()*1000)
+    if snapshot.provider_id not in trusted_analysis_sources():
+        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_TRUSTED','message':'Provider identity is not configured as trusted'})
+    if snapshot.symbol.strip().upper()!=symbol or snapshot.timeframe.strip().upper()!=timeframe:
+        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_MISMATCH','message':'Provider returned a different instrument or timeframe'})
+    quote=snapshot.quote
+    if quote.symbol.strip().upper()!=symbol:
+        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_MISMATCH','message':'Provider quote instrument does not match the request'})
+    if quote.ask<=quote.bid:
+        raise HTTPException(503,detail={'code':'ANALYSIS_INVALID_SPREAD','message':'Provider returned an invalid bid/ask spread'})
+    asset_class,decimals,max_spread,max_deviation=ANALYSIS_SYMBOL_POLICY[symbol]
+    precision=10**(-decimals)
+    if any(abs(value-round(value,decimals))>precision/10 for value in (quote.bid,quote.ask)):
+        raise HTTPException(503,detail={'code':'ANALYSIS_INVALID_PRECISION','message':'Provider quote exceeds instrument precision'})
+    if quote.ask-quote.bid>max_spread:
+        raise HTTPException(503,detail={'code':'ANALYSIS_SPREAD_TOO_WIDE','message':'Provider spread exceeds the instrument policy'})
+    if quote.timestamp_ms>observed_ms+ANALYSIS_CLOCK_SKEW_MS or observed_ms-quote.timestamp_ms>ANALYSIS_QUOTE_MAX_AGE_MS:
+        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_STALE','message':'Provider quote is stale or future-dated'})
+    if not snapshot.candles or any(not candle.complete for candle in snapshot.candles):
+        raise HTTPException(503,detail={'code':'ANALYSIS_CANDLES_INCOMPLETE','message':'Provider returned incomplete candles'})
+    if any(a.timestamp_ms>=b.timestamp_ms for a,b in zip(snapshot.candles,snapshot.candles[1:])):
+        raise HTTPException(503,detail={'code':'ANALYSIS_CANDLES_UNORDERED','message':'Provider returned unordered candles'})
+    interval_ms=ANALYSIS_TIMEFRAME_POLICY[timeframe][0]
+    for previous,current in zip(snapshot.candles,snapshot.candles[1:]):
+        delta=current.timestamp_ms-previous.timestamp_ms
+        if delta==interval_ms: continue
+        weekend_gap=asset_class in ('FOREX','METAL') and 2*86_400_000<=delta<=72*60*60*1000
+        if not weekend_gap:
+            raise HTTPException(503,detail={'code':'ANALYSIS_CANDLE_GAP','message':'Provider returned an unexplained candle-session gap'})
+    latest=snapshot.candles[-1]
+    if max(abs(quote.bid-latest.close),abs(quote.ask-latest.close))/latest.close>max_deviation:
+        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_DEVIATION','message':'Provider quote is inconsistent with the candle snapshot'})
+    candles=[AnalysisCandle(timestamp_ms=c.timestamp_ms,open=c.open,high=c.high,low=c.low,close=c.close,volume=c.volume,complete=c.complete,source=snapshot.provider_id,retrieved_at_ms=observed_ms) for c in snapshot.candles]
+    return {'provider_id':snapshot.provider_id,'observed_ms':observed_ms,'quote':quote,'candles':candles,'asset_class':asset_class}
+
+def validate_analysis_snapshot(x, provider):
+    server_now_ms=provider['observed_ms']
+    timeframe=x.timeframe.strip().upper()
+    policy=ANALYSIS_TIMEFRAME_POLICY.get(timeframe)
+    if policy is None:
+        raise HTTPException(422,'Unsupported timeframe; expected one of M1, M5, M15, M30, H1, H4, D1, W1')
+    interval_ms,max_age_ms=policy
+    if x.strategy_id not in STRATEGY_RULESETS:
+        raise HTTPException(422,'Unsupported strategy ID')
+    if provider['asset_class'] not in ANALYSIS_SESSION_POLICY:
+        raise HTTPException(422,'Unsupported instrument session metadata')
+    return server_now_ms,timeframe,interval_ms,max_age_ms,ANALYSIS_SESSION_POLICY[provider['asset_class']]
+
 def require_durable_execution():
     if not durable_execution_enabled():
         raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution-sensitive operations are disabled on non-durable storage'})
@@ -394,7 +619,7 @@ def snapshot_ticket(value):
 
 def destructive_context(p):
     with tx() as c:
-        managed=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
     beat=fresh_heartbeat(p)
     if (not managed or managed['revoked'] or managed['access_type']!='MASTER' or managed['account_mode'] not in ('DEMO','LIVE')
@@ -438,6 +663,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     require_durable_execution()
     p=auth(authorization,'app'); fernet,_=managed_config()
     if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
+    if x.broker_brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
     evidence=x.cost_evidence.strip()
     if any(ord(ch)<32 or ord(ch)==127 for ch in evidence): raise HTTPException(422,'Cost evidence reference must not contain control characters')
     if x.cost_model not in ('OBSERVED_ROUND_TURN','CONFIGURED_ROUND_TURN','CONFIGURED_PER_SIDE','ZERO_COMMISSION_SPREAD_ONLY'): raise HTTPException(422,'Invalid transaction cost model')
@@ -450,7 +676,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
-        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode,x.cost_model,float(x.commission_per_lot),evidence))
+        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode,x.broker_brand,x.cost_model,float(x.commission_per_lot),evidence))
         c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+86400,p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) VALUES(?,?,'PROVISION','QUEUED',?)",(job_id,p['id'],t))
     return {'job_id':job_id,'status':'QUEUED'}
@@ -460,7 +686,18 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
     require_durable_execution()
     worker_auth(authorization); fernet,_=managed_config(); t=time.time()
     with tx(True) as c:
-        r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
+        # Include in-flight provision leases as well as worker-reported terminal processes.
+        # This closes the race where two simultaneous requests claim before either terminal
+        # has written its local process marker.
+        leased_provisions=c.execute(
+            "SELECT COUNT(*) FROM worker_jobs WHERE worker_id=? AND kind='PROVISION' AND status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until>=?",
+            (x.worker_id,t)
+        ).fetchone()[0]
+        at_capacity = x.active_terminals >= x.max_terminals or leased_provisions >= x.max_terminals
+        if at_capacity:
+            r=c.execute("SELECT * FROM worker_jobs WHERE kind='REVOKE' AND (status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?)) ORDER BY created LIMIT 1",(t,)).fetchone()
+        else:
+            r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
         if not r: return {'job':None}
         c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=?,lease_started=? WHERE id=?",(x.worker_id,t+120,t,r['id']))
         if r['kind']=='REVOKE': return {'job_id':r['id'],'kind':'REVOKE','pairing_id':r['pairing_id'],'worker_id':x.worker_id}
@@ -472,7 +709,7 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
         if m['account_mode'] not in ('DEMO','LIVE'):
             c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_MODE_UNVERIFIED',error_message='Account mode must be re-verified before provisioning' WHERE id=?",(r['id'],))
             return {'job':None}
-        account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']; account['account_mode']=m['account_mode']
+        account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']; account['account_mode']=m['account_mode']; account['broker_brand']=m['broker_brand']
         account['cost_model']=m['cost_model']; account['commission_per_lot']=float(m['commission_per_lot']); account['cost_evidence']=m['cost_evidence']
         try:
             claimed_account=json.loads(p['account']) if p['account'] else {}
@@ -584,13 +821,13 @@ def claim(x:Claim):
         rows=c.execute('SELECT * FROM pairings WHERE consumed=0 AND expires>?',(t,)).fetchall()
         found=next((r for r in rows if hmac.compare_digest(r['code_hash'],digest(x.pairing_code))),None)
         if found is None: raise HTTPException(401,'Invalid or expired pairing code')
-        managed=c.execute('SELECT login_enc,server_enc,account_mode FROM managed_accounts WHERE pairing_id=? AND revoked=0',(found['id'],)).fetchone()
+        managed=c.execute('SELECT login_enc,server_enc,account_mode,broker_brand FROM managed_accounts WHERE pairing_id=? AND revoked=0',(found['id'],)).fetchone()
         if managed:
             fernet,_=managed_config()
             expected_login=fernet.decrypt(managed['login_enc'].encode()).decode()
             expected_server=fernet.decrypt(managed['server_enc'].encode()).decode()
-            if managed['account_mode'] not in ('DEMO','LIVE') or x.account['login']!=expected_login or x.account['server']!=expected_server or x.account['account_mode']!=managed['account_mode']:
-                raise HTTPException(401,'Authenticated terminal account does not match managed account')
+            if managed['account_mode'] not in ('DEMO','LIVE') or x.account['login']!=expected_login or not broker_server_matches(managed['broker_brand'],expected_server,x.account['server']) or x.account['account_mode']!=managed['account_mode'] or not broker_company_matches(managed['broker_brand'],x.account.get('company')):
+                raise HTTPException(401,'Authenticated terminal broker, login, server or mode does not match the selected managed account')
         c.execute('UPDATE pairings SET consumed=1,terminal_hash=?,terminal_id=?,instance_id=?,account=? WHERE id=? AND consumed=0',(digest(terminal_token),terminal_id,x.terminal_instance_id,json.dumps(x.account,separators=(',',':')),found['id']))
         if c.total_changes<1: raise HTTPException(409,'Pairing code already consumed')
     return {'terminal_id':terminal_id,'terminal_token':terminal_token,'poll_seconds':2}
@@ -691,7 +928,7 @@ def state(authorization:str|None=Header(default=None)):
                 items=c.execute('SELECT ticket,ack_status,message,operational_status,remaining_volume,target_volume FROM command_items WHERE command_id=? ORDER BY rowid',(cmd['id'],)).fetchall()
             last_command['results']=[{'ticket':i['ticket'],'status':'REJECTED' if i['ack_status']=='REJECTED' else ('APPLIED' if i['operational_status']=='CONFIRMED' else ('PARTIAL' if i['operational_status']=='PARTIAL' else ('UNKNOWN' if i['ack_status']=='UNKNOWN' else 'PENDING'))),'ack_status':i['ack_status'] or 'PENDING','operational_status':i['operational_status'],'target_volume':i['target_volume'],'remaining_volume':i['remaining_volume'],'message':('Target absence confirmed by subsequent terminal evidence' if i['operational_status']=='CONFIRMED' else ('Partial result reconciled against fresh terminal volume' if i['operational_status']=='PARTIAL' else i['message']))} for i in items]
     with tx() as c:
-        m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        m=c.execute('SELECT access_type,revoked,account_mode,broker_brand FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute('SELECT status,error_code,error_message FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1',(p['id'],)).fetchone()
     managed=None
     identity_verified=False
@@ -701,12 +938,73 @@ def state(authorization:str|None=Header(default=None)):
         identity_verified=bool(actual and m['account_mode'] in ('DEMO','LIVE') and actual.get('account') and all(actual['account'].get(k)==claimed.get(k) for k in ('login','server','company','currency','account_mode')) and actual['account'].get('account_mode')==m['account_mode'])
         app_status='READY' if identity_verified and worker_ready and execution_state_eligible(actual) and heartbeat_news_clear(actual) else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
         live_auth=bool(m['account_mode']=='LIVE' and identity_verified and p['live_authorized_until'] and p['live_authorized_until']>time.time() and p['live_authorized_login']==actual['account'].get('login') and p['live_authorized_server']==actual['account'].get('server'))
-        managed={'status':app_status,'access_type':m['access_type'],'account_mode':m['account_mode'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
+        managed={'status':app_status,'access_type':m['access_type'],'account_mode':m['account_mode'],'broker_brand':m['broker_brand'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
         if actual:
             with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
     result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
+
+@app.post('/v1/app/analysis',response_model=AnalysisResponse)
+def app_analysis(x:AnalysisRequest,authorization:str|None=Header(default=None)):
+    """Run deterministic analysis on an authenticated server-fetched snapshot.
+
+    This endpoint is deliberately analysis-only: the response is always marked
+    non-executable by the quantitative module and is never translated into a
+    broker command. Reusing a request ID returns the original response; changing
+    its payload is rejected to prevent accidental duplicate work.
+    """
+    p=auth(authorization,'app')
+    identity_payload=x.model_dump(mode='json')
+    identity_raw=json.dumps(identity_payload,sort_keys=True,separators=(',',':'),allow_nan=False)
+    payload_hash=digest(identity_raw)
+    with tx() as c:
+        prior=c.execute('SELECT payload_hash,response FROM analysis_requests WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
+    if prior:
+        if not hmac.compare_digest(prior['payload_hash'],payload_hash):
+            raise HTTPException(409,'request_id was already used for a different analysis payload')
+        return json.loads(prior['response'])
+    symbol=x.symbol.strip().upper(); timeframe=x.timeframe.strip().upper()
+    if symbol not in ANALYSIS_SYMBOL_POLICY:
+        raise HTTPException(422,'Unsupported symbol')
+    if timeframe not in ANALYSIS_TIMEFRAME_POLICY:
+        raise HTTPException(422,'Unsupported timeframe; expected one of M1, M5, M15, M30, H1, H4, D1, W1')
+    provider=fetch_provider_snapshot(symbol,timeframe)
+    server_now_ms,timeframe,interval_ms,max_age_ms,allow_session_gaps=validate_analysis_snapshot(x,provider)
+    quote=provider['quote']
+    payload={
+        'symbol':symbol,'timeframe':timeframe,'strategy_id':x.strategy_id,
+        'source':provider['provider_id'],'now_ms':server_now_ms,
+        'provider_retrieved_at_ms':provider['observed_ms'],
+        'expected_interval_ms':interval_ms,'max_candle_age_ms':max_age_ms,
+        'asset_class':provider['asset_class'],'allow_session_gaps':allow_session_gaps,
+        'quote_bid':quote.bid,'quote_ask':quote.ask,
+        'candles':[c.model_dump(mode='json') for c in provider['candles']],
+    }
+    raw=json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False)
+    response=json.loads(analyze_json(raw))
+    # The quantitative contract is the final safety boundary for this route.
+    response.update({
+        'provider_retrieved_at_ms':provider['observed_ms'],
+        'quote_bid':quote.bid,
+        'quote_ask':quote.ask,
+        'quote_retrieved_at_ms':quote.timestamp_ms,
+        'quote_source':provider['provider_id'],
+        'server_now_ms':server_now_ms,
+        'executable':False,
+    })
+    validated=AnalysisResponse.model_validate(response)
+    serialized=json.dumps(validated.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
+    with tx(True) as c:
+        try:
+            c.execute('INSERT INTO analysis_requests(pairing_id,request_id,payload_hash,response,created) VALUES(?,?,?,?,?)',(p['id'],x.request_id,payload_hash,serialized,time.time()))
+        except sqlite3.IntegrityError:
+            prior=c.execute('SELECT payload_hash,response FROM analysis_requests WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
+            if not prior or not hmac.compare_digest(prior['payload_hash'],payload_hash):
+                raise HTTPException(409,'request_id was already used for a different analysis payload')
+            serialized=prior['response']
+    return json.loads(serialized)
+
 @app.get('/v1/terminal/news-verdict')
 def terminal_news_verdict(symbol:str=Query(min_length=1,max_length=64),authorization:str|None=Header(default=None)):
     auth(authorization,'terminal')
@@ -966,9 +1264,10 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     with tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=?,heartbeat_seq=heartbeat_seq+1 WHERE id=?',(json.dumps(payload,separators=(',',':'),allow_nan=False),p['id']))
         seq=c.execute('SELECT heartbeat_seq FROM pairings WHERE id=?',(p['id'],)).fetchone()['heartbeat_seq']
-        managed=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
         if (managed and not managed['revoked'] and managed['access_type']=='MASTER' and managed['account_mode']==x.account.account_mode
+            and broker_company_matches(managed['broker_brand'],x.account.company)
             and job and job['status']=='READY' and x.terminal_connected and terminal_identity_matches(p,managed['account_mode'],payload)):
             reconcile_command_items(c,p['id'],payload,seq)
         # Heartbeats establish terminal telemetry only.  A heartbeat must never

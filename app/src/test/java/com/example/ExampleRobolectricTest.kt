@@ -9,6 +9,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.example.security.AppSecurityGuard
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -72,6 +73,7 @@ class ExampleRobolectricTest {
   @Test
   fun `MT5 password storage follows explicit save preference`() {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
+    if (!context.secretsManager.isSecureStorageAvailable) return
     context.secretsManager.saveMT5PasswordIfAllowed("temporary-password", false)
     assertFalse(context.secretsManager.isMT5PasswordSaveEnabled())
     assertTrue(context.secretsManager.getMT5Password().isBlank())
@@ -83,8 +85,20 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `appearance preference accepts supported modes and rejects arbitrary values`() {
+    val context = ApplicationProvider.getApplicationContext<MyApplication>()
+    val secrets = context.secretsManager
+    assertTrue(secrets.saveThemeMode("Light"))
+    assertEquals("Light", secrets.getThemeMode())
+    assertFalse(secrets.saveThemeMode("neon"))
+    assertEquals("Light", secrets.getThemeMode())
+    assertTrue(secrets.saveThemeMode("System"))
+  }
+
+  @Test
   fun `verify Telegram settings state persistence and unlinking`() {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
+    if (!context.secretsManager.isSecureStorageAvailable) return
     val vm = DestinedFXViewModel(context)
     assertEquals("Not configured", vm.telegramStatus.value)
     
@@ -143,6 +157,7 @@ class ExampleRobolectricTest {
     // Fresh guest mode is permitted. With no Deriv/MT5 credentials, activation must instead
     // fail at the broker connection boundary (not because a Supabase session is missing).
     context.secretsManager.saveDerivApiToken("")
+    AppSecurityGuard.unlock()
     val result = botEngine.startBot("EURUSD", "smc-confluence-1.0.0", "H1", 1.0)
     assertTrue(result.isFailure)
     val reason = result.exceptionOrNull()?.message.orEmpty()

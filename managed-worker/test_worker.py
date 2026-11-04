@@ -31,12 +31,62 @@ class WorkerTests(unittest.TestCase):
         self.meta.chmod(0o755)
         self.job = {"job_id": "job_123", "pairing_id": "pair_456", "pairing_code": "abcdefgh1234",
                     "bridge_url": "https://bridge.destinedfx.internal", "account": {"login": "123456", "server": "Demo-Server",
-                    "password": "secret-not-logged", "access_type": "INVESTOR", "account_mode": "DEMO"}}
+                    "password": "secret-not-logged", "access_type": "INVESTOR", "account_mode": "DEMO", "broker_brand": "FBS"}}
         self.settings = {"data_root": str(self.root / "accounts"), "mt5_install": str(self.install),
-                         "terminal_exe": str(self.term), "metaeditor_exe": str(self.meta), "ea_source": str(self.source)}
+                         "terminal_exe": str(self.term), "metaeditor_exe": str(self.meta), "ea_source": str(self.source),
+                         "single_broker_brand": "FBS", "max_terminals": 1}
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_broker_brand_is_required_and_unknown_brands_are_rejected(self):
+        for brand in ("UNKNOWN", "OTHER", None):
+            job = {**self.job, "account": {**self.job["account"], "broker_brand": brand}}
+            with self.assertRaises(worker.ProvisionError):
+                worker.validate_job(job)
+
+    def test_broker_specific_terminal_mapping_is_explicit(self):
+        mapped = {
+            **self.settings,
+            "broker_terminals": {
+                "FBS": {"mt5_install": "C:/FBS", "terminal_exe": "C:/FBS/terminal64.exe", "metaeditor_exe": "C:/FBS/metaeditor64.exe"},
+                "EXNESS": {"mt5_install": "C:/Exness", "terminal_exe": "C:/Exness/terminal64.exe", "metaeditor_exe": "C:/Exness/metaeditor64.exe"},
+            },
+        }
+        self.assertEqual(worker.settings_for_broker(mapped, "EXNESS")["mt5_install"], "C:/Exness")
+        with self.assertRaises(worker.ProvisionError):
+            worker.settings_for_broker(mapped, "HFM")
+
+    def test_active_terminal_capacity_counts_inconclusive_processes(self):
+        marker = Path(self.settings["data_root"]) / "job_123" / "terminal" / ".destinedfx-worker.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":44,"executable":"terminal.exe","status":"RUNNING"}', encoding="utf-8")
+        with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.UNKNOWN):
+            self.assertEqual(worker.active_terminal_count(self.settings), 1)
+
+    def test_load_settings_requires_brand_binding_and_bounded_capacity(self):
+        config = self.root / "worker.toml"
+        lines = [
+            'control_plane_url = "https://bridge.realcop.com"',
+            f'data_root = "{self.root / "accounts"}"',
+            f'mt5_install = "{self.install}"',
+            f'terminal_exe = "{self.term}"',
+            f'metaeditor_exe = "{self.meta}"',
+            f'ea_source = "{self.source}"',
+            'single_broker_brand = "FBS"',
+            'max_terminals = 1',
+        ]
+        config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        loaded = worker.load_settings(config)
+        self.assertEqual(loaded["single_broker_brand"], "FBS")
+        config.write_text(
+            config.read_text(encoding="utf-8").replace(
+                'single_broker_brand = "FBS"', 'single_broker_brand = "UNKNOWN"'
+            ),
+            encoding="utf-8"
+        )
+        with self.assertRaises(worker.ProvisionError):
+            worker.load_settings(config)
 
     def test_investor_ini_disables_expert_trading(self):
         text = worker.ini_text(self.job, "INVESTOR", "EURUSD")

@@ -27,7 +27,12 @@ import com.destinedfx.core.risk.RiskEngine
 import com.destinedfx.core.risk.SizingResult
 import com.example.ui.theme.*
 import java.util.Locale
-import kotlin.math.abs
+
+internal fun manualPlanRewardToRisk(entry: Double, stopLoss: Double, takeProfit: Double): Double? {
+    if (!entry.isFinite() || !stopLoss.isFinite() || !takeProfit.isFinite() || entry <= 0.0 || stopLoss <= 0.0 || takeProfit <= 0.0) return null
+    if (stopLoss == entry) return null
+    return RiskEngine.rewardToRisk(entry, stopLoss, takeProfit, isLong = stopLoss < entry)
+}
 
 /**
  * Dedicated Risk-Reward & Position Sizing Calculator.
@@ -73,16 +78,19 @@ fun RiskRewardCalculatorComponent(
     val sl = stopLossText.toDoubleOrNull() ?: 0.0
     val tp = takeProfitText.toDoubleOrNull() ?: 0.0
     val maxRiskDollars = if (equity > 0.0 && riskIsValid) equity * (riskPct / 100.0) else 0.0
-    val slDistance = if (entry > 0 && sl > 0) abs(entry - sl) else 0.0
-    val rrRatio = if (entry > 0 && sl > 0 && tp > 0 && abs(entry - sl) > 0) {
-        abs(tp - entry) / abs(entry - sl)
-    } else null
+    val slDistance = if (entry > 0 && sl > 0) kotlin.math.abs(entry - sl) else 0.0
+    val rrRatio = manualPlanRewardToRisk(entry, sl, tp)
 
     val sizingResult = remember(equity, riskPct, entry, sl, spec) {
         if (spec != null && entry > 0.0 && sl > 0.0 && equity > 0.0 && riskIsValid) {
             val acc = AccountState(balance = equity, equity = equity, freeMargin = equity, leverage = 100, currency = "USD")
             RiskEngine.positionSize(acc, riskPct, entry, sl, spec)
         } else null
+    }
+    val gatedSizingResult = when {
+        sizingResult is SizingResult.Sized && (rrRatio ?: 0.0) < RiskEngine.MINIMUM_REWARD_TO_RISK ->
+            SizingResult.Rejected("Sizing withheld: target must be on the reward side of entry and the plan must meet at least 2.0R.")
+        else -> sizingResult
     }
 
     Card(
@@ -246,9 +254,9 @@ fun RiskRewardCalculatorComponent(
             }
 
             // Sizing Result or Rejection Block
-            when (sizingResult) {
+            when (gatedSizingResult) {
                 is SizingResult.Sized -> {
-                    val isExceeding = sizingResult.moneyRiskActual > maxRiskDollars + 1e-6
+                    val isExceeding = gatedSizingResult.moneyRiskActual > maxRiskDollars + 1e-6
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -260,11 +268,11 @@ fun RiskRewardCalculatorComponent(
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("FINAL POSITION SIZE:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) ProfitGreen else LossRed)
-                                Text("${sizingResult.lots} LOTS (stepped down)", fontSize = 13.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextPrimary)
+                                Text("${gatedSizingResult.lots} LOTS (stepped down)", fontSize = 13.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextPrimary)
                             }
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Estimated Loss at SL:", fontSize = 11.sp, color = TextSecondary)
-                                Text("$${String.format(Locale.US, "%.2f", sizingResult.moneyRiskActual)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) TextPrimary else LossRed)
+                                Text("$${String.format(Locale.US, "%.2f", gatedSizingResult.moneyRiskActual)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) TextPrimary else LossRed)
                             }
                             Text(
                                 "Enforced: Rounded down to broker step (${spec?.volumeStep ?: 0.01}). Never rounded up.",
@@ -293,7 +301,7 @@ fun RiskRewardCalculatorComponent(
                                     color = LossRed
                                 )
                                 Text(
-                                    text = if (sizingResult.reason.contains("below broker minimum")) "Minimum broker volume exceeds the 1% risk limit." else sizingResult.reason,
+                                    text = if (gatedSizingResult.reason.contains("below broker minimum")) "Minimum broker volume exceeds the 1% risk limit." else gatedSizingResult.reason,
                                     fontSize = 10.sp,
                                     color = TextPrimary
                                 )

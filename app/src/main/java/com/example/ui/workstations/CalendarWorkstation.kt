@@ -2,10 +2,11 @@ package com.example.ui.workstations
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -15,8 +16,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -25,326 +26,238 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.instrument.AssetClassifier
 import com.destinedfx.core.news.CalendarResult
+import com.destinedfx.core.news.EconomicEvent
 import com.destinedfx.core.news.NewsFilter
+import com.destinedfx.core.news.NewsImpact
 import com.destinedfx.core.news.NewsStatus
-import com.example.domain.repository.NewsEvent
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.theme.*
-import com.example.ui.components.TerminalPageHeader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.compose.ui.platform.LocalInspectionMode
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicLong
+
+private val utcZone: TimeZone get() = TimeZone.getTimeZone("UTC")
+private fun dateKey(ms: Long) = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = utcZone }.format(Date(ms))
+private fun dateLabel(ms: Long) = SimpleDateFormat("EEE, dd MMM", Locale.US).apply { timeZone = utcZone }.format(Date(ms))
+private fun eventTime(ms: Long) = SimpleDateFormat("dd MMM HH:mm", Locale.US).apply { timeZone = utcZone }.format(Date(ms))
 
 @Composable
 fun CalendarTab(viewModel: DestinedFXViewModel) {
-    val isPreviewMode = LocalInspectionMode.current || viewModel.isPreview
-    var events by remember { mutableStateOf<List<NewsEvent>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(!isPreviewMode) }
+    val preview = LocalInspectionMode.current || viewModel.isPreview
+    var events by remember { mutableStateOf<List<EconomicEvent>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(!preview) }
     var newsStatus by remember { mutableStateOf(NewsStatus.UNKNOWN) }
-    var statusDetail by remember {
-        mutableStateOf(
-            if (isPreviewMode) "Preview only — live calendar data is not loaded in preview mode."
-            else "Evaluating economic calendar news filter and event windows..."
-        )
-    }
-
-    val coroutineScope = rememberCoroutineScope()
-    val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
+    var detail by remember { mutableStateOf(if (preview) "Preview only — live calendar data is not loaded." else "Evaluating verified calendar coverage…") }
+    var sourceRetrieved by remember { mutableStateOf<String?>(null) }
+    var selectedDate by remember { mutableStateOf("All dates") }
+    var selectedCurrency by remember { mutableStateOf("All") }
+    var selectedImpact by remember { mutableStateOf("All") }
+    var dateMenu by remember { mutableStateOf(false) }
+    var currencyMenu by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val symbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
+    val refreshGeneration = remember { AtomicLong(0L) }
+    var refreshJob by remember { mutableStateOf<Job?>(null) }
 
     fun refreshCalendar() {
-        if (isPreviewMode) return
-        coroutineScope.launch {
+        if (preview) return
+        refreshJob?.cancel()
+        val requestId = refreshGeneration.incrementAndGet()
+        val requestedSymbol = symbol
+        refreshJob = scope.launch {
             isLoading = true
+            events = emptyList()
+            sourceRetrieved = null
+            newsStatus = NewsStatus.UNKNOWN
+            detail = "Refreshing verified calendar coverage…"
             try {
-                val fetchedEvents = withContext(Dispatchers.IO) { viewModel.app.newsRepository.fetchUpcomingEvents() }
+                // One snapshot drives both the event rows and the execution-safety verdict.
                 val result = withContext(Dispatchers.IO) { viewModel.app.newsRepository.calendar() }
-                // A stale cache may still be returned after a failed fetch. Do not display it as
-                // current verified calendar data when the authoritative result is UNKNOWN.
-                events = if (result is CalendarResult.Ok) fetchedEvents else emptyList()
-                val verdict = NewsFilter.evaluate(result, AssetClassifier.newsCurrencies(activeSymbol), System.currentTimeMillis())
-                newsStatus = verdict.status
-                statusDetail = if (result is CalendarResult.Ok) {
-                    val source = result.events.firstOrNull()?.source ?: "unavailable"
-                    val retrieved = SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'", Locale.US)
-                        .apply { timeZone = TimeZone.getTimeZone("UTC") }
-                        .format(Date(result.retrievedAtMs))
-                    "${verdict.detail} • Source: $source • Retrieved: $retrieved"
-                } else verdict.detail
+                if (requestId != refreshGeneration.get()) return@launch
+                val verdict = NewsFilter.evaluate(result, AssetClassifier.newsCurrencies(requestedSymbol), System.currentTimeMillis())
+                if (requestId == refreshGeneration.get()) newsStatus = verdict.status
+                if (result is CalendarResult.Ok) {
+                    events = result.events.sortedBy { it.timeMs }
+                    val retrieved = SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'", Locale.US).apply { timeZone = utcZone }.format(Date(result.retrievedAtMs))
+                    sourceRetrieved = "Source: ${result.source} · Retrieved: $retrieved"
+                } else {
+                    events = emptyList()
+                    sourceRetrieved = null
+                }
+                if (requestId == refreshGeneration.get()) detail = "Evaluated for $requestedSymbol · ${verdict.detail}"
             } catch (e: kotlinx.coroutines.CancellationException) {
+                if (requestId == refreshGeneration.get()) {
+                    events = emptyList()
+                    sourceRetrieved = null
+                    newsStatus = NewsStatus.UNKNOWN
+                    detail = "Calendar refresh cancelled. Automated execution remains blocked until a verified result is loaded."
+                }
                 throw e
             } catch (e: Exception) {
-                events = emptyList()
-                newsStatus = NewsStatus.UNKNOWN
-                statusDetail = "Calendar unavailable (${e.javaClass.simpleName}). Automated execution remains blocked until verified news data is available."
+                if (requestId == refreshGeneration.get()) {
+                    events = emptyList()
+                    sourceRetrieved = null
+                    newsStatus = NewsStatus.UNKNOWN
+                    detail = "Calendar unavailable (${e.javaClass.simpleName}). Automated execution remains blocked until verified news data is available."
+                }
             } finally {
-                isLoading = false
+                if (requestId == refreshGeneration.get()) {
+                    isLoading = false
+                    refreshJob = null
+                }
             }
         }
     }
-
-    LaunchedEffect(activeSymbol) {
-        if (!isPreviewMode) {
-            refreshCalendar()
+    LaunchedEffect(symbol) { if (!preview) refreshCalendar() }
+    DisposableEffect(Unit) {
+        onDispose {
+            refreshGeneration.incrementAndGet()
+            refreshJob?.cancel()
         }
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(DarkBackground)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    val dates = remember(events) { listOf("All dates") + events.map { dateKey(it.timeMs) }.distinct().sorted() }
+    val currencies = remember(events) { listOf("All") + events.map { it.currency }.distinct().sorted() }
+    LaunchedEffect(dates, currencies) {
+        if (selectedDate !in dates) selectedDate = "All dates"
+        if (selectedCurrency !in currencies) selectedCurrency = "All"
+    }
+    val shown = remember(events, selectedDate, selectedCurrency, selectedImpact) {
+        events.filter { event ->
+            (selectedDate == "All dates" || dateKey(event.timeMs) == selectedDate) &&
+                (selectedCurrency == "All" || event.currency.equals(selectedCurrency, true)) &&
+                (selectedImpact == "All" || event.impact.name.equals(selectedImpact, true))
+        }
+    }
+
+    LazyColumn(Modifier.fillMaxSize().background(DarkBackground).padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         item {
-            val statusColor = when (newsStatus) {
-                NewsStatus.CLEAR -> ProfitGreen
-                NewsStatus.HIGH_IMPACT_WINDOW -> LossRed
-                NewsStatus.UNKNOWN -> WarningAmber
-            }
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), border = BorderStroke(1.dp, CardBorder.copy(alpha = 0.9f))) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            val color = when (newsStatus) { NewsStatus.CLEAR -> ProfitGreen; NewsStatus.HIGH_IMPACT_WINDOW -> LossRed; NewsStatus.UNKNOWN -> WarningAmber }
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), border = BorderStroke(1.dp, CardBorder)) {
+                Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(ElectricCyan.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(23.dp))
+                        Box(Modifier.size(36.dp).background(ElectricCyan.copy(alpha = .12f), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.CalendarMonth, null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
                         }
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("EVENT RISK DESK", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
-                            Text("Economic calendar", fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Black)
-                            Text(if (isPreviewMode) "PREVIEW · NO LIVE CALENDAR DATA" else "Currency relevance: $activeSymbol",
-                                fontSize = 10.sp, color = TextSecondary)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("EVENT RISK DESK", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+                            Text("Economic calendar", fontSize = 20.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                            Text(if (preview) "PREVIEW · NO LIVE DATA" else "Currency relevance: $symbol", fontSize = 10.sp, color = TextSecondary)
                         }
-                        IconButton(onClick = { refreshCalendar() }, modifier = Modifier.testTag("refresh_calendar_button")) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh verified calendar", tint = ElectricCyan)
-                        }
+                        IconButton(onClick = { refreshCalendar() }, modifier = Modifier.testTag("refresh_calendar_button")) { Icon(Icons.Default.Refresh, "Refresh verified calendar", tint = ElectricCyan) }
                     }
                     HorizontalDivider(color = CardBorder)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(SimpleDateFormat("EEE, dd MMM yyyy", Locale.US).format(Date()),
-                                fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
-                            Text("Times shown in UTC", fontSize = 9.sp, color = TextSecondary)
-                        }
-                        Box(Modifier.clip(RoundedCornerShape(7.dp)).background(statusColor.copy(alpha = 0.13f))
-                            .padding(horizontal = 9.dp, vertical = 6.dp)) {
-                            Text(when (newsStatus) {
-                                NewsStatus.CLEAR -> "CLEAR"
-                                NewsStatus.HIGH_IMPACT_WINDOW -> "HIGH IMPACT"
-                                NewsStatus.UNKNOWN -> if (isLoading) "CHECKING" else "UNKNOWN"
-                            }, fontSize = 9.sp, color = statusColor, fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column { Text(SimpleDateFormat("EEE, dd MMM yyyy", Locale.US).apply { timeZone = utcZone }.format(Date()), fontSize = 11.sp, color = TextPrimary, fontWeight = FontWeight.Bold); Text("All event times in UTC", fontSize = 9.sp, color = TextSecondary) }
+                        Surface(color = color.copy(alpha = .13f), shape = RoundedCornerShape(6.dp)) {
+                            Text(when (newsStatus) { NewsStatus.CLEAR -> "CLEAR"; NewsStatus.HIGH_IMPACT_WINDOW -> "HIGH IMPACT"; NewsStatus.UNKNOWN -> if (isLoading) "CHECKING" else "UNKNOWN" }, Modifier.padding(horizontal = 8.dp, vertical = 5.dp), fontSize = 9.sp, color = color, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
             }
         }
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                com.example.ui.components.StatChip(
-                    label = "EVENTS LOADED",
-                    value = events.size.toString(),
-                    modifier = Modifier.weight(1f),
-                    color = ElectricCyan
-                )
-                com.example.ui.components.StatChip(
-                    label = "HIGH IMPACT",
-                    value = events.count { it.impact.equals("high", ignoreCase = true) }.toString(),
-                    modifier = Modifier.weight(1f),
-                    color = LossRed
-                )
-                com.example.ui.components.StatChip(
-                    label = "MEDIUM",
-                    value = events.count { it.impact.equals("medium", ignoreCase = true) }.toString(),
-                    modifier = Modifier.weight(1f),
-                    color = OrangeAccent
-                )
-            }
-        }
-
-        // Live News Gate Status Banner
-        item {
-            val bannerBg = when (newsStatus) {
-                NewsStatus.CLEAR -> ProfitGreen.copy(alpha = 0.12f)
-                NewsStatus.HIGH_IMPACT_WINDOW -> LossRed.copy(alpha = 0.15f)
-                NewsStatus.UNKNOWN -> OrangeAccent.copy(alpha = 0.15f)
-            }
-            val bannerBorder = when (newsStatus) {
-                NewsStatus.CLEAR -> ProfitGreen
-                NewsStatus.HIGH_IMPACT_WINDOW -> LossRed
-                NewsStatus.UNKNOWN -> OrangeAccent
-            }
-            val bannerTitle = when (newsStatus) {
-                NewsStatus.CLEAR -> "NEWS WINDOW: CLEAR (NO HIGH-IMPACT EVENT DETECTED)"
-                NewsStatus.HIGH_IMPACT_WINDOW -> "NEWS GATE: BLOCKED (HIGH IMPACT EVENT ACTIVE)"
-                NewsStatus.UNKNOWN -> "NEWS GATE: UNKNOWN (AUTOMATION BLOCKED)"
-            }
-
-            Card(
-                colors = CardDefaults.cardColors(containerColor = bannerBg),
-                border = BorderStroke(1.dp, bannerBorder),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth().testTag("news_gate_banner")
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(
-                        imageVector = if (newsStatus == NewsStatus.CLEAR) Icons.Default.CalendarMonth else Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = bannerBorder,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Column {
-                        Text(
-                            text = bannerTitle,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = bannerBorder
-                        )
-                        Text(
-                            text = statusDetail,
-                            fontSize = 10.sp,
-                            color = TextPrimary
-                        )
+            val bg = when (newsStatus) { NewsStatus.CLEAR -> ProfitGreen.copy(alpha = .10f); NewsStatus.HIGH_IMPACT_WINDOW -> LossRed.copy(alpha = .13f); NewsStatus.UNKNOWN -> OrangeAccent.copy(alpha = .13f) }
+            val border = when (newsStatus) { NewsStatus.CLEAR -> ProfitGreen; NewsStatus.HIGH_IMPACT_WINDOW -> LossRed; NewsStatus.UNKNOWN -> OrangeAccent }
+            val title = when (newsStatus) { NewsStatus.CLEAR -> "NEWS WINDOW: CLEAR"; NewsStatus.HIGH_IMPACT_WINDOW -> "NEWS GATE: BLOCKED · HIGH IMPACT"; NewsStatus.UNKNOWN -> "NEWS GATE: UNKNOWN · AUTOMATION BLOCKED" }
+            Card(colors = CardDefaults.cardColors(containerColor = bg), border = BorderStroke(1.dp, border), shape = RoundedCornerShape(9.dp), modifier = Modifier.fillMaxWidth().testTag("news_gate_banner")) {
+                Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Icon(if (newsStatus == NewsStatus.CLEAR) Icons.Default.CalendarMonth else Icons.Default.Warning, null, tint = border, modifier = Modifier.size(19.dp))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(title, fontWeight = FontWeight.Bold, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = border)
+                        Text(detail, fontSize = 10.sp, color = TextPrimary)
+                        sourceRetrieved?.let { Text(it, fontSize = 9.sp, color = TextSecondary, fontFamily = FontFamily.Monospace) }
                     }
                 }
             }
         }
-
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Stat("EVENTS", events.size.toString(), ElectricCyan, Modifier.weight(1f))
+                Stat("HIGH", events.count { it.impact == NewsImpact.HIGH }.toString(), LossRed, Modifier.weight(1f))
+                Stat("MEDIUM", events.count { it.impact == NewsImpact.MEDIUM }.toString(), OrangeAccent, Modifier.weight(1f))
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { dateMenu = true }, modifier = Modifier.fillMaxWidth().height(38.dp), contentPadding = PaddingValues(horizontal = 8.dp)) { Text(if (selectedDate == "All dates") "Date: All" else "Date: ${selectedDate.takeLast(5)}", fontSize = 10.sp, maxLines = 1) }
+                    DropdownMenu(expanded = dateMenu, onDismissRequest = { dateMenu = false }) {
+                        dates.forEach { value -> DropdownMenuItem(text = { Text(if (value == "All dates") value else dateLabel(events.firstOrNull { dateKey(it.timeMs) == value }?.timeMs ?: 0L)) }, onClick = { selectedDate = value; dateMenu = false }) }
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { currencyMenu = true }, modifier = Modifier.fillMaxWidth().height(38.dp), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("CCY: $selectedCurrency", fontSize = 10.sp, maxLines = 1) }
+                    DropdownMenu(expanded = currencyMenu, onDismissRequest = { currencyMenu = false }) { currencies.forEach { value -> DropdownMenuItem(text = { Text(value) }, onClick = { selectedCurrency = value; currencyMenu = false }) } }
+                }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf("All", "High", "Medium", "Low").forEach { impact -> FilterChip(selected = selectedImpact.equals(impact, true), onClick = { selectedImpact = impact }, label = { Text(impact, fontSize = 10.sp) }, modifier = Modifier.height(31.dp)) }
+            }
+        }
+        item { EventHeader() }
         if (isLoading) {
-            item {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = CyanPrimary, modifier = Modifier.size(28.dp))
-                }
-            }
+            item { Box(Modifier.fillMaxWidth().padding(26.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = CyanPrimary, modifier = Modifier.size(26.dp)) } }
         } else if (events.isEmpty()) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "No verified events are available for this window. Calendar status remains unknown; this is not confirmation of a clear market.",
-                        color = TextSecondary,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
-            }
+            item { EmptyState(if (preview) "Preview only — live calendar data is not loaded." else "No verified calendar rows are currently available. This is not evidence of a clear market.") }
+        } else if (shown.isEmpty()) {
+            item { EmptyState("No verified events match these filters.") }
         } else {
-            items(events) { evt ->
-                EconomicEventCard(evt)
+            items(shown, key = { "${it.timeMs}-${it.currency}-${it.name}" }) { EconomicEventCard(it) }
+        }
+    }
+}
+
+@Composable
+private fun Stat(label: String, value: String, color: Color, modifier: Modifier) {
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, CardBorder)) {
+        Column(Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) { Text(label, fontSize = 8.sp, color = TextSecondary, fontFamily = FontFamily.Monospace); Text(value, fontSize = 15.sp, color = color, fontWeight = FontWeight.Bold) }
+    }
+}
+
+@Composable
+private fun EventHeader() {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("UTC", Modifier.width(56.dp), fontSize = 8.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
+        Text("CCY", Modifier.width(39.dp), fontSize = 8.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
+        Text("EVENT", Modifier.weight(1f), fontSize = 8.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
+        Text("IMPACT", Modifier.width(44.dp), fontSize = 8.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun EmptyState(message: String) {
+    Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Text(message, color = TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(13.dp)) }
+}
+
+@Composable
+fun EconomicEventCard(evt: EconomicEvent) {
+    val impactColor = when (evt.impact) { NewsImpact.HIGH -> LossRed; NewsImpact.MEDIUM -> OrangeAccent; NewsImpact.LOW -> ProfitGreen }
+    Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, TabBorder), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 9.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(eventTime(evt.timeMs), Modifier.width(56.dp), fontSize = 9.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                Text(evt.currency, Modifier.width(39.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CyanPrimary, fontFamily = FontFamily.Monospace)
+                Text(evt.name, Modifier.weight(1f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, maxLines = 2)
+                Text(evt.impact.name, Modifier.width(44.dp), fontSize = 8.sp, fontWeight = FontWeight.Black, color = impactColor, fontFamily = FontFamily.Monospace)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Metric("ACTUAL", evt.actual, Modifier.weight(1f)); Metric("FORECAST", evt.forecast, Modifier.weight(1f)); Metric("PREVIOUS", evt.previous, Modifier.weight(1f))
             }
         }
     }
 }
 
 @Composable
-fun EconomicEventCard(evt: NewsEvent) {
-    val impactColor = when (evt.impact.lowercase()) {
-        "high" -> LossRed
-        "medium" -> OrangeAccent
-        else -> ProfitGreen
-    }
-
-    val dateFmt = remember { SimpleDateFormat("EEE, MMM dd HH:mm 'UTC'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") } }
-    val formattedTime = dateFmt.format(Date(evt.dateTimeUtcMs))
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = DarkSurface),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, TabBorder),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(CyanPrimary.copy(alpha = 0.15f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = evt.currency,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = CyanPrimary,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(impactColor.copy(alpha = 0.15f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = evt.impact.uppercase(),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            color = impactColor,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-
-                Text(
-                    text = formattedTime,
-                    fontSize = 10.sp,
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-
-            Text(
-                text = evt.title,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = TextPrimary
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "Forecast: ${evt.forecast ?: "N/A"}",
-                    fontSize = 10.sp,
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    text = "Previous: ${evt.previous ?: "N/A"}",
-                    fontSize = 10.sp,
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-        }
+private fun Metric(label: String, value: String?, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(label, fontSize = 7.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+        Text(value?.takeIf { it.isNotBlank() } ?: "—", fontSize = 9.sp, color = TextPrimary, fontFamily = FontFamily.Monospace, maxLines = 1)
     }
 }

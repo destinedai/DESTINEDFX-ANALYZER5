@@ -47,14 +47,20 @@ import com.example.ui.DestinedFXApp
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.BrandWelcome
 import com.example.ui.theme.*
-import com.example.ui.viewmodel.RiskViewModel
+import com.example.security.AppSecurityGuard
 
 class MainActivity : FragmentActivity() {
     private var mainViewModel: DestinedFXViewModel? = null
+    private val processLifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStop(owner: LifecycleOwner) {
+            AppSecurityGuard.lock()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        ProcessLifecycleOwner.get().lifecycle.addObserver(processLifecycleObserver)
 
         setContent {
             val app = (LocalContext.current.applicationContext as MyApplication)
@@ -72,8 +78,7 @@ class MainActivity : FragmentActivity() {
             } else if (isReady) {
                 val mainVm: DestinedFXViewModel = viewModel(factory = AppContainer.Factory)
                 mainViewModel = mainVm
-                val riskVm: RiskViewModel = viewModel(factory = AppContainer.Factory)
-                val themeMode by riskVm.themeMode.collectAsStateWithLifecycle()
+                val themeMode by mainVm.themeMode.collectAsStateWithLifecycle()
 
                 DestinedFXTheme(themeMode = themeMode) {
                     Surface(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -163,25 +168,42 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    private fun showBiometricPrompt() {
+    override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(processLifecycleObserver)
+        super.onDestroy()
+    }
+
+    fun showBiometricPrompt() {
+        requestSensitiveAuthentication(
+            onSuccess = { mainViewModel?.unlockApp() },
+            onFailure = { message -> mainViewModel?.biometricStatus?.value = message }
+        )
+    }
+
+    /**
+     * Authenticate one sensitive operation without forcing guest/read-only analysis through a
+     * whole-screen gate. The lease is granted only after the platform callback succeeds.
+     */
+    fun requestSensitiveAuthentication(onSuccess: () -> Unit, onFailure: (String) -> Unit = {}) {
         val executor = ContextCompat.getMainExecutor(this)
         val biometricPrompt = BiometricPrompt(this, executor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    if (errorCode != BiometricPrompt.ERROR_USER_CANCELED && errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
-                        mainViewModel?.biometricStatus?.value = "Auth Error: $errString"
-                    }
+                    onFailure(if (errorCode == BiometricPrompt.ERROR_USER_CANCELED || errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON)
+                        "Authentication cancelled; sensitive action denied."
+                    else "Authentication error: $errString")
                 }
 
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    mainViewModel?.unlockApp()
+                    AppSecurityGuard.unlock()
+                    onSuccess()
                 }
 
                 override fun onAuthenticationFailed() {
                     super.onAuthenticationFailed()
-                    mainViewModel?.biometricStatus?.value = "Validation failed. Access denied."
+                    onFailure("Authentication failed; sensitive action denied.")
                 }
             })
 
@@ -200,7 +222,7 @@ class MainActivity : FragmentActivity() {
             biometricPrompt.authenticate(promptInfoBuilder.build())
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Biometric authenticate failed: ${e.message}")
-            mainViewModel?.biometricStatus?.value = "Biometric prompt error: ${e.message}"
+            onFailure("Biometric prompt unavailable; sensitive action denied.")
         }
     }
 }

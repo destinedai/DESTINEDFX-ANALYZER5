@@ -1,6 +1,9 @@
 package com.example
 
 import com.example.data.trade.MT5RemoteBridgeClient
+import com.example.security.SecretsManager
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import org.json.JSONArray
 import org.json.JSONObject
@@ -9,8 +12,63 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class MT5RemoteBridgeClientTest {
+    @Test fun unavailableEncryptedStorageBlocksManagedRegistrationBeforeNetwork() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
+        val client = MT5RemoteBridgeClient(secrets)
+        val failure = runCatching {
+            client.registerManagedAccount(
+                login = "12345", password = "test-password", server = "Broker-Demo",
+                accessType = "MASTER", consent = true
+            )
+        }.exceptionOrNull()
+        assertTrue(failure?.message.orEmpty().contains("Secure storage is unavailable"))
+    }
+
+    @Test fun allFourRequestedBrokerBrandsAreValidForTheirMT5AccountRoute() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
+        listOf("FBS", "EXNESS", "DERIV", "HFM").forEach { brand ->
+            val client = MT5RemoteBridgeClient(
+                secrets, "${brand}_DEMO", { true }, accountMode = "DEMO", brokerBrand = brand
+            )
+            assertEquals(brand, client.brokerBrand)
+            assertEquals("DEMO", client.accountMode)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient(secrets, "UNKNOWN_DEMO", { true }, accountMode = "DEMO", brokerBrand = "UNKNOWN")
+        }
+    }
+
+    @Test fun brokerQualifiedProfileSeparatesStorageNamespaceFromVerifiedAccountMode() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
+        val client = MT5RemoteBridgeClient(
+            secrets,
+            "EXNESS_DEMO",
+            { true },
+            accountMode = "DEMO",
+            brokerBrand = "EXNESS"
+        )
+        assertEquals("EXNESS_DEMO", client.profile)
+        assertEquals("DEMO", client.accountMode)
+        assertEquals("EXNESS", client.brokerBrand)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient(secrets, "EXNESS_DEMO", { true }, accountMode = "PAPER", brokerBrand = "EXNESS")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient(secrets, "DERIV_DEMO", { true }, accountMode = "DEMO", brokerBrand = "UNKNOWN")
+        }
+    }
+
     @Test fun riskMustBeFiniteAndWithinTheExactSupportedInterval() {
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(0.25))
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(1.0))

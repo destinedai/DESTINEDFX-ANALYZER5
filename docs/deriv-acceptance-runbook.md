@@ -4,7 +4,7 @@ This runbook covers the Android app's direct Deriv Options WebSocket path and mu
 
 ## Scope and safety boundary
 
-The implementation supports selecting an exact Deriv DEMO or REAL Options account. REAL orders require a separate, explicit, process-memory-only authorization bound to the selected account ID, account type, currency, authenticated WebSocket session, and current credential generation. The authorization expires 60 minutes after explicit arming; it is not persisted or silently renewed. The app must be deliberately re-armed after expiry.
+The implementation supports selecting an exact Deriv DEMO or REAL Options account. DEMO and REAL API tokens are stored in separate encrypted mode slots; switching mode does not reuse the other mode's token. The implementation still selects one active Deriv account/session per service run. REAL orders require a separate, explicit, process-memory-only authorization bound to the selected account ID, account type, currency, authenticated WebSocket session, and current credential generation. The authorization expires 60 minutes after explicit arming; it is not persisted or silently renewed. The app must be deliberately re-armed after expiry.
 
 REAL acceptance in this runbook is limited to verifying account identity and the arming safety controls. Do not start the bot or submit a REAL order as part of software acceptance. Use an authorized broker DEMO account for any order-path test. No real credentials should be put into this repository, a report, chat, screenshot, or test fixture.
 
@@ -27,6 +27,12 @@ While any condition is incomplete, the UI reports `SYNCHRONIZING` (or `NOT READY
 4. Keep stake and multiplier at the smallest broker-accepted values and use a supported underlying/contract. Verify the app's proposal is validated before the purchase step. If a required validation, quote, portfolio, balance, or authorization check fails, confirm that no purchase is sent.
 5. For an explicitly approved DEMO order-path test, start the bot once and observe the request lifecycle. Confirm the broker's contract ID, transaction ID, purchase price, and account history match the app. Do not infer a fill from a proposal or a queued request. If the outcome is ambiguous, stop and reconcile; do not retry with a new signal or request ID.
 6. Stop the bot. Reconcile active contracts and settlements against the Deriv account history, then confirm the app no longer submits entries while disconnected, stale, or unresolved. Retain only redacted evidence and revoke the test token when the authorized operator's test window ends.
+
+## Daily loss guard
+
+The direct Deriv Multiplier service now uses the shared 2.0% account daily-loss limit. It warns at 80% and 90% of that limit, persists a per-account/per-mode/per-UTC-day lock at 100%, blocks new purchases, and attempts to sell only contracts created and tracked by DestinedFX. A closure is reported confirmed only after a fresh broker portfolio/history reconciliation shows the app-owned contract settled; an unconfirmed contract remains visibly unresolved and must be checked at the broker.
+
+The daily starting-equity baseline is stored in encrypted local storage. To avoid pretending that a midday balance is a full-day baseline, a missing baseline may only be initialized in the first 120 seconds after UTC midnight. If the app/service was not running or could not obtain a fresh matching balance and portfolio in that window, new Deriv entries remain blocked for the rest of that UTC day; the persisted lock/baseline is not silently reset by restarting the service. The executor repeats the account-matched daily-risk check after the proposal and immediately before sending a purchase. This is fail-closed behavior, not broker-history reconstruction; the current Deriv path does not reconstruct missed intraday P/L from a full statement history.
 
 ## REAL authorization-control check — no order
 

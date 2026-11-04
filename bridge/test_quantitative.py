@@ -1,10 +1,18 @@
 import json
+from pathlib import Path
 
 from quantitative import STRATEGY_ID, DataIntegrityError, OHLCV, analyze_json, evaluate_smc, validate_ohlcv
 import pytest
 
-NOW = 1_700_000_000_000
+NOW = 1_699_975_860_000  # 2023-11-14 15:31 UTC / 10:31 New York (EST)
 INTERVAL = 60_000
+
+
+def test_android_bundled_engine_matches_canonical_bridge_module():
+    canonical = Path(__file__).with_name("quantitative.py")
+    bundled = canonical.parent.parent / "app/src/main/python/quantitative.py"
+    assert bundled.is_file()
+    assert bundled.read_bytes() == canonical.read_bytes()
 
 
 def candles(direction=None, count=30):
@@ -54,6 +62,25 @@ def test_no_confirmed_event_returns_waiting():
     assert result.executable is False
 
 
+def test_json_contract_supports_timeframe_appropriate_candle_age():
+    rows = candles()
+    payload = {
+        "symbol": "EUR/USD", "timeframe": "M15", "strategy_id": STRATEGY_ID,
+        "source": "fixture-provider", "now_ms": NOW, "provider_retrieved_at_ms": NOW,
+        "expected_interval_ms": 15 * INTERVAL, "max_candle_age_ms": 31 * INTERVAL,
+        "candles": [
+            {"timestamp_ms": NOW - (len(rows) - index) * 15 * INTERVAL - 5 * INTERVAL, "open": row.open,
+             "high": row.high, "low": row.low, "close": row.close, "volume": row.volume,
+             "complete": True, "source": row.source, "retrieved_at_ms": NOW}
+            for index, row in enumerate(rows)
+        ],
+    }
+    result = json.loads(analyze_json(json.dumps(payload)))
+    assert result["state"] == "WAITING"
+    assert result["reason"] == "NO_CONFIRMED_BOS"
+    assert result["executable"] is False
+
+
 @pytest.mark.parametrize("bad", [
     "INCOMPLETE_CANDLE",
     "UNORDERED_OR_DUPLICATE_CANDLES",
@@ -61,6 +88,7 @@ def test_no_confirmed_event_returns_waiting():
     "IMPOSSIBLE_OHLCV",
     "FUTURE_OR_INVALID_TIMESTAMP",
     "INVALID_RETRIEVAL_TIMESTAMP",
+    "STALE_RETRIEVAL",
     "STALE_CANDLES",
     "CANDLE_GAP_OR_WRONG_INTERVAL",
 ])
@@ -78,12 +106,58 @@ def test_invalid_provider_data_is_rejected_before_analysis(bad):
         rows[-1] = OHLCV(**{**rows[-1].__dict__, "timestamp_ms": NOW + 1})
     elif bad == "INVALID_RETRIEVAL_TIMESTAMP":
         rows[-1] = OHLCV(**{**rows[-1].__dict__, "retrieved_at_ms": NOW + 1})
+    elif bad == "STALE_RETRIEVAL":
+        rows[-1] = OHLCV(**{**rows[-1].__dict__, "retrieved_at_ms": NOW - 600_000})
     elif bad == "STALE_CANDLES":
         rows = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms - 600_000, "retrieved_at_ms": NOW}) for row in rows]
     elif bad == "CANDLE_GAP_OR_WRONG_INTERVAL":
         rows[15:] = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + INTERVAL}) for row in rows[15:]]
     with pytest.raises(DataIntegrityError, match=bad):
         validate(rows)
+
+
+def test_market_session_gap_can_be_explicitly_allowed_but_not_assumed():
+    rows = candles()
+    gap = 48 * 60 * 60 * 1000
+    rows = [OHLCV(**{**row.__dict__, "retrieved_at_ms": NOW + gap}) for row in rows]
+    rows[15:] = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + gap}) for row in rows[15:]]
+    with pytest.raises(DataIntegrityError, match="CANDLE_GAP_OR_WRONG_INTERVAL"):
+        validate_ohlcv(rows, now_ms=NOW + gap, source="fixture-provider",
+                        expected_interval_ms=INTERVAL, allow_session_gaps=False)
+    accepted = validate_ohlcv(rows, now_ms=NOW + gap, source="fixture-provider",
+                              expected_interval_ms=INTERVAL, allow_session_gaps=True)
+    assert accepted.source == "fixture-provider"
+    assert accepted.last_timestamp_ms == rows[-1].timestamp_ms
+
+
+def test_allowed_session_gaps_do_not_hide_a_missing_intraday_candle():
+    rows = candles()
+    rows[15:] = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + INTERVAL}) for row in rows[15:]]
+    with pytest.raises(DataIntegrityError, match="CANDLE_GAP_OR_WRONG_INTERVAL"):
+        validate(rows, allow_session_gaps=True)
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_quote_that_crosses_structural_stop_invalidates_candidate(direction):
+    from quantitative import _atr, _candidate
+
+    rows = candles(direction)
+    series = validate(rows)
+    atr = _atr(series.candles)
+    prior = series.candles[-5:-1]
+    if direction == "LONG":
+        stop = min(row.low for row in prior) - 0.25 * atr
+        bid, ask = stop - 0.2, stop - 0.1
+    else:
+        stop = max(row.high for row in prior) + 0.25 * atr
+        bid, ask = stop + 0.1, stop + 0.2
+    result = _candidate(series, "EUR/USD", "M1", STRATEGY_ID, direction, ("TEST_RULE",), bid, ask)
+
+    assert result.state == "WAITING"
+    assert result.reason == "QUOTE_CROSSED_STRUCTURAL_STOP"
+    assert result.direction == "WAIT"
+    assert result.entry is None and result.stop_loss is None and result.take_profit is None
+    assert result.executable is False
 
 
 def test_missing_source_and_empty_series_fail_closed():
@@ -109,19 +183,23 @@ def _strategy_rows(strategy, count=35):
         previous = rows[-2]
         rows[-1] = OHLCV(last.timestamp_ms, previous.high + .2, previous.high + .6, previous.high + .1, previous.high + .5, 100.0, True, "fixture-provider", NOW)
     elif strategy == "ict-silver-bullet":
-        rows[-1] = OHLCV(last.timestamp_ms, 100.0, 102.0, 90.0, 101.0, 100.0, True, "fixture-provider", NOW)
+        rows[-6] = OHLCV(rows[-6].timestamp_ms, 105.0, 106.0, 100.0, 105.8, 100.0, True, "fixture-provider", NOW)
+        rows[-4] = OHLCV(rows[-4].timestamp_ms, 105.8, 106.0, 105.5, 105.9, 100.0, True, "fixture-provider", NOW)
+        rows[-3] = OHLCV(rows[-3].timestamp_ms, 105.9, 106.2, 105.8, 106.1, 100.0, True, "fixture-provider", NOW)
+        rows[-2] = OHLCV(rows[-2].timestamp_ms, 106.5, 108.0, 106.4, 107.5, 100.0, True, "fixture-provider", NOW)
+        rows[-1] = OHLCV(last.timestamp_ms, 106.3, 107.1, 106.1, 106.5, 100.0, True, "fixture-provider", NOW)
     elif strategy == "wyckoff-schematics":
         rows[-1] = OHLCV(last.timestamp_ms, 100.0, 108.0, 99.0, 107.0, 200.0, True, "fixture-provider", NOW)
     elif strategy in {"supply-and-demand", "breakout-momentum"}:
         rows[-1] = OHLCV(last.timestamp_ms, 100.0, 108.0, 99.0, 107.0, 100.0, True, "fixture-provider", NOW)
     elif strategy == "volatility-breakout":
         rows[-1] = OHLCV(last.timestamp_ms, 100.0, 110.0, 99.0, 109.0, 100.0, True, "fixture-provider", NOW)
-    elif strategy == "statistical-mean-reversion":
+    elif strategy == "mean-reversion":
         rows = []
         for index in range(count):
             close = 100.0 + (0.15 if index % 2 else -0.15)
             rows.append(OHLCV(NOW - (count - index) * INTERVAL, close - .05, close + .25, close - .25, close, 100.0, True, "fixture-provider", NOW))
-        rows[-1] = OHLCV(rows[-1].timestamp_ms, 95.0, 97.0, 94.0, 96.0, 100.0, True, "fixture-provider", NOW)
+        rows[-1] = OHLCV(rows[-1].timestamp_ms, 99.65, 99.75, 99.5, 99.7, 100.0, True, "fixture-provider", NOW)
     return rows
 
 @pytest.mark.parametrize("strategy", ALL_STRATEGIES)
@@ -132,6 +210,8 @@ def test_each_known_strategy_has_versioned_positive_evidence_and_is_non_executab
     assert result.strategy_version == STRATEGY_RULESETS[strategy]
     assert result.evidence
     assert result.reason
+    assert result.confidence_score == 0
+    assert "NO_EMPIRICAL_CONFIDENCE_SCORE" in result.score_basis
     assert result.executable is False
 
 def _neutral_rows(count=35):
@@ -156,6 +236,40 @@ def test_each_known_strategy_insufficient_history_waits(strategy):
     assert result.state == "WAITING"
     assert result.reason == "INSUFFICIENT_CLOSED_CANDLES"
     assert result.strategy_id == strategy
+
+
+def test_ict_requires_sweep_displacement_fvg_and_consequent_encroachment():
+    result = evaluate_strategy(validate(_strategy_rows("ict-silver-bullet")), strategy_id="ict-silver-bullet", symbol="EUR/USD", timeframe="M15")
+    assert result.state == "CANDIDATE"
+    assert result.direction == "LONG"
+    assert "LIQUIDITY_SWEEP_LOW" in result.evidence
+    assert "DISPLACEMENT_CLOSE_UP" in result.evidence
+    assert "BULLISH_FVG" in result.evidence
+    assert "FVG_CONSEQUENT_ENCROACHMENT" in result.evidence
+    assert "SILVER_BULLET_NEW_YORK_AM" in result.evidence
+    assert result.executable is False
+
+
+def test_ict_session_windows_use_new_york_dst_and_half_open_boundaries():
+    from quantitative import _ict_silver_bullet_window
+
+    assert _ict_silver_bullet_window(1_699_975_860_000) == "NEW_YORK_AM"  # Nov EST
+    assert _ict_silver_bullet_window(1_689_345_060_000) == "NEW_YORK_AM"  # Jul EDT
+    assert _ict_silver_bullet_window(1_699_950_600_000) == "LONDON"  # 03:30 EST
+    assert _ict_silver_bullet_window(1_699_990_200_000) == "NEW_YORK_PM"  # 14:30 EST
+    assert _ict_silver_bullet_window(1_699_977_600_000) is None  # 11:00 EST is end-exclusive
+
+
+def test_ict_rejects_an_otherwise_valid_pattern_outside_session():
+    rows = _strategy_rows("ict-silver-bullet")
+    shift_ms = 2 * 60 * 60 * 1000
+    shifted = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + shift_ms,
+                        "retrieved_at_ms": row.retrieved_at_ms + shift_ms}) for row in rows]
+    series = validate_ohlcv(shifted, now_ms=NOW + shift_ms, source="fixture-provider", expected_interval_ms=INTERVAL)
+    result = evaluate_strategy(series, strategy_id="ict-silver-bullet", symbol="EUR/USD", timeframe="M15")
+    assert result.state == "WAITING"
+    assert result.reason == "OUTSIDE_ICT_SILVER_BULLET_WINDOW"
+    assert result.executable is False
 
 
 def test_unknown_strategy_is_only_not_implemented_case():
@@ -187,11 +301,35 @@ def test_json_boundary_preserves_non_executable_candidate_and_provenance():
     assert result["executable"] is False
 
 
+def test_json_boundary_stale_retrieval_response_preserves_exact_identity():
+    rows = candles()
+    rows[-1] = OHLCV(**{**rows[-1].__dict__, "retrieved_at_ms": NOW - 600_000})
+    payload = {
+        "symbol": "EUR/USD", "timeframe": "M1", "strategy_id": STRATEGY_ID,
+        "source": "fixture-provider", "now_ms": NOW, "expected_interval_ms": INTERVAL,
+        "provider_retrieved_at_ms": NOW, "candles": [row.__dict__ for row in rows],
+    }
+    result = json.loads(analyze_json(json.dumps(payload)))
+    assert result["state"] == "DATA_UNAVAILABLE"
+    assert result["reason"] == "STALE_RETRIEVAL"
+    assert result["symbol"] == payload["symbol"]
+    assert result["strategy_id"] == payload["strategy_id"]
+    assert result["strategy_version"] == "python-smc-confluence-1.0.0"
+    assert result["timeframe"] == payload["timeframe"]
+    assert result["candle_timestamp_ms"] == rows[-1].timestamp_ms
+    assert result["source"] == payload["source"]
+    assert result["evidence"] == [] and result["score_basis"] == []
+    assert result["entry"] is None and result["stop_loss"] is None and result["take_profit"] is None
+    assert result["executable"] is False
+
+
 def test_json_boundary_unknown_strategy_is_not_implemented_without_fallback():
     result = json.loads(analyze_json(json.dumps({
         "symbol": "EUR/USD", "timeframe": "M15", "strategy_id": "future-strategy",
-        "source": "fixture-provider", "now_ms": NOW, "candles": [],
+        "source": "fixture-provider", "now_ms": NOW, "expected_interval_ms": INTERVAL,
+        "provider_retrieved_at_ms": NOW, "candles": [row.__dict__ for row in candles()],
     })))
+    assert result["state"] == "WAITING"
     assert result["strategy_version"] == "NOT_IMPLEMENTED"
     assert result["reason"] == "NOT_IMPLEMENTED"
     assert result["executable"] is False

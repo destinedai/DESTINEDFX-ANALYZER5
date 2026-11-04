@@ -42,6 +42,15 @@
                 android:value="User-started Demo trading account monitoring and broker-confirmed contract reconciliation" />
         </service>
 
+        <service
+            android:name=".service.MT5AccountSessionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started monitoring and account-risk notifications for configured MT5 broker profiles" />
+        </service>
+
         <receiver
             android:name=".service.DerivBotBootReceiver"
             android:enabled="true"

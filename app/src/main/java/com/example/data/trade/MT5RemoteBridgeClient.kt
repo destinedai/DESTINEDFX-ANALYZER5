@@ -19,8 +19,24 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** Android control/status client for the remote MT5 relay. Never places orders. */
-class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String = "DEMO") {
-    val profile: String = profile.trim().uppercase().also { require(it == "DEMO" || it == "LIVE") }
+class MT5RemoteBridgeClient(
+    private val secrets: SecretsManager,
+    profile: String = "DEMO",
+    private val sensitiveActionAuthorized: () -> Boolean = { false },
+    accountMode: String = profile,
+    brokerBrand: String = "FBS"
+) {
+    /** Local secure-storage namespace, e.g. FBS_DEMO or EXNESS_LIVE. */
+    val profile: String = profile.trim().uppercase().also {
+        require(it.matches(Regex("[A-Z0-9_-]{1,80}"))) { "Invalid broker account profile key." }
+    }
+    /** Actual broker account mode remains DEMO or LIVE, independent of the local namespace. */
+    val accountMode: String = accountMode.trim().uppercase().also {
+        require(it == "DEMO" || it == "LIVE") { "Account mode must be DEMO or LIVE." }
+    }
+    val brokerBrand: String = brokerBrand.trim().uppercase().also {
+        require(it in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
+    }
     private val http = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(5, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
@@ -50,7 +66,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     )
     fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
     fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
-    fun hasPairing(): Boolean = secrets.getMT5BridgeAppToken(profile).isNotBlank()
+    fun hasPairing(): Boolean = secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()
 
     /** Registers one mode-scoped pairing. The bridge stores broker credentials encrypted; this client never logs them. */
     suspend fun registerManagedAccount(
@@ -64,8 +80,10 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         commissionPerLot: Double = 0.0,
         costEvidence: String = ""
     ): Snapshot {
+        check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; managed account registration was not attempted." }
         require(managedConfigured()) { "CONFIGURATION_REQUIRED" }
         require(accessType == "MASTER" || accessType == "INVESTOR")
+        require(brokerBrand in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
         require(consent) { "Explicit consent is required before sending broker credentials." }
         require(login.trim().matches(Regex("[0-9]{1,20}"))) { "Account login must contain digits only." }
         require(server.isNotBlank() && password.isNotBlank()) { "Exact broker server and password are required." }
@@ -76,23 +94,26 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         when (costModel) {
             "OBSERVED_ROUND_TURN" -> require(commissionPerLot == 0.0 && evidence.isEmpty()) { "Observed mode uses broker deal history and must not include a configured commission." }
             "ZERO_COMMISSION_SPREAD_ONLY" -> require(commissionPerLot == 0.0 && evidence.length >= 8) { "Zero-commission mode requires a broker pricing reference; the EA will calculate spread and slippage costs live." }
-            else -> require(commissionPerLot > 0.0 && evidence.length >= 8) { "Configured commission requires a positive account-currency amount per standard lot and a broker pricing reference." }
+        else -> require(commissionPerLot > 0.0 && evidence.length >= 8) { "Configured commission requires a positive account-currency amount per standard lot and a broker pricing reference." }
         }
-        if (secrets.getMT5BridgeAppToken(profile).isBlank()) pair()
+        check(secrets.saveManagedMT5AccountProfile(profile, login.trim(), server, accessType, password, savePasswordLocally)) {
+            "Managed MT5 profile could not be durably saved in encrypted storage; no credentials were submitted."
+        }
+        if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) pair()
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
-            .put("access_type", accessType).put("account_mode", profile).put("consent", consent)
+            .put("access_type", accessType).put("account_mode", accountMode).put("broker_brand", brokerBrand).put("consent", consent)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
-        secrets.saveManagedMT5Profile(profile, login.trim(), server, accessType, password, savePasswordLocally)
         return state()
     }
 
-    suspend fun pair(): Pairing = request("POST", "/v1/pairings", JSONObject()).let { body ->
+    suspend fun pair(): Pairing {
+        check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; pairing request was not sent." }
+        val body = request("POST", "/v1/pairings", JSONObject())
         val code = body.optString("pairing_code"); val token = body.optString("app_token")
         require(code.isNotBlank() && token.isNotBlank()) { "Bridge returned an incomplete pairing response." }
-        if (!secrets.isSecureStorageAvailable) throw IllegalStateException("Secure storage is unavailable; app token was not saved.")
-        check(secrets.saveMT5BridgeAppToken(token, profile)) { "Bridge app token could not be durably stored in encrypted preferences." }
-        Pairing(code, body.optString("expires_at"))
+        check(secrets.saveMT5BridgeAccountAppToken(profile, token)) { "Bridge app token could not be durably stored in encrypted preferences." }
+        return Pairing(code, body.optString("expires_at"))
     }
 
     suspend fun state(): Snapshot {
@@ -150,6 +171,9 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     suspend fun command(requestId: String, action: String, config: JSONObject = JSONObject()): CommandResult {
         require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP", "CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL"))
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
+        if (action in TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
+            return CommandResult(requestId, false, "REAUTHENTICATION_REQUIRED: authenticate again before this trading action", rejected = true)
+        }
         if (action in TRADE_ACTIONS) {
             val fresh = try { state() } catch (e: Exception) {
                 return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
@@ -216,7 +240,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         val login = config.optString("account_login")
         val server = config.optString("account_server")
         val mode = config.optString("account_mode").uppercase()
-        if (login != snapshot.actualLogin || server != snapshot.actualServer || mode != profile) return "Command account/environment does not match the verified selected profile."
+        if (login != snapshot.actualLogin || server != snapshot.actualServer || mode != accountMode) return "Command account/environment does not match the verified selected profile."
         val tickets = config.optJSONArray("tickets")
         fun ticketsOrFailure(): List<String>? {
             tickets ?: return null
@@ -263,7 +287,8 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     }
 
     suspend fun authorizeLiveSession(): String {
-        require(profile == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
+        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
+        require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
         val fresh = state()
         val reason = gateFailure(fresh, requireLiveAuthorization = false)
         require(reason == null) { reason ?: "LIVE profile is not ready." }
@@ -272,33 +297,33 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     }
 
     suspend fun clearLiveAuthorization() {
-        if (profile == "LIVE" && hasPairing()) request("DELETE", "/v1/app/live-authorization")
+        if (accountMode == "LIVE" && hasPairing()) request("DELETE", "/v1/app/live-authorization")
     }
 
     suspend fun revoke() {
         request("DELETE", "/v1/app/pairing")
-        secrets.clearMT5BridgeAppToken(profile)
-        secrets.clearMT5BridgePendingCommand(profile)
-        secrets.clearMT5BridgeSafetyStop(profile)
+        secrets.clearMT5BridgeAccountAppToken(profile)
+        secrets.clearMT5BridgeAccountPendingCommand(profile)
+        secrets.clearMT5BridgeAccountSafetyStop(profile)
     }
 
     private fun gateFailure(snapshot: Snapshot, requireLiveAuthorization: Boolean): String? {
-        val expectedLogin = secrets.getManagedMT5Login(profile)
-        val expectedServer = secrets.getManagedMT5Server(profile)
+        val expectedLogin = secrets.getManagedMT5AccountLogin(profile)
+        val expectedServer = secrets.getManagedMT5AccountServer(profile)
         return when {
-            profile !in setOf("DEMO", "LIVE") -> "Selected profile is not DEMO or LIVE."
-            snapshot.profileMode != profile -> "Selected $profile profile does not match the server-managed account mode."
+            accountMode !in setOf("DEMO", "LIVE") -> "Selected account mode is not DEMO or LIVE."
+            snapshot.profileMode != accountMode -> "Selected $brokerBrand $accountMode profile does not match the server-managed account mode."
             snapshot.accessType != "MASTER" -> "INVESTOR access is read-only and cannot execute trading commands."
             !snapshot.accountVerified -> "Broker-reported account identity is not verified by the bridge."
-            snapshot.actualAccountMode != profile -> "Connected terminal reports ${snapshot.actualAccountMode.ifBlank { "UNVERIFIED" }} mode, not $profile."
-            expectedLogin.isBlank() || snapshot.actualLogin != expectedLogin -> "Connected terminal login does not exactly match the selected $profile profile."
-            expectedServer.isBlank() || snapshot.actualServer != expectedServer -> "Connected terminal server does not exactly match the selected $profile profile."
+            snapshot.actualAccountMode != accountMode -> "Connected terminal reports ${snapshot.actualAccountMode.ifBlank { "UNVERIFIED" }} mode, not $accountMode."
+            expectedLogin.isBlank() || snapshot.actualLogin != expectedLogin -> "Connected terminal login does not exactly match the selected $brokerBrand $accountMode account."
+            expectedServer.isBlank() || snapshot.actualServer != expectedServer -> "Connected terminal server does not exactly match the selected $brokerBrand $accountMode account."
             !snapshot.heartbeatFresh -> "Authenticated terminal heartbeat is missing or stale."
             !snapshot.terminalConnected -> "MT5 terminal is not connected."
             !snapshot.tradeAllowed -> "Broker or terminal trade permission is unavailable."
             snapshot.managedState != "READY" -> "Managed service and terminal are not READY."
             snapshot.state !in setOf("READY", "RUNNING", "PAUSED", "STOPPED") -> "EA reports ${snapshot.state}; execution is blocked until it is reconciled."
-            profile == "LIVE" && requireLiveAuthorization && !snapshot.liveAuthorized -> "Current explicit LIVE authorization is missing or expired."
+            accountMode == "LIVE" && requireLiveAuthorization && !snapshot.liveAuthorized -> "Current explicit LIVE authorization is missing or expired."
             else -> null
         }
     }
@@ -306,7 +331,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
     private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException(if (!managedConfigured()) "CONFIGURATION_REQUIRED" else "Managed service URL is invalid; HTTPS is required.")
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
-        secrets.getMT5BridgeAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
+        secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty().take(256 * 1024)

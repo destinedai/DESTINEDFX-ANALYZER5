@@ -72,7 +72,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "runtime configuration applied": "ArrayCopy(g_symbols,syms)" in source and "g_maxConcurrent=concurrent" in source and "g_dailyLossPercent=daily" in source,
         "risk validated without clamping": "risk<=0||risk>1" in source and "g_riskPercent=risk" in source,
         "processed command retains original ack": "Ack(id,g_ackOutcomes[ai],g_ackMessages[ai])" in source and "g_ackOutcomes[n]=outcome" in source,
-        "persistent daily equity": "GlobalVariableSet(key,AccountInfoDouble(ACCOUNT_EQUITY))" in source,
+        "persistent daily equity": "GlobalVariableSet(equityKey,equity)" in source and "AccountInfoDouble(ACCOUNT_EQUITY)" in source,
         "rates readiness": "CopyRates(syms[si],mtf,0,80,hr)<50" in source and "MarketReady(syms[si],mtf)" in source,
         "trade permission readiness": "!MQLInfoInteger(MQL_TRADE_ALLOWED)||!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)" in source and "!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)" in source,
         "structured signal object": "LastSignalJson()" in source and '"last_signal\\":%s' in source and "ORDER_ACCEPTED" in source and "REJECTED" in source,
@@ -274,3 +274,38 @@ def test_reconciliation_publishes_monotonic_ack_updates():
     assert "Ack(request,newOutcome,newMessage,newResults)" in publish
     assert "PublishReconciledOperationAcks();" in source[source.index("void ReconcileOperations()") :]
     assert "if(!created[t]){ReconcileOperation(oi);continue;}" in source
+
+
+def test_daily_risk_guard_is_account_equity_wide_persistent_and_closes_only_managed_exposure():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    snapshot = source[source.index("bool DailyRiskSnapshot") : source.index("bool RiskDayOK()")]
+    emergency = source[source.index("void DailyEmergencyExit()") : source.index("void Heartbeat()")]
+    assert "DailyRiskBaselineKey" in snapshot and "(nowServer-dayStart)>120" in snapshot
+    assert "AccountInfoDouble(ACCOUNT_EQUITY)" in snapshot
+    assert "netPnl=currentEquity-g_dayStartEquity" in snapshot
+    assert "HistorySelect" not in snapshot
+    assert "DEAL_MAGIC" not in snapshot and "POSITION_MAGIC" not in snapshot
+    assert "DailyRiskWarningKey" in source and 'NotifyDailyRisk("80% WARNING"' in source
+    assert 'NotifyDailyRisk("90% CRITICAL WARNING"' in source
+    assert 'NotifyDailyRisk("100% LIMIT BREACHED"' in source
+    assert 'string DailyRiskLockKey(){return DayKey()+"_LOCK";}' in source
+    assert 'string DailyRiskWarningKey(string threshold){return DayKey()+"_WARN_"+threshold;}' in source
+    assert "GlobalVariableSet(lockKey,1.0)" in source and "GlobalVariablesFlush()" in source
+    assert "DailyEmergencyExit()" in source and "trade.OrderDelete(ticket)" in emergency
+    assert "trade.PositionClose(ticket)" in emergency
+    assert "ORDER_MAGIC)!=(long)InpMagic" in emergency
+    assert "POSITION_MAGIC)!=(long)InpMagic" in emergency
+    assert "OrderSelect(ticket)" in emergency and "HistoryOrderSelect(ticket)" in emergency
+    assert "PositionSelectByTicket(ticket)" in emergency
+    assert "g_dailyRiskStatus=\"EXIT_CONFIRMED\"" in source
+    assert "g_dailyRiskStatus=\"EXIT_PENDING\"" in source
+    assert "DAILY RISK DATA UNAVAILABLE" in source
+    assert "daily_loss_used_percent" in source and "g_dailyRiskUsedPct" in source
+    assert "RiskDayOK()&&AccountIdentityMatches()" in source
+
+
+def test_daily_limit_blocks_start_resume_and_timer_keeps_exit_retrying():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert 'if(!RiskDayOK()){g_state="STOPPED";outcome="REJECTED";msg="DAILY RISK GUARD' in source
+    assert 'if(RiskDayOK()&&AccountIdentityMatches()' in source
+    assert 'if(!RiskDayOK()){if(DailyRiskLocked())DailyEmergencyExit();' in source

@@ -12,6 +12,8 @@ import com.example.domain.engine.impl.CoreMarketStructureAnalyzer
 import com.example.domain.engine.MTFAlignmentEngine
 import com.example.domain.usecase.impl.*
 import com.example.security.SecretsManager
+import com.example.security.AppSecurityGuard
+import com.example.domain.risk.TradingSafetyLimits
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.OkHttpClient
@@ -148,7 +150,10 @@ class MyApplication : Application() {
             
             _authUseCase = AuthUseCaseImpl(dbInstance, secrets)
             _marketDataUseCase = GetMarketDataUseCaseImpl(marketDataRepository)
-            _signalGenerationUseCase = SignalGenerationUseCaseImpl(marketDataRepository, newsRepository)
+            _signalGenerationUseCase = SignalGenerationUseCaseImpl(
+                marketDataRepository, newsRepository,
+                pythonAnalyzer = ChaquopyPythonAnalyzer(this@MyApplication)
+            )
             
             _derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secrets)
             _derivGatewayAdapter = com.example.data.broker.DerivBrokerGatewayAdapter(derivBrokerGateway)
@@ -163,11 +168,15 @@ class MyApplication : Application() {
                 reports = signalGenerationUseCase,
                 config = { 
                     com.destinedfx.core.trade.TradingConfig(
-                        riskPercent = 1.0, 
-                        minRR = 2.0,
-                        portfolio = com.destinedfx.core.risk.PortfolioLimits(maxDailyLossPct = 3.0, maxWeeklyLossPct = 6.0)
+                        riskPercent = TradingSafetyLimits.MAX_TRADE_RISK_PERCENT,
+                        minRR = TradingSafetyLimits.MIN_REWARD_TO_RISK,
+                        portfolio = com.destinedfx.core.risk.PortfolioLimits(
+                            maxDailyLossPct = TradingSafetyLimits.MAX_DAILY_LOSS_PERCENT,
+                            maxWeeklyLossPct = TradingSafetyLimits.MAX_WEEKLY_LOSS_PERCENT
+                        )
                     ) 
-                }
+                },
+                sensitiveActionAuthorized = { AppSecurityGuard.authorizeSensitiveAction() }
             )
             _backtestUseCase = BacktestUseCaseImpl(marketDataRepository, startingBalance = { null })
             
@@ -177,7 +186,8 @@ class MyApplication : Application() {
                 tradeUseCase = tradeUseCase,
                 tradeRepo = tradeRepository,
                 brokerManager = brokerManager,
-                signalGenerationUseCase = signalGenerationUseCase
+                signalGenerationUseCase = signalGenerationUseCase,
+                sensitiveActionAuthorized = { AppSecurityGuard.authorizeSensitiveAction() }
             )
             
             initStatus.value = InitState.Ready

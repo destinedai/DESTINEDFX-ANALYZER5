@@ -1,16 +1,35 @@
 # Broker capability matrix
 
-This matrix describes repository capability and evidence status. A capability marked implemented means code exists; it does not prove a genuine broker account, broker response, fill, reconciliation, or production readiness.
+This matrix records repository implementation and evidence separately. A declared broker brand or an authenticated MT5 terminal is not proof of order acceptance, fill, reconciliation, or production readiness.
 
-| Broker | Market data | Authentication/account verification | DEMO orders | LIVE orders | Stop/close | History/reconciliation |
-|---|---|---|---|---|---|---|
-| Deriv | **IMPLEMENTED** — WebSocket/provider paths exist | **IMPLEMENTED / NOT VERIFIED** — authorization code exists; genuine account evidence is not present in this environment | **NOT VERIFIED** — the generic Forex/CFD trade plan is deliberately rejected because Deriv Multiplier stake/proposal mapping is not validated | **BLOCKED** — no LIVE authorization is granted | **NOT VERIFIED** — close route exists, broker confirmation and recovery evidence are absent | **NOT VERIFIED** |
-| MT5 managed bridge | **NOT VERIFIED** — depends on the managed terminal/provider | **NOT VERIFIED** — requires the authenticated bridge, worker, terminal and exact account identity | **NOT VERIFIED** — requires a genuine terminal, EA, worker and broker-confirmed order/fill | **BLOCKED** — separately gated and not authorized | **NOT VERIFIED** — commands exist, end-to-end broker/EA evidence is absent | **NOT VERIFIED** |
-| OANDA | **IMPLEMENTED** for provider market data only | **NOT IMPLEMENTED** for trading | **NOT IMPLEMENTED** — routes to `UnavailableBrokerGateway` | **BLOCKED** — no execution route exists | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** |
-| Preview gateway (separate from broker profiles) | **NOT IMPLEMENTED** | **BLOCKED** | **BLOCKED** — simulated orders are disabled | **BLOCKED** | **BLOCKED** | **BLOCKED** |
+| Broker / connection method | Current implementation | DEMO acceptance | LIVE |
+|---|---|---|---|
+| FBS MT5 | Shared managed MT5 terminal/EA path; broker-brand claim check for terminal company, login, server and mode | NOT VERIFIED — no genuine FBS DEMO account acceptance evidence in this repository run | BLOCKED |
+| Exness MT5 | Shared managed MT5 terminal/EA path; separate broker-qualified pairing and terminal identity check | NOT VERIFIED — no genuine Exness MT5 DEMO account acceptance evidence | BLOCKED |
+| Exness Trader API | NOT IMPLEMENTED — requires eligible Exness API key, Ed25519 signing service, per-account Access Point discovery, event stream and reconciliation | NOT IMPLEMENTED | BLOCKED |
+| Deriv Options / Multipliers API | REST account/OTP plus account-scoped authenticated WebSocket, proposal/purchase and execution ledger code exist | NOT VERIFIED — genuine account proposal, purchase, close/settlement and history acceptance are still required | BLOCKED |
+| Deriv MT5 | Uses shared managed MT5 terminal/EA path when the customer has an actual Deriv MT5 account | NOT VERIFIED | BLOCKED |
+| HFM MT5 | Shared managed MT5 terminal/EA path; broker-brand claim check for terminal company, login, server and mode | NOT VERIFIED — no genuine HFM DEMO account acceptance evidence | BLOCKED |
 
-The Deriv, MT5 and OANDA broker profiles in this matrix are available to Android code through `BrokerCapabilityMatrix`; Preview is a separate non-broker gateway and is not a `BrokerType` profile. Preview mode has no account balance, cannot authenticate, cannot return a quote, and fails closed for order, close, and margin operations. No preview identifier is a broker transaction identifier.
+## Capability disclosures
 
-## Evidence still required
+The Android `BrokerCapabilityMatrix` is a static code capability profile for DERIV, MT5, and OANDA; it does not itself prove an account is ready. This document's FBS, Exness, HFM, and Deriv rows distinguish the connection methods that map to those profiles. Preview is a separate non-broker gateway, not a `BrokerType` profile. Preview mode has no account balance, cannot authenticate, cannot return a quote, and fails closed for order, close, and margin operations. No preview identifier is a broker transaction identifier.
 
-Deriv DEMO acceptance requires a user-authorized genuine DEMO account, exact account identity and mode, a minimum-risk product-specific proposal/purchase, broker-confirmed transaction and contract IDs, settlement, history reconciliation, duplicate prevention, reconnect, STOP and restart evidence. MT5 DEMO acceptance additionally requires the Windows worker, genuine terminal, compiled EA, exact login/server/mode, heartbeat, trade permission, broker-reported order/fill and recovery evidence. No LIVE order is authorized by this repository task.
+## MT5 account isolation
+
+The Android app uses a broker-qualified secure-storage namespace, for example FBS_DEMO, EXNESS_DEMO, and HFM_LIVE. Pairing tokens, account credentials, pending command IDs, and safety-stop metadata are separated by broker and mode. The selected account mode sent to the bridge remains exactly DEMO or LIVE; the local namespace is not sent as an account mode.
+
+The managed-account registration includes `broker_brand`. The bridge stores it and checks the company reported by the actual terminal when the terminal claims the pairing. Supported MT5 brand checks currently recognize FBS, Exness, Deriv, and HF Markets/HFM company-name aliases. Exact server names remain user supplied and are never guessed. Older records without a broker brand remain UNKNOWN for compatibility and should be re-enrolled before being treated as brand-verified.
+
+## What the implementation does not prove
+
+- The FBS, Exness and HFM entries share one MT5 connector; this is not three separate broker APIs.
+- The direct Exness Trader API connector and its Ed25519 key management are not implemented by the MT5 connector.
+- Deriv MT5 and Deriv Options/Multipliers are separate account paths.
+- A local unit test or a terminal heartbeat does not prove a real DEMO order lifecycle.
+- DEMO and LIVE profiles are separate. LIVE trade authorization remains blocked until explicitly armed for the exact account.
+- No genuine broker order was submitted in this development change.
+
+## Required acceptance evidence
+
+For each real DEMO account, record the exact broker and connection method, actual account ID/mode/server, fresh quote and instrument specification, broker-confirmed order/deal/contract IDs, protective order state, cancellation/close result, history reconciliation, and reconnect/restart evidence. Ambiguous order outcomes must remain unresolved until broker state confirms them.

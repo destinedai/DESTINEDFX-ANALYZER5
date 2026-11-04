@@ -15,6 +15,7 @@ import org.robolectric.annotation.Config
 class SecretsManagerBridgePendingTest {
     @Test fun botConfigurationPersistsSeparatelyFromAnalyzerStrategy() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
         manager.saveSelectedStrategy("ict-silver-bullet")
         manager.saveBotSymbol("R_100")
         manager.saveBotStrategy("smc-confluence-1.0.0")
@@ -43,6 +44,54 @@ class SecretsManagerBridgePendingTest {
         assertEquals("", manager.getMT5BridgePendingCommandAction())
     }
 
+    @Test fun configuredMT5AccountProfilesAreEnumeratedWithoutExposingTokens() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+        assertTrue(manager.saveMT5BridgeAccountAppToken("FBS_DEMO", "opaque-demo-token"))
+        assertTrue(manager.saveMT5BridgeAccountAppToken("EXNESS_LIVE", "opaque-live-token"))
+        val profiles = manager.getConfiguredMT5AccountProfileKeys()
+        assertTrue(profiles.contains("FBS_DEMO"))
+        assertTrue(profiles.contains("EXNESS_LIVE"))
+        assertTrue(!profiles.contains("HFM_DEMO"))
+    }
+
+    @Test fun derivApiTokensAreIsolatedByDemoAndRealMode() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+
+        assertTrue(manager.saveDerivAccountMode("demo"))
+        assertTrue(manager.saveDerivApiToken("demo-only-token"))
+        assertTrue(manager.saveDerivAccountMode("real"))
+        assertTrue(manager.saveDerivApiToken("real-only-token"))
+
+        assertEquals("demo-only-token", manager.getDerivApiToken("demo"))
+        assertEquals("real-only-token", manager.getDerivApiToken("real"))
+        assertTrue(manager.clearDerivCredentials())
+        assertEquals("", manager.getDerivApiToken("demo"))
+        assertEquals("", manager.getDerivApiToken("real"))
+    }
+
+    @Test fun derivDailyRiskBaselineLockAndWarningsAreAccountModeAndDayScoped() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+        val day = "2026-11-04"
+        assertTrue(manager.initializeDerivDailyRiskDay("demo-account-1", "demo", day, 1_000.0))
+        assertEquals(1_000.0, manager.getDerivDailyRiskStartingEquity("demo-account-1", "demo", day)!!, 0.0)
+        // Re-initialization during the same day cannot move the baseline downward.
+        assertTrue(manager.initializeDerivDailyRiskDay("demo-account-1", "demo", day, 500.0))
+        assertEquals(1_000.0, manager.getDerivDailyRiskStartingEquity("demo-account-1", "demo", day)!!, 0.0)
+        assertTrue(manager.markDerivDailyRiskWarningSent("demo-account-1", "demo", day, 80))
+        assertFalse(manager.markDerivDailyRiskWarningSent("demo-account-1", "demo", day, 80))
+        assertTrue(manager.markDerivDailyRiskWarningSent("demo-account-1", "demo", day, 90))
+        assertTrue(manager.lockDerivDailyRisk("demo-account-1", "demo", day))
+        assertTrue(manager.isDerivDailyRiskLocked("demo-account-1", "demo", day))
+        assertFalse(manager.isDerivDailyRiskLocked("demo-account-1", "real", day))
+        assertFalse(manager.isDerivDailyRiskLocked("different-account", "demo", day))
+        assertTrue(manager.initializeDerivDailyRiskDay("demo-account-1", "demo", "2026-11-05", 900.0))
+        assertFalse(manager.isDerivDailyRiskLocked("demo-account-1", "demo", "2026-11-05"))
+        assertEquals(900.0, manager.getDerivDailyRiskStartingEquity("demo-account-1", "demo", "2026-11-05")!!, 0.0)
+    }
+
     @Test fun manuallyChangedManagedBridgeUrlPersistsAcrossManagerRestart() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         if (!manager.isSecureStorageAvailable) return
@@ -67,8 +116,8 @@ class SecretsManagerBridgePendingTest {
         assertEquals("demo-request", manager.getMT5BridgePendingCommandId("DEMO"))
         assertEquals("live-request", manager.getMT5BridgePendingCommandId("LIVE"))
 
-        manager.saveManagedMT5Profile("DEMO", "111", "Demo-Server", "MASTER", "demo-password", true)
-        manager.saveManagedMT5Profile("LIVE", "999", "Live-Server", "MASTER", "live-password", true)
+        assertTrue(manager.saveManagedMT5Profile("DEMO", "111", "Demo-Server", "MASTER", "demo-password", true))
+        assertTrue(manager.saveManagedMT5Profile("LIVE", "999", "Live-Server", "MASTER", "live-password", true))
         assertEquals("111", manager.getManagedMT5Login("DEMO"))
         assertEquals("999", manager.getManagedMT5Login("LIVE"))
         assertEquals("Demo-Server", manager.getManagedMT5Server("DEMO"))
@@ -82,6 +131,57 @@ class SecretsManagerBridgePendingTest {
         manager.clearMT5BridgeAppToken("LIVE")
         assertEquals("demo-token", manager.getMT5BridgeAppToken("DEMO"))
         assertFalse(manager.getMT5BridgeAppToken("LIVE").isNotBlank())
+    }
+
+    @Test fun brokerQualifiedMt5ProfilesKeepTokensCredentialsAndPendingCommandsIndependent() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+
+        assertTrue(manager.saveManagedMT5AccountProfile("FBS_DEMO", "111", "FBS-Demo", "MASTER", "fbs-pw", true))
+        assertTrue(manager.saveManagedMT5AccountProfile("EXNESS_DEMO", "222", "Exness-Demo", "MASTER", "exness-pw", true))
+        assertTrue(manager.saveManagedMT5AccountProfile("HFM_LIVE", "333", "HFM-Live", "MASTER", "hfm-pw", true))
+
+        assertEquals("111", manager.getManagedMT5AccountLogin("FBS_DEMO"))
+        assertEquals("222", manager.getManagedMT5AccountLogin("EXNESS_DEMO"))
+        assertEquals("333", manager.getManagedMT5AccountLogin("HFM_LIVE"))
+        assertEquals("exness-pw", manager.getManagedMT5AccountPassword("EXNESS_DEMO"))
+        assertTrue(manager.saveMT5BridgeAccountAppToken("FBS_DEMO", "fbs-token"))
+        assertTrue(manager.saveMT5BridgeAccountAppToken("EXNESS_DEMO", "exness-token"))
+        assertTrue(manager.saveMT5BridgeAccountPendingCommand("fbs-id", "STOP", "FBS_DEMO"))
+        assertTrue(manager.saveMT5BridgeAccountPendingCommand("exness-id", "START", "EXNESS_DEMO"))
+        assertEquals("fbs-token", manager.getMT5BridgeAccountAppToken("FBS_DEMO"))
+        assertEquals("exness-token", manager.getMT5BridgeAccountAppToken("EXNESS_DEMO"))
+        assertEquals("fbs-id", manager.getMT5BridgeAccountPendingCommandId("FBS_DEMO"))
+        assertEquals("exness-id", manager.getMT5BridgeAccountPendingCommandId("EXNESS_DEMO"))
+
+        manager.clearMT5BridgeAccountAppToken("EXNESS_DEMO")
+        manager.clearMT5BridgeAccountPendingCommand("EXNESS_DEMO")
+        assertEquals("", manager.getMT5BridgeAccountAppToken("EXNESS_DEMO"))
+        assertEquals("", manager.getMT5BridgeAccountPendingCommandId("EXNESS_DEMO"))
+        assertEquals("fbs-token", manager.getMT5BridgeAccountAppToken("FBS_DEMO"))
+        assertEquals("fbs-id", manager.getMT5BridgeAccountPendingCommandId("FBS_DEMO"))
+
+        assertTrue(manager.saveSelectedMT5BrokerBrand("EXNESS"))
+        assertEquals("EXNESS", manager.getSelectedMT5BrokerBrand())
+        assertTrue(manager.saveSelectedMT5BrokerBrand("DERIV"))
+        assertEquals("DERIV", manager.getSelectedMT5BrokerBrand())
+        assertFalse(manager.saveSelectedMT5BrokerBrand("UNKNOWN"))
+    }
+
+    @Test fun managedMt5ProfileRefusesUnavailableStorageAndDefaultsPasswordSavingOff() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val unavailable = SecretsManager(context) { throw IllegalStateException("simulated Android Keystore failure") }
+        assertFalse(unavailable.isSecureStorageAvailable)
+        assertFalse(unavailable.saveManagedMT5Profile("DEMO", "123", "Demo-Server", "MASTER", "pw"))
+        assertFalse(unavailable.saveManagedMT5Profile("DEMO", "123", "Demo-Server", "MASTER", "pw", true))
+        assertEquals("", unavailable.getManagedMT5Login("DEMO"))
+        assertEquals("", unavailable.getManagedMT5Password("DEMO"))
+
+        val manager = SecretsManager(context)
+        if (!manager.isSecureStorageAvailable) return
+        assertTrue(manager.saveManagedMT5Profile("DEMO", "456", "Demo-Server", "MASTER", "do-not-save"))
+        assertFalse(manager.isManagedMT5PasswordSaveEnabled("DEMO"))
+        assertEquals("", manager.getManagedMT5Password("DEMO"))
     }
 
     @Test fun derivCredentialsAreStoredOnlyInEncryptedPreferencesAndModeIsExplicit() {
