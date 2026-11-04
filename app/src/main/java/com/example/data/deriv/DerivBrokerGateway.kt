@@ -614,7 +614,8 @@ class DerivBrokerGateway(
 
     suspend fun executeMultiplier(
         intent: DerivMultiplierIntent,
-        onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit = { _, _, _ -> }
+        onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit = { _, _, _ -> },
+        allowPurchase: suspend () -> Boolean = { false }
     ): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.READY) {
             return@withContext Result.failure(Exception("Deriv broker is not connected. Please connect in the Bot tab."))
@@ -726,7 +727,6 @@ class DerivBrokerGateway(
             put("price", askPrice)
             put("req_id", buyReqId)
         }
-        onStage(buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT)
         val purchaseBoundaryNow = System.currentTimeMillis()
         val accountAndSessionStillCurrent = sessionId != null &&
             authenticatedSessionId == sessionId &&
@@ -754,6 +754,27 @@ class DerivBrokerGateway(
                 )
             )
         }
+        val dailyRiskRecheckPassed = try {
+            allowPurchase()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+        if (!dailyRiskRecheckPassed) {
+            pendingRequests.remove(buyReqId)
+            onStage(propReqId, proposalId, DerivSubmissionStage.PROPOSAL_CONFIRMED)
+            return@withContext Result.failure(
+                DerivExecutionFailure(
+                    DerivExecutionFailureKind.PURCHASE_NOT_SENT,
+                    "DAILY_RISK_RECHECK_FAILED: daily loss status or a fresh account-matched broker snapshot could not be verified after proposal; no purchase was sent.",
+                    buyReqId,
+                    proposalId,
+                    DerivSubmissionStage.PROPOSAL_CONFIRMED
+                )
+            )
+        }
+        onStage(buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT)
         if (webSocket?.send(buyPayload.toString()) != true) {
             pendingRequests.remove(buyReqId)
             return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_NOT_SENT, "PURCHASE_NOT_SENT: Deriv WebSocket rejected the buy request before transmission.", buyReqId, proposalId, DerivSubmissionStage.PROPOSAL_CONFIRMED))
