@@ -668,7 +668,15 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
     require_durable_execution()
     worker_auth(authorization); fernet,_=managed_config(); t=time.time()
     with tx(True) as c:
-        if x.active_terminals >= x.max_terminals:
+        # Include in-flight provision leases as well as worker-reported terminal processes.
+        # This closes the race where two simultaneous requests claim before either terminal
+        # has written its local process marker.
+        leased_provisions=c.execute(
+            "SELECT COUNT(*) FROM worker_jobs WHERE worker_id=? AND kind='PROVISION' AND status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until>=?",
+            (x.worker_id,t)
+        ).fetchone()[0]
+        at_capacity = x.active_terminals >= x.max_terminals or leased_provisions >= x.max_terminals
+        if at_capacity:
             r=c.execute("SELECT * FROM worker_jobs WHERE kind='REVOKE' AND (status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?)) ORDER BY created LIMIT 1",(t,)).fetchone()
         else:
             r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
