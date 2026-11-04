@@ -341,6 +341,25 @@ class SecretsManager internal constructor(
     fun clearMT5BridgeAccountAppToken(profileKey: String): Boolean =
         isSecureStorageAvailable && prefs.edit().remove(mt5AccountKey("bridge_token", profileKey)).commit()
 
+    /** Configured profile namespaces that have a saved opaque app token; no token values are returned. */
+    fun getConfiguredMT5AccountProfileKeys(): List<String> {
+        if (!isSecureStorageAvailable) return emptyList()
+        val knownBrands = setOf("FBS", "EXNESS", "HFM", "DERIV")
+        return prefs.all.keys.asSequence()
+            .filter { it.startsWith("mt5_account_") && it.endsWith("_bridge_token") }
+            .map { it.removePrefix("mt5_account_").removeSuffix("_bridge_token").uppercase() }
+            .filter { profile ->
+                val separator = profile.lastIndexOf('_')
+                separator > 0 &&
+                    profile.substringBeforeLast('_') in knownBrands &&
+                    profile.substring(separator + 1) in setOf("DEMO", "LIVE") &&
+                    prefs.getString(mt5AccountKey("bridge_token", profile), "").orEmpty().isNotBlank()
+            }
+            .distinct()
+            .sorted()
+            .toList()
+    }
+
     fun saveManagedMT5AccountProfile(
         profileKey: String, login: String, server: String, accessType: String,
         password: String, savePassword: Boolean = false
