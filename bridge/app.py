@@ -81,6 +81,8 @@ def db():
     CREATE TABLE IF NOT EXISTS trade_ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, created REAL NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);
     CREATE TABLE IF NOT EXISTS analysis_requests(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, response TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(pairing_id,request_id));''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_app_hash ON pairings(app_hash)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_terminal_hash ON pairings(terminal_hash)')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
     for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT'),('heartbeat_seq','INTEGER NOT NULL DEFAULT 0')):
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
@@ -396,13 +398,14 @@ def provider_news(symbol):
 def auth(header, kind):
     if not header or not header.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
     raw=header[7:]
-    if len(raw)>200: raise HTTPException(401,'Unauthorized')
+    if len(raw)>200 or kind not in ('app','terminal'): raise HTTPException(401,'Unauthorized')
     field='app_hash' if kind=='app' else 'terminal_hash'
+    wanted=digest(raw)
     with tx() as c:
-        rows=c.execute(f'SELECT * FROM pairings WHERE {field} IS NOT NULL').fetchall()
-    for r in rows:
-        if hmac.compare_digest(r[field],digest(raw)):
-            if kind=='app' or (r['consumed'] and r['terminal_hash']): return dict(r)
+        row=c.execute(f'SELECT * FROM pairings WHERE {field}=? LIMIT 1',(wanted,)).fetchone()
+    if row is not None and hmac.compare_digest(row[field] or '',wanted):
+        if kind=='app' or (row['consumed'] and row['terminal_hash']):
+            return dict(row)
     raise HTTPException(401,'Unauthorized')
 def check_json(v, depth=0):
     if depth>8: raise HTTPException(422,'Data nesting exceeds limit')
