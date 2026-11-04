@@ -206,6 +206,13 @@ class DerivDemoBotService : Service() {
                     stopSafely("Safety blocked — Deriv daily equity is not finite; no new entry is permitted")
                     return
                 }
+                val existingDailyBaseline = app.secretsManager.getDerivDailyRiskStartingEquity(account.loginId, account.mode, utcDay)
+                if (existingDailyBaseline == null &&
+                    !DerivDailyRiskMonitor.canInitializeDailyBaseline(System.currentTimeMillis())
+                ) {
+                    stopSafely("Safety blocked — Deriv daily-risk baseline was not captured near UTC midnight; new entries remain blocked until the next UTC day or a supported broker-history baseline is available")
+                    return
+                }
                 if (!app.secretsManager.initializeDerivDailyRiskDay(account.loginId, account.mode, utcDay, currentEquity)) {
                     stopSafely("Safety blocked — secure Deriv daily-risk baseline could not be persisted")
                     return
