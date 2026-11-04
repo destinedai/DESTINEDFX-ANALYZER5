@@ -1,6 +1,7 @@
 package com.example.ui.workstations
 
 import com.example.domain.risk.TradingSafetyLimits
+import com.example.service.MT5AccountSessionService
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -206,6 +207,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
     LaunchedEffect(bridgeMode, bridgeToken, bridgeProfileKey, selectedAccountMode, bridgeClient.baseUrl()) {
         if (bridgeMode && bridgeClient.baseUrl().isNotBlank() && bridgeToken.isNotBlank()) {
+            runCatching { MT5AccountSessionService.start(reportContext) }
             while (true) {
                 try {
                     val fresh = bridgeClient.state()
@@ -1890,6 +1892,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                 savePasswordChecked, selectedCostModel, selectedCommission, selectedCostEvidence
                                             )
                                             bridgeMode = true
+                                            runCatching { MT5AccountSessionService.start(reportContext) }
                                             bridgeSnapshot = snapshot
                                             bridgeMessage = snapshot.managedState.ifBlank { "PROVISIONING" }
                                             brokerConnectionMessage = "${snapshot.managedState.ifBlank { "PROVISIONING" }} — broker connection is not confirmed until a fresh authenticated EA heartbeat."
