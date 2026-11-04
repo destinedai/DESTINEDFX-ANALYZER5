@@ -46,8 +46,8 @@ def broker_company_matches(brand, company):
     """Bind an MT5 profile to the broker identity actually reported by its terminal."""
     key=str(brand or 'UNKNOWN').strip().upper()
     normalized=''.join(ch for ch in str(company or '').upper() if ch.isalnum())
-    if key == 'UNKNOWN':
-        return True  # legacy records remain explicitly unverified until re-enrolled
+    if key not in ('FBS', 'EXNESS', 'HFM', 'DERIV'):
+        return False
     aliases={
         'FBS': ('FBS',),
         'EXNESS': ('EXNESS',),
@@ -56,6 +56,13 @@ def broker_company_matches(brand, company):
     }
     markers=aliases.get(key)
     return bool(normalized and markers and any(marker in normalized for marker in markers))
+
+def broker_server_matches(brand, expected_server, actual_server):
+    """Require the authenticated terminal to use the exact server pinned for this broker profile."""
+    key=str(brand or 'UNKNOWN').strip().upper()
+    expected=str(expected_server or '').strip()
+    actual=str(actual_server or '').strip()
+    return key in ('FBS', 'EXNESS', 'HFM', 'DERIV') and bool(expected) and hmac.compare_digest(expected, actual)
 
 def token(): return secrets.token_urlsafe(32)
 def db():
@@ -226,7 +233,7 @@ class ActiveOrder(BaseModel):
 class Account(BaseModel):
     model_config=ConfigDict(extra='forbid')
     login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); company:str=Field(min_length=1,max_length=128); currency:str=Field(min_length=1,max_length=16); account_mode:str
-    balance:float|None=Field(default=None,gt=0,allow_inf_nan=False); equity:float|None=Field(default=None,gt=0,allow_inf_nan=False); margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); free_margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin_level:float|None=Field(default=None,ge=0,allow_inf_nan=False); leverage:int|None=Field(default=None,gt=0)
+    balance:float|None=Field(default=None,ge=0,allow_inf_nan=False); equity:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); free_margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin_level:float|None=Field(default=None,ge=0,allow_inf_nan=False); leverage:int|None=Field(default=None,gt=0)
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
     state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict); cancelled_order_tickets:list[str]=Field(default_factory=list)
@@ -631,7 +638,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     require_durable_execution()
     p=auth(authorization,'app'); fernet,_=managed_config()
     if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
-    if x.broker_brand not in ('UNKNOWN','FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'Unsupported MT5 broker brand')
+    if x.broker_brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
     evidence=x.cost_evidence.strip()
     if any(ord(ch)<32 or ord(ch)==127 for ch in evidence): raise HTTPException(422,'Cost evidence reference must not contain control characters')
     if x.cost_model not in ('OBSERVED_ROUND_TURN','CONFIGURED_ROUND_TURN','CONFIGURED_PER_SIDE','ZERO_COMMISSION_SPREAD_ONLY'): raise HTTPException(422,'Invalid transaction cost model')
@@ -783,7 +790,7 @@ def claim(x:Claim):
             fernet,_=managed_config()
             expected_login=fernet.decrypt(managed['login_enc'].encode()).decode()
             expected_server=fernet.decrypt(managed['server_enc'].encode()).decode()
-            if managed['account_mode'] not in ('DEMO','LIVE') or x.account['login']!=expected_login or x.account['server']!=expected_server or x.account['account_mode']!=managed['account_mode'] or not broker_company_matches(managed['broker_brand'],x.account.get('company')):
+            if managed['account_mode'] not in ('DEMO','LIVE') or x.account['login']!=expected_login or not broker_server_matches(managed['broker_brand'],expected_server,x.account['server']) or x.account['account_mode']!=managed['account_mode'] or not broker_company_matches(managed['broker_brand'],x.account.get('company')):
                 raise HTTPException(401,'Authenticated terminal broker, login, server or mode does not match the selected managed account')
         c.execute('UPDATE pairings SET consumed=1,terminal_hash=?,terminal_id=?,instance_id=?,account=? WHERE id=? AND consumed=0',(digest(terminal_token),terminal_id,x.terminal_instance_id,json.dumps(x.account,separators=(',',':')),found['id']))
         if c.total_changes<1: raise HTTPException(409,'Pairing code already consumed')
