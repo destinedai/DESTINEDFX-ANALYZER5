@@ -614,8 +614,8 @@ class DerivBrokerGateway(
 
     suspend fun executeMultiplier(
         intent: DerivMultiplierIntent,
-        onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit = { _, _, _ -> },
-        allowPurchase: suspend () -> Boolean = { false }
+        allowPurchase: suspend () -> Boolean = { false },
+        onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit = { _, _, _ -> }
     ): Result<DerivBuyResult> = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.READY) {
             return@withContext Result.failure(Exception("Deriv broker is not connected. Please connect in the Bot tab."))
