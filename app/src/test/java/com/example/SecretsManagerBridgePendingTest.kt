@@ -55,6 +55,43 @@ class SecretsManagerBridgePendingTest {
         assertTrue(!profiles.contains("HFM_DEMO"))
     }
 
+    @Test fun derivApiTokensAreIsolatedByDemoAndRealMode() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+
+        assertTrue(manager.saveDerivAccountMode("demo"))
+        assertTrue(manager.saveDerivApiToken("demo-only-token"))
+        assertTrue(manager.saveDerivAccountMode("real"))
+        assertTrue(manager.saveDerivApiToken("real-only-token"))
+
+        assertEquals("demo-only-token", manager.getDerivApiToken("demo"))
+        assertEquals("real-only-token", manager.getDerivApiToken("real"))
+        assertTrue(manager.clearDerivCredentials())
+        assertEquals("", manager.getDerivApiToken("demo"))
+        assertEquals("", manager.getDerivApiToken("real"))
+    }
+
+    @Test fun derivDailyRiskBaselineLockAndWarningsAreAccountModeAndDayScoped() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+        val day = "2026-11-04"
+        assertTrue(manager.initializeDerivDailyRiskDay("demo-account-1", "demo", day, 1_000.0))
+        assertEquals(1_000.0, manager.getDerivDailyRiskStartingEquity("demo-account-1", "demo", day)!!, 0.0)
+        // Re-initialization during the same day cannot move the baseline downward.
+        assertTrue(manager.initializeDerivDailyRiskDay("demo-account-1", "demo", day, 500.0))
+        assertEquals(1_000.0, manager.getDerivDailyRiskStartingEquity("demo-account-1", "demo", day)!!, 0.0)
+        assertTrue(manager.markDerivDailyRiskWarningSent("demo-account-1", "demo", day, 80))
+        assertFalse(manager.markDerivDailyRiskWarningSent("demo-account-1", "demo", day, 80))
+        assertTrue(manager.markDerivDailyRiskWarningSent("demo-account-1", "demo", day, 90))
+        assertTrue(manager.lockDerivDailyRisk("demo-account-1", "demo", day))
+        assertTrue(manager.isDerivDailyRiskLocked("demo-account-1", "demo", day))
+        assertFalse(manager.isDerivDailyRiskLocked("demo-account-1", "real", day))
+        assertFalse(manager.isDerivDailyRiskLocked("different-account", "demo", day))
+        assertTrue(manager.initializeDerivDailyRiskDay("demo-account-1", "demo", "2026-11-05", 900.0))
+        assertFalse(manager.isDerivDailyRiskLocked("demo-account-1", "demo", "2026-11-05"))
+        assertEquals(900.0, manager.getDerivDailyRiskStartingEquity("demo-account-1", "demo", "2026-11-05")!!, 0.0)
+    }
+
     @Test fun manuallyChangedManagedBridgeUrlPersistsAcrossManagerRestart() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         if (!manager.isSecureStorageAvailable) return
