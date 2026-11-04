@@ -1221,7 +1221,7 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     with tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=?,heartbeat_seq=heartbeat_seq+1 WHERE id=?',(json.dumps(payload,separators=(',',':'),allow_nan=False),p['id']))
         seq=c.execute('SELECT heartbeat_seq FROM pairings WHERE id=?',(p['id'],)).fetchone()['heartbeat_seq']
-        managed=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
         if (managed and not managed['revoked'] and managed['access_type']=='MASTER' and managed['account_mode']==x.account.account_mode
             and broker_company_matches(managed['broker_brand'],x.account.company)
