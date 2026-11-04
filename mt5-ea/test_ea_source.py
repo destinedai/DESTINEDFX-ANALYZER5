@@ -276,24 +276,31 @@ def test_reconciliation_publishes_monotonic_ack_updates():
     assert "if(!created[t]){ReconcileOperation(oi);continue;}" in source
 
 
-def test_daily_risk_guard_is_bot_scoped_persistent_and_closes_only_managed_exposure():
+def test_daily_risk_guard_is_account_wide_persistent_and_closes_only_managed_exposure():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
-    assert "DailyRiskSnapshot" in source and "HistorySelect(dayStart,nowServer)" in source
-    assert "DEAL_MAGIC)!=(long)InpMagic" in source
-    assert "DEAL_COMMISSION" in source and "DEAL_FEE" in source and "POSITION_PROFIT" in source and "POSITION_SWAP" in source
+    snapshot = source[source.index("bool DailyRiskSnapshot") : source.index("bool RiskDayOK()")]
+    emergency = source[source.index("void DailyEmergencyExit()") : source.index("void Heartbeat()")]
+    assert "HistorySelect(dayStart,nowServer)" in snapshot
+    assert "DEAL_MAGIC" not in snapshot and "POSITION_MAGIC" not in snapshot
+    assert "DEAL_COMMISSION" in snapshot and "DEAL_FEE" in snapshot
+    assert "POSITION_PROFIT" in snapshot and "POSITION_SWAP" in snapshot
+    assert "DailyRiskBaselineKey" in snapshot and "(nowServer-dayStart)>120" in snapshot
     assert "DailyRiskWarningKey" in source and 'NotifyDailyRisk("80% WARNING"' in source
     assert 'NotifyDailyRisk("90% CRITICAL WARNING"' in source
     assert 'NotifyDailyRisk("100% LIMIT BREACHED"' in source
+    assert 'string DailyRiskLockKey(){return DayKey()+"_LOCK";}' in source
+    assert 'string DailyRiskWarningKey(string threshold){return DayKey()+"_WARN_"+threshold;}' in source
     assert "GlobalVariableSet(lockKey,1.0)" in source and "GlobalVariablesFlush()" in source
-    assert "DailyEmergencyExit()" in source and "trade.OrderDelete(ticket)" in source
-    assert "trade.PositionClose(ticket)" in source
-    assert "ORDER_MAGIC)!=(long)InpMagic" in source
-    assert "POSITION_MAGIC)!=(long)InpMagic" in source
-    assert "OrderSelect(ticket)" in source and "HistoryOrderSelect(ticket)" in source
-    assert "PositionSelectByTicket(ticket)" in source
+    assert "DailyEmergencyExit()" in source and "trade.OrderDelete(ticket)" in emergency
+    assert "trade.PositionClose(ticket)" in emergency
+    assert "ORDER_MAGIC)!=(long)InpMagic" in emergency
+    assert "POSITION_MAGIC)!=(long)InpMagic" in emergency
+    assert "OrderSelect(ticket)" in emergency and "HistoryOrderSelect(ticket)" in emergency
+    assert "PositionSelectByTicket(ticket)" in emergency
     assert "g_dailyRiskStatus=\"EXIT_CONFIRMED\"" in source
     assert "g_dailyRiskStatus=\"EXIT_PENDING\"" in source
     assert "DAILY RISK DATA UNAVAILABLE" in source
+    assert "daily_loss_used_percent" in source and "g_dailyRiskUsedPct" in source
     assert "RiskDayOK()&&AccountIdentityMatches()" in source
 
 
