@@ -106,29 +106,14 @@ bool DailyRiskSnapshot(double &closedPnl,double &floatingPnl,double &netPnl,doub
    g_dayStartEquity=GlobalVariableGet(equityKey);
    g_day=dayParts.day_of_year;
    if(!Finite(g_dayStartEquity)||g_dayStartEquity<=0||!Finite(g_dailyLossPercent)||g_dailyLossPercent<=0||g_dailyLossPercent>2.0)return false;
-   if(!HistorySelect(dayStart,nowServer))return false;
-   for(int i=HistoryDealsTotal()-1;i>=0;i--){
-      ulong deal=HistoryDealGetTicket(i);
-      if(deal==0)continue;
-      double commission=HistoryDealGetDouble(deal,DEAL_COMMISSION);
-      double fee=HistoryDealGetDouble(deal,DEAL_FEE);
-      if(!Finite(commission)||!Finite(fee))return false;
-      closedPnl+=commission+fee;
-      long entry=(long)HistoryDealGetInteger(deal,DEAL_ENTRY);
-      if(entry==DEAL_ENTRY_OUT||entry==DEAL_ENTRY_OUT_BY||entry==DEAL_ENTRY_INOUT){
-         double profit=HistoryDealGetDouble(deal,DEAL_PROFIT),swap=HistoryDealGetDouble(deal,DEAL_SWAP);
-         if(!Finite(profit)||!Finite(swap))return false;
-         closedPnl+=profit+swap;
-      }
-   }
-   for(int i=PositionsTotal()-1;i>=0;i--){
-      ulong ticket=PositionGetTicket(i);
-      if(ticket==0)continue;
-      double profit=PositionGetDouble(POSITION_PROFIT),swap=PositionGetDouble(POSITION_SWAP);
-      if(!Finite(profit)||!Finite(swap))return false;
-      floatingPnl+=profit+swap;
-   }
-   netPnl=closedPnl+floatingPnl;
+
+   // Account equity is the authoritative aggregate: it includes manual trades, other EAs,
+   // realised P/L, commissions, swaps, fees and all live positions. Measuring its change
+   // from the saved day-start baseline avoids counting the full lifetime P/L of positions
+   // that were already open at midnight.
+   double currentEquity=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(!Finite(currentEquity))return false;
+   netPnl=currentEquity-g_dayStartEquity;
    limit=g_dayStartEquity*g_dailyLossPercent/100.0;
    if(!Finite(netPnl)||!Finite(limit)||limit<=0)return false;
    usedPct=MathMax(0.0,-netPnl)/limit*100.0;
