@@ -49,6 +49,7 @@ string BrokerTime(datetime value){if(value<=0)return "UNAVAILABLE";MqlDateTime x
 int StableHash(string value){long h=0;for(int i=0;i<StringLen(value);i++)h=(h*31+StringGetCharacter(value,i))%2147483647;return (int)h;}
 int ServerHash(){return StableHash(AccountInfoString(ACCOUNT_SERVER));}
 string DayKey(){ MqlDateTime x; TimeToStruct(TimeCurrent(),x); return StringFormat("DFX_%I64d_%d_%04d%03d",AccountInfoInteger(ACCOUNT_LOGIN),ServerHash(),x.year,x.day_of_year); }
+string DailyRiskBaselineKey(){return DayKey()+"_ACCT_EQUITY_V2";}
 string ObjectAt(string text,int p){ if(p<0||StringGetCharacter(text,p)!='{')return ""; int depth=0;bool quoted=false,esc=false;for(int i=p;i<StringLen(text);i++){ushort ch=StringGetCharacter(text,i);if(quoted){if(esc)esc=false;else if(ch=='\\')esc=true;else if(ch=='\"')quoted=false;}else if(ch=='\"')quoted=true;else if(ch=='{')depth++;else if(ch=='}'&&--depth==0)return StringSubstr(text,p,i-p+1);}return "";}
 string ConfigObject(string obj){ int p=StringFind(obj,"\"config\""); if(p<0)return ""; p=StringFind(obj,"{",p); if(p<0)return ""; int depth=0; bool quoted=false,esc=false; for(int i=p;i<StringLen(obj);i++){ushort ch=StringGetCharacter(obj,i); if(quoted){if(esc)esc=false;else if(ch=='\\')esc=true;else if(ch=='\"')quoted=false;}else if(ch=='\"')quoted=true;else if(ch=='{')depth++;else if(ch=='}'&&--depth==0)return StringSubstr(obj,p,i-p+1);} return ""; }
 string JArray(string obj,string key){int p=StringFind(obj,"\""+key+"\"");if(p<0)return "";p=StringFind(obj,"[",p);if(p<0)return "";int e=StringFind(obj,"]",p);return e<0?"":StringSubstr(obj,p,e-p+1);}
@@ -93,8 +94,11 @@ bool DailyRiskSnapshot(double &closedPnl,double &floatingPnl,double &netPnl,doub
    datetime nowServer=TimeCurrent();
    MqlDateTime dayParts;TimeToStruct(nowServer,dayParts);dayParts.hour=0;dayParts.min=0;dayParts.sec=0;
    datetime dayStart=StructToTime(dayParts);
-   string equityKey=DayKey();
+   string equityKey=DailyRiskBaselineKey();
    if(!GlobalVariableCheck(equityKey)){
+      // Do not create a false "daily" baseline when the EA starts hours after midnight.
+      // If the baseline was missed, fail closed until the next broker-server day.
+      if((nowServer-dayStart)>120)return false;
       double equity=AccountInfoDouble(ACCOUNT_EQUITY);
       if(!Finite(equity)||equity<=0||GlobalVariableSet(equityKey,equity)==0)return false;
       GlobalVariablesFlush();
