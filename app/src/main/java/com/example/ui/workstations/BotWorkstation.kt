@@ -5,7 +5,6 @@ import com.example.service.MT5AccountSessionService
 import com.example.service.AccountSessionRegistry
 
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyRow
 import com.example.ui.formatPrice
 import androidx.compose.foundation.BorderStroke
@@ -36,8 +35,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.bot.BotLifecycleState
 import com.example.data.broker.BrokerType
 import com.example.data.broker.BrokerConnectionStatus
-import com.example.data.broker.BrokerCapabilityMatrix
-import com.example.data.broker.CapabilityStatus
 import com.example.MainActivity
 import com.example.ui.DestinedFXViewModel
 import com.example.ui.InsightCard
@@ -76,7 +73,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         )
     }
     val reportContext = LocalContext.current
-    var bridgeMode by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isNotBlank()) }
+    val activeBrokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
+    var bridgeMode by remember(bridgeProfileKey, activeBrokerType) {
+        mutableStateOf(activeBrokerType == BrokerType.MT5 && bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isNotBlank())
+    }
     var bridgeCode by remember(bridgeProfileKey) { mutableStateOf("") }
     var bridgeMessage by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.getMT5BridgeAccountPendingCommandId(bridgeProfileKey).let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
     var bridgeSnapshot by remember(bridgeProfileKey) { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
@@ -162,7 +162,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { /* the bot starts regardless; the in-app status card is the primary indicator */ }
     val derivAccount by viewModel.app.derivBrokerGateway.accountInfo.collectAsStateWithLifecycle()
-    val activeBrokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
     val activeBrokerGateway by viewModel.activeBrokerGateway.collectAsStateWithLifecycle()
     val brokerConnStatus by activeBrokerGateway.connectionStatus.collectAsStateWithLifecycle()
     val accountMetrics by activeBrokerGateway.accountMetrics.collectAsStateWithLifecycle()
@@ -184,26 +183,18 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         mutableStateOf(if (mt5AccessType == "INVESTOR") bridgeSecrets.getManagedMT5AccountPassword(bridgeProfileKey) else "")
     }
     var mt5ServerInput by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.getManagedMT5AccountServer(bridgeProfileKey)) }
-    var mt5CostModel by remember(bridgeProfileKey) { mutableStateOf("OBSERVED_ROUND_TURN") }
-    var mt5CommissionPerLot by remember(bridgeProfileKey) { mutableStateOf("") }
-    var mt5CostEvidence by remember(bridgeProfileKey) { mutableStateOf("") }
     var managedCredentialConsent by remember(bridgeProfileKey) { mutableStateOf(false) }
     var showMt5Password by remember { mutableStateOf(false) }
     var isConnectingBroker by remember { mutableStateOf(false) }
-    var showPostLoginPairSelectorModal by remember { mutableStateOf(false) }
-    val tickers by viewModel.tickers.collectAsStateWithLifecycle()
-    var instantLotSize by remember { mutableStateOf(0.01) }
-    var instantSlPips by remember { mutableStateOf("20") }
-    var instantTpPips by remember { mutableStateOf("50") }
-    var instantExecutionStatus by remember { mutableStateOf<String?>(null) }
     val terminalSymbol = viewModel.app.secretsManager.getBrokerSymbolOverrides()[activeSymbol]
         ?.trim()?.takeIf { it.isNotEmpty() } ?: activeSymbol.replace("/", "").replace(" ", "")
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(activeBrokerType) {
+    LaunchedEffect(activeBrokerType, bridgeToken) {
         brokerConnectionMessage = null
         statusMessage = null
         isConnectingBroker = false
+        bridgeMode = activeBrokerType == BrokerType.MT5 && bridgeToken.isNotBlank()
     }
 
     LaunchedEffect(bridgeMode, bridgeToken, bridgeProfileKey, selectedAccountMode, bridgeClient.baseUrl()) {
@@ -310,6 +301,37 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().testTag("bot_connection_type_card")
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("DESTINEDFX BOT · CONNECT ACCOUNT", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("Choose the connection supported by your account. Credentials are sent only to that broker's existing integration.", color = TextSecondary, fontSize = 10.sp)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.selectBroker(BrokerType.MT5)
+                                bridgeMode = bridgeToken.isNotBlank()
+                            },
+                            modifier = Modifier.weight(1f).testTag("select_managed_mt5"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = if (activeBrokerType == BrokerType.MT5) ElectricCyan else TextSecondary)
+                        ) { Text("MT5 · MANAGED") }
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.selectBroker(BrokerType.DERIV)
+                                bridgeMode = false
+                            },
+                            modifier = Modifier.weight(1f).testTag("select_direct_deriv"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = if (activeBrokerType == BrokerType.DERIV) ElectricCyan else TextSecondary)
+                        ) { Text("DIRECT DERIV API") }
+                    }
+                }
+            }
+        }
+        item {
+            if (activeBrokerType == BrokerType.MT5) {
             Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), modifier = Modifier.fillMaxWidth().testTag("mt5_remote_bridge_card")) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -574,8 +596,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                 }
             }
+            }
         }
         item {
+            if (activeBrokerType in setOf(BrokerType.MT5, BrokerType.DERIV)) {
             val isConnected = if (bridgeMode) bridgeTerminalFresh else brokerConnStatus == BrokerConnectionStatus.CONNECTED
             val statusColor = if (bridgeMode) bridgeStatusColor else when (botSummary.state) {
                 BotLifecycleState.ACTIVE_SCANNING -> ProfitGreen
@@ -646,9 +670,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                 }
             }
+            }
         }
         item {
+            if (activeBrokerType == BrokerType.DERIV) {
             DerivDemoAccountCard(viewModel)
+            }
         }
         // Master Bot Control Card
         item {
@@ -750,7 +777,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         statusMessage = "STOP REQUESTED — no new entry requests will be generated; known contracts remain broker-tracked."
                                     }
                                 } else viewModel.setBotStatus(active) { success, err ->
-                                    statusMessage = if (success) { if (active) "24/7 Surveillance Engine activated" else "Surveillance stopped" } else err ?: "Failed to change engine state"
+                                    statusMessage = if (success) {
+                                        if (active) "Start accepted; verify the engine status and account heartbeat before relying on it."
+                                        else "Bot stopped; existing positions are not automatically closed."
+                                    } else err ?: "Failed to change engine state"
                                 }
                             },
                             colors = SwitchDefaults.colors(
@@ -764,6 +794,17 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
 
                     HorizontalDivider(color = TabBorder)
+                    Text(
+                        text = when {
+                            bridgeMode -> "Automatic broker-wide symbol discovery and strategy ranking are not implemented. MT5 currently scans the configured symbols with one selected strategy."
+                            derivExecutionMode -> "Automatic multi-symbol ranking is not implemented. Direct Deriv currently scans the selected supported underlying and strategy only."
+                            else -> "Automatic broker-wide symbol discovery and strategy ranking are not implemented for the current local execution route."
+                        },
+                        color = WarningAmber,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.testTag("bot_auto_selection_gap")
+                    )
                     if (derivExecutionMode) {
                         Text(
                             "DERIV MULTIPLIER: $derivServiceState · supports only MULTUP/MULTDOWN on a verified DEMO or explicitly armed REAL synthetic account. Forex/CFD plans and MT5 execution remain blocked.",
@@ -1298,22 +1339,19 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
         // MetaTrader 5 Native Architecture: Account Management, Real Balance & Direct Broker Gateway
         item {
+            if (activeBrokerType == BrokerType.MT5) {
             var showBrokerSearchDialog by remember { mutableStateOf(false) }
             var brokerSearchQuery by remember { mutableStateOf("") }
             var savePasswordChecked by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.isManagedMT5AccountPasswordSaveEnabled(bridgeProfileKey)) }
             var showOpenDemoDialog by remember { mutableStateOf(false) }
             var showOpenRealDialog by remember { mutableStateOf(false) }
 
-            val storedBal = remember {
-                viewModel.app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 } ?: 0.0
-            }
-            var mt5BalanceInput by remember { mutableStateOf(String.format(java.util.Locale.US, "%.2f", storedBal)) }
-            var selectedLeverage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5Leverage().takeIf { it > 0 } ?: 0) }
-            var expandedLeverage by remember { mutableStateOf(false) }
             val currentSessionStatus = viewModel.app.secretsManager.getMT5SessionStatus()
             val hasSavedLogin = bridgeSecrets.getManagedMT5AccountLogin(bridgeProfileKey).isNotBlank() && bridgeSecrets.getManagedMT5AccountServer(bridgeProfileKey).isNotBlank()
             val isSessionExpired = currentSessionStatus == "SESSION_EXPIRED"
-            var isEditingCredentials by remember(bridgeProfileKey) { mutableStateOf(!hasSavedLogin) }
+            var isEditingCredentials by remember(bridgeProfileKey) {
+                mutableStateOf(!hasSavedLogin || bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isBlank())
+            }
 
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -1350,6 +1388,23 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.Monospace
                             )
+                        }
+                    }
+
+                    if (hasSavedLogin && !isEditingCredentials) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val savedLogin = bridgeSecrets.getManagedMT5AccountLogin(bridgeProfileKey)
+                            Column(Modifier.weight(1f)) {
+                                Text("$selectedAccountMode · ••••${savedLogin.takeLast(4)}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text("${bridgeSecrets.getManagedMT5AccountServer(bridgeProfileKey)} · $bridgeDisplayState", color = if (bridgeIdentityFresh) ElectricCyan else WarningAmber, fontSize = 9.sp)
+                            }
+                            TextButton(onClick = { isEditingCredentials = true }, modifier = Modifier.testTag("edit_mt5_account")) {
+                                Text("EDIT", color = ElectricCyan)
+                            }
                         }
                     }
 
@@ -1583,8 +1638,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
 
-                    // Broker Login & Configuration Inputs (Only shown when editing or disconnected)
-                    if (isEditingCredentials || brokerConnStatus != BrokerConnectionStatus.CONNECTED) {
+                    // Managed credentials are collected only when connecting or explicitly editing the account.
+                    if (isEditingCredentials) {
                         // Top Broker Company Search Header
                         Row(
                             modifier = Modifier.fillMaxWidth().background(DarkSurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
@@ -1737,88 +1792,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         )
 
                         Text("Server names are not guessed or prefilled. Listed broker names are discovery aids only; the managed terminal must authenticate the exact server you enter.", fontSize = 9.sp, color = WarningAmber)
-                        Text("TRANSACTION COST MODEL", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                        Text("Choose the model that matches your broker's published pricing. Incorrect cost inputs can make risk calculations unsafe.", fontSize = 9.sp, color = WarningAmber)
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf(
-                                listOf("OBSERVED_ROUND_TURN" to "Observed history", "CONFIGURED_ROUND_TURN" to "Round-turn commission"),
-                                listOf("CONFIGURED_PER_SIDE" to "Per-side commission", "ZERO_COMMISSION_SPREAD_ONLY" to "Zero commission + spread")
-                            ).forEach { group ->
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    group.forEach { (model, label) ->
-                                        OutlinedButton(
-                                            onClick = {
-                                                mt5CostModel = model
-                                                if (model == "OBSERVED_ROUND_TURN") {
-                                                    mt5CommissionPerLot = ""
-                                                    mt5CostEvidence = ""
-                                                }
-                                            },
-                                            modifier = Modifier.weight(1f),
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = if (mt5CostModel == model) ElectricCyan else TextSecondary)
-                                        ) {
-                                            Text(if (mt5CostModel == model) "✓ $label" else label, fontSize = 8.sp, maxLines = 2)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if (mt5CostModel == "CONFIGURED_ROUND_TURN" || mt5CostModel == "CONFIGURED_PER_SIDE") {
-                            OutlinedTextField(
-                                value = mt5CommissionPerLot,
-                                onValueChange = { mt5CommissionPerLot = it.filter { ch -> ch.isDigit() || ch == '.' } },
-                                label = { Text(if (mt5CostModel == "CONFIGURED_PER_SIDE") "Commission per side / 1.00 lot" else "Round-turn commission / 1.00 lot") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth().testTag("bot_cost_commission")
-                            )
-                        }
-                        if (mt5CostModel != "OBSERVED_ROUND_TURN") {
-                            OutlinedTextField(
-                                value = mt5CostEvidence,
-                                onValueChange = { mt5CostEvidence = it.filter { ch -> ch.code >= 32 && ch.code != 127 }.take(512) },
-                                label = { Text("Broker pricing evidence reference") },
-                                placeholder = { Text("Official schedule / contract-spec section") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth().testTag("bot_cost_evidence")
-                            )
-                            Text("Use an actual broker fee schedule or contract specification you have checked. This reference text is not independently verified by the app. Amounts are in account currency per standard lot.", fontSize = 9.sp, color = TextSecondary)
-                        } else {
-                            Text("Observed-history mode requires representative completed EA trades on this symbol; a fresh account may be blocked until valid history exists.", fontSize = 9.sp, color = TextSecondary)
-                        }
+                        Text("Commission and spread checks use observed completed broker history. New accounts remain blocked until representative cost evidence is available; pricing is never guessed.", fontSize = 9.sp, color = WarningAmber)
                         Text("Balance, equity, margin, currency and leverage appear only after a verified broker account snapshot.", fontSize = 9.sp, color = TextSecondary)
-                        // Leverage Selector
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            OutlinedTextField(
-                                value = "1:$selectedLeverage",
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Account Leverage") },
-                                trailingIcon = {
-                                    IconButton(onClick = { expandedLeverage = !expandedLeverage }) {
-                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth().testTag("bot_mt5_leverage"),
-                                singleLine = true
-                            )
-                            DropdownMenu(
-                                expanded = expandedLeverage,
-                                onDismissRequest = { expandedLeverage = false },
-                                modifier = Modifier.fillMaxWidth(0.85f)
-                            ) {
-                                listOf(100, 200, 500, 1000).forEach { lev ->
-                                    DropdownMenuItem(
-                                        text = { Text("1:$lev", fontWeight = FontWeight.Bold) },
-                                        onClick = {
-                                            selectedLeverage = lev
-                                            expandedLeverage = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Checkbox(checked = managedCredentialConsent, onCheckedChange = { managedCredentialConsent = it })
                             Text("I consent to send these broker credentials over HTTPS to DestinedFX managed execution for encrypted storage and MT5 terminal login.", fontSize = 10.sp, color = TextPrimary)
@@ -1862,28 +1837,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     brokerConnectionMessage = "Consent is required before sending credentials to managed execution."
                                     return@Button
                                 }
-                                val selectedCostModel = mt5CostModel
-                                val selectedCommission = when (selectedCostModel) {
-                                    "OBSERVED_ROUND_TURN", "ZERO_COMMISSION_SPREAD_ONLY" -> 0.0
-                                    else -> mt5CommissionPerLot.trim().toDoubleOrNull()
-                                }
-                                val selectedCostEvidence = if (selectedCostModel == "OBSERVED_ROUND_TURN") "" else mt5CostEvidence.trim()
-                                if (selectedCommission == null || !selectedCommission.isFinite() || selectedCommission < 0.0) {
-                                    brokerConnectionMessage = "Enter a valid finite commission value from the broker's pricing schedule."
-                                    return@Button
-                                }
-                                if (selectedCostModel in setOf("CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE") && selectedCommission <= 0.0) {
-                                    brokerConnectionMessage = "Configured commission must be greater than zero; choose zero-commission mode only when broker pricing confirms it."
-                                    return@Button
-                                }
-                                if (selectedCostModel == "ZERO_COMMISSION_SPREAD_ONLY" && selectedCommission != 0.0) {
-                                    brokerConnectionMessage = "Zero-commission mode must use a commission value of zero."
-                                    return@Button
-                                }
-                                if (selectedCostModel != "OBSERVED_ROUND_TURN" && (selectedCostEvidence.length < 8 || selectedCostEvidence.any { ch -> ch.code < 32 || ch.code == 127 })) {
-                                    brokerConnectionMessage = "Enter a reference to the actual broker pricing or contract specification (at least 8 characters)."
-                                    return@Button
-                                }
+                                // Use observed broker history; never guess a zero-commission model or accept unverified cost inputs.
+                                val selectedCostModel = "OBSERVED_ROUND_TURN"
+                                val selectedCommission = 0.0
+                                val selectedCostEvidence = ""
                                 val activity = reportContext as? MainActivity
                                 if (activity == null) {
                                     brokerConnectionMessage = "Authentication is unavailable; sensitive action denied."
@@ -1899,6 +1856,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         if (!bridgeClient.managedConfigured()) {
                                             brokerConnectionMessage = "CONFIGURATION_REQUIRED"
                                         } else {
+                                            viewModel.selectBroker(BrokerType.MT5)
                                             bridgeMode = true
                                             val snapshot = bridgeClient.registerManagedAccount(
                                                 mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent,
@@ -1970,9 +1928,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                 onClick = {
                                                     selectedBrokerBrand = broker.brandId
                                                     bridgeSecrets.saveSelectedMT5BrokerBrand(broker.brandId)
-                                                    if (mt5ServerInput.isBlank()) {
-                                                        mt5ServerInput = broker.servers.firstOrNull().orEmpty()
-                                                    }
                                                     showBrokerSearchDialog = false
                                                 },
                                                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
@@ -1980,7 +1935,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             ) {
                                                 Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                                     Text(broker.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = ElectricCyan)
-                                                    Text("Listed only · enter the exact broker-issued server manually", fontSize = 9.sp, color = TextSecondary)
+                                                    Text("Broker listed · enter the exact server issued for this account", fontSize = 9.sp, color = TextSecondary)
                                                 }
                                             }
                                         }
@@ -2031,386 +1986,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                 }
             }
-        }
-
-        // Target Configuration Parameters Card
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                border = BorderStroke(1.dp, TabBorder),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "AUTONOMOUS PARAMETERS & SAFETY CONSTRAINTS",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = CyanPrimary
-                    )
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Instrument:", fontSize = 11.sp, color = TextSecondary)
-                        Text(activeSymbol, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Strategy:", fontSize = 11.sp, color = TextSecondary)
-                        Text(selectedStrategyId, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Timeframe:", fontSize = 11.sp, color = TextSecondary)
-                        Text(selectedTimeframe, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Max Risk per Trade:", fontSize = 11.sp, color = TextSecondary)
-                        Text("${riskPercent}% (Capped strictly <= 1.0%)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ProfitGreen)
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Minimum Executable RR:", fontSize = 11.sp, color = TextSecondary)
-                        Text("1:2.0 (Absolute minimum)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ProfitGreen)
-                    }
-                }
             }
         }
-
-        // MetaTrader 5 Instant 1-Tap Market Execution (One-Click Trading)
-        item {
-            val currentTicker = tickers[activeSymbol]
-            val currentPrice = currentTicker?.price ?: 0.0
-            val bidPrice = currentTicker?.bid ?: currentPrice
-            val askPrice = currentTicker?.ask ?: currentPrice
-            val spreadVal = if (currentTicker?.bid != null && currentTicker?.ask != null && currentTicker.hasRealSpread) {
-                (currentTicker.ask - currentTicker.bid)
-            } else currentTicker?.spread
-
-            val spec = com.destinedfx.core.instrument.SpecRegistry.get(activeSymbol)
-            val pipUnit = spec?.pipSize ?: if (activeSymbol.contains("JPY", true)) 0.01 else if (activeSymbol.contains("XAU", true)) 0.1 else 0.0001
-            val slPipsNum = (instantSlPips.toDoubleOrNull() ?: 20.0).coerceAtLeast(5.0)
-            val tpPipsNum = (instantTpPips.toDoubleOrNull() ?: 50.0).coerceAtLeast(10.0)
-            val rrRatio = if (slPipsNum > 0.0) tpPipsNum / slPipsNum else 2.5
-
-            val buySl = if (askPrice > 0.0) askPrice - (slPipsNum * pipUnit) else 0.0
-            val buyTp = if (askPrice > 0.0) askPrice + (tpPipsNum * pipUnit) else 0.0
-            val sellSl = if (bidPrice > 0.0) bidPrice + (slPipsNum * pipUnit) else 0.0
-            val sellTp = if (bidPrice > 0.0) bidPrice - (tpPipsNum * pipUnit) else 0.0
-
-            val isConnected = brokerConnStatus == BrokerConnectionStatus.CONNECTED
-
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.5f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().testTag("instant_execution_card")
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    // Header
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Box(
-                                Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(ElectricCyan.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.Bolt, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(18.dp))
-                            }
-                            Column {
-                                Text(
-                                    text = "INSTANT MARKET EXECUTION",
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = ElectricCyan
-                                )
-                                Text(
-                                    text = "MetaTrader 5 One-Click Deal Protocol",
-                                    fontSize = 9.sp,
-                                    color = TextSecondary
-                                )
-                            }
-                        }
-
-                        Box(
-                            Modifier.clip(RoundedCornerShape(6.dp))
-                                .background(if (isConnected) ProfitGreen.copy(alpha = 0.15f) else LossRed.copy(alpha = 0.15f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = if (isConnected) "MT5 LIVE GATEWAY" else "OFFLINE",
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                color = if (isConnected) ProfitGreen else LossRed
-                            )
-                        }
-                    }
-
-                    HorizontalDivider(color = CardBorder)
-
-                    // Symbol & Real-Time Price Overview
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(activeSymbol, fontSize = 18.sp, fontWeight = FontWeight.Black, color = TextPrimary)
-                            Text("Active Order Symbol", fontSize = 10.sp, color = TextSecondary)
-                        }
-
-                        if (spreadVal != null && spreadVal > 0.0) {
-                            val spreadPips = spreadVal / pipUnit
-                            Box(
-                                Modifier.clip(RoundedCornerShape(6.dp)).background(DarkSurfaceVariant)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "Spread: ${String.format(java.util.Locale.US, "%.1f", spreadPips)} pips",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextSecondary,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                    }
-
-                    // Lot Size Selector & Stepper
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Order Volume (Lots):", fontSize = 11.sp, color = TextSecondary)
-                            Text(
-                                text = "${String.format(java.util.Locale.US, "%.2f", instantLotSize)} Lot",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace,
-                                color = TextPrimary
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    instantLotSize = (instantLotSize - 0.01).coerceAtLeast(0.01)
-                                },
-                                modifier = Modifier.size(36.dp),
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text("-", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            }
-
-                            val lotPresets = listOf(0.01, 0.02, 0.05, 0.10, 0.50, 1.00)
-                            LazyRow(
-                                modifier = Modifier.weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                items(lotPresets) { lot ->
-                                    val isSelected = Math.abs(instantLotSize - lot) < 0.001
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(if (isSelected) ElectricCyan else DarkSurfaceVariant)
-                                            .border(1.dp, if (isSelected) ElectricCyan else CardBorder, RoundedCornerShape(6.dp))
-                                            .clickable { instantLotSize = lot }
-                                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = String.format(java.util.Locale.US, "%.2f", lot),
-                                            fontSize = 11.sp,
-                                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
-                                            color = if (isSelected) DarkBackground else TextPrimary,
-                                            fontFamily = FontFamily.Monospace
-                                        )
-                                    }
-                                }
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    instantLotSize = (instantLotSize + 0.01).coerceAtMost(10.0)
-                                },
-                                modifier = Modifier.size(36.dp),
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text("+", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            }
-                        }
-                    }
-
-                    // SL / TP pip settings
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = instantSlPips,
-                            onValueChange = { instantSlPips = it },
-                            label = { Text("SL (Pips)") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                        OutlinedTextField(
-                            value = instantTpPips,
-                            onValueChange = { instantTpPips = it },
-                            label = { Text("TP (Pips)") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                    }
-
-                    // RR calculation info
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Projected RR: 1:${String.format(java.util.Locale.US, "%.1f", rrRatio)}",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (rrRatio >= 2.0) ProfitGreen else WarningAmber,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = if (rrRatio >= 2.0) "Passes SMC Filter (>= 1:2.0)" else "SMC Warning: RR < 1:2.0",
-                            fontSize = 10.sp,
-                            color = if (rrRatio >= 2.0) ProfitGreen else WarningAmber
-                        )
-                    }
-
-                    val directDemoOrderCapability = BrokerCapabilityMatrix.forBroker(activeBrokerType)
-                        .capability("demo_orders")?.status == CapabilityStatus.IMPLEMENTED
-                    Text(
-                        if (directDemoOrderCapability) "Broker reports a demo-order route; live quote, account identity, risk, and final gateway validation are still required."
-                        else "Instant orders unavailable: this broker has no implemented and verified direct demo-order capability. Use only its supported, separately validated workflow.",
-                        color = if (directDemoOrderCapability) WarningAmber else LossRed, fontSize = 10.sp
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        // SELL BUTTON
-                        Button(
-                            enabled = directDemoOrderCapability && isConnected,
-                            onClick = {
-                                if (!directDemoOrderCapability) {
-                                    instantExecutionStatus = "Blocked: no implemented and verified direct demo-order capability for ${activeBrokerType.name}."
-                                } else if (!isConnected) {
-                                    instantExecutionStatus = "Blocked: selected broker is not connected."
-                                } else if (bidPrice <= 0.0) {
-                                    instantExecutionStatus = "⚠️ Waiting for live bid quote on $activeSymbol..."
-                                } else {
-                                    instantExecutionStatus = "Unavailable: no verified direct demo-order submission route exists for ${activeBrokerType.name}."
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = LossRed),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f).height(62.dp).testTag("instant_sell_button")
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("SELL BY MARKET", fontWeight = FontWeight.Black, fontSize = 12.sp, color = Color.White)
-                                Text(
-                                    text = if (bidPrice > 0.0) formatPrice(bidPrice, activeSymbol) else "—",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 15.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = Color.White
-                                )
-                                Text("BID", fontSize = 8.sp, color = Color.White.copy(alpha = 0.7f))
-                            }
-                        }
-
-                        // BUY BUTTON
-                        Button(
-                            enabled = directDemoOrderCapability && isConnected,
-                            onClick = {
-                                if (!directDemoOrderCapability) {
-                                    instantExecutionStatus = "Blocked: no implemented and verified direct demo-order capability for ${activeBrokerType.name}."
-                                } else if (!isConnected) {
-                                    instantExecutionStatus = "Blocked: selected broker is not connected."
-                                } else if (askPrice <= 0.0) {
-                                    instantExecutionStatus = "⚠️ Waiting for live ask quote on $activeSymbol..."
-                                } else {
-                                    instantExecutionStatus = "Unavailable: no verified direct demo-order submission route exists for ${activeBrokerType.name}."
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f).height(62.dp).testTag("instant_buy_button")
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("BUY BY MARKET", fontWeight = FontWeight.Black, fontSize = 12.sp, color = Color.White)
-                                Text(
-                                    text = if (askPrice > 0.0) formatPrice(askPrice, activeSymbol) else "—",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 15.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = Color.White
-                                )
-                                Text("ASK", fontSize = 8.sp, color = Color.White.copy(alpha = 0.7f))
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // No deterministic strategy-plan-to-broker execution flow exists for this shortcut.
-                    Button(
-                        enabled = false,
-                        onClick = { instantExecutionStatus = "Unavailable: no broker-validated strategy plan is available." },
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().height(52.dp).testTag("full_auto_execute_button")
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = DarkBackground)
-                            Text(
-                                text = "FULL-AUTO ORDERING UNAVAILABLE — VERIFIED PLAN REQUIRED",
-                                fontWeight = FontWeight.Black,
-                                fontSize = 11.sp,
-                                color = DarkBackground,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-
-                    // Execution status / alert message
-                    instantExecutionStatus?.let { msg ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(DarkSurfaceVariant)
-                                .border(1.dp, if (msg.startsWith("✅")) ProfitGreen.copy(alpha = 0.5f) else WarningAmber.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-                                .padding(10.dp)
-                        ) {
-                            Text(
-                                text = msg,
-                                fontSize = 10.sp,
-                                color = if (msg.startsWith("✅")) ProfitGreen else WarningAmber,
-                                lineHeight = 14.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!bridgeMode) {
+        if (activeBrokerType == BrokerType.DERIV) {
         // Open Positions Section
         item {
             Text(
@@ -2540,108 +2118,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         }
     }
 
-    if (showPostLoginPairSelectorModal) {
-        AlertDialog(
-            onDismissRequest = { showPostLoginPairSelectorModal = false },
-            title = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = ProfitGreen,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Text(
-                        text = "BROKER CONNECTED SUCCESSFULLY",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        color = ProfitGreen
-                    )
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "Select a pair for bot analysis. Account figures shown here come only from the authenticated broker snapshot; execution still requires risk and market-data checks.",
-                        fontSize = 11.sp,
-                        color = TextPrimary,
-                        lineHeight = 16.sp
-                    )
 
-                    HorizontalDivider(color = CardBorder)
-
-                    Text(
-                        text = "CHOOSE PAIR TO AUTOMATE:",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        color = ElectricCyan
-                    )
-
-                    val selectPairs = listOf(
-                        "EUR/USD" to "Forex Major",
-                        "GBP/USD" to "Forex Major",
-                        "XAU/USD" to "Gold Commodity",
-                        "BTC/USD" to "Crypto Asset",
-                        "NAS100" to "US Tech Index",
-                        "SPX500" to "US SP500 Index",
-                        "USD/JPY" to "Forex Major",
-                        "USD/CAD" to "Forex Major",
-                        "USD/CHF" to "Forex Major"
-                    )
-
-                    LazyColumn(
-                        modifier = Modifier.height(240.dp).fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        items(selectPairs) { (pair, category) ->
-                            Card(
-                                onClick = {
-                                    viewModel.selectBotTicker(pair)
-                                    showPostLoginPairSelectorModal = false
-                                    statusMessage = "Bot configured for $pair. Verified account metrics are used when available; live execution requires all safety checks."
-                                },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (pair == activeSymbol) ElectricCyan.copy(alpha = 0.15f) else DarkSurfaceVariant
-                                ),
-                                border = BorderStroke(1.dp, if (pair == activeSymbol) ElectricCyan else CardBorder),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.fillMaxWidth().testTag("modal_pair_$pair")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column {
-                                        Text(pair, fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = TextPrimary)
-                                        Text(category, fontSize = 9.sp, color = TextSecondary)
-                                    }
-                                    if (pair == activeSymbol) {
-                                        Text("ACTIVE", fontSize = 9.sp, fontWeight = FontWeight.Black, color = ElectricCyan, fontFamily = FontFamily.Monospace)
-                                    } else {
-                                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = { showPostLoginPairSelectorModal = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
-                ) {
-                    Text("Confirm $activeSymbol", fontWeight = FontWeight.Black, fontSize = 11.sp)
-                }
-            }
-        )
-    }
 }
 
 

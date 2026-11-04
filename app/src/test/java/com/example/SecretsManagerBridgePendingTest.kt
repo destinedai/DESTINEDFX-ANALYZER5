@@ -61,8 +61,12 @@ class SecretsManagerBridgePendingTest {
 
         assertTrue(manager.saveDerivAccountMode("demo"))
         assertTrue(manager.saveDerivApiToken("demo-only-token"))
+        // The UI persists the token before the selected account mode, so it must pass that mode explicitly.
+        assertTrue(manager.saveDerivApiToken("real-only-token", "real"))
+        assertEquals("demo", manager.getDerivAccountMode())
+        assertEquals("demo-only-token", manager.getDerivApiToken("demo"))
+        assertEquals("real-only-token", manager.getDerivApiToken("real"))
         assertTrue(manager.saveDerivAccountMode("real"))
-        assertTrue(manager.saveDerivApiToken("real-only-token"))
 
         assertEquals("demo-only-token", manager.getDerivApiToken("demo"))
         assertEquals("real-only-token", manager.getDerivApiToken("real"))

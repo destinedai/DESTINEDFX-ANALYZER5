@@ -248,7 +248,7 @@ fun DerivDemoAccountCard(viewModel: DestinedFXViewModel) {
                         message = ""
                         scope.launch {
                             try {
-                                if (!secrets.saveDerivApiToken(token) || !secrets.saveDerivAppId(appId) || !secrets.saveDerivAccountMode(selectedMode)) {
+                                if (!secrets.saveDerivApiToken(token, selectedMode) || !secrets.saveDerivAppId(appId) || !secrets.saveDerivAccountMode(selectedMode)) {
                                     message = "Credentials could not be saved securely; no connection was attempted."
                                 } else {
                                     if (selectedMode == "demo") {
