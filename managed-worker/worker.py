@@ -325,6 +325,55 @@ def quarantine_terminal(settings: dict, job_id: str) -> str:
     return "NOT_FOUND"
 
 
+def settings_for_broker(settings: dict, broker_brand: str) -> dict:
+    """Resolve a declared broker terminal install; never guess a brand from a path."""
+    brand = str(broker_brand or "").strip().upper()
+    if brand not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+        raise ProvisionError("BROKER_BRAND_REQUIRED")
+    mapping = settings.get("broker_terminals")
+    if isinstance(mapping, dict) and mapping:
+        item = mapping.get(brand)
+        if not isinstance(item, dict):
+            raise ProvisionError("BROKER_TERMINAL_NOT_CONFIGURED")
+        resolved = dict(settings)
+        for key in ("mt5_install", "terminal_exe", "metaeditor_exe"):
+            value = item.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ProvisionError("BROKER_TERMINAL_CONFIG_INVALID")
+            resolved[key] = value
+        if isinstance(item.get("compiled_ea"), str):
+            resolved["compiled_ea"] = item["compiled_ea"]
+        resolved["selected_broker_brand"] = brand
+        return resolved
+    if str(settings.get("single_broker_brand", "")).strip().upper() != brand:
+        raise ProvisionError("BROKER_TERMINAL_NOT_CONFIGURED")
+    resolved = dict(settings)
+    resolved["selected_broker_brand"] = brand
+    return resolved
+
+
+def active_terminal_count(settings: dict) -> int:
+    """Count running or inconclusive worker-owned terminals against capacity."""
+    root = Path(settings["data_root"]).resolve()
+    count = 0
+    for _marker, record in terminal_records(root):
+        status = str(record.get("status", "")).upper()
+        if status in {"FAILED", "REVOKED", "RESTART_LIMIT"}:
+            continue
+        try:
+            pid = int(record.get("pid", 0) or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        executable = Path(str(record.get("executable", ""))) if record.get("executable") else None
+        if pid <= 0:
+            if status in {"LAUNCH_PENDING", "OPERATOR_REVIEW", "AUTHENTICATING", "RUNNING"}:
+                count += 1
+            continue
+        if executable is None or process_is_owned(pid, executable) != ProcessState.DEFINITELY_DEAD:
+            count += 1
+    return count
+
+
 def validate_job(job: Any) -> dict[str, Any]:
     if not isinstance(job, dict):
         raise ProvisionError("INVALID_JOB")
@@ -351,6 +400,8 @@ def validate_job(job: Any) -> dict[str, Any]:
         raise ProvisionError("INVALID_ACCESS_TYPE")
     if mode not in {"DEMO", "LIVE"}:
         raise ProvisionError("INVALID_ACCOUNT_MODE")
+    if account.get("broker_brand") not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+        raise ProvisionError("INVALID_BROKER_BRAND")
     result = dict(job)
     result["bridge_url"] = normalized
     return result
@@ -603,7 +654,7 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
               "status": "LAUNCH_PENDING", "created": time.time(), "expected_login": job["account"]["login"],
               "expected_server": job["account"]["server"], "account_mode": job["account"]["account_mode"],
               "access_type": job["account"]["access_type"], "bridge_url": job["bridge_url"],
-              "expected_company": job["account"].get("company", ""),
+              "expected_company": job["account"].get("company", ""), "broker_brand": job["account"]["broker_brand"],
               "expected_currency": job["account"].get("currency", ""),
               "webrequest_allowlist_required": True, "startup_requires_start_command": True,
               "restart_requires_reauthentication": False}
@@ -666,7 +717,13 @@ def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
 
 def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
     base = settings["control_plane_url"].rstrip("/")
-    job = request_json(f"{base}/v1/worker/jobs/claim", operator_token, "POST", {"worker_id": worker_id})
+    occupied = active_terminal_count(settings)
+    capacity = int(settings.get("max_terminals", 1))
+    job = request_json(f"{base}/v1/worker/jobs/claim", operator_token, "POST", {
+        "worker_id": worker_id,
+        "active_terminals": occupied,
+        "max_terminals": capacity,
+    })
     if job.get("job") is None and not job.get("job_id"):
         return
     job_id = job.get("job_id") if isinstance(job, dict) else None
@@ -686,8 +743,9 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
         return
     try:
         job = validate_job(job)
+        broker_settings = settings_for_broker(settings, job["account"]["broker_brand"])
         post_state(base, operator_token, job_id, worker_id, "PROVISIONING")
-        provision(job, settings)
+        provision(job, broker_settings)
         # A process launch/authentication attempt is not evidence of a fresh EA
         # heartbeat, so READY is only for a server-observed authenticated state.
         post_state(base, operator_token, job_id, worker_id, "AUTHENTICATING")
@@ -720,9 +778,26 @@ def load_settings(path: Path) -> dict:
     try:
         with path.open("rb") as f:
             cfg = tomllib.load(f)
-        required = ("control_plane_url", "data_root", "mt5_install", "terminal_exe", "metaeditor_exe", "ea_source")
+        required = ("control_plane_url", "data_root", "ea_source")
         if any(not isinstance(cfg.get(k), str) or not cfg[k] for k in required):
             raise ValueError
+        capacity = cfg.get("max_terminals", 1)
+        if not isinstance(capacity, int) or isinstance(capacity, bool) or not 1 <= capacity <= 16:
+            raise ValueError
+        mapping = cfg.get("broker_terminals")
+        if mapping is not None:
+            if not isinstance(mapping, dict) or not mapping:
+                raise ValueError
+            for brand, item in mapping.items():
+                if brand not in {"FBS", "EXNESS", "HFM", "DERIV"} or not isinstance(item, dict):
+                    raise ValueError
+                if any(not isinstance(item.get(k), str) or not item[k] for k in ("mt5_install", "terminal_exe", "metaeditor_exe")):
+                    raise ValueError
+        else:
+            if str(cfg.get("single_broker_brand", "")).upper() not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+                raise ValueError
+            if any(not isinstance(cfg.get(k), str) or not cfg[k] for k in ("mt5_install", "terminal_exe", "metaeditor_exe")):
+                raise ValueError
         normalized = validate_origin(cfg["control_plane_url"])
         if normalized is None:
             raise ValueError
