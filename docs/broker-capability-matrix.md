@@ -7,9 +7,9 @@ This matrix describes repository capability and evidence status. A capability ma
 | Deriv | **IMPLEMENTED** — WebSocket/provider paths exist | **IMPLEMENTED / NOT VERIFIED** — authorization code exists; genuine account evidence is not present in this environment | **NOT VERIFIED** — the generic Forex/CFD trade plan is deliberately rejected because Deriv Multiplier stake/proposal mapping is not validated | **BLOCKED** — no LIVE authorization is granted | **NOT VERIFIED** — close route exists, broker confirmation and recovery evidence are absent | **NOT VERIFIED** |
 | MT5 managed bridge | **NOT VERIFIED** — depends on the managed terminal/provider | **NOT VERIFIED** — requires the authenticated bridge, worker, terminal and exact account identity | **NOT VERIFIED** — requires a genuine terminal, EA, worker and broker-confirmed order/fill | **BLOCKED** — separately gated and not authorized | **NOT VERIFIED** — commands exist, end-to-end broker/EA evidence is absent | **NOT VERIFIED** |
 | OANDA | **IMPLEMENTED** for provider market data only | **NOT IMPLEMENTED** for trading | **NOT IMPLEMENTED** — routes to `UnavailableBrokerGateway` | **BLOCKED** — no execution route exists | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** |
-| Preview gateway | **NOT IMPLEMENTED** | **BLOCKED** | **BLOCKED** — simulated orders are disabled | **BLOCKED** | **BLOCKED** | **BLOCKED** |
+| Preview gateway (separate from broker profiles) | **NOT IMPLEMENTED** | **BLOCKED** | **BLOCKED** — simulated orders are disabled | **BLOCKED** | **BLOCKED** | **BLOCKED** |
 
-The same matrix is available to Android code through `BrokerCapabilityMatrix`. Preview mode has no account balance, cannot authenticate, cannot return a quote, and fails closed for order, close, and margin operations. No preview identifier is a broker transaction identifier.
+The Deriv, MT5 and OANDA broker profiles in this matrix are available to Android code through `BrokerCapabilityMatrix`; Preview is a separate non-broker gateway and is not a `BrokerType` profile. Preview mode has no account balance, cannot authenticate, cannot return a quote, and fails closed for order, close, and margin operations. No preview identifier is a broker transaction identifier.
 
 ## Evidence still required
 
