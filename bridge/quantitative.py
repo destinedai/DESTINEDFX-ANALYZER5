@@ -122,7 +122,11 @@ def validate_ohlcv(candles: Iterable[OHLCV], *, now_ms: int, source: str,
         for delta in intervals:
             if delta == expected_interval_ms:
                 continue
-            if not (allow_session_gaps and expected_interval_ms <= delta <= 72 * 60 * 60 * 1000):
+            # The generic analyzer has no exchange calendar. Only tolerate the
+            # weekend-scale closure also enforced by the authenticated provider
+            # boundary; a missing intraday candle must never be called a session gap.
+            if not (allow_session_gaps and delta > expected_interval_ms and
+                    2 * 24 * 60 * 60 * 1000 <= delta <= 72 * 60 * 60 * 1000):
                 raise DataIntegrityError("CANDLE_GAP_OR_WRONG_INTERVAL")
     interval = intervals[0] if intervals and all(delta == intervals[0] for delta in intervals) else None
     return ValidatedSeries(rows, source, rows[-1].timestamp_ms, interval)
@@ -190,15 +194,22 @@ def _candidate(series: ValidatedSeries, symbol: str, timeframe: str,
     atr = _atr(series.candles)
     if atr is None or atr <= 0:
         return _waiting(series, symbol, timeframe, strategy_id, "INSUFFICIENT_STRUCTURE_OR_ATR")
+    if (quote_bid is None) != (quote_ask is None):
+        return _waiting(series, symbol, timeframe, strategy_id, "INVALID_QUOTE")
+    if quote_bid is not None and (
+        not isfinite(quote_bid) or not isfinite(quote_ask) or quote_bid <= 0 or quote_ask <= quote_bid
+    ):
+        return _waiting(series, symbol, timeframe, strategy_id, "INVALID_QUOTE")
     entry = (quote_ask if direction == "LONG" else quote_bid) if (
         quote_bid is not None and quote_ask is not None
     ) else series.candles[-1].close
     prior = series.candles[-5:-1]
     stop = (min(x.low for x in prior) - 0.25 * atr if direction == "LONG"
             else max(x.high for x in prior) + 0.25 * atr)
-    risk = abs(entry - stop)
+    risk = entry - stop if direction == "LONG" else stop - entry
     if risk <= 0 or not isfinite(risk):
-        return _waiting(series, symbol, timeframe, strategy_id, "INVALID_STRUCTURE_RISK")
+        reason = "QUOTE_CROSSED_STRUCTURAL_STOP" if quote_bid is not None else "INVALID_STRUCTURE_RISK"
+        return _waiting(series, symbol, timeframe, strategy_id, reason)
     target = entry + 2 * risk if direction == "LONG" else entry - 2 * risk
     return SignalCandidate(
         symbol, strategy_id, STRATEGY_RULESETS[strategy_id], timeframe, "CANDIDATE",

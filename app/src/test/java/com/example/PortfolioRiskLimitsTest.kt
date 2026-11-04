@@ -49,4 +49,27 @@ class PortfolioRiskLimitsTest {
         assertFalse(atLimit.allowed)
         assertEquals("DAILY_LOSS_LIMIT_REACHED", atLimit.code)
     }
+
+    @Test
+    fun defaultConcurrentPositionLimitMatchesSharedSafetyLimitAndBlocksThirdPosition() {
+        val now = 1_790_000_000_000L
+        val limits = PortfolioLimits()
+        assertEquals(TradingSafetyLimits.MAX_CONCURRENT_POSITIONS, limits.maxOpenTrades)
+
+        val verdict = PortfolioRiskEngine.evaluate(
+            startBalance = 1_000.0,
+            closed = emptyList(),
+            floatingPnl = 0.0,
+            open = listOf(
+                OpenRisk("EURUSD", true, 0.25, null, null),
+                OpenRisk("GBPUSD", true, 0.25, null, null)
+            ),
+            candidate = OpenRisk("AUDJPY", true, 0.25, null, null),
+            nowMs = now,
+            l = limits
+        )
+
+        assertFalse(verdict.allowed)
+        assertEquals("MAX_TRADES", verdict.code)
+    }
 }

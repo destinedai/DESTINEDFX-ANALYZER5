@@ -5,7 +5,7 @@ from typing import Any
 from urllib.parse import urlparse, quote, urlencode
 from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr
+from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from cryptography.fernet import Fernet, InvalidToken
 from quantitative import STRATEGY_RULESETS, analyze_json
 
@@ -223,6 +223,24 @@ class AnalysisResponse(BaseModel):
     quote_source:StrictStr
     server_now_ms:StrictInt
     executable:StrictBool
+
+    @model_validator(mode='after')
+    def validate_candidate_geometry(self):
+        if self.state != 'CANDIDATE':
+            return self
+        if self.direction not in ('LONG', 'SHORT') or None in (self.entry, self.stop_loss, self.take_profit, self.reward_to_risk):
+            raise ValueError('Candidate requires direction, entry, stop, target and reward-to-risk')
+        entry=float(self.entry); stop=float(self.stop_loss); target=float(self.take_profit)
+        if not all(math.isfinite(value) and value > 0 for value in (entry, stop, target)):
+            raise ValueError('Candidate prices must be finite and positive')
+        risk=entry-stop if self.direction=='LONG' else stop-entry
+        reward=target-entry if self.direction=='LONG' else entry-target
+        rr=float(self.reward_to_risk)
+        computed=reward/risk if risk>0 else float('nan')
+        if risk<=0 or reward<=0 or not math.isfinite(computed) or computed<2.0 or not math.isfinite(rr) or abs(computed-rr)>0.02:
+            raise ValueError('Candidate stop/target geometry is invalid for its direction')
+        return self
+
 class Position(BaseModel):
     model_config=ConfigDict(extra='forbid')
     ticket:StrictInt|StrictStr; position_id:StrictInt|StrictStr; symbol:str=Field(max_length=64); direction:str=Field(max_length=16); volume:float=Field(gt=0,allow_inf_nan=False); open_price:float=Field(gt=0,allow_inf_nan=False); stop_loss:float=Field(ge=0,allow_inf_nan=False); take_profit:float=Field(ge=0,allow_inf_nan=False); floating_profit:float=Field(allow_inf_nan=False); commission:float|None=Field(default=None,allow_inf_nan=False); swap:float=Field(allow_inf_nan=False); fees:float|None=Field(default=None,allow_inf_nan=False)

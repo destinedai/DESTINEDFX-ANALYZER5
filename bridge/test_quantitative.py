@@ -130,6 +130,36 @@ def test_market_session_gap_can_be_explicitly_allowed_but_not_assumed():
     assert accepted.last_timestamp_ms == rows[-1].timestamp_ms
 
 
+def test_allowed_session_gaps_do_not_hide_a_missing_intraday_candle():
+    rows = candles()
+    rows[15:] = [OHLCV(**{**row.__dict__, "timestamp_ms": row.timestamp_ms + INTERVAL}) for row in rows[15:]]
+    with pytest.raises(DataIntegrityError, match="CANDLE_GAP_OR_WRONG_INTERVAL"):
+        validate(rows, allow_session_gaps=True)
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_quote_that_crosses_structural_stop_invalidates_candidate(direction):
+    from quantitative import _atr, _candidate
+
+    rows = candles(direction)
+    series = validate(rows)
+    atr = _atr(series.candles)
+    prior = series.candles[-5:-1]
+    if direction == "LONG":
+        stop = min(row.low for row in prior) - 0.25 * atr
+        bid, ask = stop - 0.2, stop - 0.1
+    else:
+        stop = max(row.high for row in prior) + 0.25 * atr
+        bid, ask = stop + 0.1, stop + 0.2
+    result = _candidate(series, "EUR/USD", "M1", STRATEGY_ID, direction, ("TEST_RULE",), bid, ask)
+
+    assert result.state == "WAITING"
+    assert result.reason == "QUOTE_CROSSED_STRUCTURAL_STOP"
+    assert result.direction == "WAIT"
+    assert result.entry is None and result.stop_loss is None and result.take_profit is None
+    assert result.executable is False
+
+
 def test_missing_source_and_empty_series_fail_closed():
     with pytest.raises(DataIntegrityError, match="NO_CANDLES"):
         validate_ohlcv([], now_ms=NOW, source="fixture-provider")
@@ -169,7 +199,7 @@ def _strategy_rows(strategy, count=35):
         for index in range(count):
             close = 100.0 + (0.15 if index % 2 else -0.15)
             rows.append(OHLCV(NOW - (count - index) * INTERVAL, close - .05, close + .25, close - .25, close, 100.0, True, "fixture-provider", NOW))
-        rows[-1] = OHLCV(rows[-1].timestamp_ms, 95.0, 97.0, 94.0, 96.0, 100.0, True, "fixture-provider", NOW)
+        rows[-1] = OHLCV(rows[-1].timestamp_ms, 99.65, 99.75, 99.5, 99.7, 100.0, True, "fixture-provider", NOW)
     return rows
 
 @pytest.mark.parametrize("strategy", ALL_STRATEGIES)

@@ -1,5 +1,7 @@
 import os, time, uuid
 from concurrent.futures import ThreadPoolExecutor
+import pytest
+from pydantic import ValidationError
 os.environ['ALLOW_LOOPBACK_HTTP']='true'
 os.environ['BRIDGE_DB_PATH']='/tmp/destinedfx-bridge-test.sqlite3'
 os.environ['PAIR_RATE_LIMIT']='1000'
@@ -56,6 +58,19 @@ def test_authenticated_analysis_is_typed_non_executable_and_idempotent(monkeypat
     assert replay.status_code==200 and replay.json()==body
     changed={**payload,'symbol':'GBP/USD'}
     assert client.post('/v1/app/analysis',headers=headers,json=changed).status_code==409
+
+
+def test_analysis_response_model_rejects_directionally_invalid_candidate_geometry():
+    invalid = {
+        'symbol':'EUR/USD','strategy_id':'smc-confluence-1.0.0','strategy_version':'python-smc-confluence-1.0.0',
+        'timeframe':'M1','state':'CANDIDATE','direction':'LONG','entry':1.0,'stop_loss':1.1,
+        'take_profit':1.2,'reward_to_risk':2.0,'confidence_score':0,'score_basis':['rule-condition match only'],
+        'evidence':['BOS_UP_CLOSED_CANDLE'],'reason':'candidate','rejection_reasons':[],'source':'fixture-provider',
+        'candle_timestamp_ms':1,'provider_retrieved_at_ms':1,'quote_bid':1.0,'quote_ask':1.0001,
+        'quote_retrieved_at_ms':1,'quote_source':'fixture-provider','server_now_ms':1,'executable':False,
+    }
+    with pytest.raises(ValidationError, match='Candidate stop/target geometry is invalid'):
+        app.AnalysisResponse.model_validate(invalid)
 
 def test_concurrent_identical_analysis_retries_replay_one_stored_response(monkeypatch):
     configure_provider(monkeypatch)
