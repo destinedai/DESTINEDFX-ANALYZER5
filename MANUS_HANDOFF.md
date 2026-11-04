@@ -3,9 +3,9 @@
 ## Repository
 
 - Repository: `destinedai/DESTINEDFX-ANALYZER5`
-- Branch: `main`
-- Latest completed commit: `b21f202eef89ded9676dd5be8a74de177e2d710a`
-- Working tree at handoff creation: clean before this document was added.
+- Branch: `feat/final-python-broker-readiness`
+- Base SHA: `a7218911dc979e04d88ffedc296db060d09371bd` (`origin/main`)
+- Working tree at handoff creation: implementation in progress; no changes were made to `main`.
 
 ## Completed work
 
@@ -121,3 +121,15 @@ Expose the Python analysis foundation through a versioned authenticated bridge r
 - An authorized always-on deployment target with persistent storage, health checks, restart recovery, and secure environment variables.
 - Optional secure Telegram bot token/chat configuration for real delivery verification.
 - Android SDK/device access for local device verification; CI remains the authoritative build environment until then.
+
+
+## Final remaining implementation continuation
+
+This branch is based on `origin/main` SHA `a7218911dc979e04d88ffedc296db060d09371bd` and is named `feat/final-python-broker-readiness`.
+
+- Added independently dispatched, versioned Python rulesets for all eight requested strategy identifiers, with positive, negative, insufficient-history, provenance and non-executable tests.
+- Restored and hardened the Chaquopy `analyze_json` boundary, including source identity, candle timestamp, ruleset version, score basis, invalid quote rejection and fail-closed responses.
+- Removed the hard-coded temporary Cloudflare Quick Tunnel build default. Missing bridge configuration now resolves to `__CONFIGURATION_REQUIRED__`.
+- Corrected Bot and Deriv service transitional states so queued START/STOP requests display awaiting-acknowledgement states rather than confirmed RUNNING/STOPPED states.
+- Preview broker execution remains fail-closed and the Android broker capability matrix is explicit.
+- Local Python, worker and EA verification: **139 passed** with one existing deprecation warning. Android SDK/device and installed-APK runtime remain **NOT VERIFIED** in this sandbox.

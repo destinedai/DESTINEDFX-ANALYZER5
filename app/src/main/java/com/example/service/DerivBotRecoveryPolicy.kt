@@ -24,7 +24,7 @@ internal object DerivBotRecoveryPolicy {
 }
 
 internal object DerivBotServiceStatePolicy {
-    private val activeStates = setOf("CONNECTING", "RECONCILING", "RUNNING")
+    private val activeStates = setOf("STARTING", "CONNECTING", "RECONCILING", "RUNNING")
 
     fun isSwitchChecked(state: String): Boolean = state in activeStates
     fun canStart(state: String): Boolean = state !in activeStates

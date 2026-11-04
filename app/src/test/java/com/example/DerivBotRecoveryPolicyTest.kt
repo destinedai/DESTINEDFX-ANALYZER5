@@ -13,7 +13,7 @@ class DerivBotRecoveryPolicyTest {
 
     @Test
     fun connectingAndReconcilingAreActiveAndCannotStartAgain() {
-        for (state in listOf("CONNECTING", "RECONCILING", "RUNNING")) {
+        for (state in listOf("STARTING", "CONNECTING", "RECONCILING", "RUNNING")) {
             assertTrue(DerivBotServiceStatePolicy.isSwitchChecked(state))
             assertFalse(DerivBotServiceStatePolicy.canStart(state))
             assertTrue(DerivBotServiceStatePolicy.canStop(state))

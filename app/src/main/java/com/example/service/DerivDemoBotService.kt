@@ -93,6 +93,7 @@ class DerivDemoBotService : Service() {
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putString(EXTRA_SYMBOL, symbol).putString(EXTRA_STRATEGY, strategy)
                     .putString(EXTRA_TIMEFRAME, timeframe).putBoolean("enabled", true).apply()
+                update("STARTING — verifying selected account; no order requests will be sent")
                 loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
             }
             null -> {
@@ -306,6 +307,7 @@ class DerivDemoBotService : Service() {
     private fun update(text: String) {
         _state.value = when {
             text.startsWith("Running") || text.startsWith("Submitting") || text.startsWith("Contract") -> "RUNNING"
+            text.startsWith("STARTING") -> "STARTING"
             text.startsWith("CONNECTING") || text.startsWith("Connecting") || text.startsWith("RECONNECTING") -> "CONNECTING"
             text.startsWith("RECONCILING") -> "RECONCILING"
             text.startsWith("ERROR") -> "ERROR"

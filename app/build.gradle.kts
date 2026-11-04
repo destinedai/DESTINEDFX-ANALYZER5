@@ -25,7 +25,6 @@ val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromGradle.takeIf { it.isNotBlank
 val mt5ManagedServiceUrlBuildValue = mt5ManagedServiceUrl.ifBlank { "__CONFIGURATION_REQUIRED__" }
   .replace("\\", "\\\\")
   .replace("\"", "\\\"")
-val mt5ManagedDemoDefault = "https://ancient-put-forge-preferences.trycloudflare.com"
 
 android {
   namespace = "com.example"
@@ -67,10 +66,7 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      val debugBridgeUrl = mt5ManagedServiceUrl.ifBlank { mt5ManagedDemoDefault }
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-      buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$debugBridgeUrl\"")
+      buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
       signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
