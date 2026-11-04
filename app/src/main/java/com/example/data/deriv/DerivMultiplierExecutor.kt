@@ -8,7 +8,7 @@ class DerivMultiplierExecutor(
     private val gateway: DerivBrokerGateway,
     private val dao: DerivExecutionDao,
     private val sensitiveActionAuthorized: () -> Boolean = { false },
-    private val dailyRiskEntryAllowed: suspend (String, String) -> Boolean = { _, _ -> true }
+    private val dailyRiskEntryAllowed: suspend (String, String) -> Boolean = { _, _ -> false }
 ) {
     companion object {
         private const val PORTFOLIO_MAX_AGE_MS = 8_000L
@@ -165,7 +165,7 @@ class DerivMultiplierExecutor(
         val current = account ?: return@withContext Result.failure(Exception("ACCOUNT_UNVERIFIED: verify the selected Deriv account before submitting"))
         if (current.loginId.isBlank() || current.mode !in setOf("demo", "real")) return@withContext Result.failure(Exception("ACCOUNT_INVALID: broker account identity is unavailable"))
         if (!dailyRiskEntryAllowed(current.loginId, current.mode.uppercase())) {
-            return@withContext Result.failure(Exception("DAILY_LOSS_LOCKED: the persisted Deriv daily loss limit is locked for this account and mode; no purchase was sent"))
+            return@withContext Result.failure(DerivExecutionFailure(DerivExecutionFailureKind.PURCHASE_NOT_SENT, "DAILY_RISK_RECHECK_FAILED: the persisted Deriv daily loss limit is locked or unavailable for this account and mode; no purchase was sent"))
         }
         val existing = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId)
         if (existing != null) return@withContext Result.failure(Exception("DUPLICATE_SIGNAL: ${intent.signalId} already exists for ${current.mode.uppercase()} account ${current.loginId} in ${existing.status}"))
@@ -211,10 +211,14 @@ class DerivMultiplierExecutor(
 
         val initial = intent.toEntity(DerivExecutionStatus.ORDER_SUBMITTING.name, DerivSubmissionStage.VALIDATED.name)
         if (dao.insertIfAbsent(initial) == -1L) return@withContext Result.failure(Exception("DUPLICATE_SIGNAL: persisted execution intent already exists"))
-        val result = gateway.executeMultiplier(intent) { requestId, proposalId, stage ->
-            val saved = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId) ?: initial
-            dao.update(saved.copy(requestId = requestId ?: saved.requestId, proposalId = proposalId ?: saved.proposalId, submissionStage = stage.name, status = if (stage == DerivSubmissionStage.PURCHASE_SENT) DerivExecutionStatus.ORDER_PENDING.name else DerivExecutionStatus.ORDER_SUBMITTING.name, updatedAtMs = System.currentTimeMillis()))
-        }
+        val result = gateway.executeMultiplier(
+            intent,
+            onStage = { requestId, proposalId, stage ->
+                val saved = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId) ?: initial
+                dao.update(saved.copy(requestId = requestId ?: saved.requestId, proposalId = proposalId ?: saved.proposalId, submissionStage = stage.name, status = if (stage == DerivSubmissionStage.PURCHASE_SENT) DerivExecutionStatus.ORDER_PENDING.name else DerivExecutionStatus.ORDER_SUBMITTING.name, updatedAtMs = System.currentTimeMillis()))
+            },
+            allowPurchase = { dailyRiskEntryAllowed(current.loginId, current.mode.uppercase()) }
+        )
         if (result.isSuccess) {
             val buy = result.getOrThrow()
             val saved = dao.findBySignalId(current.loginId, current.mode.uppercase(), intent.signalId) ?: initial
