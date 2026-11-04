@@ -66,20 +66,25 @@ class WorkerTests(unittest.TestCase):
 
     def test_load_settings_requires_brand_binding_and_bounded_capacity(self):
         config = self.root / "worker.toml"
-        config.write_text(
-            'control_plane_url = "https://bridge.realcop.com"\\n'
-            f'data_root = "{self.root / "accounts"}"\\n'
-            f'mt5_install = "{self.install}"\\n'
-            f'terminal_exe = "{self.term}"\\n'
-            f'metaeditor_exe = "{self.meta}"\\n'
-            f'ea_source = "{self.source}"\\n'
-            'single_broker_brand = "FBS"\\n'
-            'max_terminals = 1\\n',
-            encoding="utf-8"
-        )
+        lines = [
+            'control_plane_url = "https://bridge.realcop.com"',
+            f'data_root = "{self.root / "accounts"}"',
+            f'mt5_install = "{self.install}"',
+            f'terminal_exe = "{self.term}"',
+            f'metaeditor_exe = "{self.meta}"',
+            f'ea_source = "{self.source}"',
+            'single_broker_brand = "FBS"',
+            'max_terminals = 1',
+        ]
+        config.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
         loaded = worker.load_settings(config)
         self.assertEqual(loaded["single_broker_brand"], "FBS")
-        config.write_text(config.read_text(encoding="utf-8").replace('single_broker_brand = "FBS"', 'single_broker_brand = "UNKNOWN"'), encoding="utf-8")
+        config.write_text(
+            config.read_text(encoding="utf-8").replace(
+                'single_broker_brand = "FBS"', 'single_broker_brand = "UNKNOWN"'
+            ),
+            encoding="utf-8"
+        )
         with self.assertRaises(worker.ProvisionError):
             worker.load_settings(config)
 
