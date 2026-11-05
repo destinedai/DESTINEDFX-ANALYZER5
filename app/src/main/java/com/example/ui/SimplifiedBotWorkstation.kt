@@ -463,7 +463,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         message = "Deriv REAL authorization armed for the current account session only."
                     } catch (e: Exception) { message = e.message ?: "Deriv REAL arm failed closed." }
                 }
-            }) { Text("ARM REAL SESSION") },
+            }) { Text("ARM REAL SESSION") } },
             dismissButton = { TextButton(onClick = { showDerivRealArmDialog = false }) { Text("CANCEL") } }
         )
         if (showPairingRevokeDialog) AlertDialog(
@@ -478,7 +478,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     catch (e: Exception) { message = e.message ?: "Pairing revocation was not confirmed." }
                     finally { busy = false }
                 }
-            }) { Text("REVOKE PAIRING") },
+            }) { Text("REVOKE PAIRING") } },
             dismissButton = { TextButton(onClick = { showPairingRevokeDialog = false }) { Text("CANCEL") } }
         )
         if (showLiveAuthorizationDialog) AlertDialog(
@@ -488,7 +488,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             confirmButton = { TextButton(onClick = {
                 showLiveAuthorizationDialog = false
                 scope.launch { busy = true; try { val expiry = requireNotNull(bridge).authorizeLiveSession(); liveAuthorizationExpiry = expiry; mt5Snapshot = bridge.state(); message = "LIVE authorization confirmed until $expiry." } catch (e: Exception) { message = e.message ?: "LIVE authorization failed closed." } finally { busy = false } }
-            }) { Text("AUTHORIZE LIVE") },
+            }) { Text("AUTHORIZE LIVE") } },
             dismissButton = { TextButton(onClick = { showLiveAuthorizationDialog = false }) { Text("CANCEL") } }
         )
         message?.let { Text(it, color = if (it.contains("failed", true) || it.contains("blocked", true)) LossRed else WarningAmber, fontSize = 11.sp, lineHeight = 16.sp) }

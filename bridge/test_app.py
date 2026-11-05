@@ -736,6 +736,24 @@ def test_readiness_requires_valid_managed_configuration_and_storage(monkeypatch)
     assert response.status_code==200
     assert response.json()=={'status':'ready','database':'ok','managed_execution':'configured'}
 
+def test_worker_claim_receives_persisted_bridge_origin_and_readiness_fails_closed(monkeypatch):
+    managed_env(monkeypatch)
+    expected='https://bridge.destinedfx.internal'
+    assert client.get('/health/ready').status_code==200
+    p,ah=managed_pair()
+    assert client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'123456','server':'Demo-Server','password':'test-only',
+        'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+    }).status_code==202
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    claim=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'origin-regression-worker'})
+    assert claim.status_code==200
+    assert claim.json()['bridge_url']==expected
+    monkeypatch.delenv('BRIDGE_BASE_URL',raising=False)
+    response=client.get('/health/ready')
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='CONFIGURATION_REQUIRED'
+
 def test_non_durable_storage_is_not_execution_ready(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setenv('EXECUTION_STORAGE_DURABLE','false')
