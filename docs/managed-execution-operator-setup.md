@@ -14,7 +14,7 @@ The Android app can control an account only after a DestinedFX-operated service 
 
 ## Broker-specific terminal installations and worker capacity
 
-The managed MT5 worker accepts only the explicit brands FBS, EXNESS, HFM, and DERIV (the last means a genuine Deriv MT5 account, not Options/Multipliers). New bridge registrations with UNKNOWN are rejected. The terminal claim must match the registered broker company, exact user-supplied server, login, and DEMO/LIVE mode; a brand label alone is not verification.
+The managed MT5 worker uses `broker_brand` as the sole canonical broker identity and accepts only FBS, EXNESS, HFM, and DERIV (the last means a genuine Deriv MT5 account, not Options/Multipliers). Brand values are normalized to uppercase at registration/claim and worker validation; there is no independent legacy `broker` field to reconcile. New bridge registrations with UNKNOWN are rejected. The terminal claim must match the registered broker company, exact user-supplied server, login, and DEMO/LIVE mode; a brand label alone is not verification.
 
 For a single-broker PC, set **single_broker_brand** in worker.toml to exactly the chosen brand and configure its genuine installation paths. For multiple broker brands, remove **single_broker_brand** and the top-level MT5 paths and add a separate **[broker_terminals.FBS]**, **[broker_terminals.EXNESS]**, **[broker_terminals.HFM]**, and/or **[broker_terminals.DERIV]** table for each genuine installation you own. Each table must provide **mt5_install**, **terminal_exe**, and **metaeditor_exe**. Do not copy one broker's installation path into another brand's entry or invent server names.
 

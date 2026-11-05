@@ -39,11 +39,34 @@ class WorkerTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_broker_brand_is_required_and_unknown_brands_are_rejected(self):
-        for brand in ("UNKNOWN", "OTHER", None):
+    def test_supported_broker_brands_are_normalized_without_legacy_broker_property(self):
+        for brand in ("FBS", "EXNESS", "HFM", "DERIV"):
+            for mode in ("DEMO", "LIVE"):
+                account = {k: v for k, v in self.job["account"].items() if k != "broker"}
+                job = {**self.job, "account": {**account, "broker_brand": brand.lower(), "account_mode": mode}}
+                self.assertEqual(worker.validate_job(job)["account"]["broker_brand"], brand)
+        for brand in ("UNKNOWN", "OTHER", None, "FBS/EXNESS"):
             job = {**self.job, "account": {**self.job["account"], "broker_brand": brand}}
             with self.assertRaises(worker.ProvisionError):
                 worker.validate_job(job)
+        for legacy in ("EXNESS", "UNKNOWN", None):
+            job = {**self.job, "account": {**self.job["account"], "broker": legacy}}
+            with self.assertRaises(worker.ProvisionError) as error:
+                worker.validate_job(job)
+            self.assertEqual(error.exception.code, "CONFLICTING_BROKER_IDENTITY")
+        matching_alias = {**self.job, "account": {**self.job["account"], "broker": " fbs "}}
+        self.assertEqual(worker.validate_job(matching_alias)["account"]["broker_brand"], "FBS")
+
+    def test_malformed_account_and_missing_required_claim_fields_fail_closed(self):
+        for job in ({**self.job, "account": None}, {**self.job, "account": []},
+                    {key: value for key, value in self.job.items() if key != "job_id"}):
+            with self.assertRaises(worker.ProvisionError):
+                worker.validate_job(job)
+        for field in ("login", "server", "password", "access_type", "account_mode", "broker_brand"):
+            account = {**self.job["account"]}
+            account.pop(field)
+            with self.assertRaises(worker.ProvisionError, msg=f"missing account.{field}"):
+                worker.validate_job({**self.job, "account": account})
 
     def test_broker_specific_terminal_mapping_is_explicit(self):
         mapped = {
@@ -73,7 +96,7 @@ class WorkerTests(unittest.TestCase):
             f'terminal_exe = "{self.term}"',
             f'metaeditor_exe = "{self.meta}"',
             f'ea_source = "{self.source}"',
-            'single_broker_brand = "FBS"',
+            'single_broker_brand = "fbs"',
             'max_terminals = 1',
         ]
         config.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -81,7 +104,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(loaded["single_broker_brand"], "FBS")
         config.write_text(
             config.read_text(encoding="utf-8").replace(
-                'single_broker_brand = "FBS"', 'single_broker_brand = "UNKNOWN"'
+                'single_broker_brand = "fbs"', 'single_broker_brand = "UNKNOWN"'
             ),
             encoding="utf-8"
         )
@@ -257,7 +280,7 @@ class WorkerTests(unittest.TestCase):
     def test_supervision_restarts_owned_terminal_with_bounded_retries(self):
         result = worker.provision(self.job, self.settings, launch=False)
         marker = result / "terminal" / ".destinedfx-worker.json"
-        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO","access_type":"MASTER","bridge_url":"https://bridge.realcop.com"}', encoding="utf-8")
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO","access_type":"MASTER","bridge_url":"https://bridge.realcop.com","broker_brand":"FBS"}', encoding="utf-8")
         fake = type("Process", (), {"pid": 100})()
         with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD), patch.object(worker.subprocess, "Popen", return_value=fake) as popen:
             outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
@@ -309,7 +332,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(first, restarted)
 
     def test_restart_configuration_has_expected_identity_and_no_password(self):
-        text = worker.restart_ini_contents({"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.realcop.com"})
+        text = worker.restart_ini_contents({"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.realcop.com", "broker_brand":"FBS"})
         self.assertIn("Login=123456", text)
         self.assertIn("Server=Demo-Server", text)
         self.assertIn("AllowLiveTrading=1", text)
@@ -317,12 +340,12 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn("Password=", text)
 
     def test_restart_configuration_rejects_missing_or_invalid_identity_and_investor_is_read_only(self):
-        for record in ({"expected_login": "", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.realcop.com"},
-                       {"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "BROKER", "bridge_url": "https://bridge.realcop.com"},
-                       {"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.invalid"}):
+        for record in ({"expected_login": "", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.realcop.com", "broker_brand":"FBS"},
+                       {"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "BROKER", "bridge_url": "https://bridge.realcop.com", "broker_brand":"FBS"},
+                       {"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "MASTER", "bridge_url": "https://bridge.invalid", "broker_brand":"FBS"}):
             with self.assertRaises(worker.ProvisionError):
                 worker.restart_ini_contents(record)
-        investor = worker.restart_ini_contents({"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "INVESTOR", "bridge_url": "https://bridge.realcop.com"})
+        investor = worker.restart_ini_contents({"expected_login": "123456", "expected_server": "Demo-Server", "account_mode": "DEMO", "access_type": "INVESTOR", "bridge_url": "https://bridge.realcop.com", "broker_brand":"FBS"})
         self.assertIn("AllowLiveTrading=0", investor)
 
 

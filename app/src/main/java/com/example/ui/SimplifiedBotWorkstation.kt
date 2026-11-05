@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -82,11 +84,13 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val derivAccount by viewModel.app.derivBrokerGateway.accountInfo.collectAsStateWithLifecycle()
     val derivState by viewModel.app.derivBrokerGateway.connectionState.collectAsStateWithLifecycle()
     var broker by remember(activeBroker) { mutableStateOf(activeBroker) }
-    var mt5Profile by remember { mutableStateOf("DEMO") }
-    var selectedMt5Broker by remember { mutableStateOf(viewModel.app.secretsManager.getManagedMT5Broker("DEMO")) }
+    var mt5Mode by remember { mutableStateOf("DEMO") }
+    var selectedMt5Broker by remember { mutableStateOf("") }
+    val mt5Profile = "${selectedMt5Broker}_${mt5Mode}"
     var login by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var server by remember { mutableStateOf("") }
+    var accessType by remember { mutableStateOf("MASTER") }
     var derivToken by remember { mutableStateOf("") }
     var derivAppId by remember { mutableStateOf("") }
     var savePassword by remember { mutableStateOf(false) }
@@ -97,12 +101,18 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var selectedOpportunity by remember { mutableStateOf<com.example.domain.model.TradeSignal?>(null) }
     var commandPending by remember { mutableStateOf(false) }
     val secrets = viewModel.app.secretsManager
-    val bridge = remember(mt5Profile) { MT5RemoteBridgeClient(secrets, mt5Profile) }
+    val bridge = remember(mt5Profile) { if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) MT5RemoteBridgeClient(secrets, mt5Profile, accountMode = mt5Mode, brokerBrand = selectedMt5Broker) else null }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     LaunchedEffect(broker, mt5Profile) {
-        selectedMt5Broker = secrets.getManagedMT5Broker(mt5Profile)
-        if (broker == BrokerType.MT5 && bridge.managedConfigured() && bridge.hasPairing()) {
+        if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) {
+            login = secrets.getManagedMT5AccountLogin(mt5Profile)
+            server = secrets.getManagedMT5AccountServer(mt5Profile)
+            accessType = secrets.getManagedMT5AccountAccessType(mt5Profile)
+            savePassword = secrets.isManagedMT5AccountPasswordSaveEnabled(mt5Profile)
+            password = if (savePassword) secrets.getManagedMT5AccountPassword(mt5Profile) else ""
+        }
+        if (broker == BrokerType.MT5 && bridge?.managedConfigured() == true && bridge.hasPairing()) {
             while (true) {
                 mt5Snapshot = runCatching { bridge.state() }.getOrNull()
                 delay(5_000L)
@@ -123,7 +133,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         else -> botActive
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(DarkBackground).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("DESTINEDFX BOT", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
         Text("Connect an account, then let the engine scan eligible markets automatically.", color = TextSecondary, fontSize = 11.sp)
 
@@ -136,27 +146,33 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     }
                 }
                 if (broker == BrokerType.MT5) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("DEMO", "LIVE").forEach { profile ->
-                            FilterChip(selected = mt5Profile == profile, onClick = { mt5Profile = profile }, label = { Text(profile, fontSize = 10.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (profile == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
-                        }
-                    }
-                    Text("MT5 BROKER", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { selected ->
-                            FilterChip(
-                                selected = selectedMt5Broker == selected,
-                                onClick = { selectedMt5Broker = selected },
-                                label = { Text(selected, fontSize = 9.sp) },
-                                modifier = Modifier.weight(1f),
-                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary)
-                            )
+                    Text("MT5 ACCOUNTS", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                            Text(brand, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            listOf("DEMO", "LIVE").forEach { mode ->
+                                val slot = "${brand}_${mode}"
+                                val selected = selectedMt5Broker == brand && mt5Mode == mode
+                                val saved = secrets.getManagedMT5AccountLogin(slot).isNotBlank()
+                                val status = if (selected && connected) "Connected" else if (secrets.getMT5BridgeAccountAppToken(slot).isNotBlank()) "Paired" else if (saved) "Configured" else "Not configured"
+                                FilterChip(selected = selected, onClick = {
+                                    selectedMt5Broker = brand; mt5Mode = mode
+                                    secrets.saveSelectedMT5BrokerBrand(brand)
+                                    broker = BrokerType.MT5; viewModel.selectBroker(BrokerType.MT5); message = null
+                                }, label = { Text("$mode · $status", fontSize = 9.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
+                            }
                         }
                     }
                     Text("Broker selection is not identity proof. Use the exact server assigned to this MT5 account; verify terminal-reported company separately.", color = WarningAmber, fontSize = 9.sp)
                     LoginField("Login", login, { login = it.filter(Char::isDigit) }, KeyboardType.Number)
                     LoginField("Password", password, { password = it }, KeyboardType.Password, true)
                     LoginField("Server", server, { server = it }, KeyboardType.Text)
+                    Text("Access type", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("MASTER", "INVESTOR").forEach { access ->
+                            FilterChip(selected = accessType == access, onClick = { accessType = access }, label = { Text(access, fontSize = 10.sp) })
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Switch(checked = savePassword, onCheckedChange = { savePassword = it })
                         Text("Save password in encrypted device storage", color = TextSecondary, fontSize = 10.sp)
@@ -177,11 +193,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             try {
                                 if (broker == BrokerType.MT5) {
                                     require(selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Select an MT5 broker before connecting." }
-                                    val snapshot = bridge.registerManagedAccount(login, password, server, selectedMt5Broker, "MASTER", consent, savePassword)
+                                    val snapshot = requireNotNull(bridge) { "Select an MT5 broker." }.registerManagedAccount(login = login, password = password, server = server, accessType = accessType, consent = consent, savePasswordLocally = savePassword)
                                     mt5Snapshot = snapshot
                                     message = when {
-                                        snapshot.connected && snapshot.heartbeatFresh && snapshot.brokerIdentityVerified -> "Broker identity verified; account is connected."
-                                        snapshot.connected && snapshot.heartbeatFresh -> "BROKER IDENTITY UNCONFIRMED; execution remains blocked."
+                                        snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh && snapshot.accountVerified && snapshot.brokerIdentityVerified -> "Broker identity verified; account is connected."
+                                        snapshot.terminalOnline && snapshot.heartbeatFresh -> "BROKER IDENTITY UNCONFIRMED; execution remains blocked."
                                         else -> "Credentials accepted; waiting for a fresh terminal heartbeat."
                                     }
                                 } else {
@@ -223,7 +239,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             require(opportunity != null) { "No qualified setup yet. Scanning continues." }
                             if (broker == BrokerType.MT5) {
                                 val config = JSONObject().put("strategy", viewModel.selectedStrategyId.value).put("symbols", JSONArray().put(opportunity.symbol)).put("timeframes", JSONArray().put("H1")).put("risk_percent", 1.0).put("max_daily_loss_percent", 2.0).put("max_concurrent_positions", 2)
-                                val result = bridge.command(UUID.randomUUID().toString(), "START", config)
+                                val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "START", config)
                                 message = if (result.queued) "Scanning started for ${opportunity.symbol}; waiting for broker acknowledgement." else result.detail
                             } else {
                                 if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -238,7 +254,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         busy = true; commandPending = true
                         try {
                             if (broker == BrokerType.MT5) {
-                                val result = bridge.command(UUID.randomUUID().toString(), "STOP")
+                                val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "STOP")
                                 message = if (result.queued) "Stop requested; waiting for fresh broker state. Existing positions remain protected." else result.detail
                             } else { DerivDemoBotService.stop(context); viewModel.setBotStatus(false); message = "Stop requested. Existing positions remain broker-tracked." }
                         } catch (e: Exception) { message = e.message?.take(240) ?: "Stop was not confirmed." } finally { busy = false; commandPending = false }

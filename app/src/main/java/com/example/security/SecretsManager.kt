@@ -411,7 +411,7 @@ class SecretsManager internal constructor(
                     login = getManagedMT5AccountLogin(key),
                     server = getManagedMT5AccountServer(key),
                     accessType = getManagedMT5AccountAccessType(key),
-                    connected = getMT5BridgeAccountAppToken(key).isNotBlank(),
+                    connected = false,
                     passwordSaved = isManagedMT5AccountPasswordSaveEnabled(key)
                 )
             }

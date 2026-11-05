@@ -21,10 +21,10 @@ import java.util.concurrent.TimeUnit
 /** Android control/status client for the remote MT5 relay. Never places orders. */
 class MT5RemoteBridgeClient(
     private val secrets: SecretsManager,
-    profile: String = "DEMO",
+    profile: String,
     private val sensitiveActionAuthorized: () -> Boolean = { false },
-    accountMode: String = profile,
-    brokerBrand: String = "FBS"
+    accountMode: String,
+    brokerBrand: String
 ) {
     /** Local secure-storage namespace, e.g. FBS_DEMO or EXNESS_LIVE. */
     val profile: String = profile.trim().uppercase().also {
@@ -37,6 +37,7 @@ class MT5RemoteBridgeClient(
     val brokerBrand: String = brokerBrand.trim().uppercase().also {
         require(it in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
     }
+    init { require(this.profile == "${this.brokerBrand}_${this.accountMode}") { "MT5 profile must be the explicit broker/mode slot." } }
     private val http = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(5, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
@@ -129,7 +130,7 @@ class MT5RemoteBridgeClient(
         val actualServer = account?.optString("server").orEmpty()
         val actualMode = account?.optString("account_mode").orEmpty().uppercase()
         val verified = obj.optBoolean("account_identity_verified", false) && actualLogin.isNotBlank() &&
-            actualServer.isNotBlank() && actualMode in setOf("DEMO", "LIVE")
+            actualServer.isNotBlank() && actualMode in setOf("DEMO", "LIVE") && actualMode == accountMode
         fun array(key: String): List<JSONObject>? {
             val a = obj.optJSONArray(key) ?: return null
             val out = mutableListOf<JSONObject>()
@@ -144,7 +145,7 @@ class MT5RemoteBridgeClient(
         val access = managed?.optString("access_type", "").orEmpty().uppercase()
         val mode = managed?.optString("account_mode", "").orEmpty().uppercase()
         return Snapshot(
-            managedState, access, mode, true, online, freshness,
+            managedState, access, mode, online && terminalConnected && verified && actualMode == accountMode, online, freshness,
             when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
             actualMode, managed?.optBoolean("live_authorized", false) == true,

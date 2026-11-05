@@ -415,6 +415,29 @@ def test_worker_lease_capacity_blocks_second_simultaneous_claim(monkeypatch):
     assert second.json() == {'job':None}
 
 
+def test_bridge_claim_payload_validates_in_worker_for_all_canonical_brands_and_modes(monkeypatch):
+    import sys
+    from pathlib import Path
+    worker_dir = str(Path(__file__).resolve().parents[1] / 'managed-worker')
+    if worker_dir not in sys.path:
+        sys.path.insert(0, worker_dir)
+    import worker
+    managed_env(monkeypatch)
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    for index, brand in enumerate(('FBS','EXNESS','HFM','DERIV')):
+        for mode in ('DEMO','LIVE'):
+            _, headers = managed_pair()
+            assert client.post('/v1/app/managed-account', headers=headers, json={
+                'login':f'800{index}{1 if mode == "LIVE" else 0}','server':'Broker-Server','password':'fixture-secret',
+                'access_type':'MASTER','account_mode':mode,'broker_brand':brand.lower(),'consent':True
+            }).status_code == 202
+            claim = client.post('/v1/worker/jobs/claim', headers=wh, json={'worker_id':f'worker-{index}-{mode}'})
+            assert claim.status_code == 200
+            payload = claim.json()
+            assert payload['account']['broker_brand'] == brand
+            assert payload['account']['account_mode'] == mode
+            assert worker.validate_job(payload)['account']['broker_brand'] == brand
+
 def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
     managed_env(monkeypatch)
     p,ah=managed_pair()

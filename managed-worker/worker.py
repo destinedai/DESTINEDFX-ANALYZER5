@@ -34,7 +34,7 @@ LOGIN = re.compile(r"^[0-9]{1,20}$")
 SAFE_SERVER = re.compile(r"^[A-Za-z0-9 ._:-]{1,128}$")
 SAFE_SYMBOL = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 VALID_ACCESS = {"MASTER", "INVESTOR"}
-VALID_BROKERS = {"FBS", "EXNESS", "HFM", "DERIV"}
+SUPPORTED_BROKER_BRANDS = {"FBS", "EXNESS", "HFM", "DERIV"}
 
 
 class ProcessState(str, Enum):
@@ -196,9 +196,10 @@ def restart_ini_contents(record: dict[str, Any]) -> str:
     server = record.get("expected_server", "")
     mode = record.get("account_mode", "")
     access = record.get("access_type", "")
+    brand = record.get("broker_brand", "")
     bridge_url = record.get("bridge_url", "")
     if not (LOGIN.fullmatch(str(login)) and SAFE_SERVER.fullmatch(str(server)) and mode in {"DEMO", "LIVE"}
-            and access in VALID_ACCESS and validate_origin(str(bridge_url))):
+            and access in VALID_ACCESS and brand in SUPPORTED_BROKER_BRANDS and validate_origin(str(bridge_url))):
         raise ProvisionError("RESTART_CONFIGURATION_UNVERIFIED")
     allow_trade = "1" if access == "MASTER" else "0"
     return ("[Common]\n"
@@ -329,7 +330,7 @@ def quarantine_terminal(settings: dict, job_id: str) -> str:
 def settings_for_broker(settings: dict, broker_brand: str) -> dict:
     """Resolve a declared broker terminal install; never guess a brand from a path."""
     brand = str(broker_brand or "").strip().upper()
-    if brand not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+    if brand not in SUPPORTED_BROKER_BRANDS:
         raise ProvisionError("BROKER_BRAND_REQUIRED")
     mapping = settings.get("broker_terminals")
     if isinstance(mapping, dict) and mapping:
@@ -391,8 +392,6 @@ def validate_job(job: Any) -> dict[str, Any]:
     if not isinstance(account, dict):
         raise ProvisionError("INVALID_ACCOUNT")
     login, server, password, access, mode = (account.get(k) for k in ("login", "server", "password", "access_type", "account_mode"))
-    if account.get("broker") not in VALID_BROKERS:
-        raise ProvisionError("INVALID_BROKER")
     if not isinstance(login, str) or not LOGIN.fullmatch(login):
         raise ProvisionError("INVALID_ACCOUNT")
     if not isinstance(server, str) or not SAFE_SERVER.fullmatch(server):
@@ -403,9 +402,17 @@ def validate_job(job: Any) -> dict[str, Any]:
         raise ProvisionError("INVALID_ACCESS_TYPE")
     if mode not in {"DEMO", "LIVE"}:
         raise ProvisionError("INVALID_ACCOUNT_MODE")
-    if account.get("broker_brand") not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+    brand = str(account.get("broker_brand") or "").strip().upper()
+    if brand not in SUPPORTED_BROKER_BRANDS:
         raise ProvisionError("INVALID_BROKER_BRAND")
+    # Accept a legacy alias only when it explicitly agrees; it never supplies
+    # or overrides the canonical broker identity.
+    if "broker" in account:
+        legacy_brand = str(account.get("broker") or "").strip().upper()
+        if legacy_brand not in SUPPORTED_BROKER_BRANDS or legacy_brand != brand:
+            raise ProvisionError("CONFLICTING_BROKER_IDENTITY")
     result = dict(job)
+    result["account"] = dict(account, broker_brand=brand)
     result["bridge_url"] = normalized
     return result
 
@@ -656,7 +663,6 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
               "executable": str(account_terminal.resolve()), "pid": 0, "restart_count": 0,
               "status": "LAUNCH_PENDING", "created": time.time(), "expected_login": job["account"]["login"],
               "expected_server": job["account"]["server"], "account_mode": job["account"]["account_mode"],
-              "broker": job["account"]["broker"],
               "access_type": job["account"]["access_type"], "bridge_url": job["bridge_url"],
               "expected_company": job["account"].get("company", ""), "broker_brand": job["account"]["broker_brand"],
               "expected_currency": job["account"].get("currency", ""),
@@ -692,6 +698,13 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
 
 def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
     """Provision with evidence-based cleanup; never delete a possibly live tree."""
+    job = validate_job(job)
+    brand = job["account"]["broker_brand"]
+    selected_brand = settings.get("selected_broker_brand")
+    if selected_brand is not None and selected_brand != brand:
+        raise ProvisionError("BROKER_TERMINAL_NOT_CONFIGURED")
+    if selected_brand is None:
+        settings = settings_for_broker(settings, brand)
     root = Path(settings["data_root"]).resolve()
     account_dir = safe_child(root, job["job_id"])
     try:
@@ -793,12 +806,13 @@ def load_settings(path: Path) -> dict:
             if not isinstance(mapping, dict) or not mapping:
                 raise ValueError
             for brand, item in mapping.items():
-                if brand not in {"FBS", "EXNESS", "HFM", "DERIV"} or not isinstance(item, dict):
+                if brand not in SUPPORTED_BROKER_BRANDS or not isinstance(item, dict):
                     raise ValueError
                 if any(not isinstance(item.get(k), str) or not item[k] for k in ("mt5_install", "terminal_exe", "metaeditor_exe")):
                     raise ValueError
         else:
-            if str(cfg.get("single_broker_brand", "")).upper() not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+            cfg["single_broker_brand"] = str(cfg.get("single_broker_brand", "")).strip().upper()
+            if cfg["single_broker_brand"] not in SUPPORTED_BROKER_BRANDS:
                 raise ValueError
             if any(not isinstance(cfg.get(k), str) or not cfg[k] for k in ("mt5_install", "terminal_exe", "metaeditor_exe")):
                 raise ValueError
