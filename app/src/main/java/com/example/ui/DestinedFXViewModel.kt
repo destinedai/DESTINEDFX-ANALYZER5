@@ -1319,6 +1319,27 @@ open class DestinedFXViewModel(
     val botStatusSummary = app.autonomousBotEngine.status
     val botActive: StateFlow<Boolean> = _botActive.asStateFlow()
 
+    /**
+     * Finds the strongest currently qualified opportunity from the real provider universe.
+     * No fallback symbol or fabricated plan is used; an empty result means no setup passed
+     * the existing signal and RiskEngine gates.
+     */
+    suspend fun findBestBotOpportunity(): com.example.domain.model.TradeSignal? = withContext(Dispatchers.Default) {
+        val candidates = com.example.data.market.SymbolRegistry.getBackgroundSymbols()
+        candidates.mapNotNull { symbol ->
+            runCatching {
+                app.signalGenerationUseCase.generateSignal(
+                    symbol = symbol,
+                    timeframe = "H1",
+                    strategyId = selectedStrategyId.value
+                )
+            }.getOrNull()?.takeIf {
+                it.executable && it.direction != com.example.domain.model.SignalDirection.WAIT &&
+                    it.entryPrice > 0.0 && it.stopLoss > 0.0 && it.takeProfit > 0.0
+            }
+        }.maxWithOrNull(compareBy<com.example.domain.model.TradeSignal> { it.confidenceScore }.thenBy { it.symbol })
+    }
+
     fun setBotStatus(active: Boolean, onResult: ((Boolean, String?) -> Unit)? = null) {
         viewModelScope.launch {
             try {

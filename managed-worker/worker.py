@@ -34,6 +34,7 @@ LOGIN = re.compile(r"^[0-9]{1,20}$")
 SAFE_SERVER = re.compile(r"^[A-Za-z0-9 ._:-]{1,128}$")
 SAFE_SYMBOL = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 VALID_ACCESS = {"MASTER", "INVESTOR"}
+VALID_BROKERS = {"FBS", "EXNESS", "HFM", "DERIV"}
 
 
 class ProcessState(str, Enum):
@@ -390,6 +391,8 @@ def validate_job(job: Any) -> dict[str, Any]:
     if not isinstance(account, dict):
         raise ProvisionError("INVALID_ACCOUNT")
     login, server, password, access, mode = (account.get(k) for k in ("login", "server", "password", "access_type", "account_mode"))
+    if account.get("broker") not in VALID_BROKERS:
+        raise ProvisionError("INVALID_BROKER")
     if not isinstance(login, str) or not LOGIN.fullmatch(login):
         raise ProvisionError("INVALID_ACCOUNT")
     if not isinstance(server, str) or not SAFE_SERVER.fullmatch(server):
@@ -653,6 +656,7 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
               "executable": str(account_terminal.resolve()), "pid": 0, "restart_count": 0,
               "status": "LAUNCH_PENDING", "created": time.time(), "expected_login": job["account"]["login"],
               "expected_server": job["account"]["server"], "account_mode": job["account"]["account_mode"],
+              "broker": job["account"]["broker"],
               "access_type": job["account"]["access_type"], "bridge_url": job["bridge_url"],
               "expected_company": job["account"].get("company", ""), "broker_brand": job["account"]["broker_brand"],
               "expected_currency": job["account"].get("currency", ""),

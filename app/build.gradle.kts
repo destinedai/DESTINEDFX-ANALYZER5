@@ -41,6 +41,7 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
+    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
   signingConfigs {
@@ -111,6 +112,19 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+}
+
+chaquopy {
+  defaultConfig {
+    version = "3.12"
+    buildPython("/usr/bin/python3.12")
+  }
+  sourceSets {
+    getByName("main") {
+      setSrcDirs(listOf("../bridge"))
+      include("quantitative.py")
+    }
   }
 }
 
