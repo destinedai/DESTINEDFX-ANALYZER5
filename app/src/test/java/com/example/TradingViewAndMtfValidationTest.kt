@@ -20,6 +20,7 @@ import com.example.ui.chart.TradingViewLoadStatus
 import com.example.ui.chart.isTradingViewChartDocumentUrl
 import com.example.ui.chart.isSupportedTradingViewHost
 import com.example.ui.DestinedFXScreen
+import com.example.ui.deriveMarketReadiness
 import com.example.ui.mapTradeSignalToUiModel
 import com.example.ui.scanChartBitmap
 import com.example.ui.detectPairFromChartText
@@ -35,6 +36,31 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TradingViewAndMtfValidationTest {
+
+    @Test
+    fun chartReadinessNeverInfersRenderingFromCandlesOrWidgetPresence() {
+        val unverified = deriveMarketReadiness(
+            ticker = null,
+            candleSource = "verified-provider",
+            candlesAvailable = true,
+            chartDisplayed = false,
+            signal = null,
+            nowMs = 10_000L
+        )
+        assertTrue(unverified.candlesConfirmed)
+        assertFalse(unverified.chartDisplayed)
+        assertEquals("Chart candle rendering unverified", unverified.chartLabel)
+
+        val nativeRendered = deriveMarketReadiness(
+            ticker = null,
+            candleSource = "verified-provider",
+            candlesAvailable = true,
+            chartDisplayed = true,
+            signal = null,
+            nowMs = 10_000L
+        )
+        assertEquals("Native chart rendered", nativeRendered.chartLabel)
+    }
 
     private fun getSecretsManager(): SecretsManager {
         val context = ApplicationProvider.getApplicationContext<Context>()

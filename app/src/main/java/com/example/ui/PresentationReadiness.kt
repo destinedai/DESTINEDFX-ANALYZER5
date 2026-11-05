@@ -40,7 +40,7 @@ fun deriveMarketReadiness(
         tradingEligible = tradingEligible,
         quoteLabel = if (quoteLive) "Live quote received" else "Quote unavailable or delayed",
         candleLabel = if (candlesConfirmed) "Fresh OHLC candles confirmed" else "OHLC candles not confirmed",
-        chartLabel = if (chartDisplayed) "Chart displayed" else "Chart not displayed",
+        chartLabel = if (chartDisplayed) "Native chart rendered" else "Chart candle rendering unverified",
         analysisLabel = when {
             signal == null -> "Analysis not completed"
             else -> "Analysis completed"

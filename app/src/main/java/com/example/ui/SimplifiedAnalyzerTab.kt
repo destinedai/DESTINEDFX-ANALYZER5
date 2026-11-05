@@ -76,7 +76,9 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val strategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     var advancedOpen by remember { mutableStateOf(false) }
-    var chartDisplayed by remember { mutableStateOf(true) }
+    // TradingView's cross-origin widget does not expose verifiable candle-render evidence.
+    // Never present its WebView or iframe being attached as proof that a chart rendered.
+    var chartDisplayed by remember { mutableStateOf(false) }
 
     val activeTicker = ticker[symbol]
     val currentSignal = signal
@@ -114,7 +116,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                 }
                 val price = activeTicker?.price?.takeIf { it > 0.0 }
                 Text(price?.let { formatPrice(it, symbol) } ?: "Price unavailable", color = if (price != null) TextPrimary else WarningAmber, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text("Market analysis uses verified provider data. The chart is display-only.", color = TextSecondary, fontSize = 10.sp)
+                Text("Analysis is based on available market data. Chart candle rendering is not verified.", color = TextSecondary, fontSize = 10.sp)
             }
         }
         item {
@@ -175,7 +177,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                         candles = viewModel.candlesForChart(symbol, timeframe),
                         candleSource = viewModel.marketDataSource(symbol, timeframe),
                         isRealTradingViewEnabled = true,
-                        onToggleChartType = { chartDisplayed = true },
+                        onToggleChartType = { chartDisplayed = false },
                         onPriceUpdate = { _, _ -> },
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
