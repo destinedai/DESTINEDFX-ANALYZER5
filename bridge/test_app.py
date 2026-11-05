@@ -265,6 +265,8 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
     assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
+    state=client.get('/v1/app/state',headers=ah).json()['managed_execution']
+    assert state['worker_status']=='LEASED' and state['status']!='READY'
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
 
 def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypatch):

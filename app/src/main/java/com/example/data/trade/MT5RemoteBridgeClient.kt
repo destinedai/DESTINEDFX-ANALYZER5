@@ -44,6 +44,10 @@ class MT5RemoteBridgeClient(
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     data class Pairing(val code: String, val expiresAt: String)
+    data class ServiceReadiness(
+        val httpReachable: Boolean, val httpStatus: Int?, val serviceStatus: String,
+        val database: String, val managedExecution: String, val errorCode: String = ""
+    )
     data class CommandResult(
         val requestId: String, val queued: Boolean, val detail: String = "", val rejected: Boolean = false,
         val serverCommandId: String = "", val status: String = "",
@@ -51,7 +55,7 @@ class MT5RemoteBridgeClient(
     )
     data class CloseAllConfirmation(val token: String, val expiresAt: String, val tickets: List<String>)
     data class Snapshot(
-        val managedState: String, val accessType: String, val profileMode: String,
+        val managedState: String, val workerStatus: String = "UNKNOWN", val accessType: String, val profileMode: String,
         val connected: Boolean, val terminalOnline: Boolean, val heartbeatFresh: Boolean,
         val state: String, val account: String, val actualLogin: String, val actualServer: String,
         val actualAccountMode: String, val liveAuthorized: Boolean, val tradeAllowed: Boolean,
@@ -68,6 +72,24 @@ class MT5RemoteBridgeClient(
     fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
     fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
     fun hasPairing(): Boolean = secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()
+    /** Probes service readiness independently of any paired account or terminal. HTTP 200 alone is not trading readiness. */
+    suspend fun checkServiceReadiness(): ServiceReadiness = withContext(Dispatchers.IO) {
+        val base = validateBaseUrl(baseUrl()) ?: return@withContext ServiceReadiness(false, null, "CONFIGURATION_REQUIRED", "unknown", "unknown")
+        val req = Request.Builder().url(base + "/health/ready").header("Accept", "application/json").get().build()
+        try {
+            http.newCall(req).execute().use { response ->
+                val body = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrElse { JSONObject() }
+                val detail = body.optJSONObject("detail")
+                ServiceReadiness(
+                    httpReachable = true, httpStatus = response.code,
+                    serviceStatus = body.optString("status", if (response.isSuccessful) "unknown" else "not_ready"),
+                    database = body.optString("database", "unknown"),
+                    managedExecution = body.optString("managed_execution", "unknown"),
+                    errorCode = detail?.optString("code").orEmpty()
+                )
+            }
+        } catch (_: Exception) { ServiceReadiness(false, null, "unreachable", "unknown", "unknown") }
+    }
 
     /** Registers one mode-scoped pairing. The bridge stores broker credentials encrypted; this client never logs them. */
     suspend fun registerManagedAccount(
@@ -142,10 +164,11 @@ class MT5RemoteBridgeClient(
             return out
         }
         val managedState = managed?.let { it.optString("status", it.optString("state", "")) }.orEmpty().uppercase()
+        val workerStatus = managed?.optString("worker_status", "UNKNOWN").orEmpty().uppercase()
         val access = managed?.optString("access_type", "").orEmpty().uppercase()
         val mode = managed?.optString("account_mode", "").orEmpty().uppercase()
         return Snapshot(
-            managedState, access, mode, online && terminalConnected && verified && actualMode == accountMode, online, freshness,
+            managedState, workerStatus, access, mode, online && terminalConnected && verified && actualMode == accountMode, online, freshness,
             when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
             actualMode, managed?.optBoolean("live_authorized", false) == true,
