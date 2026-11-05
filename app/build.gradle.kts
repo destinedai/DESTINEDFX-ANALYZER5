@@ -118,6 +118,7 @@ chaquopy {
   defaultConfig {
     version = "3.12"
     buildPython("/usr/bin/python3.12")
+    pip { install("tzdata==2025.2") }
   }
   sourceSets {
     getByName("main") {
@@ -132,14 +133,6 @@ chaquopy {
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
-}
-
-chaquopy {
-  defaultConfig {
-    version = "3.12"
-    pip { install("tzdata==2025.2") }
-  }
-  sourceSets { getByName("main") { srcDir("src/main/python") } }
 }
 
 // Dependencies
