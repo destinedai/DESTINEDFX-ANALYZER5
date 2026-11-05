@@ -76,9 +76,9 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val strategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     var advancedOpen by remember { mutableStateOf(false) }
-    // TradingView's cross-origin widget does not expose verifiable candle-render evidence.
-    // Never present its WebView or iframe being attached as proof that a chart rendered.
-    var chartDisplayed by remember { mutableStateOf(false) }
+    // The native chart consumes the same validated candles as analysis. TradingView remains an
+    // optional reference view and is never treated as the authoritative data source.
+    var showReferenceChart by remember { mutableStateOf(false) }
 
     val activeTicker = ticker[symbol]
     val currentSignal = signal
@@ -87,13 +87,19 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val displayState = userFacingSignalLabel(currentSignal?.signalState, currentSignal?.direction)
     val rr = currentAnalysis?.let { validatedDisplayRewardRisk(it.signalState, it.direction, it.entry, it.stopLoss, it.tp1) }
     val hasPlan = rr != null && currentSignal?.entryPrice?.let { it > 0.0 } == true
+    val candles = viewModel.candlesForChart(symbol, timeframe)
     val readiness = deriveMarketReadiness(
         ticker = activeTicker,
         candleSource = viewModel.marketDataSource(symbol, timeframe),
-        candlesAvailable = viewModel.candlesForChart(symbol, timeframe).isNotEmpty(),
-        chartDisplayed = chartDisplayed,
+        candlesAvailable = candles.isNotEmpty(),
+        chartDisplayed = candles.isNotEmpty(),
         signal = currentSignal
     )
+    val quoteAgeSeconds = activeTicker?.lastUpdateMillis?.takeIf { it > 0L }?.let {
+        ((System.currentTimeMillis() - it).coerceAtLeast(0L) / 1000L)
+    }
+    val canAnalyze = activeTicker?.isLive == true && viewModel.isDataFresh(symbol) &&
+        candles.isNotEmpty() && !scanning
     val stateColor = when (displayState) {
         "BUY" -> ProfitGreen
         "SELL" -> LossRed
@@ -111,12 +117,22 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("DESTINEDFX ANALYZER", color = GoldAccent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(symbol, color = TextPrimary, fontSize = 25.sp, fontWeight = FontWeight.Black)
-                    Text("· $timeframe", color = ElectricCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(symbol, color = TextPrimary, fontSize = 25.sp, fontWeight = FontWeight.Black)
+                Text("· $timeframe", color = ElectricCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
                 val price = activeTicker?.price?.takeIf { it > 0.0 }
                 Text(price?.let { formatPrice(it, symbol) } ?: "Price unavailable", color = if (price != null) TextPrimary else WarningAmber, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text("Analysis is based on available market data. Chart candle rendering is not verified.", color = TextSecondary, fontSize = 10.sp)
+                Text(
+                    "BID ${activeTicker?.bid?.let { formatPrice(it, symbol) } ?: "—"}  ·  ASK ${activeTicker?.ask?.let { formatPrice(it, symbol) } ?: "—"}",
+                    color = TextSecondary,
+                    fontSize = 10.sp
+                )
+                Text(
+                    "SOURCE: ${activeTicker?.source?.ifBlank { "UNAVAILABLE" } ?: "UNAVAILABLE"}  ·  UPDATED: ${quoteAgeSeconds?.let { if (it < 2) "just now" else "$it seconds ago" } ?: "—"}  ·  DATA: ${if (readiness.quoteLive) "LIVE" else "STALE / UNAVAILABLE"}",
+                    color = if (readiness.quoteLive) ProfitGreen else WarningAmber,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
         item {
@@ -156,17 +172,25 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             WhyThisTrade(signal, strategyName)
         }
         item {
-            GoldGradientButton(onClick = { viewModel.runSignalScan(symbol, timeframe) }, enabled = !scanning, modifier = Modifier.fillMaxWidth()) {
+            GoldGradientButton(onClick = { viewModel.runSignalScan(symbol, timeframe) }, enabled = canAnalyze, modifier = Modifier.fillMaxWidth()) {
                 if (scanning) CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp, color = DarkBackground)
                 else Text("ANALYSE MARKET", fontWeight = FontWeight.Black, fontSize = 12.sp)
+            }
+            if (!canAnalyze && !scanning) {
+                Text("Analysis is disabled until a fresh verified quote and validated candles are available.", color = WarningAmber, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
             }
         }
         item {
             Card(modifier = Modifier.fillMaxWidth().height(330.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = DarkBackground), border = BorderStroke(1.dp, CardBorder)) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("MARKET CHART", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                        IconButton(onClick = { viewModel.refreshMarketData(symbol, timeframe) }) { Icon(Icons.Default.Refresh, contentDescription = "Refresh chart", tint = ElectricCyan) }
+                        Text(if (showReferenceChart) "REFERENCE CHART" else "VALIDATED OHLC CHART", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(onClick = { showReferenceChart = !showReferenceChart }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                                Text(if (showReferenceChart) "USE NATIVE" else "REFERENCE", fontSize = 9.sp)
+                            }
+                            IconButton(onClick = { viewModel.refreshMarketData(symbol, timeframe) }) { Icon(Icons.Default.Refresh, contentDescription = "Refresh chart", tint = ElectricCyan) }
+                        }
                     }
                     TradingChartContainer(
                         activeSymbol = symbol,
@@ -174,10 +198,10 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                         currentSpotPrice = activeTicker?.takeIf { readiness.quoteLive }?.price,
                         activeStrategy = strategyId,
                         dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = symbol),
-                        candles = viewModel.candlesForChart(symbol, timeframe),
+                        candles = candles,
                         candleSource = viewModel.marketDataSource(symbol, timeframe),
-                        isRealTradingViewEnabled = true,
-                        onToggleChartType = { chartDisplayed = false },
+                        isRealTradingViewEnabled = showReferenceChart,
+                        onToggleChartType = { showReferenceChart = false },
                         onPriceUpdate = { _, _ -> },
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
@@ -204,12 +228,18 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
 @Composable
 private fun SelectionBar(viewModel: DestinedFXViewModel, symbol: String, timeframe: String) {
     val symbols = listOf("EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "BTC/USD", "ETH/USD", "NAS100", "USOIL")
-    val timeframes = listOf("M5", "M15", "M30", "H1", "H4", "D1")
+    val timeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, CardBorder)) {
         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text("MARKET", color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Black)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { items(symbols) { item -> FilterChip(selected = item == symbol, onClick = { viewModel.selectTicker(item) }, label = { Text(item, fontSize = 10.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary)) } }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { items(timeframes) { item -> FilterChip(selected = item == timeframe, onClick = { viewModel.selectTimeframe(item) }, label = { Text(item, fontSize = 10.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary)) } }
+            Text("STRATEGY", color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Black)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                items(StrategyRegistry.allStrategies.filter { it.isImplemented }) { strategy ->
+                    FilterChip(selected = strategy.id == strategyId, onClick = { viewModel.selectStrategy(strategy.id) }, label = { Text(strategy.name, fontSize = 10.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
+                }
+            }
         }
     }
 }
