@@ -2,6 +2,7 @@
 
 **Work branch:** `integration/complete-demo-readiness`
 **Starting SHA:** `fc6e7c20a1dbfee29275f94ae4fe366a3cb309e0`
+**Implementation SHA:** `8860df88d09d7b7303a822060089895c9521be8`
 **Scope:** DEMO execution only. LIVE remains locked and server-side blocked.
 
 ## Implemented in this milestone
@@ -35,9 +36,9 @@
 | EA source contracts and safety math | PASS | `python3 -m pytest -q mt5-ea` |
 | Combined available Python/source suite | PASS | 180 passed |
 | Python bytecode compilation | PASS | bridge, quantitative, worker modules compile |
-| Android JVM tests | BLOCKED_EXTERNAL_INPUT | Gradle resolved, but the sandbox has no Android SDK: `SDK location not found`; requires `ANDROID_HOME` or `local.properties` on a build host |
-| Android instrumentation tests | BLOCKED_EXTERNAL_INPUT | Requires Android emulator/device runtime not available in this sandbox |
-| Genuine MetaEditor EA compilation | BLOCKED_EXTERNAL_INPUT | Requires Windows MT5 installation and genuine `metaeditor64.exe` |
+| Android JVM tests and debug APK | PASS | GitHub Actions job 127383112432 on exact implementation SHA |
+| Android instrumentation tests | PASS | Clean API 34 emulator job 127385339769 on exact implementation SHA |
+| Genuine MetaEditor EA compilation | PASS | Windows MetaEditor job 127383112441 on exact implementation SHA |
 | MQL5 journal runtime self-test | BLOCKED_EXTERNAL_INPUT | Requires genuine Windows desktop MT5 terminal; Strategy Tester WebRequest is not sufficient |
 | Windows PowerShell execution validation | BLOCKED_EXTERNAL_INPUT | Requires Windows PowerShell, DPAPI CurrentUser context, Tailscale, and genuine broker terminals |
 | Real broker DEMO acceptance | BLOCKED_EXTERNAL_INPUT | Owner must provide FBS, Exness, HFM, and Deriv MT5 DEMO profiles and explicitly authorize any order test |
@@ -65,4 +66,6 @@ All four broker execution gates remain `BLOCKED_EXTERNAL_INPUT` in this sandbox.
 
 `NOT_READY`
 
-The code-level milestone and available automated checks pass, but genuine MetaEditor compilation, MQL5 runtime persistence testing, Windows installer execution, Android instrumentation, and all broker DEMO acceptance gates remain external and unverified. This report does not claim production readiness, LIVE readiness, a connected broker, a submitted order, a fill, or 24/7/offline hosting.
+The code-level milestone and exact-SHA automated checks pass, including genuine MetaEditor compilation and Android emulator instrumentation. Genuine MQL5 journal runtime fault-injection testing, Windows installer execution under the owner DPAPI/Tailscale context, and all broker DEMO acceptance gates remain external and unverified. This report does not claim production readiness, LIVE readiness, a connected broker, a submitted order, a fill, or 24/7/offline hosting.
+
+**Exact CI run:** https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42066828591
