@@ -97,7 +97,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "authoritative news gate immediately before broker call": "bool NewsClear(string sym)" in source and "if(!NewsClear(sym))" in source and "trade.Buy" in source and "NEWS_BLOCKED" in source,
         "news verdict is timestamped and fail closed": all(x in source for x in ["retrieved_at_ms", "coverage_from_ms", "coverage_to_ms", "g_newsStatus=\"UNKNOWN\"", "NEWS UNKNOWN"]),
         "pending news cancellation is EA-owned only": "CancelNewsBlockedPendingOrders" in source and "ORDER_MAGIC" in source and "trade.OrderDelete" in source and "HistoryOrderSelect" in source,
-        "signal dedupe persisted before submission": "if(!Remember(key))" in source and "PersistSeen()" in source and 'FileOpen(SeenFile(),FILE_READ' in source and "AtomicWrite" in source,
+        "signal dedupe persisted before submission": "if(!Remember(key))" in source and "PersistSeen()" in source and "ReadJournalRecovered" in source and "AtomicWrite" in source,
         "signal identity excludes direction": 'string SignalKey(string sym,ENUM_TIMEFRAMES tf,datetime bar){return g_strategy+"|"+sym+"|"+TFLabel(tf)+"|"+IntegerToString((int)bar);}' in source and "SignalKey(sym,tf,bt);" in source,
         "source persists signal dedupe": "PersistSeen()" in source and "SeenFile()" in source and "AtomicWrite" in source,
     }
@@ -317,10 +317,13 @@ def test_journal_failure_contracts_fail_closed_before_ack_or_submission():
     place = source[source.index("bool Place("):source.index("\nvoid SetWait")]
     commands = source[source.index("void ProcessCommands()"):source.index("void ReconcileOrder(")]
     scan = source[source.index("void Scan()"):source.index("void Ack(")]
-    assert "uint written=FileWriteString(h,text)" in atomic
+    assert "uint written=encoded==0?0:FileWriteArray(h,bytes,0,encoded)" in atomic
+    assert "FILE_WRITE|FILE_BIN" in atomic and "CP_UTF8" in atomic
     assert "FileFlush(h)" in atomic and "FileSize(h)" in atomic
-    assert "FileReadString(verify" in atomic and "persisted!=text" in atomic
-    assert "FileMove(name,0,bak,0)" in atomic and "FileMove(bak,0,name,0)" in atomic
+    assert "ReadBinaryJournal(tmp,verified)" in atomic and "verified!=text" in atomic
+    assert "FileMove(name,0,bak,FILE_REWRITE)" in atomic and "FileMove(bak,0,name,FILE_REWRITE)" in atomic
+    assert "ReadJournalRecovered" in source and "manual recovery" in source
+    assert "Periodic order-state journal persistence failed" in source
     assert place.index('g_sigExecutionState="SUBMISSION_INTENT"') < place.index("if(!PersistOrderState())") < place.index("trade.Buy")
     assert 'g_sigExecutionState="SUBMISSION_UNKNOWN"' in place and 'g_state="STOPPED"' in place
     assert 'persistedSignal=g_lastSignal;StringReplace(persistedSignal,"|","%7C")' in source

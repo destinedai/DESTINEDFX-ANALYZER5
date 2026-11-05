@@ -17,10 +17,11 @@ $base = Join-Path $env:ProgramData 'DestinedFX'
 $dataDir = Join-Path $base 'data'
 $backupDir = Join-Path $base 'backups'
 $configDir = Join-Path $base 'config'
+$secretsPath = Join-Path $configDir 'owner-secrets.dpapi'
 $logDir = Join-Path $base 'logs'
 $workerData = Join-Path $base 'accounts'
 $venvDir = Join-Path $base 'venv'
-if (Test-Path (Join-Path $configDir 'owner-secrets.dpapi')) { throw 'An owner setup already exists. Do not rerun this first-install script: it would rotate the Fernet key and worker token. Stop the stack and perform a planned secret migration/recovery instead.' }
+$resume = Test-Path $secretsPath
 New-Item -ItemType Directory -Force -Path $dataDir,$backupDir,$configDir,$logDir,$workerData | Out-Null
 # Keep persistent files readable only by the interactive owner, SYSTEM, and local Administrators.
 $owner = "$env:USERDOMAIN\$env:USERNAME"
@@ -40,14 +41,19 @@ if (-not (Test-Path (Join-Path $venvDir 'Scripts\python.exe'))) {
 $venvPython = Join-Path $venvDir 'Scripts\python.exe'
 & $venvPython -m pip install --disable-pip-version-check -r (Join-Path $bridgeDir 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Bridge dependency installation failed.' }
-$terminalInstall = (Resolve-Path (Read-Host 'Exact genuine broker MT5 installation directory')).Path
-$terminalExe = Join-Path $terminalInstall 'terminal64.exe'
-$metaEditor = Join-Path $terminalInstall 'metaeditor64.exe'
-if (-not (Test-Path $terminalExe -PathType Leaf) -or -not (Test-Path $metaEditor -PathType Leaf)) { throw 'Both terminal64.exe and metaeditor64.exe must exist in the supplied genuine broker installation.' }
 $eaSource = (Resolve-Path (Read-Host 'Path to DestinedFXTraderEA.mq5')).Path
 if (-not $eaSource.EndsWith('.mq5',[StringComparison]::OrdinalIgnoreCase)) { throw 'EA source must be the genuine .mq5 file.' }
-$broker = (Read-Host 'First broker brand (FBS / EXNESS / HFM / DERIV)').Trim().ToUpperInvariant()
-if ($broker -notin @('FBS','EXNESS','HFM','DERIV')) { throw 'Unsupported broker brand.' }
+$brokerTerminals = @{}
+foreach ($broker in @('FBS','EXNESS','HFM','DERIV')) {
+    $terminalInstall = (Resolve-Path (Read-Host "Exact genuine $broker MT5 installation directory")).Path
+    $terminalExe = Join-Path $terminalInstall 'terminal64.exe'
+    $metaEditor = Join-Path $terminalInstall 'metaeditor64.exe'
+    if (-not (Test-Path $terminalExe -PathType Leaf) -or -not (Test-Path $metaEditor -PathType Leaf)) { throw "Both terminal64.exe and metaeditor64.exe must exist in the supplied genuine $broker installation." }
+    $brokerTerminals[$broker] = @{ mt5_install=$terminalInstall; terminal_exe=$terminalExe; metaeditor_exe=$metaEditor }
+}
+$capacityText = (Read-Host 'Measured safe simultaneous DEMO terminal capacity on this PC (1-4)').Trim()
+[int]$measuredCapacity = 0
+if (-not [int]::TryParse($capacityText,[ref]$measuredCapacity) -or $measuredCapacity -lt 1 -or $measuredCapacity -gt 4) { throw 'Enter a measured safe capacity from 1 through 4; do not claim capacity from account-slot count.' }
 $workerId = (Read-Host 'Stable worker ID (letters, digits, underscore, hyphen)').Trim()
 if ($workerId -notmatch '^[A-Za-z0-9_-]{1,128}$') { throw 'Invalid stable worker ID.' }
 $origin = $TailnetOrigin.TrimEnd('/')
@@ -62,20 +68,28 @@ Write-Host 'Configuring private tailnet HTTPS proxy to the loopback-only bridge 
 if ($LASTEXITCODE -ne 0) { throw 'Tailscale Serve setup failed. Complete HTTPS/certificate consent in the Tailscale admin console, then rerun.' }
 $serveStatus = & $tailscale.Source serve status 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0 -or $serveStatus -notmatch [regex]::Escape($parsed.Host)) { throw 'Serve status did not confirm the supplied tailnet host. Check the URL and rerun.' }
-# Generate secrets in-process and store only as a Windows DPAPI CurrentUser-protected file.
-$generated = & $venvPython -c 'import json,secrets; from cryptography.fernet import Fernet; print(json.dumps({"fernet_key":Fernet.generate_key().decode(),"worker_token":secrets.token_urlsafe(48)}))'
-if ($LASTEXITCODE -ne 0) { throw 'Secret generation failed.' }
-$secretObject = $generated | ConvertFrom-Json
+# Reuse a valid DPAPI secret bundle on repair; only first install generates secrets.
+if ($resume) {
+    try {
+        $encryptedExisting = [IO.File]::ReadAllText($secretsPath)
+        $secureExisting = ConvertTo-SecureString $encryptedExisting
+        $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureExisting)
+        try { $secretJson = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+        $secretObject = $secretJson | ConvertFrom-Json
+        if ([string]::IsNullOrWhiteSpace($secretObject.fernet_key) -or [string]::IsNullOrWhiteSpace($secretObject.worker_token)) { throw 'Secret bundle fields are missing.' }
+    } catch { throw 'Existing owner-secrets.dpapi could not be decrypted or validated under this Windows user; stop and perform manual recovery without deleting state.' }
+} else {
+    $generated = & $venvPython -c 'import json,secrets; from cryptography.fernet import Fernet; print(json.dumps({"fernet_key":Fernet.generate_key().decode(),"worker_token":secrets.token_urlsafe(48)}))'
+    if ($LASTEXITCODE -ne 0) { throw 'Secret generation failed.' }
+    $secretObject = $generated | ConvertFrom-Json
+    $secretJson = $generated
+}
 $workerConfig = Join-Path $configDir 'worker.toml'
 function TomlString([string]$Value) { '"' + $Value.Replace('\','\\').Replace('"','\"') + '"' }
 $toml = @"
 control_plane_url = $(TomlString $origin)
 data_root = $(TomlString $workerData)
-single_broker_brand = $(TomlString $broker)
-max_terminals = 1
-mt5_install = $(TomlString $terminalInstall)
-terminal_exe = $(TomlString $terminalExe)
-metaeditor_exe = $(TomlString $metaEditor)
+max_terminals = $measuredCapacity
 ea_source = $(TomlString $eaSource)
 compiled_ea = ""
 symbol = "EURUSD"
@@ -83,15 +97,38 @@ poll_seconds = 5
 auth_timeout_seconds = 300
 max_restart_retries = 3
 restart_backoff_seconds = 30
+
+[broker_terminals.FBS]
+mt5_install = $(TomlString $brokerTerminals['FBS'].mt5_install)
+terminal_exe = $(TomlString $brokerTerminals['FBS'].terminal_exe)
+metaeditor_exe = $(TomlString $brokerTerminals['FBS'].metaeditor_exe)
+
+[broker_terminals.EXNESS]
+mt5_install = $(TomlString $brokerTerminals['EXNESS'].mt5_install)
+terminal_exe = $(TomlString $brokerTerminals['EXNESS'].terminal_exe)
+metaeditor_exe = $(TomlString $brokerTerminals['EXNESS'].metaeditor_exe)
+
+[broker_terminals.HFM]
+mt5_install = $(TomlString $brokerTerminals['HFM'].mt5_install)
+terminal_exe = $(TomlString $brokerTerminals['HFM'].terminal_exe)
+metaeditor_exe = $(TomlString $brokerTerminals['HFM'].metaeditor_exe)
+
+[broker_terminals.DERIV]
+mt5_install = $(TomlString $brokerTerminals['DERIV'].mt5_install)
+terminal_exe = $(TomlString $brokerTerminals['DERIV'].terminal_exe)
+metaeditor_exe = $(TomlString $brokerTerminals['DERIV'].metaeditor_exe)
 "@
 [IO.File]::WriteAllText($workerConfig,$toml,[Text.UTF8Encoding]::new($false))
 $identityPath = Join-Path $configDir 'worker-id.txt'
 [IO.File]::WriteAllText($identityPath,$workerId,[Text.UTF8Encoding]::new($false))
-$secretJson = @{fernet_key=$secretObject.fernet_key;worker_token=$secretObject.worker_token} | ConvertTo-Json -Compress
-$secureSecret = ConvertTo-SecureString $secretJson -AsPlainText -Force
-$encrypted = ConvertFrom-SecureString $secureSecret
-[IO.File]::WriteAllText((Join-Path $configDir 'owner-secrets.dpapi'),$encrypted,[Text.UTF8Encoding]::new($false))
-$secureSecret.Dispose(); $secretJson=$null; $secretObject=$null; $generated=$null
+if (-not $resume) {
+    $secretJson = @{fernet_key=$secretObject.fernet_key;worker_token=$secretObject.worker_token} | ConvertTo-Json -Compress
+    $secureSecret = ConvertTo-SecureString $secretJson -AsPlainText -Force
+    $encrypted = ConvertFrom-SecureString $secureSecret
+    [IO.File]::WriteAllText($secretsPath,$encrypted,[Text.UTF8Encoding]::new($false))
+    $secureSecret.Dispose()
+}
+$secretJson=$null; $secretObject=$null; $generated=$null
 $supervisor = Join-Path $PSScriptRoot 'run-owner-stack.ps1'
 $backupScript = Join-Path $PSScriptRoot 'backup-bridge.ps1'
 if (-not (Test-Path $supervisor) -or -not (Test-Path $backupScript)) { throw 'Owner stack support scripts are missing.' }
@@ -126,7 +163,7 @@ Remove-Item Env:DESTINEDFX_HEALTH_URL -ErrorAction SilentlyContinue
 if(-not $ready){Stop-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -ErrorAction SilentlyContinue;throw 'Owner bridge did not pass the private HTTPS readiness check. Do not submit broker credentials; inspect Tailscale Serve status and local logs.'}
 & $venvPython (Join-Path $PSScriptRoot 'backup-bridge.py')
 if($LASTEXITCODE -ne 0){Write-Warning 'Initial database backup failed; check ProgramData\DestinedFX\backups before using this setup.'}
-Write-Host "Installed for $owner. Bridge readiness returned status=ready, database=ok, managed_execution=configured through the Windows Python HTTPS client."
+Write-Host "$(if($resume){'Resumed/repaired'}else{'Installed'}) for $owner. Bridge readiness returned status=ready, database=ok, managed_execution=configured through the Windows Python HTTPS client."
 Write-Host "Bridge binds only to 127.0.0.1:8000; private HTTPS origin: $origin"
 Write-Host "Durable SQLite path: $(Join-Path $dataDir 'bridge.sqlite3'); rolling backups: $backupDir"
 Write-Host "Worker config: $workerConfig; worker ID: $workerId"
