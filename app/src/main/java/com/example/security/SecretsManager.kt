@@ -236,13 +236,15 @@ class SecretsManager(private val ctx: Context) {
             prefs.edit().remove(profileKey(MT5_BRIDGE_TOKEN, profile)).apply()
         }
     }
-    fun saveManagedMT5Profile(profile: String, login: String, server: String, accessType: String, password: String, savePassword: Boolean): Boolean {
+    fun saveManagedMT5Profile(profile: String, login: String, server: String, accessType: String, password: String, savePassword: Boolean, broker: String): Boolean {
         require(accessType == "MASTER" || accessType == "INVESTOR")
+        require(broker in setOf("FBS", "EXNESS", "HFM", "DERIV"))
         if (!isSecureStorageAvailable) return false
         val mode = managedProfile(profile)
         val edit = prefs.edit().putString("managed_mt5_${mode.lowercase()}_login", login.trim())
             .putString("managed_mt5_${mode.lowercase()}_server", server)
             .putString("managed_mt5_${mode.lowercase()}_access", accessType)
+            .putString("managed_mt5_${mode.lowercase()}_broker", broker)
             .putBoolean("managed_mt5_${mode.lowercase()}_save_password", savePassword)
         if (savePassword) edit.putString("managed_mt5_${mode.lowercase()}_password", password)
         else edit.remove("managed_mt5_${mode.lowercase()}_password")
@@ -253,6 +255,8 @@ class SecretsManager(private val ctx: Context) {
     fun getManagedMT5AccessType(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_access", "MASTER") ?: "MASTER"
     fun isManagedMT5PasswordSaveEnabled(profile: String): Boolean = prefs.getBoolean("managed_mt5_${managedProfile(profile).lowercase()}_save_password", false)
     fun getManagedMT5Password(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_password", "") ?: ""
+    fun getManagedMT5Broker(profile: String): String = prefs.getString("managed_mt5_${managedProfile(profile).lowercase()}_broker", "UNSELECTED")
+        ?.takeIf { it in setOf("FBS", "EXNESS", "HFM", "DERIV") } ?: "UNSELECTED"
     fun getManagedMT5SelectedProfile(): String = (prefs.getString("managed_mt5_selected_profile", "DEMO") ?: "DEMO").uppercase().takeIf { it in setOf("DEMO", "LIVE") } ?: "DEMO"
     fun saveManagedMT5SelectedProfile(profile: String) { prefs.edit().putString("managed_mt5_selected_profile", managedProfile(profile)).apply() }
     /** Writes both reconciliation values atomically and synchronously before any command request is issued. */

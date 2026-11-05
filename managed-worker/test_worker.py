@@ -31,7 +31,7 @@ class WorkerTests(unittest.TestCase):
         self.meta.chmod(0o755)
         self.job = {"job_id": "job_123", "pairing_id": "pair_456", "pairing_code": "abcdefgh1234",
                     "bridge_url": "https://bridge.destinedfx.internal", "account": {"login": "123456", "server": "Demo-Server",
-                    "password": "secret-not-logged", "access_type": "INVESTOR", "account_mode": "DEMO"}}
+                    "password": "secret-not-logged", "access_type": "INVESTOR", "account_mode": "DEMO", "broker": "FBS"}}
         self.settings = {"data_root": str(self.root / "accounts"), "mt5_install": str(self.install),
                          "terminal_exe": str(self.term), "metaeditor_exe": str(self.meta), "ea_source": str(self.source)}
 
@@ -83,6 +83,10 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(worker.ProvisionError) as e:
             worker.validate_job(unknown)
         self.assertEqual(e.exception.code, "INVALID_ACCOUNT_MODE")
+        unsupported = {**self.job, "account": {**self.job["account"], "broker": "OANDA"}}
+        with self.assertRaises(worker.ProvisionError) as broker_error:
+            worker.validate_job(unsupported)
+        self.assertEqual(broker_error.exception.code, "INVALID_BROKER")
 
     def test_invalid_path_and_bridge_rejected(self):
         bad = dict(self.job, job_id="../escape")
@@ -207,7 +211,7 @@ class WorkerTests(unittest.TestCase):
     def test_supervision_restarts_owned_terminal_with_bounded_retries(self):
         result = worker.provision(self.job, self.settings, launch=False)
         marker = result / "terminal" / ".destinedfx-worker.json"
-        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO","access_type":"MASTER","bridge_url":"https://bridge.realcop.com"}', encoding="utf-8")
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO","broker":"FBS","access_type":"MASTER","bridge_url":"https://bridge.realcop.com"}', encoding="utf-8")
         fake = type("Process", (), {"pid": 100})()
         with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD), patch.object(worker.subprocess, "Popen", return_value=fake) as popen:
             outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
@@ -216,6 +220,7 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(any(str(value).startswith("/config:") for value in args))
         self.assertIn("/portable", args)
         self.assertEqual(worker.json.loads(marker.read_text())["restart_count"], 1)
+        self.assertEqual(worker.json.loads(marker.read_text())["broker"], "FBS")
         with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD):
             outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
         self.assertEqual(outcome[0]["status"], "RESTART_LIMIT")

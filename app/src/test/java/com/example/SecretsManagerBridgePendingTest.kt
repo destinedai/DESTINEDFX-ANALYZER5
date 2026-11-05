@@ -67,14 +67,16 @@ class SecretsManagerBridgePendingTest {
         assertEquals("demo-request", manager.getMT5BridgePendingCommandId("DEMO"))
         assertEquals("live-request", manager.getMT5BridgePendingCommandId("LIVE"))
 
-        assertTrue(manager.saveManagedMT5Profile("DEMO", "111", "Demo-Server", "MASTER", "demo-password", true))
-        assertTrue(manager.saveManagedMT5Profile("LIVE", "999", "Live-Server", "MASTER", "live-password", true))
+        assertTrue(manager.saveManagedMT5Profile("DEMO", "111", "Demo-Server", "MASTER", "demo-password", true, "FBS"))
+        assertTrue(manager.saveManagedMT5Profile("LIVE", "999", "Live-Server", "MASTER", "live-password", true, "HFM"))
         assertEquals("111", manager.getManagedMT5Login("DEMO"))
         assertEquals("999", manager.getManagedMT5Login("LIVE"))
         assertEquals("Demo-Server", manager.getManagedMT5Server("DEMO"))
         assertEquals("Live-Server", manager.getManagedMT5Server("LIVE"))
         assertEquals("demo-password", manager.getManagedMT5Password("DEMO"))
         assertEquals("live-password", manager.getManagedMT5Password("LIVE"))
+        assertEquals("FBS", manager.getManagedMT5Broker("DEMO"))
+        assertEquals("HFM", manager.getManagedMT5Broker("LIVE"))
 
         manager.clearMT5BridgePendingCommand("LIVE")
         assertEquals("demo-request", manager.getMT5BridgePendingCommandId("DEMO"))
@@ -87,7 +89,7 @@ class SecretsManagerBridgePendingTest {
     @Test fun managedProfilePersistenceNeverClaimsSuccessWithoutEncryptedStorage() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         if (manager.isSecureStorageAvailable) return
-        assertFalse(manager.saveManagedMT5Profile("DEMO", "123", "Demo-Server", "MASTER", "secret", true))
+        assertFalse(manager.saveManagedMT5Profile("DEMO", "123", "Demo-Server", "MASTER", "secret", true, "FBS"))
     }
 
     @Test fun derivCredentialsAreStoredOnlyInEncryptedPreferencesAndModeIsExplicit() {

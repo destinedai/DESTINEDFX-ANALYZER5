@@ -58,6 +58,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         login: String,
         password: String,
         server: String,
+        broker: String,
         accessType: String,
         consent: Boolean,
         savePasswordLocally: Boolean = false,
@@ -66,6 +67,7 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
         costEvidence: String = ""
     ): Snapshot {
         require(managedConfigured()) { "CONFIGURATION_REQUIRED" }
+        require(broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Select FBS, Exness, HFM, or Deriv MT5 before connecting." }
         require(accessType == "MASTER" || accessType == "INVESTOR")
         require(consent) { "Explicit consent is required before sending broker credentials." }
         require(login.trim().matches(Regex("[0-9]{1,20}"))) { "Account login must contain digits only." }
@@ -80,11 +82,11 @@ class MT5RemoteBridgeClient(private val secrets: SecretsManager, profile: String
             else -> require(commissionPerLot > 0.0 && evidence.length >= 8) { "Configured commission requires a positive account-currency amount per standard lot and a broker pricing reference." }
         }
         if (secrets.getMT5BridgeAppToken(profile).isBlank()) pair()
-        val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
+        val payload = JSONObject().put("broker", broker).put("login", login.trim()).put("server", server).put("password", password)
             .put("access_type", accessType).put("account_mode", profile).put("consent", consent)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
-        if (!secrets.saveManagedMT5Profile(profile, login.trim(), server, accessType, password, savePasswordLocally)) {
+        if (!secrets.saveManagedMT5Profile(profile, login.trim(), server, accessType, password, savePasswordLocally, broker)) {
             throw IllegalStateException("REMOTE_PROFILE_ACCEPTED_LOCAL_SAVE_FAILED")
         }
         return state()

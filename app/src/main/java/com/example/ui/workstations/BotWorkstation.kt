@@ -1272,6 +1272,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         // MetaTrader 5 Native Architecture: Account Management, Real Balance & Direct Broker Gateway
         item {
             var selectedBrokerCompanyName by remember { mutableStateOf("FBS Markets Inc.") }
+            var selectedMt5Broker by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.getManagedMT5Broker(selectedAccountMode)) }
             var showBrokerSearchDialog by remember { mutableStateOf(false) }
             var brokerSearchQuery by remember { mutableStateOf("") }
             var savePasswordChecked by remember(selectedAccountMode) { mutableStateOf(bridgeSecrets.isManagedMT5PasswordSaveEnabled(selectedAccountMode)) }
@@ -1628,6 +1629,28 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             fontFamily = FontFamily.Monospace
                         )
 
+                        Text("MT5 BROKER", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextSecondary)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { broker ->
+                                FilterChip(
+                                    selected = selectedMt5Broker == broker,
+                                    onClick = { selectedMt5Broker = broker },
+                                    label = { Text(broker, fontSize = 9.sp) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = ElectricCyan,
+                                        selectedLabelColor = DarkBackground,
+                                        containerColor = DarkSurfaceVariant,
+                                        labelColor = TextSecondary
+                                    )
+                                )
+                            }
+                        }
+                        Text(
+                            "Selection is a user-provided label, not proof of broker identity. Enter the exact server assigned to this MT5 account; the terminal's reported company remains separate evidence.",
+                            fontSize = 9.sp, color = WarningAmber
+                        )
+
                         // Mode Selector: DEMO vs REAL
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
@@ -1821,6 +1844,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         // Prominent MT5 Blue Login Button (#2196F3)
                         Button(
                             onClick = {
+                                if (selectedMt5Broker !in setOf("FBS", "EXNESS", "HFM", "DERIV")) {
+                                    brokerConnectionMessage = "Select FBS, Exness, HFM, or Deriv MT5 before connecting."
+                                    return@Button
+                                }
                                 if (mt5LoginInput.isBlank()) {
                                     brokerConnectionMessage = "Please enter your Trade Account / Login ID."
                                     return@Button
@@ -1874,7 +1901,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         } else {
                                             bridgeMode = true
                                             val snapshot = bridgeClient.registerManagedAccount(
-                                                mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent,
+                                                mt5LoginInput, secret, mt5ServerInput, selectedMt5Broker, mt5AccessType, managedCredentialConsent,
                                                 savePasswordChecked, selectedCostModel, selectedCommission, selectedCostEvidence
                                             )
                                             bridgeMode = true

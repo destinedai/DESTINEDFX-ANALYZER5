@@ -83,6 +83,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val derivState by viewModel.app.derivBrokerGateway.connectionState.collectAsStateWithLifecycle()
     var broker by remember(activeBroker) { mutableStateOf(activeBroker) }
     var mt5Profile by remember { mutableStateOf("DEMO") }
+    var selectedMt5Broker by remember { mutableStateOf(viewModel.app.secretsManager.getManagedMT5Broker("DEMO")) }
     var login by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var server by remember { mutableStateOf("") }
@@ -100,6 +101,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     LaunchedEffect(broker, mt5Profile) {
+        selectedMt5Broker = secrets.getManagedMT5Broker(mt5Profile)
         if (broker == BrokerType.MT5 && bridge.managedConfigured() && bridge.hasPairing()) {
             while (true) {
                 mt5Snapshot = runCatching { bridge.state() }.getOrNull()
@@ -139,6 +141,19 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             FilterChip(selected = mt5Profile == profile, onClick = { mt5Profile = profile }, label = { Text(profile, fontSize = 10.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (profile == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
                         }
                     }
+                    Text("MT5 BROKER", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { selected ->
+                            FilterChip(
+                                selected = selectedMt5Broker == selected,
+                                onClick = { selectedMt5Broker = selected },
+                                label = { Text(selected, fontSize = 9.sp) },
+                                modifier = Modifier.weight(1f),
+                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary)
+                            )
+                        }
+                    }
+                    Text("Broker selection is not identity proof. Use the exact server assigned to this MT5 account; verify terminal-reported company separately.", color = WarningAmber, fontSize = 9.sp)
                     LoginField("Login", login, { login = it.filter(Char::isDigit) }, KeyboardType.Number)
                     LoginField("Password", password, { password = it }, KeyboardType.Password, true)
                     LoginField("Server", server, { server = it }, KeyboardType.Text)
@@ -161,7 +176,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             busy = true; message = null
                             try {
                                 if (broker == BrokerType.MT5) {
-                                    val snapshot = bridge.registerManagedAccount(login, password, server, "MASTER", consent, savePassword)
+                                    require(selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Select an MT5 broker before connecting." }
+                                    val snapshot = bridge.registerManagedAccount(login, password, server, selectedMt5Broker, "MASTER", consent, savePassword)
                                     mt5Snapshot = snapshot
                                     message = if (snapshot.connected && snapshot.heartbeatFresh) "Connected to broker." else "Credentials accepted; waiting for a fresh terminal heartbeat."
                                 } else {
