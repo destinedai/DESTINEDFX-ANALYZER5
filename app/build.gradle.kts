@@ -136,7 +136,7 @@ secrets {
 
 chaquopy {
   defaultConfig {
-    version = "3.13"
+    version = "3.12"
     pip { install("tzdata==2025.2") }
   }
   sourceSets { getByName("main") { srcDir("src/main/python") } }
