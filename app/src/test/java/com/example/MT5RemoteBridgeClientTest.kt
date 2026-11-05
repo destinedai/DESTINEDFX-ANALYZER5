@@ -170,7 +170,7 @@ class MT5RemoteBridgeClientTest {
     private fun snapshot(orders: List<JSONObject>) = MT5RemoteBridgeClient.Snapshot(
         managedState = "READY", accessType = "MASTER", profileMode = "DEMO", connected = true, terminalOnline = true,
         heartbeatFresh = true, state = "READY", account = "123 @ Broker-Demo", actualLogin = "123", actualServer = "Broker-Demo",
-        actualAccountMode = "DEMO", liveAuthorized = false, tradeAllowed = true, terminalConnected = true, accountVerified = true,
+        actualAccountMode = "DEMO", liveAuthorized = false, tradeAllowed = true, terminalConnected = true, accountVerified = true, brokerIdentityVerified = true,
         currency = "USD", balance = null, equity = null, margin = null, freeMargin = null, marginLevel = null, leverage = null,
         positions = emptyList(), activeOrders = orders, closedDeals = emptyList(), snapshotsValid = true,
         lastSignal = null, newsVerdict = null, raw = JSONObject()

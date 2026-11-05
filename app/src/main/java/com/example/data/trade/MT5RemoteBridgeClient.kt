@@ -54,7 +54,7 @@ class MT5RemoteBridgeClient(
         val connected: Boolean, val terminalOnline: Boolean, val heartbeatFresh: Boolean,
         val state: String, val account: String, val actualLogin: String, val actualServer: String,
         val actualAccountMode: String, val liveAuthorized: Boolean, val tradeAllowed: Boolean,
-        val terminalConnected: Boolean, val accountVerified: Boolean,
+        val terminalConnected: Boolean, val accountVerified: Boolean, val brokerIdentityVerified: Boolean,
         val currency: String, val balance: Double?, val equity: Double?,
         val margin: Double?, val freeMargin: Double?, val marginLevel: Double?, val leverage: Int?,
         val positions: List<JSONObject>?, val activeOrders: List<JSONObject>?, val closedDeals: List<JSONObject>?,
@@ -149,6 +149,7 @@ class MT5RemoteBridgeClient(
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
             actualMode, managed?.optBoolean("live_authorized", false) == true,
             obj.optBoolean("trade_allowed", false), terminalConnected, verified,
+            managed?.optBoolean("broker_identity_verified", obj.optBoolean("broker_identity_verified", false)) == true,
             account?.optString("currency").orEmpty(), account?.let { finite(it, "balance") }, account?.let { finite(it, "equity") },
             account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
             account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
@@ -315,6 +316,7 @@ class MT5RemoteBridgeClient(
             snapshot.profileMode != accountMode -> "Selected $brokerBrand $accountMode profile does not match the server-managed account mode."
             snapshot.accessType != "MASTER" -> "INVESTOR access is read-only and cannot execute trading commands."
             !snapshot.accountVerified -> "Broker-reported account identity is not verified by the bridge."
+            !snapshot.brokerIdentityVerified -> "BROKER IDENTITY UNCONFIRMED: terminal company/server do not match the selected broker."
             snapshot.actualAccountMode != accountMode -> "Connected terminal reports ${snapshot.actualAccountMode.ifBlank { "UNVERIFIED" }} mode, not $accountMode."
             expectedLogin.isBlank() || snapshot.actualLogin != expectedLogin -> "Connected terminal login does not exactly match the selected $brokerBrand $accountMode account."
             expectedServer.isBlank() || snapshot.actualServer != expectedServer -> "Connected terminal server does not exactly match the selected $brokerBrand $accountMode account."

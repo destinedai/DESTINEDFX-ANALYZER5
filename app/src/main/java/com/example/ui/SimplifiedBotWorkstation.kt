@@ -113,7 +113,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     }
 
     val connected = when (broker) {
-        BrokerType.MT5 -> mt5Snapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.accountVerified } == true
+        BrokerType.MT5 -> mt5Snapshot?.let { it.connected && it.terminalOnline && it.heartbeatFresh && it.accountVerified && it.brokerIdentityVerified } == true
         BrokerType.DERIV -> derivState == com.example.data.deriv.DerivConnectionState.READY
         else -> connectionStatus == com.example.data.broker.BrokerConnectionStatus.CONNECTED
     }
@@ -179,7 +179,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     require(selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Select an MT5 broker before connecting." }
                                     val snapshot = bridge.registerManagedAccount(login, password, server, selectedMt5Broker, "MASTER", consent, savePassword)
                                     mt5Snapshot = snapshot
-                                    message = if (snapshot.connected && snapshot.heartbeatFresh) "Connected to broker." else "Credentials accepted; waiting for a fresh terminal heartbeat."
+                                    message = when {
+                                        snapshot.connected && snapshot.heartbeatFresh && snapshot.brokerIdentityVerified -> "Broker identity verified; account is connected."
+                                        snapshot.connected && snapshot.heartbeatFresh -> "BROKER IDENTITY UNCONFIRMED; execution remains blocked."
+                                        else -> "Credentials accepted; waiting for a fresh terminal heartbeat."
+                                    }
                                 } else {
                                     require(derivToken.isNotBlank() && derivAppId.isNotBlank()) { "Enter a Deriv API token and application ID." }
                                     secrets.saveDerivApiToken(derivToken)

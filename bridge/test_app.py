@@ -203,7 +203,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
+    assert set(state)=={'pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 

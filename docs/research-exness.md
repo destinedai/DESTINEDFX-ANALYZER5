@@ -14,6 +14,10 @@
 - Exness’s platform page states that MT4 accounts cannot be used on MT5 and vice versa, and that certain regions require MT5-based accounts to use MetaTrader 5 terminal rather than Exness Terminal. It also gives supported-version information: MT5 Build 4755 (released 13 Dec 2024) and says older versions will not connect, effective 1 July 2025. Verify live support/build requirements at deployment; this dated page is not a repository compatibility guarantee. [1] [2]
 - Repository context: Exness appears as the broker label `Exness Global` in `BrokerDirectory`; it is not a verified execution integration. Project documentation says managed MT5 requires the authenticated bridge, worker, real MT5 terminal and exact account identity; current MT5 managed-bridge authentication and DEMO order acceptance remain NOT VERIFIED, and LIVE is BLOCKED. The relay/EA independently verifies terminal login, exact server, company/currency, and actual `ACCOUNT_TRADE_MODE` against a separately selected DEMO/LIVE profile. [7] [8] [9]
 
+## Official Exness API update (23 October 2026)
+
+Exness now documents an official REST and WebSocket API for eligible Exness-platform accounts, including account information, instruments, market data and trading: [Exness API](https://get.exness.help/hc/en-us/articles/27866287512476-Exness-API). The page explicitly excludes standard MT4/MT5 accounts. Therefore this application must continue to authenticate and trade Exness MT5 accounts through the managed MetaTrader 5 terminal, exact account server, EA and bridge. The Exness API is not an authentication or trading shortcut for Exness MT5. It may be considered later only as a separate optional integration for eligible Exness-platform accounts.
+
 ## Implementation constraints and documented gaps
 
 - Do not hard-code an Exness login, password, server, terminal hostname/IP, or DEMO/LIVE assignment. Collect the account’s login and exact server from the account owner’s PA, and validate login/server/mode/company against a fresh authenticated terminal heartbeat. The broker label alone cannot identify the account server. Never treat the blog example `Exness-MT5server` as a universal server. [1] [2] [4] [7] [8]
@@ -34,3 +38,4 @@
 [7]: https://github.com/destinedai/DESTINEDFX-ANALYZER5 "DESTINEDFX-ANALYZER5 repository — broker capability matrix and broker directory"
 [8]: https://github.com/destinedai/DESTINEDFX-ANALYZER5/blob/feat/complete-demo-readiness/docs/managed-execution-protocol.md "DESTINEDFX managed MT5 execution protocol"
 [9]: https://github.com/destinedai/DESTINEDFX-ANALYZER5/blob/feat/complete-demo-readiness/docs/managed-execution-operator-setup.md "Managed MT5 execution operator setup"
+[10]: https://get.exness.help/hc/en-us/articles/27866287512476-Exness-API "Exness API — official Help Center"
