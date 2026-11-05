@@ -76,9 +76,8 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val strategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     var advancedOpen by remember { mutableStateOf(false) }
-    // The native chart consumes the same validated candles as analysis. TradingView remains an
-    // optional reference view and is never treated as the authoritative data source.
-    var showReferenceChart by remember { mutableStateOf(false) }
+    // TradingView is the primary visible chart. The native chart remains an implementation
+    // fallback when the widget itself cannot render; it is never used to validate analysis data.
 
     val activeTicker = ticker[symbol]
     val currentSignal = signal
@@ -181,14 +180,11 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             }
         }
         item {
-            Card(modifier = Modifier.fillMaxWidth().height(330.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = DarkBackground), border = BorderStroke(1.dp, CardBorder)) {
+                Card(modifier = Modifier.fillMaxWidth().height(470.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = DarkBackground), border = BorderStroke(1.dp, CardBorder)) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(if (showReferenceChart) "REFERENCE CHART" else "VALIDATED OHLC CHART", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text("TRADINGVIEW", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedButton(onClick = { showReferenceChart = !showReferenceChart }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                                Text(if (showReferenceChart) "USE NATIVE" else "REFERENCE", fontSize = 9.sp)
-                            }
                             IconButton(onClick = { viewModel.refreshMarketData(symbol, timeframe) }) { Icon(Icons.Default.Refresh, contentDescription = "Refresh chart", tint = ElectricCyan) }
                         }
                     }
@@ -200,8 +196,8 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                         dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = symbol),
                         candles = candles,
                         candleSource = viewModel.marketDataSource(symbol, timeframe),
-                        isRealTradingViewEnabled = showReferenceChart,
-                        onToggleChartType = { showReferenceChart = false },
+                        isRealTradingViewEnabled = true,
+                        onToggleChartType = { /* widget failure may switch to the native fallback */ },
                         onPriceUpdate = { _, _ -> },
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
