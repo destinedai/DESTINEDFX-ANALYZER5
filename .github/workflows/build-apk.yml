@@ -219,7 +219,7 @@ jobs:
           actual_abis = re.findall(r"'([^']+)'", native_line)
           if not set(abis).issubset(actual_abis):
               raise SystemExit(f'APK ABI mismatch: configured {abis}, package reports {actual_abis}')
-          if 'Signer #1 certificate SHA-256 digest:' not in signature:
+          if not re.search(r'certificate SHA-256 digest:\s*[0-9a-fA-F]{64}', signature):
               raise SystemExit('apksigner output did not contain a signing-certificate SHA-256 fingerprint')
           print(f'APK package/version validated against Gradle: {package} {version_name} ({version_code}); ABIs={abis}')
           PY
@@ -242,7 +242,7 @@ jobs:
           print(f'Version: `{name}` (code `{code}`)')
           PY
             echo 'Signature verified by apksigner; certificate fingerprint:'
-            printf '%s\n' "$signature" | grep -E 'Signer #1 certificate SHA-256 digest:'
+            printf '%s\n' "$signature" | grep -E 'certificate SHA-256 digest:'
             echo 'Configured ABI metadata and Chaquopy Python native payload inspected.'
             echo 'SHA-256:'
             echo '```text'
