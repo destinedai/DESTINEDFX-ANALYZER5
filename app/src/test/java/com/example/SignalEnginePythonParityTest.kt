@@ -2,12 +2,13 @@ package com.example
 
 import com.destinedfx.core.analysis.AnalysisInput
 import com.destinedfx.core.analysis.SignalEngine
+import com.destinedfx.core.analysis.SignalState
 import com.destinedfx.core.marketdata.AssetClass
 import com.destinedfx.core.marketdata.Candle
 import com.destinedfx.core.marketdata.MarketQuote
 import com.destinedfx.core.marketdata.Timeframe
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SignalEnginePythonParityTest {
@@ -19,10 +20,21 @@ class SignalEnginePythonParityTest {
         private val STRATEGIES = listOf("smc-confluence-1.0.0", "ict-silver-bullet")
     }
 
+    private data class Snapshot(
+        val strategy: String,
+        val state: SignalState,
+        val direction: String?,
+        val hasPlan: Boolean,
+        val firstReason: String,
+        val components: List<String>,
+        val sweepCount: Int,
+        val fvgCount: Int
+    )
+
     private fun pythonGoldenRows(strategy: String): List<Candle> {
         val rows = (0 until COUNT).map { index ->
             // The final 35 rows match bridge/test_quantitative.py's golden fixture exactly.
-            // These 25 earlier trend candles only extend the history to SignalEngine's 60-bar minimum.
+            // These 25 earlier trend candles only extend history to SignalEngine's 60-bar minimum.
             val close = 95.0 + index * 0.2
             Candle(
                 timeMs = NOW_MS - (COUNT - index) * MINUTE_MS,
@@ -56,7 +68,7 @@ class SignalEnginePythonParityTest {
         return rows
     }
 
-    private fun summary(strategy: String): String {
+    private fun snapshot(strategy: String): Snapshot {
         val candles = pythonGoldenRows(strategy)
         val last = candles.last()
         val quote = MarketQuote.twoSided(
@@ -75,27 +87,47 @@ class SignalEnginePythonParityTest {
                 strategyId = strategy
             )
         )
-        assertNotNull(report)
-        val plan = report.plan
-        return listOf(
-            "strategy=$strategy",
-            "state=${report.state}",
-            "direction=${report.dir}",
-            "entry=${plan?.entry}",
-            "stop_loss=${plan?.stopLoss}",
-            "take_profit=${plan?.primary?.price}",
-            "rr=${plan?.primary?.rr}",
-            "reasons=${report.reasons.joinToString("|")}",
-            "blockers=${report.blockers.joinToString("|")}",
-            "components=${report.components.map { it.name }}",
-            "sweeps=${report.sweeps.map { it.level.kind.name + ":" + it.impliedDir.name }}",
-            "fvgs=${report.fvgs.size}"
-        ).joinToString("; ")
+        assertEquals("Exactly 60 complete fixture candles are supplied", COUNT, candles.count { it.complete })
+        assertTrue(candles.all { it.isValid })
+        return Snapshot(
+            strategy = strategy,
+            state = report.state,
+            direction = report.dir?.name,
+            hasPlan = report.plan != null,
+            firstReason = report.reasons.firstOrNull().orEmpty(),
+            components = report.components.map { it.name },
+            sweepCount = report.sweeps.size,
+            fvgCount = report.fvgs.size
+        )
     }
 
     @Test
     fun pythonGolden60CandleFixturesProduceStableSignalEngineReports() {
-        val actual = STRATEGIES.map(::summary)
-        assertEquals("Kotlin snapshot to document against the Python golden outputs", listOf("TODO", "TODO"), actual)
+        val actual = STRATEGIES.map(::snapshot)
+        assertEquals(
+            listOf(
+                Snapshot(
+                    strategy = "smc-confluence-1.0.0",
+                    state = SignalState.WAIT,
+                    direction = null,
+                    hasPlan = false,
+                    firstReason = "Bull 10 vs bear 0: no clear edge -> WAIT",
+                    components = listOf("MTF", "Structure", "Liquidity", "Order Block / FVG", "Patterns", "Volume", "Momentum"),
+                    sweepCount = 0,
+                    fvgCount = 1
+                ),
+                Snapshot(
+                    strategy = "ict-silver-bullet",
+                    state = SignalState.WAIT,
+                    direction = null,
+                    hasPlan = false,
+                    firstReason = "Score 35 below weak threshold 50 -> WAIT",
+                    components = listOf("Killzone Timing", "Liquidity Sweep", "FVG Displacement", "Structure Shift", "Target Draw"),
+                    sweepCount = 0,
+                    fvgCount = 1
+                )
+            ),
+            actual
+        )
     }
 }
