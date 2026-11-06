@@ -1,9 +1,11 @@
 package com.example
 
 import com.example.ui.BotUiState
+import com.example.ui.canSelectMt5Mode
 import com.example.ui.deriveBotUiState
 import com.example.ui.isVerifiedMt5Connection
 import com.example.ui.isValidDemoPassEvidence
+import com.example.ui.liveLeaseStatusLabel
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -56,13 +58,14 @@ class BotUiStateTest {
             actualLogin: String = "123456",
             actualServer: String = "Broker-Demo",
             actualMode: String = "DEMO",
+            brokerIdentityVerified: Boolean = true,
         ) = isVerifiedMt5Connection(
             snapshotConnected = connected,
             workerReady = true,
             terminalOnline = true,
             heartbeatFresh = heartbeatFresh,
             accountVerified = true,
-            brokerIdentityVerified = true,
+            brokerIdentityVerified = brokerIdentityVerified,
             actualMode = actualMode,
             expectedMode = "DEMO",
             actualLogin = actualLogin,
@@ -76,7 +79,23 @@ class BotUiStateTest {
         assertEquals(false, verified(actualLogin = "999999"))
         assertEquals(false, verified(actualServer = "Broker-Live"))
         assertEquals(false, verified(actualMode = "LIVE"))
+        assertEquals(false, verified(brokerIdentityVerified = false))
         assertEquals(true, verified())
+
+        fun uiState(
+            connected: Boolean,
+            pairingRequired: Boolean = false,
+            terminalOnline: Boolean? = true,
+            heartbeatFresh: Boolean? = true,
+        ) = deriveBotUiState(false, connected, pairingRequired, terminalOnline, heartbeatFresh, "READY", false)
+
+        assertEquals(BotUiState.PAIRING_REQUIRED, uiState(connected = false, pairingRequired = true))
+        assertEquals(BotUiState.EA_OFFLINE, uiState(connected = false, heartbeatFresh = false))
+        assertEquals(BotUiState.TERMINAL_OFFLINE, uiState(connected = false, terminalOnline = false))
+        assertEquals(false, uiState(connected = verified(connected = false)) == BotUiState.CONNECTED) // HTTP success alone
+        assertEquals(false, uiState(connected = verified(actualLogin = "999999")) == BotUiState.CONNECTED)
+        assertEquals(false, uiState(connected = verified(actualServer = "Broker-Live")) == BotUiState.CONNECTED)
+        assertEquals(false, uiState(connected = verified(brokerIdentityVerified = false)) == BotUiState.CONNECTED)
     }
 
     @Test fun liveRequiresMatchingBrokerDemoPassEvidenceAndFullGateSet() {
@@ -85,6 +104,9 @@ class BotUiStateTest {
             status: String = "PASS",
             soakDays: Int = 5,
             restartTestPass: Boolean = true,
+            login: String = "123456",
+            server: String = "FBS-Demo",
+            evidencePathCount: Int = 1,
         ) = isValidDemoPassEvidence(
             expectedBroker = "FBS",
             expectedLogin = "123456",
@@ -92,14 +114,14 @@ class BotUiStateTest {
             broker = broker,
             mode = "DEMO",
             status = status,
-            login = "123456",
-            server = "FBS-Demo",
+            login = login,
+            server = server,
             soakDays = soakDays,
             orderLifecyclePass = true,
             dailyReconciliationPass = true,
             restartTestPass = restartTestPass,
             riskControlsPass = true,
-            evidencePathCount = 1,
+            evidencePathCount = evidencePathCount,
         )
 
         assertEquals(true, accepted())
@@ -107,5 +129,18 @@ class BotUiStateTest {
         assertEquals(false, accepted(status = "BLOCKED"))
         assertEquals(false, accepted(soakDays = 4))
         assertEquals(false, accepted(restartTestPass = false))
+        assertEquals(false, accepted(login = "999999"))
+        assertEquals(false, accepted(server = "FBS-Live"))
+        assertEquals(false, accepted(evidencePathCount = 0))
+    }
+
+    @Test fun liveSelectionRequiresAcceptedBrokerSpecificDemoPassAndLeaseLabelIsExplicit() {
+        assertEquals(true, canSelectMt5Mode("DEMO", "FBS", emptyMap()))
+        assertEquals(false, canSelectMt5Mode("LIVE", "FBS", emptyMap()))
+        assertEquals(false, canSelectMt5Mode("LIVE", "EXNESS", mapOf("FBS" to "accepted-demo-pass-sha256")))
+        assertEquals(true, canSelectMt5Mode("LIVE", "FBS", mapOf("FBS" to "accepted-demo-pass-sha256")))
+
+        assertEquals("LIVE NOT ARMED · SERVER LEASE INACTIVE", liveLeaseStatusLabel(false))
+        assertEquals("LIVE ARMED · SERVER LEASE ACTIVE", liveLeaseStatusLabel(true))
     }
 }

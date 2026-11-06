@@ -152,6 +152,15 @@ fun isValidDemoPassEvidence(
     expectedLogin.isNotBlank() && login == expectedLogin && expectedServer.isNotBlank() && server == expectedServer &&
     soakDays in 5..7 && orderLifecyclePass && dailyReconciliationPass && restartTestPass && riskControlsPass && evidencePathCount > 0
 
+fun canSelectMt5Mode(mode: String, broker: String, acceptedDemoPassDigests: Map<String, String>): Boolean =
+    mode != "LIVE" || broker in acceptedDemoPassDigests
+
+fun liveLeaseStatusLabel(serverLeaseActive: Boolean): String = if (serverLeaseActive) {
+    "LIVE ARMED · SERVER LEASE ACTIVE"
+} else {
+    "LIVE NOT ARMED · SERVER LEASE INACTIVE"
+}
+
 @Composable
 fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val context = LocalContext.current
@@ -249,7 +258,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         }
     }
     val selectMt5Slot: (String, String) -> Unit = { brand, mode ->
-        if (mode == "LIVE" && brand !in demoPassDigests) {
+        if (!canSelectMt5Mode(mode, brand, demoPassDigests)) {
             message = "LIVE is locked. Import a matching broker-specific DEMO PASS file after the required soak and evidence gates."
         } else {
         val changed = selectedMt5Broker != brand || mt5Mode != mode
@@ -480,7 +489,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     connected -> "Connected"
                                     else -> "Authenticating"
                                 } else if (secrets.getMT5BridgeAccountAppToken(slot).isNotBlank()) "Paired" else if (saved) "Registered" else "Not configured"
-                                FilterChip(selected = selected, enabled = mode != "LIVE" || brand in demoPassDigests, onClick = { selectMt5Slot(brand, mode) }, label = { Text(if (mode == "LIVE" && brand !in demoPassDigests) "$mode · DEMO PASS REQUIRED" else "$mode · $status", fontSize = 9.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
+                                FilterChip(selected = selected, enabled = canSelectMt5Mode(mode, brand, demoPassDigests), onClick = { selectMt5Slot(brand, mode) }, label = { Text(if (!canSelectMt5Mode(mode, brand, demoPassDigests)) "$mode · DEMO PASS REQUIRED" else "$mode · $status", fontSize = 9.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
                             }
                         }
                     }
@@ -525,7 +534,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         val serverLiveExpiry = snapshot?.raw?.optJSONObject("managed_execution")?.optString("live_authorized_until")?.takeIf { it.isNotBlank() }.orEmpty()
                         Text("Selected LIVE account: ${secrets.getManagedMT5AccountLogin(mt5Profile).ifBlank { "not registered" }} @ ${secrets.getManagedMT5AccountServer(mt5Profile).ifBlank { "server not configured" }}", color = TextPrimary, fontSize = 10.sp)
                         Text("Terminal identity: ${snapshot?.actualLogin ?: "unverified"} @ ${snapshot?.actualServer ?: "unverified"} · mode ${snapshot?.actualAccountMode ?: "unverified"}", color = TextSecondary, fontSize = 10.sp)
-                        Text("Fresh terminal heartbeat: ${snapshot?.heartbeatFresh == true} · broker identity: ${snapshot?.brokerIdentityVerified == true} · service state: ${snapshot?.managedState ?: "unknown"} · LIVE authorization: ${if (snapshot?.liveAuthorized == true) "ACTIVE" else "inactive"}", color = if (snapshot?.liveAuthorized == true) WarningAmber else TextSecondary, fontSize = 10.sp)
+                        Text("${liveLeaseStatusLabel(snapshot?.liveAuthorized == true)} · fresh terminal heartbeat: ${snapshot?.heartbeatFresh == true} · broker identity: ${snapshot?.brokerIdentityVerified == true} · service state: ${snapshot?.managedState ?: "unknown"}", color = if (snapshot?.liveAuthorized == true) WarningAmber else TextSecondary, fontSize = 10.sp)
                         if (snapshot?.liveAuthorized == true) Text("Authorization expiry: ${serverLiveExpiry.ifBlank { liveAuthorizationExpiry.ifBlank { "server confirms active; expiry not returned" } }}", color = WarningAmber, fontSize = 10.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                             OutlinedButton(onClick = {
@@ -742,7 +751,7 @@ private fun ConnectedBotDashboard(
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, ProfitGreen.copy(alpha = 0.5f))) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("CONNECTED ACCOUNT", color = ProfitGreen, fontSize = 10.sp, fontWeight = FontWeight.Black)
+            Text("VERIFIED CONNECTED ACCOUNT", color = ProfitGreen, fontSize = 10.sp, fontWeight = FontWeight.Black)
             Text(if (broker == BrokerType.MT5) "MetaTrader 5 · ${mt5Snapshot?.actualAccountMode ?: "unverified"}" else "Deriv · ${derivAccount?.mode?.uppercase() ?: "unverified"}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             val accountId = if (broker == BrokerType.MT5) mt5Snapshot?.actualLogin else derivAccount?.loginId
             Text("Account: ${maskAccountId(accountId)}", color = TextSecondary, fontSize = 11.sp)
