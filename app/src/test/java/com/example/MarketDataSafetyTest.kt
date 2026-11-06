@@ -8,6 +8,7 @@ import com.example.data.market.classifyQuoteFreshness
 import com.example.data.market.candleSourceKey
 import com.example.data.market.canMergeQuoteIntoCandle
 import com.example.data.market.canonicalTickerAfterRefresh
+import com.example.data.market.isExplicitDerivMt5Source
 import com.example.data.market.scannerQuoteFromRow
 import com.example.data.market.processPollingItemsIndependently
 import com.example.data.market.resilientPollingLoop
@@ -188,6 +189,15 @@ class MarketDataSafetyTest {
         assertFalse(canMergeQuoteIntoCandle("Deriv WebSocket", "TradingView scanner snapshot"))
         assertFalse(canMergeQuoteIntoCandle("OANDA", "Binance Spot (USDT pairs)"))
         assertFalse(canMergeQuoteIntoCandle("", "OANDA"))
+    }
+
+    @Test
+    fun derivMarketDataRequiresExplicitMt5SourceSelection() {
+        assertFalse(isExplicitDerivMt5Source("TRADINGVIEW"))
+        assertFalse(isExplicitDerivMt5Source("DERIV"))
+        assertFalse(isExplicitDerivMt5Source("DERIV_OPTIONS"))
+        assertTrue(isExplicitDerivMt5Source("deriv_mt5"))
+        assertFalse(isExplicitDerivMt5Source("DERIV_MT5_DEMO"))
     }
 
 

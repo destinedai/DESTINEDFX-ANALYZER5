@@ -233,7 +233,7 @@ class DerivBrokerGateway(
                 throw IllegalStateException(
                     "No unique active ${requestedMode.uppercase()} Options account was selected for this token" +
                         (if (available.isEmpty()) "." else ". Available account types: " + available.joinToString() + ".") +
-                        " Check that the token has the required account-read and trading permissions."
+                        " Check that the PAT has the trade scope required by the Options account-list endpoint."
                 )
             }
 
@@ -368,10 +368,10 @@ class DerivBrokerGateway(
             _accountMetrics.value = null
             _portfolioSnapshot.value = null
             _connectionState.value = DerivConnectionState.ERROR
-            val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
-            lastConnectionError = detail
-            Log.e(TAG, "Deriv direct-API connection failed: $detail")
-            Result.failure(Exception("Deriv connection failed: $detail"))
+            val mapped = DerivConnectionFailureMapper.from(error)
+            lastConnectionError = mapped.code.name
+            Log.e(TAG, "Deriv direct-API connection failed: ${mapped.code.name}")
+            Result.failure(Exception("${mapped.message} ${mapped.recovery}"))
         }
     }
 

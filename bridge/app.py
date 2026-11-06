@@ -1,12 +1,16 @@
 import os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error
+import re
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse, quote, urlencode
 from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from cryptography.fernet import Fernet, InvalidToken
+import jwt
+from jwt import PyJWKClient
 from quantitative import STRATEGY_RULESETS, analyze_json
 
 
@@ -14,6 +18,7 @@ DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
 ALLOW_LOOPBACK=os.getenv('ALLOW_LOOPBACK_HTTP','false').lower()=='true'
 MAX_BODY=int(os.getenv('MAX_BODY_BYTES','65536'))
 PAIR_RATE=int(os.getenv('PAIR_RATE_LIMIT','10'))
+TOKEN_RATE=int(os.getenv('TOKEN_RATE_LIMIT','180'))
 STALE=int(os.getenv('HEARTBEAT_STALE_SECONDS','15'))
 RECOVERY_GRACE=int(os.getenv('HEARTBEAT_RECOVERY_GRACE_SECONDS','120'))
 NEWS_BEFORE=int(os.getenv('NEWS_BLACKOUT_BEFORE_SECONDS','1800'))
@@ -38,6 +43,31 @@ ANALYSIS_SYMBOL_POLICY={
 ANALYSIS_SESSION_POLICY={'FOREX':True,'METAL':True,'CRYPTO':False}
 _NEWS_CACHE={}
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
+
+def cloudflare_access_settings():
+    team_domain=os.getenv('CF_ACCESS_TEAM_DOMAIN','').strip().rstrip('/')
+    audience=os.getenv('CF_ACCESS_AUD','').strip()
+    if not team_domain and not audience: return None
+    parsed=urlparse(team_domain)
+    host=(parsed.hostname or '').lower().rstrip('.')
+    if (parsed.scheme!='https' or parsed.port is not None or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password or
+        not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.cloudflareaccess\.com',host) or
+        not audience or len(audience)>2048):
+        raise ValueError('Cloudflare Access origin validation is incompletely or incorrectly configured')
+    return team_domain,audience
+
+@lru_cache(maxsize=4)
+def _cloudflare_jwks_client(team_domain):
+    return PyJWKClient(team_domain+'/cdn-cgi/access/certs',cache_jwk_set=True,lifespan=300,timeout=5)
+
+def validate_cloudflare_assertion(assertion):
+    settings=cloudflare_access_settings()
+    if settings is None: return False
+    team_domain,audience=settings
+    signing_key=_cloudflare_jwks_client(team_domain).get_signing_key_from_jwt(assertion)
+    claims=jwt.decode(assertion,signing_key.key,algorithms=['RS256'],audience=audience,issuer=team_domain,
+        options={'require':['exp','iat','iss','aud']},leeway=30)
+    return isinstance(claims,dict)
 
 def now(): return datetime.now(timezone.utc)
 def iso(dt=None): return (dt or now()).isoformat().replace('+00:00','Z')
@@ -75,6 +105,7 @@ def db():
     CREATE TABLE IF NOT EXISTS close_all_confirmations(token_hash TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, account_mode TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS command_items(command_id INTEGER NOT NULL REFERENCES commands(id) ON DELETE CASCADE, ticket TEXT NOT NULL, target_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_volume REAL NOT NULL DEFAULT 0.0, remaining_volume REAL, ack_status TEXT, message TEXT NOT NULL DEFAULT '', operational_status TEXT NOT NULL DEFAULT 'PENDING', ack_heartbeat_seq INTEGER, PRIMARY KEY(command_id,ticket));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS request_rate(token_hash TEXT PRIMARY KEY, window INTEGER NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED', broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN');
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
@@ -125,6 +156,28 @@ def secure(request):
 @app.middleware('http')
 async def limits(request:Request, call_next):
     secure(request)
+    try:
+        access_settings=cloudflare_access_settings()
+    except ValueError:
+        return JSONResponse({'detail':{'code':'ACCESS_VALIDATION_MISCONFIGURED'}},503)
+    if access_settings is not None and request.url.path != '/health/live':
+        assertion=request.headers.get('cf-access-jwt-assertion','').strip()
+        if not assertion: return JSONResponse({'detail':{'code':'ACCESS_ASSERTION_REQUIRED'}},401)
+        try: valid_access=validate_cloudflare_assertion(assertion)
+        except Exception: valid_access=False
+        if not valid_access: return JSONResponse({'detail':{'code':'ACCESS_ASSERTION_INVALID'}},401)
+    authorization=request.headers.get('authorization','').strip()
+    if authorization and not request.url.path.startswith('/health/'):
+        token_hash=digest(authorization)
+        window=int(time.time()//60)
+        with tx(immediate=True) as c:
+            row=c.execute('SELECT window,count FROM request_rate WHERE token_hash=?',(token_hash,)).fetchone()
+            if row and row['window']==window and row['count']>=TOKEN_RATE:
+                return JSONResponse({'detail':'Per-token request rate limit exceeded'},429,headers={'Retry-After':'60'})
+            c.execute('''INSERT INTO request_rate(token_hash,window,count) VALUES(?,?,1)
+                ON CONFLICT(token_hash) DO UPDATE SET
+                count=CASE WHEN request_rate.window=excluded.window THEN request_rate.count+1 ELSE 1 END,
+                window=excluded.window''',(token_hash,window))
     if request.method in ('POST','PUT','PATCH'):
         try: length=int(request.headers.get('content-length','0'))
         except ValueError: return JSONResponse({'detail':'Invalid content length'},400)
@@ -598,6 +651,37 @@ def terminal_identity_matches(p, account_mode, beat):
 def execution_state_eligible(beat):
     return bool(beat and beat.get('state') in ('READY','RUNNING','PAUSED','STOPPED'))
 
+def verified_terminal_pairing_exists():
+    """Require a real fresh EA heartbeat and a worker-owned READY job."""
+    with tx() as c:
+        rows=c.execute('''SELECT p.*,m.account_mode,m.broker_brand,m.server_enc,m.access_type,j.status AS job_status
+                          FROM pairings p
+                          JOIN managed_accounts m ON m.pairing_id=p.id
+                          JOIN worker_jobs j ON j.pairing_id=p.id
+                          WHERE p.consumed=1 AND m.revoked=0 AND m.account_mode IN ('DEMO','LIVE')
+                            AND j.status='READY'
+                          ORDER BY j.created DESC''').fetchall()
+    for row in rows:
+        beat=fresh_heartbeat(row)
+        if not beat or not beat.get('terminal_connected') or not execution_state_eligible(beat):
+            continue
+        if row['access_type']=='MASTER' and not beat.get('trade_allowed'):
+            continue
+        if not terminal_identity_matches(row,row['account_mode'],beat):
+            continue
+        try:
+            fernet,_=managed_config()
+            expected_server=fernet.decrypt(row['server_enc']).decode()
+        except Exception:
+            continue
+        account=beat.get('account') or {}
+        if not broker_server_matches(row['broker_brand'],expected_server,account.get('server')):
+            continue
+        if not broker_company_matches(row['broker_brand'],account.get('company')):
+            continue
+        return True
+    return False
+
 UINT64_MAX=18446744073709551615
 DESTRUCTIVE_ACTIONS={'CANCEL_PENDING_SELECTED','CANCEL_EA_PENDING','CLOSE_POSITION_SELECTED','CLOSE_ALL'}
 
@@ -619,7 +703,7 @@ def snapshot_ticket(value):
 
 def destructive_context(p):
     with tx() as c:
-        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
     beat=fresh_heartbeat(p)
     if (not managed or managed['revoked'] or managed['access_type']!='MASTER' or managed['account_mode'] not in ('DEMO','LIVE')
@@ -663,7 +747,8 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     require_durable_execution()
     p=auth(authorization,'app'); fernet,_=managed_config()
     if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
-    if x.broker_brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
+    brand=x.broker_brand.strip().upper()
+    if brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
     evidence=x.cost_evidence.strip()
     if any(ord(ch)<32 or ord(ch)==127 for ch in evidence): raise HTTPException(422,'Cost evidence reference must not contain control characters')
     if x.cost_model not in ('OBSERVED_ROUND_TURN','CONFIGURED_ROUND_TURN','CONFIGURED_PER_SIDE','ZERO_COMMISSION_SPREAD_ONLY'): raise HTTPException(422,'Invalid transaction cost model')
@@ -676,7 +761,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
-        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode,x.broker_brand,x.cost_model,float(x.commission_per_lot),evidence))
+        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode,brand,x.cost_model,float(x.commission_per_lot),evidence))
         c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+86400,p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) VALUES(?,?,'PROVISION','QUEUED',?)",(job_id,p['id'],t))
     return {'job_id':job_id,'status':'QUEUED'}
@@ -782,6 +867,8 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
                 job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
     return {'job_id':job_id,'kind':job['kind'],'status':job['status'],'error_code':job['error_code'],'error_message':job['error_message']}
 
+@app.get('/health/live')
+def live_health(): return {'status':'ok'}
 @app.get('/health')
 def health(): return {'status':'ok'}
 @app.get('/health/ready')
@@ -797,7 +884,9 @@ def readiness():
         raise
     except Exception:
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
-    return {'status':'ready','database':'ok','managed_execution':'configured'}
+    if not verified_terminal_pairing_exists():
+        raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
+    return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy'}
 @app.post('/v1/pairings',status_code=201)
 def create_pair(request:Request):
     require_durable_execution()
@@ -928,7 +1017,7 @@ def state(authorization:str|None=Header(default=None)):
                 items=c.execute('SELECT ticket,ack_status,message,operational_status,remaining_volume,target_volume FROM command_items WHERE command_id=? ORDER BY rowid',(cmd['id'],)).fetchall()
             last_command['results']=[{'ticket':i['ticket'],'status':'REJECTED' if i['ack_status']=='REJECTED' else ('APPLIED' if i['operational_status']=='CONFIRMED' else ('PARTIAL' if i['operational_status']=='PARTIAL' else ('UNKNOWN' if i['ack_status']=='UNKNOWN' else 'PENDING'))),'ack_status':i['ack_status'] or 'PENDING','operational_status':i['operational_status'],'target_volume':i['target_volume'],'remaining_volume':i['remaining_volume'],'message':('Target absence confirmed by subsequent terminal evidence' if i['operational_status']=='CONFIRMED' else ('Partial result reconciled against fresh terminal volume' if i['operational_status']=='PARTIAL' else i['message']))} for i in items]
     with tx() as c:
-        m=c.execute('SELECT access_type,revoked,account_mode,broker_brand FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        m=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute('SELECT status,error_code,error_message FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1',(p['id'],)).fetchone()
     managed=None
     identity_verified=False
@@ -936,12 +1025,15 @@ def state(authorization:str|None=Header(default=None)):
         actual=fresh_heartbeat(p); worker_ready=bool(job and job['status']=='READY')
         claimed=json.loads(p['account']) if p['account'] else {}
         identity_verified=bool(actual and m['account_mode'] in ('DEMO','LIVE') and actual.get('account') and all(actual['account'].get(k)==claimed.get(k) for k in ('login','server','company','currency','account_mode')) and actual['account'].get('account_mode')==m['account_mode'])
+        fernet,_=managed_config()
+        expected_server=fernet.decrypt(m['server_enc']).decode()
+        broker_identity_verified=bool(actual and actual.get('account') and broker_company_matches(m['broker_brand'], actual['account'].get('company','')) and broker_server_matches(m['broker_brand'], expected_server, actual['account'].get('server','')))
         app_status='READY' if identity_verified and worker_ready and execution_state_eligible(actual) and heartbeat_news_clear(actual) else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
         live_auth=bool(m['account_mode']=='LIVE' and identity_verified and p['live_authorized_until'] and p['live_authorized_until']>time.time() and p['live_authorized_login']==actual['account'].get('login') and p['live_authorized_server']==actual['account'].get('server'))
-        managed={'status':app_status,'access_type':m['access_type'],'account_mode':m['account_mode'],'broker_brand':m['broker_brand'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
+        managed={'status':app_status,'worker_status':job['status'] if job else 'NOT_CONFIGURED','access_type':m['access_type'],'account_mode':m['account_mode'],'broker_brand':m['broker_brand'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
         if actual:
             with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
-    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
 
@@ -1264,7 +1356,7 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     with tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=?,heartbeat_seq=heartbeat_seq+1 WHERE id=?',(json.dumps(payload,separators=(',',':'),allow_nan=False),p['id']))
         seq=c.execute('SELECT heartbeat_seq FROM pairings WHERE id=?',(p['id'],)).fetchone()['heartbeat_seq']
-        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
         if (managed and not managed['revoked'] and managed['access_type']=='MASTER' and managed['account_mode']==x.account.account_mode
             and broker_company_matches(managed['broker_brand'],x.account.company)

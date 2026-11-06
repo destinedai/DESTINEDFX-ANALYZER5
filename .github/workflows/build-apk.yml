@@ -17,12 +17,50 @@ jobs:
           python-version: "3.12"
       - name: Install bridge test dependencies
         run: python -m pip install -r bridge/requirements.txt
+      - name: Run offline Deriv DEMO smoke-harness tests
+        run: python -m pytest -q scripts/test_deriv_demo_smoke.py
       - name: Run bridge tests
         run: python -m pytest -q bridge
+      - name: Build and smoke-test the owner Docker bridge image
+        run: |
+          env BRIDGE_BASE_URL=https://bridge.ci.example.ts.net \
+            CREDENTIALS_FERNET_KEY=ci-placeholder WORKER_TOKEN=ci-placeholder \
+            TAILSCALE_IPV4=127.0.0.1 BRIDGE_HOST=bridge.ci.example.ts.net \
+            docker compose -f bridge/compose.owner.yaml config --quiet
+          docker build --file bridge/Dockerfile --tag destinedfx-bridge:ci bridge
+          docker run --rm --entrypoint python destinedfx-bridge:ci -c "import app, quantitative; print('Bridge image imports passed')"
+          docker run --rm -e BRIDGE_HOST=bridge.ci.example.ts.net \
+            -v "$GITHUB_WORKSPACE/bridge/Caddyfile.owner:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
       - name: Run managed-worker tests
-        run: python -m unittest discover -s managed-worker -p 'test_*.py' -v
+        run: |
+          python -m pytest -q managed-worker --junitxml=/tmp/managed-worker-junit.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = ET.parse('/tmp/managed-worker-junit.xml').getroot()
+          doctor = [case for case in root.iter('testcase') if 'test_doctor' in case.attrib.get('classname', '') or 'test_doctor' in case.attrib.get('file', '')]
+          executed = [case for case in doctor if case.find('skipped') is None]
+          if len(executed) < 9:
+              raise SystemExit(f'Expected at least 9 executed test_doctor.py cases, found {len(executed)}.')
+          print(f'test_doctor.py cases executed: {len(executed)}')
+          PY
       - name: Run MT5 EA source-contract and safety-math regressions
         run: python -m pytest -q mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py
+
+  secret-scan:
+    name: Scan current tree for secrets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Install Gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
+      - name: Scan checked-out tree with redacted findings
+        run: |
+          "$(go env GOPATH)/bin/gitleaks" dir --redact=100 --exit-code 1 .
 
   mt5-ea-windows-compile:
     name: Compile MT5 EA with genuine MetaEditor
@@ -30,6 +68,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Parse Windows owner-stack PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            'managed-worker/windows/install-owner-stack.ps1',
+            'managed-worker/windows/run-owner-stack.ps1',
+            'managed-worker/windows/backup-bridge.ps1',
+            'managed-worker/launch-worker.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error }
+            Write-Host "PowerShell syntax valid: $file"
+          }
       - name: Install MetaTrader and compile the EA
         shell: pwsh
         run: ./scripts/compile-mt5-ea.ps1 -OutputDir "$env:RUNNER_TEMP\destinedfx-ea"
@@ -176,13 +230,40 @@ jobs:
           aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
           test -n "$apksigner_path"
           test -n "$aapt_path"
-          "$apksigner_path" verify --verbose --print-certs "$apk"
+          signature="$({ "$apksigner_path" verify --verbose --print-certs "$apk"; } 2>&1)"
+          printf '%s\n' "$signature"
           metadata="$("$aapt_path" dump badging "$apk")"
-          printf '%s\n' "$metadata" | grep -F "package: name='com.aistudio.destinedfx.qwvzxp'"
+          python - "$metadata" "$signature" <<'PY'
+          import re, sys
+          from pathlib import Path
+          gradle = Path('app/build.gradle.kts').read_text()
+          def configured(pattern, label):
+              match = re.search(pattern, gradle)
+              if not match:
+                  raise SystemExit(f'Could not derive {label} from app/build.gradle.kts')
+              return match.group(1)
+          package = configured(r'applicationId\s*=\s*"([^"]+)"', 'application ID')
+          version_code = configured(r'versionCode\s*=\s*(\d+)', 'version code')
+          version_name = configured(r'versionName\s*=\s*"([^"]+)"', 'version name')
+          abi_block = re.search(r'abiFilters\s*\+=\s*listOf\(([^)]*)\)', gradle)
+          if not abi_block:
+              raise SystemExit('Could not derive configured ABI filters from app/build.gradle.kts')
+          abis = re.findall(r'"([^"]+)"', abi_block.group(1))
+          metadata, signature = sys.argv[1:]
+          expected = f"package: name='{package}' versionCode='{version_code}' versionName='{version_name}'"
+          if expected not in metadata:
+              raise SystemExit(f'APK metadata mismatch; expected {expected!r}')
+          native_line = next((line for line in metadata.splitlines() if line.startswith('native-code:')), '')
+          actual_abis = re.findall(r"'([^']+)'", native_line)
+          if not set(abis).issubset(actual_abis):
+              raise SystemExit(f'APK ABI mismatch: configured {abis}, package reports {actual_abis}')
+          if not re.search(r'certificate SHA-256 digest:\s*[0-9a-fA-F]{64}', signature):
+              raise SystemExit('apksigner output did not contain a signing-certificate SHA-256 fingerprint')
+          print(f'APK package/version validated against Gradle: {package} {version_name} ({version_code}); ABIs={abis}')
+          PY
           printf '%s\n' "$metadata" | grep -E "sdkVersion:|targetSdkVersion:|native-code:"
-          printf '%s\n' "$metadata" | grep -F "versionCode='10'"
-          printf '%s\n' "$metadata" | grep -F "versionName='1.0.10'"
-          unzip -l "$apk" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
+          zip_listing="$(unzip -l "$apk")"
+          printf '%s\n' "$zip_listing" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
             echo "Chaquopy native library listing was not found for configured ABIs." >&2
             exit 1
           }
@@ -190,8 +271,17 @@ jobs:
           {
             echo "### Debug APK verification"
             echo 'Package: `com.aistudio.destinedfx.qwvzxp`'
-            echo 'Version: `1.0.10` (code `10`)'
-            echo 'Signature verified by apksigner; supported ABI metadata and Chaquopy native payload inspected.'
+            python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('app/build.gradle.kts').read_text()
+          code=re.search(r'versionCode\s*=\s*(\d+)',text).group(1)
+          name=re.search(r'versionName\s*=\s*"([^"]+)"',text).group(1)
+          print(f'Version: `{name}` (code `{code}`)')
+          PY
+            echo 'Signature verified by apksigner; certificate fingerprint:'
+            printf '%s\n' "$signature" | grep -E 'certificate SHA-256 digest:'
+            echo 'Configured ABI metadata and Chaquopy Python native payload inspected.'
             echo 'SHA-256:'
             echo '```text'
             cat /tmp/apk-sha256.txt
@@ -292,18 +382,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Package Windows MT5 worker kit
         run: |
-          mkdir -p dist/DestinedFX-Windows-Worker-Kit
-          cp managed-worker/worker.py managed-worker/worker.example.toml managed-worker/README.md managed-worker/launch-worker.ps1 dist/DestinedFX-Windows-Worker-Kit/
-          cp mt5-ea/DestinedFXTraderEA.mq5 dist/DestinedFX-Windows-Worker-Kit/
+          kit="dist/DestinedFX-Windows-Worker-Kit"
+          mkdir -p "$kit/managed-worker" "$kit/managed-worker/windows" "$kit/bridge" "$kit/mt5-ea"
+          cp managed-worker/worker.py managed-worker/worker.example.toml managed-worker/README.md managed-worker/launch-worker.ps1 "$kit/managed-worker/"
+          cp -R managed-worker/windows/. "$kit/managed-worker/windows/"
+          cp bridge/app.py bridge/quantitative.py bridge/requirements.txt "$kit/bridge/"
+          cp mt5-ea/DestinedFXTraderEA.mq5 "$kit/mt5-ea/"
           cat > dist/DestinedFX-Windows-Worker-Kit/START-HERE.txt <<'EOF'
-          DestinedFX Windows MT5 worker kit
-          1. Extract all files to a private folder.
-          2. Install the broker MT5 desktop terminal and MetaEditor.
-          3. Run launch-worker.ps1 in PowerShell.
-          4. Enter the public HTTPS bridge URL, MT5 install folder, stable worker ID and generated WORKER_TOKEN.
-          5. Add the bridge URL to MT5 Tools > Options > Expert Advisors > Allow WebRequest for listed URL.
-          6. Select DEMO MASTER in the Android app for the first execution test.
-          Keep worker.toml and terminal data private. Worker start does not place trades without an app command.
+          DestinedFX owner-operated Windows kit
+          1. Read managed-worker/windows/OWNER-SETUP.md completely before setup.
+          2. Requires the owner's Windows PC to remain powered on, awake, connected, and signed in.
+          3. Use an authorized private Tailscale tailnet with Serve only; Android must join that same tailnet.
+          4. Run managed-worker/windows/install-owner-stack.ps1 only after reviewing the exact genuine broker install and account-issued server.
+          5. The bridge binds only to 127.0.0.1:8000. Never use Funnel, a LAN/public listener, or a public unauthenticated endpoint.
+          6. Begin with an authorized DEMO account. Verify account identity, fresh terminal heartbeat, worker READY, fills, SL/TP, history and STOP separately.
+          7. No LIVE order is authorized by this kit. A queued job or launched terminal is not terminal readiness.
+          8. Preserve ProgramData\DestinedFX, DPAPI secrets, SQLite, account directories and verified backups during recovery.
+          Tailscale commercial-use eligibility is the operator's responsibility; do not assume Personal plan rights.
           EOF
       - uses: actions/upload-artifact@v4
         with:

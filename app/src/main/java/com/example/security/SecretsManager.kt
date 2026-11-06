@@ -47,6 +47,8 @@ class SecretsManager internal constructor(
         private const val DERIV_REAL_EXECUTION_ENABLED = "deriv_real_execution_enabled"
         private const val TG_STATUS = "telegram_connection_status"
         private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
+        private const val CF_ACCESS_CLIENT_ID = "cf_access_client_id"
+        private const val CF_ACCESS_CLIENT_SECRET = "cf_access_client_secret"
         private const val MT5_BRIDGE_TOKEN = "mt5_remote_bridge_app_token"
         private const val MT5_MANAGED_SERVICE_URL = "mt5_managed_service_url"
         private const val MT5_BRIDGE_PENDING_ID = "mt5_remote_bridge_pending_id"
@@ -233,6 +235,20 @@ class SecretsManager internal constructor(
         return prefs.edit().putString(MT5_MANAGED_SERVICE_URL, origin).commit()
     }
 
+    /** Cloudflare Access service credentials remain in encrypted preferences and are never logged. */
+    fun getCloudflareAccessClientId(): String = if (isSecureStorageAvailable) prefs.getString(CF_ACCESS_CLIENT_ID, "") ?: "" else ""
+    fun getCloudflareAccessClientSecret(): String = if (isSecureStorageAvailable) prefs.getString(CF_ACCESS_CLIENT_SECRET, "") ?: "" else ""
+    fun saveCloudflareAccessServiceToken(clientId: String, clientSecret: String): Boolean {
+        if (!isSecureStorageAvailable || clientId.isBlank() || clientSecret.isBlank() ||
+            clientId.length > 512 || clientSecret.length > 2048 ||
+            clientId.any { it.isISOControl() } || clientSecret.any { it.isISOControl() }
+        ) return false
+        return prefs.edit().putString(CF_ACCESS_CLIENT_ID, clientId.trim())
+            .putString(CF_ACCESS_CLIENT_SECRET, clientSecret.trim()).commit()
+    }
+    fun clearCloudflareAccessServiceToken(): Boolean = isSecureStorageAvailable &&
+        prefs.edit().remove(CF_ACCESS_CLIENT_ID).remove(CF_ACCESS_CLIENT_SECRET).commit()
+
     /** Bridge app credentials are persisted only when Android encrypted preferences initialized successfully. */
     private fun managedProfile(profile: String): String = profile.trim().uppercase().also { require(it == "DEMO" || it == "LIVE") { "Profile must be DEMO or LIVE" } }
     private fun profileKey(kind: String, profile: String) = "${kind}_${managedProfile(profile).lowercase()}"
@@ -396,6 +412,27 @@ class SecretsManager internal constructor(
         return prefs.edit().remove("${prefix}_login").remove("${prefix}_server")
             .remove("${prefix}_access").remove("${prefix}_password")
             .remove("${prefix}_save_password").commit()
+    }
+
+    /** Stable account slots. Each slot is an independent encrypted namespace; no DEMO/LIVE values are shared. */
+    fun getManagedMT5AccountRegistry(): List<com.example.data.mt5.MT5AccountSlot> {
+        val slots = listOf("FBS", "EXNESS", "HFM", "DERIV").flatMap { brand ->
+            listOf("DEMO", "LIVE").map { mode ->
+                val key = "${brand}_${mode}"
+                com.example.data.mt5.MT5AccountSlot(
+                    accountId = key,
+                    broker = brand,
+                    platform = "MT5",
+                    accountMode = mode,
+                    login = getManagedMT5AccountLogin(key),
+                    server = getManagedMT5AccountServer(key),
+                    accessType = getManagedMT5AccountAccessType(key),
+                    connected = false,
+                    passwordSaved = isManagedMT5AccountPasswordSaveEnabled(key)
+                )
+            }
+        }
+        return slots
     }
 
     fun saveMT5BridgeAccountPendingCommand(requestId: String, action: String, profileKey: String): Boolean {

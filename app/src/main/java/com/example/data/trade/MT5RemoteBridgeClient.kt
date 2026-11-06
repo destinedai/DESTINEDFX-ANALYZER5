@@ -21,10 +21,10 @@ import java.util.concurrent.TimeUnit
 /** Android control/status client for the remote MT5 relay. Never places orders. */
 class MT5RemoteBridgeClient(
     private val secrets: SecretsManager,
-    profile: String = "DEMO",
+    profile: String,
     private val sensitiveActionAuthorized: () -> Boolean = { false },
-    accountMode: String = profile,
-    brokerBrand: String = "FBS"
+    accountMode: String,
+    brokerBrand: String
 ) {
     /** Local secure-storage namespace, e.g. FBS_DEMO or EXNESS_LIVE. */
     val profile: String = profile.trim().uppercase().also {
@@ -37,12 +37,17 @@ class MT5RemoteBridgeClient(
     val brokerBrand: String = brokerBrand.trim().uppercase().also {
         require(it in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
     }
+    init { require(this.profile == "${this.brokerBrand}_${this.accountMode}") { "MT5 profile must be the explicit broker/mode slot." } }
     private val http = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(5, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     data class Pairing(val code: String, val expiresAt: String)
+    data class ServiceReadiness(
+        val httpReachable: Boolean, val httpStatus: Int?, val serviceStatus: String,
+        val database: String, val managedExecution: String, val errorCode: String = ""
+    )
     data class CommandResult(
         val requestId: String, val queued: Boolean, val detail: String = "", val rejected: Boolean = false,
         val serverCommandId: String = "", val status: String = "",
@@ -50,11 +55,11 @@ class MT5RemoteBridgeClient(
     )
     data class CloseAllConfirmation(val token: String, val expiresAt: String, val tickets: List<String>)
     data class Snapshot(
-        val managedState: String, val accessType: String, val profileMode: String,
+        val managedState: String, val workerStatus: String = "UNKNOWN", val accessType: String, val profileMode: String,
         val connected: Boolean, val terminalOnline: Boolean, val heartbeatFresh: Boolean,
         val state: String, val account: String, val actualLogin: String, val actualServer: String,
         val actualAccountMode: String, val liveAuthorized: Boolean, val tradeAllowed: Boolean,
-        val terminalConnected: Boolean, val accountVerified: Boolean,
+        val terminalConnected: Boolean, val accountVerified: Boolean, val brokerIdentityVerified: Boolean,
         val currency: String, val balance: Double?, val equity: Double?,
         val margin: Double?, val freeMargin: Double?, val marginLevel: Double?, val leverage: Int?,
         val positions: List<JSONObject>?, val activeOrders: List<JSONObject>?, val closedDeals: List<JSONObject>?,
@@ -67,6 +72,25 @@ class MT5RemoteBridgeClient(
     fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
     fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
     fun hasPairing(): Boolean = secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()
+    /** Probes service readiness independently of any paired account or terminal. HTTP 200 alone is not trading readiness. */
+    suspend fun checkServiceReadiness(): ServiceReadiness = withContext(Dispatchers.IO) {
+        val base = validateBaseUrl(baseUrl()) ?: return@withContext ServiceReadiness(false, null, "CONFIGURATION_REQUIRED", "unknown", "unknown")
+        val req = Request.Builder().url(base + "/health/ready").header("Accept", "application/json")
+            .apply { addOptionalAccessHeaders(this) }.get().build()
+        try {
+            http.newCall(req).execute().use { response ->
+                val body = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrElse { JSONObject() }
+                val detail = body.optJSONObject("detail")
+                ServiceReadiness(
+                    httpReachable = true, httpStatus = response.code,
+                    serviceStatus = body.optString("status", if (response.isSuccessful) "unknown" else "not_ready"),
+                    database = body.optString("database", "unknown"),
+                    managedExecution = body.optString("managed_execution", "unknown"),
+                    errorCode = detail?.optString("code").orEmpty()
+                )
+            }
+        } catch (_: Exception) { ServiceReadiness(false, null, "unreachable", "unknown", "unknown") }
+    }
 
     /** Registers one mode-scoped pairing. The bridge stores broker credentials encrypted; this client never logs them. */
     suspend fun registerManagedAccount(
@@ -129,7 +153,7 @@ class MT5RemoteBridgeClient(
         val actualServer = account?.optString("server").orEmpty()
         val actualMode = account?.optString("account_mode").orEmpty().uppercase()
         val verified = obj.optBoolean("account_identity_verified", false) && actualLogin.isNotBlank() &&
-            actualServer.isNotBlank() && actualMode in setOf("DEMO", "LIVE")
+            actualServer.isNotBlank() && actualMode in setOf("DEMO", "LIVE") && actualMode == accountMode
         fun array(key: String): List<JSONObject>? {
             val a = obj.optJSONArray(key) ?: return null
             val out = mutableListOf<JSONObject>()
@@ -141,14 +165,16 @@ class MT5RemoteBridgeClient(
             return out
         }
         val managedState = managed?.let { it.optString("status", it.optString("state", "")) }.orEmpty().uppercase()
+        val workerStatus = managed?.optString("worker_status", "UNKNOWN").orEmpty().uppercase()
         val access = managed?.optString("access_type", "").orEmpty().uppercase()
         val mode = managed?.optString("account_mode", "").orEmpty().uppercase()
         return Snapshot(
-            managedState, access, mode, true, online, freshness,
+            managedState, workerStatus, access, mode, online && terminalConnected && verified && actualMode == accountMode, online, freshness,
             when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
             actualMode, managed?.optBoolean("live_authorized", false) == true,
             obj.optBoolean("trade_allowed", false), terminalConnected, verified,
+            managed?.optBoolean("broker_identity_verified", obj.optBoolean("broker_identity_verified", false)) == true,
             account?.optString("currency").orEmpty(), account?.let { finite(it, "balance") }, account?.let { finite(it, "equity") },
             account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
             account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
@@ -315,6 +341,7 @@ class MT5RemoteBridgeClient(
             snapshot.profileMode != accountMode -> "Selected $brokerBrand $accountMode profile does not match the server-managed account mode."
             snapshot.accessType != "MASTER" -> "INVESTOR access is read-only and cannot execute trading commands."
             !snapshot.accountVerified -> "Broker-reported account identity is not verified by the bridge."
+            !snapshot.brokerIdentityVerified -> "BROKER IDENTITY UNCONFIRMED: terminal company/server do not match the selected broker."
             snapshot.actualAccountMode != accountMode -> "Connected terminal reports ${snapshot.actualAccountMode.ifBlank { "UNVERIFIED" }} mode, not $accountMode."
             expectedLogin.isBlank() || snapshot.actualLogin != expectedLogin -> "Connected terminal login does not exactly match the selected $brokerBrand $accountMode account."
             expectedServer.isBlank() || snapshot.actualServer != expectedServer -> "Connected terminal server does not exactly match the selected $brokerBrand $accountMode account."
@@ -331,6 +358,7 @@ class MT5RemoteBridgeClient(
     private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException(if (!managedConfigured()) "CONFIGURATION_REQUIRED" else "Managed service URL is invalid; HTTPS is required.")
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
+        addOptionalAccessHeaders(builder)
         secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->
@@ -349,6 +377,15 @@ class MT5RemoteBridgeClient(
 
     private fun validateBaseUrl(raw: String): String? {
         return validServiceOrigin(raw)
+    }
+    private fun addOptionalAccessHeaders(builder: Request.Builder) {
+        val clientId = secrets.getCloudflareAccessClientId()
+        val clientSecret = secrets.getCloudflareAccessClientSecret()
+        require(clientId.isBlank() == clientSecret.isBlank()) { "Cloudflare Access service-token ID and secret must be configured together." }
+        if (clientId.isNotBlank()) {
+            builder.header("CF-Access-Client-Id", clientId)
+            builder.header("CF-Access-Client-Secret", clientSecret)
+        }
     }
     private fun finite(obj: JSONObject, key: String): Double? = obj.optDouble(key).takeIf { it.isFinite() }
     private fun finiteInt(obj: JSONObject, key: String): Int? = obj.optInt(key).takeIf { it > 0 }

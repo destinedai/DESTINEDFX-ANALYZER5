@@ -61,6 +61,10 @@ internal fun canMergeQuoteIntoCandle(candleSource: String, quoteSource: String):
     }
 }
 
+/** Deriv data is executable only for an explicitly selected authenticated Deriv MT5 profile. */
+internal fun isExplicitDerivMt5Source(source: String): Boolean =
+    source.trim().uppercase(java.util.Locale.ROOT) == "DERIV_MT5"
+
 /** Reject stale, zero, or future-dated feed timestamps instead of counting a negative age as fresh. */
 internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean =
     timestampMs > 0L && nowMs > 0L && maxAgeMillis > 0L &&
@@ -259,25 +263,29 @@ class MarketDataRepositoryImpl(
     }
 
     private suspend fun fetchLiveQuoteForSymbol(sym: String): MarketTicker? {
-        withTimeoutOrNull(3_000L) { PublicRestMarketFeed.getLiveQuote(sym) }?.let { return it }
         val preferred = selectedApiSource.value
-        if (preferred == "DERIV" && derivMarketDataGateway != null) {
+        if (isExplicitDerivMt5Source(preferred) && derivMarketDataGateway != null) {
             derivTickerForSymbol(sym, 15_000L, waitForFreshQuote = true)?.let { return it }
         }
         if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
             withTimeoutOrNull(3_000L) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }?.let { return it }
         }
+        if (preferred == "TRADINGVIEW") {
+            withTimeoutOrNull(3_000L) { PublicRestMarketFeed.getLiveQuote(sym) }?.let { return it }
+        }
         return null
     }
 
     private suspend fun fetchBackgroundQuoteForSymbol(sym: String): MarketTicker? {
-        withTimeoutOrNull(2_000L) { PublicRestMarketFeed.getLiveQuote(sym) }?.let { return it }
         val preferred = selectedApiSource.value
-        if (preferred == "DERIV" && derivMarketDataGateway != null) {
+        if (isExplicitDerivMt5Source(preferred) && derivMarketDataGateway != null) {
             derivTickerForSymbol(sym, 20_000L, waitForFreshQuote = false)?.let { return it }
         }
         if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
             withTimeoutOrNull(2_000L) { oandaProvider.getLiveQuote(sym)?.copy(source = "OANDA") }?.let { return it }
+        }
+        if (preferred == "TRADINGVIEW") {
+            withTimeoutOrNull(2_000L) { PublicRestMarketFeed.getLiveQuote(sym) }?.let { return it }
         }
         return null
     }
@@ -400,69 +408,9 @@ class MarketDataRepositoryImpl(
             }
         }
 
-        // 3. Public Deriv stream. Subscribe explicitly and translate broker symbols back to
-        // canonical app symbols (e.g. frxEURUSD -> EUR/USD), because the signal engine looks up
-        // tickers by the canonical UI symbol. A WebSocket connection without subscriptions emits
-        // no quote stream and leaves the Analyzer permanently in WAIT / DATA_UNAVAILABLE.
-        derivMarketDataGateway?.let { derivGw ->
-            val canonicalByDerivSymbol = buildDerivCanonicalSymbolMap()
-
-            canonicalByDerivSymbol.keys.forEach { derivSymbol ->
-                // The latestQuotes flow below publishes the full, two-sided MarketQuote. This
-                // callback is deliberately side-effect free; registering it creates the
-                // subscription and lets the gateway restore it after reconnects.
-                derivGw.subscribeTicks(derivSymbol) { _ -> }
-            }
-
-            scope.launch {
-                derivGw.tickDiagnostics.collect { diagnostics ->
-                    val mapped = diagnostics.mapNotNull { (derivSymbol, message) ->
-                        val canonical = canonicalByDerivSymbol[derivSymbol]
-                            ?: dynamicCanonicalByDerivSymbol[derivSymbol]
-                            ?: return@mapNotNull null
-                        canonical to message
-                    }.toMap()
-                    _quoteDiagnostics.update { current -> current + mapped }
-                }
-            }
-
-            scope.launch {
-                derivGw.latestQuotes.collect { quotes ->
-                    val updated = quotes.mapNotNull { (derivSymbol, q) ->
-                        val canonicalSymbol = canonicalByDerivSymbol[derivSymbol]
-                            ?: dynamicCanonicalByDerivSymbol[derivSymbol]
-                            ?: return@mapNotNull null
-                        val price = (q.mid ?: q.last ?: 0.0)
-                        if (price <= 0.0) return@mapNotNull null
-
-                        canonicalSymbol to MarketTicker(
-                            symbol = canonicalSymbol,
-                            price = price,
-                            changePercent = 0.0,
-                            high = 0.0,
-                            low = 0.0,
-                            spread = q.spread ?: 0.0,
-                            bias = "NEUTRAL",
-                            confidence = 0,
-                            lastUpdateMillis = q.receivedAtMs,
-                            isLive = true,
-                            source = "Deriv WebSocket",
-                            bid = q.bid,
-                            ask = q.ask,
-                            hasRealSpread = q.spread != null,
-                            kind = "STREAM"
-                        )
-                    }.toMap()
-
-                    updated.forEach { (canonicalSymbol, ticker) ->
-                        if (shouldUpdateTicker(canonicalSymbol, ticker)) {
-                            _tickers.update { current -> current + (canonicalSymbol to ticker) }
-                            _quoteDiagnostics.update { current -> current - canonicalSymbol }
-                        }
-                    }
-                }
-            }
-        }
+        // Deriv MT5 is deliberately not subscribed here. It is an execution-account source,
+        // not a public Analyzer fallback. An authenticated broker session may opt in by setting
+        // selectedApiSource to DERIV_MT5; that path subscribes on demand in fetchLiveQuoteForSymbol.
     }
 
     private suspend fun pollAllSymbolsParallel() {
@@ -591,13 +539,14 @@ class MarketDataRepositoryImpl(
 
         // Public Binance klines provide genuine OHLC bars for supported crypto symbols and
         // do not require an API key. Quotes alone are not an OHLC fallback.
-        if (candles.isEmpty() && BinanceSymbols.toBinance(symbol) != null) {
+        if (candles.isEmpty() && preferred == "TRADINGVIEW" && BinanceSymbols.toBinance(symbol) != null) {
             candles = withTimeoutOrNull(7_000L) { binanceProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
             if (candles.isNotEmpty()) sourceUsed = "Binance Spot OHLC candles"
         }
 
-        // Deriv WebSocket candles are a real OHLC fallback only when providers above return no bars.
-        if (candles.isEmpty() && derivMarketDataGateway != null) {
+        // Deriv MT5 candles are allowed only after explicit authenticated-source selection. They
+        // must never silently replace TradingView/OANDA/Binance data or become the default feed.
+        if (candles.isEmpty() && isExplicitDerivMt5Source(preferred) && derivMarketDataGateway != null) {
             derivSymbol = withTimeoutOrNull(5_000L) { resolveDerivSymbol(symbol) }
             if (derivSymbol != null) {
                 derivFetchAttempted = true
@@ -655,10 +604,10 @@ class MarketDataRepositoryImpl(
                 derivMarketDataGateway?.getLastCandleError(derivSymbol)
             } else null
             val errorMsg = when {
-                !providerError.isNullOrBlank() -> "Deriv feed: " + providerError
+                !providerError.isNullOrBlank() -> "Deriv MT5 feed: " + providerError
                 derivSymbol == null && BinanceSymbols.toBinance(symbol) == null && secrets.getOandaApiKey().isBlank() ->
-                    "No configured keyless candle feed supports " + symbol +
-                        ". Select a supported public Deriv market or a Binance-listed crypto pair."
+                    "No validated OHLC source supports " + symbol +
+                        ". Connect an authenticated MT5 account or configure a supported public feed."
                 else -> "No valid OHLC candles received for " + symbol + " " + timeframe +
                     ". Check network access and the upstream feed response."
             }
