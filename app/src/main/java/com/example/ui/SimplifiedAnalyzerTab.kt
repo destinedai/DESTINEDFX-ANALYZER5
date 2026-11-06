@@ -138,7 +138,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             ReadinessCard(readiness, marketDataStatus, quoteDiagnostics[symbol])
         }
         item {
-            SelectionBar(viewModel, symbol, timeframe)
+            SelectionBar(viewModel, symbol, timeframe, strategyId)
         }
         item {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = DarkSurface), border = BorderStroke(1.dp, stateColor.copy(alpha = 0.55f))) {
@@ -222,7 +222,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
 }
 
 @Composable
-private fun SelectionBar(viewModel: DestinedFXViewModel, symbol: String, timeframe: String) {
+private fun SelectionBar(viewModel: DestinedFXViewModel, symbol: String, timeframe: String, strategyId: String) {
     val symbols = listOf("EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "BTC/USD", "ETH/USD", "NAS100", "USOIL")
     val timeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, CardBorder)) {

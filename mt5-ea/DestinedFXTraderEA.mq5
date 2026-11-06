@@ -22,7 +22,6 @@ input int InpScalingMinClosedTrades=20;
 input int InpPollSeconds=5;
 input int InpScanSeconds=10;
 input int InpHeartbeatSeconds=5;
-input int InpQuoteFreshnessSeconds=15;
 input int InpNewsFreshnessSeconds=120;
 // Broker quote age is separate from calendar freshness. The default is intentionally conservative.
 input int InpQuoteFreshnessSeconds=15;
