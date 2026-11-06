@@ -55,6 +55,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.broker.BrokerType
+import com.example.data.deriv.DerivConnectionFailureMapper
+import com.example.data.deriv.DerivDemoVerificationResult
+import com.example.data.deriv.derivDemoVerificationLabel
+import com.example.data.deriv.redactedDerivAccountPrefix
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.service.DerivDemoBotService
 import com.example.security.AppSecurityGuard
@@ -70,6 +74,7 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmber
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -189,6 +194,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var derivAppId by remember { mutableStateOf("") }
     var derivMode by remember { mutableStateOf("demo") }
     var selectedDerivAccountId by remember { mutableStateOf("") }
+    var derivDemoVerification by remember { mutableStateOf<DerivDemoVerificationResult?>(null) }
     var showDerivRealArmDialog by remember { mutableStateOf(false) }
     var savePassword by remember { mutableStateOf(false) }
     var consent by remember { mutableStateOf(false) }
@@ -566,6 +572,49 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     LoginField("Deriv ${derivMode.uppercase()} API token", derivToken, { derivToken = it }, KeyboardType.Password, true)
                     LoginField("Registered numeric App ID", derivAppId, { derivAppId = it.filter(Char::isDigit) }, KeyboardType.Number)
                     Text("PATs are encrypted and stored separately by account mode. REAL selection alone does not authorize trading; no REAL session restarts automatically after process death.", color = WarningAmber, fontSize = 10.sp)
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                derivDemoVerification = null
+                                message = null
+                                try {
+                                    require(derivMode == "demo") { "Verify Deriv DEMO is available only while DEMO mode is selected. LIVE remains blocked." }
+                                    require(derivToken.isNotBlank() && derivAppId.isNotBlank()) { "Enter a Deriv DEMO PAT and registered numeric App ID." }
+                                    require(secrets.saveDerivApiToken(derivToken, "demo")) { "Deriv DEMO PAT could not be saved in encrypted storage." }
+                                    require(secrets.saveDerivAppId(derivAppId)) { "Registered Deriv App ID could not be saved." }
+                                    val account = viewModel.app.derivBrokerGateway.connectAndAuthorize(derivToken, selectedDerivAccountId.takeIf { it.isNotBlank() }).getOrThrow()
+                                    val ticker = withTimeout(10_000L) { viewModel.app.marketDataRepository.refreshSymbol("R_100") }
+                                    val metrics = viewModel.app.derivBrokerGateway.accountMetrics.value
+                                    val balanceReceived = metrics?.currency.equals(account.currency, ignoreCase = true) && metrics?.balance?.isFinite() == true && System.currentTimeMillis() - viewModel.app.derivBrokerGateway.accountMetricsUpdatedAtMs.value in 0..8_000L
+                                    val portfolio = viewModel.app.derivBrokerGateway.portfolioSnapshot.value
+                                    val portfolioReceived = portfolio?.successful == true && portfolio.accountId == account.loginId && portfolio.accountMode.equals("DEMO", true) && portfolio.currency.equals(account.currency, true) && System.currentTimeMillis() - portfolio.retrievedAtMs in 0..8_000L
+                                    val tickReceived = ticker?.isLive == true && ticker.source == "Deriv WebSocket"
+                                    val failure = if (balanceReceived && portfolioReceived && tickReceived) null else "Fresh DEMO evidence was incomplete. Balance, portfolio, and a Deriv public tick are all required."
+                                    derivDemoVerification = DerivDemoVerificationResult(redactedDerivAccountPrefix(account.loginId), "DEMO", account.currency, balanceReceived, portfolioReceived, tickReceived, System.currentTimeMillis(), failure)
+                                    message = failure ?: "Deriv DEMO verification passed. Read-only evidence only; no order was sent."
+                                } catch (e: Exception) {
+                                    val mapped = DerivConnectionFailureMapper.from(e)
+                                    derivDemoVerification = DerivDemoVerificationResult("unverified", "DEMO", "", false, false, false, System.currentTimeMillis(), mapped.message)
+                                    message = "${mapped.message} ${mapped.recovery}"
+                                } finally { busy = false }
+                            }
+                        },
+                        enabled = !busy && derivMode == "demo",
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
+                    ) { Text("VERIFY DERIV DEMO · READ ONLY", fontWeight = FontWeight.Black) }
+                    derivDemoVerification?.let { verification ->
+                        Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, if (verification.state.name == "PASS") ProfitGreen else WarningAmber)) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(derivDemoVerificationLabel(verification), color = if (verification.state.name == "PASS") ProfitGreen else WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                Text("Account: ${verification.accountPrefix} · ${verification.accountType} · Currency: ${verification.currency.ifBlank { "unverified" }}", color = TextPrimary, fontSize = 10.sp)
+                                Text("Balance received: ${if (verification.balanceReceived) "YES" else "NO"} · Portfolio received: ${if (verification.portfolioReceived) "YES" else "NO"} · Public tick received: ${if (verification.tickReceived) "YES" else "NO"}", color = TextSecondary, fontSize = 10.sp)
+                                Text("Checked: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss z", java.util.Locale.US).format(java.util.Date(verification.checkedAtMs))}", color = TextSecondary, fontSize = 9.sp)
+                                verification.failureMessage?.let { Text("Reason: $it", color = LossRed, fontSize = 9.sp) }
+                            }
+                        }
+                    }
                     val matchingDerivAccounts = derivAccounts.filter { it.accountType.equals(derivMode, true) }
                     if (matchingDerivAccounts.isNotEmpty()) {
                         Text("Select exact active ${derivMode.uppercase()} account", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
