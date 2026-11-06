@@ -21,7 +21,9 @@ class SignalEnginePythonParityTest {
 
     private fun pythonGoldenRows(strategy: String): List<Candle> {
         val rows = (0 until COUNT).map { index ->
-            val close = 100.0 + index * 0.2
+            // The final 35 rows match bridge/test_quantitative.py's golden fixture exactly.
+            // These 25 earlier trend candles only extend the history to SignalEngine's 60-bar minimum.
+            val close = 95.0 + index * 0.2
             Candle(
                 timeMs = NOW_MS - (COUNT - index) * MINUTE_MS,
                 open = close - 0.05,
