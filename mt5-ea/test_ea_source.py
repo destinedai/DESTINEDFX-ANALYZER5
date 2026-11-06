@@ -140,7 +140,7 @@ def test_quote_freshness_is_conservative_and_instrument_aware():
     assert "StringFind(u,\"XAU\")" in source
     assert "StringFind(u,\"BTC\")" in source
     assert "!QuoteFresh(sym,q)" in source
-    assert "InpQuoteFreshnessSeconds>60" in source
+    assert "InpQuoteFreshnessSeconds>120" in source
 
 
 def test_news_block_is_checked_before_signal_is_consumed():
@@ -359,8 +359,8 @@ def test_journal_failure_contracts_fail_closed_before_ack_or_submission():
 def test_real_terminal_fixes_are_fail_closed_and_telemetry_is_authoritative():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     assert "input int InpQuoteFreshnessSeconds=15;" in source
-    assert "TimeCurrent()-q.time>InpQuoteFreshnessSeconds" in source
-    assert "TimeCurrent()-tq.time>InpQuoteFreshnessSeconds" in source
+    assert "QuoteFresh(sym,q)" in source
+    assert "QuoteFresh(syms[si],tq)" in source
     assert "InpQuoteFreshnessSeconds<1||InpQuoteFreshnessSeconds>120" in source
     place = source[source.index("bool Place("):source.index("\nvoid SetWait", source.index("bool Place("))]
     assert place.index("if(!NewsClear(sym))") < place.index("if(!Remember(key))")

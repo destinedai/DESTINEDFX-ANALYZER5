@@ -74,6 +74,46 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
+sealed interface BotUiState {
+    val label: String
+    data object NOT_CONFIGURED : BotUiState { override val label = "NOT CONFIGURED" }
+    data object CONNECTING : BotUiState { override val label = "CONNECTING" }
+    data object PAIRING_REQUIRED : BotUiState { override val label = "PAIRING REQUIRED" }
+    data object CONNECTED : BotUiState { override val label = "CONNECTED" }
+    data object TERMINAL_OFFLINE : BotUiState { override val label = "TERMINAL OFFLINE" }
+    data object EA_OFFLINE : BotUiState { override val label = "EA OFFLINE" }
+    data object READY : BotUiState { override val label = "READY" }
+    data object RUNNING : BotUiState { override val label = "RUNNING" }
+    data object PAUSED : BotUiState { override val label = "PAUSED" }
+    data object STOPPED : BotUiState { override val label = "STOPPED" }
+    data object ERROR : BotUiState { override val label = "ERROR" }
+    data object BLOCKED : BotUiState { override val label = "BLOCKED" }
+}
+
+fun deriveBotUiState(
+    busy: Boolean,
+    connected: Boolean,
+    pairingRequired: Boolean,
+    terminalOnline: Boolean?,
+    heartbeatFresh: Boolean?,
+    terminalState: String?,
+    blocked: Boolean,
+    error: Boolean = false,
+): BotUiState = when {
+    blocked -> BotUiState.BLOCKED
+    error -> BotUiState.ERROR
+    busy && !connected -> BotUiState.CONNECTING
+    pairingRequired -> BotUiState.PAIRING_REQUIRED
+    terminalOnline == false -> BotUiState.TERMINAL_OFFLINE
+    heartbeatFresh == false -> BotUiState.EA_OFFLINE
+    terminalState == "PAUSED" -> BotUiState.PAUSED
+    terminalState == "STOPPED" -> BotUiState.STOPPED
+    terminalState == "RUNNING" -> BotUiState.RUNNING
+    connected && terminalState == "READY" -> BotUiState.READY
+    connected -> BotUiState.CONNECTED
+    else -> BotUiState.NOT_CONFIGURED
+}
+
 @Composable
 fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val context = LocalContext.current
@@ -201,17 +241,16 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         BrokerType.DERIV -> botActive || DerivDemoBotService.state.value == "RUNNING"
         else -> botActive
     }
-    val botUiState = when {
-        busy && !connected -> "CONNECTING"
-        broker == BrokerType.MT5 && mt5Snapshot?.heartbeatFresh == false -> "EA OFFLINE"
-        broker == BrokerType.MT5 && mt5Snapshot?.terminalOnline == false -> "TERMINAL OFFLINE"
-        !connected -> if (broker == BrokerType.MT5 && !bridge?.hasPairing().orFalse()) "PAIRING REQUIRED" else "NOT CONFIGURED"
-        mt5Snapshot?.state == "PAUSED" -> "PAUSED"
-        mt5Snapshot?.state == "STOPPED" -> "STOPPED"
-        running -> "RUNNING"
-        connected -> "READY"
-        else -> "ERROR"
-    }
+    val botUiState = deriveBotUiState(
+        busy = busy,
+        connected = connected,
+        pairingRequired = broker == BrokerType.MT5 && !bridge?.hasPairing().orFalse(),
+        terminalOnline = if (broker == BrokerType.MT5) mt5Snapshot?.terminalOnline else null,
+        heartbeatFresh = if (broker == BrokerType.MT5) mt5Snapshot?.heartbeatFresh else null,
+        terminalState = if (broker == BrokerType.MT5) mt5Snapshot?.state else if (running) "RUNNING" else null,
+        blocked = broker == BrokerType.MT5 && mt5Mode == "LIVE" && mt5Snapshot?.liveAuthorized != true,
+        error = message?.contains("failed", ignoreCase = true) == true,
+    )
 
     Column(modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("DESTINEDFX BOT", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
@@ -219,7 +258,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CardBorder)) {
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("BOT STATE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                Text(botUiState, color = if (botUiState in setOf("READY", "RUNNING", "CONNECTED")) ProfitGreen else WarningAmber, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                Text(botUiState.label, color = if (botUiState in setOf(BotUiState.READY, BotUiState.RUNNING, BotUiState.CONNECTED)) ProfitGreen else WarningAmber, fontSize = 12.sp, fontWeight = FontWeight.Black)
             }
         }
 
