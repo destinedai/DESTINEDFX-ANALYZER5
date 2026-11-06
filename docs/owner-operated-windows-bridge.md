@@ -40,7 +40,7 @@ The scheduled task runs at the owner's Windows logon, not as `SYSTEM`, because t
 
 Before sending any MT5 credentials, require all of the following:
 
-1. The installer's Windows Python probe reaches the exact private HTTPS origin and returns HTTP 200 with `status=ready`, `database=ok`, and `managed_execution=configured`.
+1. During installation, the Windows Python probe reaches the exact private HTTPS origin and accepts either HTTP 200 with `status=ready`, `database=ok`, and `managed_execution=configured`, or HTTP 503 with `NO_VERIFIED_TERMINAL_PAIRING`. The latter is the expected safe state before a real terminal is paired. Final acceptance requires HTTP 200 plus `verified_terminal_pairing=healthy` after the fresh authenticated EA heartbeat.
 2. `tailscale serve status` shows HTTPS on the expected `*.ts.net` host proxying to `http://127.0.0.1:8000`; it must not show a Funnel/public endpoint.
 3. On Windows, check `Get-NetTCPConnection -LocalPort 8000 -State Listen`. The local address must be `127.0.0.1`, never `0.0.0.0` or a LAN/Tailscale interface. Do not add a Windows Firewall inbound allow rule for port 8000.
 4. On the Android phone, connect the Tailscale app to the same authorized tailnet and open `https://<windows-device>.<tailnet>.ts.net/health/ready`. A failed TLS, DNS, network, or health check means no broker credentials are submitted.
@@ -68,3 +68,22 @@ This sandbox did not have the owner's Windows PC, Tailscale tailnet, MT5 termina
 [2]: https://tailscale.com/docs/how-to/set-up-https-certificates "Tailscale HTTPS certificates"
 [3]: https://tailscale.com/pricing "Tailscale pricing and plan eligibility"
 [4]: https://tailscale.com/docs/reference/tailscale-cli/serve "Tailscale Serve CLI reference"
+
+## Read-only MT5 connection doctor
+
+After the installer and terminal setup, run the doctor from the worker kit; it never places orders, changes terminal settings, or prints passwords:
+
+```powershell
+$env:DESTINEDFX_WORKER_TOKEN = '<worker token from the owner secret store>'
+.\managed-worker\windows\doctor.ps1 -Config 'C:\ProgramData\DestinedFX\worker.toml' -Broker FBS -PythonCheck -Login '<login>' -Server '<exact broker server>'
+```
+
+Use `-Broker FBS`, `-Broker EXNESS`, `-Broker HFM`, or `-Broker DERIV` for the corresponding isolated terminal mapping. `-PythonCheck` is optional and read-only: it calls MetaTrader 5 `initialize`, reads `account_info`/`terminal_info`, and shuts down without submitting an order. The password is requested with hidden console input only when the wrapper is given the login and server; it is never written to output or configuration.
+
+A `READY` result requires the terminal executable and MetaEditor, the EA source, a worker-owned pairing marker, the exact WebRequest allowlist declaration, a reachable bridge, and a current authenticated worker/EA state. `/health/ready` intentionally remains `503 NO_VERIFIED_TERMINAL_PAIRING` after installation until a real terminal has claimed the pairing and sent a fresh identity-matched heartbeat. HTTP reachability, a running process, compilation, or a queued job alone is not readiness evidence.
+
+The exact WebRequest origin still has to be added manually in every isolated terminal under **Tools → Options → Expert Advisors → Allow WebRequest for listed URL**. The installer cannot safely edit this MetaTrader security setting. Begin with DEMO, then use the acceptance checklist before any order authorization.
+
+## Cost and service boundary
+
+This implementation uses the owner's existing Windows computer and tailnet. It does not create a VPS, paid Tailscale plan, broker account, or subscription. A PC that sleeps or loses power is unavailable; a zero-cost always-on, PC-off execution service is not claimed. Tailscale plan eligibility and commercial-use terms must be checked by the owner. If an always-on alternative is later selected, obtain explicit approval for the provider, Windows licensing, storage/backups, and recurring monthly cost before deployment.

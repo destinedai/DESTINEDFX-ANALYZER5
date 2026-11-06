@@ -598,6 +598,37 @@ def terminal_identity_matches(p, account_mode, beat):
 def execution_state_eligible(beat):
     return bool(beat and beat.get('state') in ('READY','RUNNING','PAUSED','STOPPED'))
 
+def verified_terminal_pairing_exists():
+    """Require a real fresh EA heartbeat and a worker-owned READY job."""
+    with tx() as c:
+        rows=c.execute('''SELECT p.*,m.account_mode,m.broker_brand,m.server_enc,m.access_type,j.status AS job_status
+                          FROM pairings p
+                          JOIN managed_accounts m ON m.pairing_id=p.id
+                          JOIN worker_jobs j ON j.pairing_id=p.id
+                          WHERE p.consumed=1 AND m.revoked=0 AND m.account_mode IN ('DEMO','LIVE')
+                            AND j.status='READY'
+                          ORDER BY j.created DESC''').fetchall()
+    for row in rows:
+        beat=fresh_heartbeat(row)
+        if not beat or not beat.get('terminal_connected') or not execution_state_eligible(beat):
+            continue
+        if row['access_type']=='MASTER' and not beat.get('trade_allowed'):
+            continue
+        if not terminal_identity_matches(row,row['account_mode'],beat):
+            continue
+        try:
+            fernet,_=managed_config()
+            expected_server=fernet.decrypt(row['server_enc']).decode()
+        except Exception:
+            continue
+        account=beat.get('account') or {}
+        if not broker_server_matches(row['broker_brand'],expected_server,account.get('server')):
+            continue
+        if not broker_company_matches(row['broker_brand'],account.get('company')):
+            continue
+        return True
+    return False
+
 UINT64_MAX=18446744073709551615
 DESTRUCTIVE_ACTIONS={'CANCEL_PENDING_SELECTED','CANCEL_EA_PENDING','CLOSE_POSITION_SELECTED','CLOSE_ALL'}
 
@@ -798,7 +829,9 @@ def readiness():
         raise
     except Exception:
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
-    return {'status':'ready','database':'ok','managed_execution':'configured'}
+    if not verified_terminal_pairing_exists():
+        raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
+    return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy'}
 @app.post('/v1/pairings',status_code=201)
 def create_pair(request:Request):
     require_durable_execution()
