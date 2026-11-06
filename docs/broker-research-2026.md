@@ -160,3 +160,23 @@ For OANDA v20, the official v20 documentation excludes OANDA Global Markets and 
 ## Source and retrieval note
 
 All inline citations point to official/vendor sources included in the supplied research. Retrieval date is **2026-11-06** for the findings cited throughout, unless otherwise stated in the source descriptions. A source link is evidence for the specific claim attached to it, not an assurance of future behavior or availability. No additional research was performed for this synthesis; supplied failures list was empty, and unresolved gaps have been preserved rather than filled by inference.
+
+## Login-hardening addendum — 2026-11-06
+
+The official Deriv authentication page explicitly presents two choices: OAuth 2.0 and PAT. It describes PAT as manual token entry and identifies desktop/native contexts as an appropriate PAT use case, while OAuth requires a redirect and authorization-code exchange. For this native Android phase, PAT remains the primary implemented flow; OAuth/PKCE remains a future option only if an app-link redirect, registered redirect URI, token-expiry handling, and an approved scope design are added and tested. PAT REST requests must include `Deriv-App-ID`; OAuth bearer requests do not. [1]
+
+The Options WebSocket documentation confirms that `POST /trading/v1/options/accounts/{accountId}/otp` returns a ready-to-use authenticated URL. The OTP is single-use and valid for 120 seconds, and the endpoint requires the `trade` scope. A reconnect must therefore obtain a fresh OTP rather than reuse a previous URL. [2]
+
+The published limits are now recorded as implementation constraints: REST is limited to 300 requests per IP per minute, 1,000 per IP per ten minutes, and 80 per logged-in user per minute. WebSocket budgets are grouped by operation, including 30 portfolio/profit-table requests per minute and 100 balance/statement requests per minute. The client must reuse a connection, avoid polling bursts, and back off after rejection. [3]
+
+Android’s current security guidance recommends Android Keystore-backed key storage and states that API keys must not be committed to source control. Android’s connectivity guidance recommends `ConnectivityManager.NetworkCallback` for changes in default-network availability; this is only a reconnection hint and does not prove that Deriv is healthy. Doze suspends network access and defers background work, and foreground services are intended only for user-visible work with a notification. The app therefore treats a dropped socket as not-ready and requires a fresh broker synchronization before READY; it does not claim an always-on mobile session. [4] [5] [6] [7]
+
+The implementation addendum adds deterministic, redacted failure mapping for invalid credentials/App ID, missing DEMO account, OTP expiry, rate limiting, network errors, and unavailable secure storage. It also adds `scripts/deriv_demo_smoke.py`, an owner-run read-only harness. It requests account list, account OTP, balance, portfolio, and one public tick only; it never invokes proposal, buy, sell, or order endpoints. No live broker session was run in this environment, and no credential was supplied.
+
+[1]: https://developers.deriv.com/docs/intro/authentication/ "Deriv Authentication"
+[2]: https://developers.deriv.com/docs/options/websocket/ "Deriv Options WebSockets"
+[3]: https://developers.deriv.com/docs/limits/ "Deriv API Limits"
+[4]: https://developer.android.com/topic/security/data "Android Data and File Storage"
+[5]: https://developer.android.com/develop/connectivity/network-ops/reading-network-state "Android Reading Network State"
+[6]: https://developer.android.com/training/monitoring-device-state/doze-standby "Android Doze and App Standby"
+[7]: https://developer.android.com/develop/background-work/services/fgs "Android Foreground Services Overview"

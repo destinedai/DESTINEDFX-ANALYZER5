@@ -368,10 +368,10 @@ class DerivBrokerGateway(
             _accountMetrics.value = null
             _portfolioSnapshot.value = null
             _connectionState.value = DerivConnectionState.ERROR
-            val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
-            lastConnectionError = detail
-            Log.e(TAG, "Deriv direct-API connection failed: $detail")
-            Result.failure(Exception("Deriv connection failed: $detail"))
+            val mapped = DerivConnectionFailureMapper.from(error)
+            lastConnectionError = mapped.code.name
+            Log.e(TAG, "Deriv direct-API connection failed: ${mapped.code.name}")
+            Result.failure(Exception("${mapped.message} ${mapped.recovery}"))
         }
     }
 
