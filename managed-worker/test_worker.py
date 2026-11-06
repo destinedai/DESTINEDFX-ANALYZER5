@@ -39,6 +39,39 @@ class WorkerTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_request_json_adds_optional_cloudflare_headers_without_logging_them(self):
+        import io
+        import logging
+        import contextlib
+        captured = {}
+        logs = io.StringIO()
+        handler = logging.StreamHandler(logs)
+        worker.LOG.addHandler(handler)
+        try:
+            def open_request(req, timeout):
+                captured.update(req.header_items())
+                return io.BytesIO(b"{}")
+            with patch.dict(os.environ, {"CF_ACCESS_CLIENT_ID": "worker-id-secret-test", "CF_ACCESS_CLIENT_SECRET": "worker-secret-test"}), \
+                 patch.object(worker.urllib.request, "urlopen", side_effect=open_request):
+                self.assertEqual(worker.request_json("https://bridge.invalid/health/ready", "worker-token", "GET"), {})
+        finally:
+            worker.LOG.removeHandler(handler)
+        headers = {key.lower(): value for key, value in captured.items()}
+        self.assertEqual(headers["cf-access-client-id"], "worker-id-secret-test")
+        self.assertEqual(headers["cf-access-client-secret"], "worker-secret-test")
+        self.assertNotIn("worker-secret-test", logs.getvalue())
+
+    def test_request_json_omits_partial_cloudflare_credentials(self):
+        import io
+        captured = {}
+        def open_request(req, timeout):
+            captured.update(req.header_items())
+            return io.BytesIO(b"{}")
+        with patch.dict(os.environ, {"CF_ACCESS_CLIENT_ID": "only-id", "CF_ACCESS_CLIENT_SECRET": ""}), \
+             patch.object(worker.urllib.request, "urlopen", side_effect=open_request):
+            worker.request_json("https://bridge.invalid/health/ready", "worker-token", "GET")
+        self.assertFalse(any(key.lower().startswith("cf-access-client-") for key, _ in captured.items()))
+
     def test_supported_broker_brands_are_normalized_without_legacy_broker_property(self):
         for brand in ("FBS", "EXNESS", "HFM", "DERIV"):
             for mode in ("DEMO", "LIVE"):

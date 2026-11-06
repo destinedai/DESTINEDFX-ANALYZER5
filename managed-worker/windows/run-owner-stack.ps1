@@ -20,6 +20,8 @@ $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try {$json=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr);$secrets=$json|ConvertFrom-Json}
 finally {[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr);$secure.Dispose();$json=$null}
 if(-not $secrets.fernet_key -or -not $secrets.worker_token){throw 'DPAPI owner secrets are incomplete.'}
+$env:CF_ACCESS_CLIENT_ID=[string]$secrets.cf_access_client_id
+$env:CF_ACCESS_CLIENT_SECRET=[string]$secrets.cf_access_client_secret
 $workerId=[IO.File]::ReadAllText($workerIdFile).Trim()
 if($workerId -notmatch '^[A-Za-z0-9_-]{1,128}$'){throw 'Stable worker ID is invalid.'}
 $env:BRIDGE_DB_PATH=Join-Path (Join-Path $base 'data') 'bridge.sqlite3'
@@ -54,6 +56,6 @@ try {
     }
 } finally {
     foreach($proc in @($worker,$bridge)){if($proc -and -not $proc.HasExited){Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue}}
-    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','CREDENTIALS_FERNET_KEY','WORKER_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
+    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','CREDENTIALS_FERNET_KEY','WORKER_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
     $env:CREDENTIALS_FERNET_KEY=$null;$env:WORKER_TOKEN=$null;$env:DESTINEDFX_WORKER_TOKEN=$null
 }

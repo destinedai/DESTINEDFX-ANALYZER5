@@ -419,6 +419,11 @@ def validate_job(job: Any) -> dict[str, Any]:
 
 def request_json(url: str, token: str, method: str, payload: dict | None = None, timeout: int = 20) -> dict:
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    access_id = os.environ.get("CF_ACCESS_CLIENT_ID", "").strip()
+    access_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET", "").strip()
+    if access_id and access_secret:
+        headers["Cf-Access-Client-Id"] = access_id
+        headers["Cf-Access-Client-Secret"] = access_secret
     data = None
     if payload is not None:
         headers["Content-Type"] = "application/json"

@@ -251,9 +251,13 @@ def test_cloudflare_access_origin_validation_fails_closed(monkeypatch):
     assert client.post('/v1/pairings').status_code==401
     assert client.post('/v1/pairings',headers={'Cf-Access-Jwt-Assertion':'invalid'}).status_code==401
     assert client.post('/v1/pairings',headers={'Cf-Access-Jwt-Assertion':'valid-assertion'}).status_code==201
+    assert client.get('/health/live').status_code == 200
     monkeypatch.delenv('CF_ACCESS_AUD')
     misconfigured=client.post('/v1/pairings')
     assert misconfigured.status_code==503 and misconfigured.json()['detail']['code']=='ACCESS_VALIDATION_MISCONFIGURED'
+    monkeypatch.delenv('CF_ACCESS_TEAM_DOMAIN')
+    assert client.get('/health').status_code == 200
+    assert client.post('/v1/pairings').status_code == 201
 
 def test_cloudflare_access_assertion_verifies_signature_issuer_audience_and_expiry(monkeypatch):
     from types import SimpleNamespace

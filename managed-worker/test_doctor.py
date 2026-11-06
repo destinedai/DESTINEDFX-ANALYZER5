@@ -108,3 +108,38 @@ def test_main_never_prints_worker_or_mt5_password(monkeypatch, tmp_path, capsys)
     assert "password" not in output.lower()
     payload = json.loads(output)
     assert payload["brokers"][0]["doctor_status"] == "BLOCKED"
+
+
+def test_safe_request_attaches_optional_cloudflare_headers(monkeypatch, caplog):
+    import io
+    import urllib.request
+    captured = {}
+    class Response(io.BytesIO):
+        status = 200
+    def open_request(req, timeout):
+        captured.update(req.header_items())
+        return Response(b"{}")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "doctor-id-test")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "doctor-secret-test")
+    monkeypatch.setattr(urllib.request, "urlopen", open_request)
+    assert doctor.safe_request("https://bridge.invalid/health/ready")[0] == 200
+    headers = {key.lower(): value for key, value in captured.items()}
+    assert headers["cf-access-client-id"] == "doctor-id-test"
+    assert headers["cf-access-client-secret"] == "doctor-secret-test"
+    assert "doctor-secret-test" not in caplog.text
+
+
+def test_safe_request_omits_partial_cloudflare_credentials(monkeypatch):
+    import io
+    import urllib.request
+    captured = {}
+    class Response(io.BytesIO):
+        status = 200
+    def open_request(req, timeout):
+        captured.update(req.header_items())
+        return Response(b"{}")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "doctor-id-test")
+    monkeypatch.delenv("CF_ACCESS_CLIENT_SECRET", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", open_request)
+    doctor.safe_request("https://bridge.invalid/health/ready")
+    assert not any(key.lower().startswith("cf-access-client-") for key in captured)

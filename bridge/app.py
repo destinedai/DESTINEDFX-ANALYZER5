@@ -160,7 +160,7 @@ async def limits(request:Request, call_next):
         access_settings=cloudflare_access_settings()
     except ValueError:
         return JSONResponse({'detail':{'code':'ACCESS_VALIDATION_MISCONFIGURED'}},503)
-    if access_settings is not None:
+    if access_settings is not None and request.url.path != '/health/live':
         assertion=request.headers.get('cf-access-jwt-assertion','').strip()
         if not assertion: return JSONResponse({'detail':{'code':'ACCESS_ASSERTION_REQUIRED'}},401)
         try: valid_access=validate_cloudflare_assertion(assertion)
@@ -867,6 +867,8 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
                 job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
     return {'job_id':job_id,'kind':job['kind'],'status':job['status'],'error_code':job['error_code'],'error_message':job['error_message']}
 
+@app.get('/health/live')
+def live_health(): return {'status':'ok'}
 @app.get('/health')
 def health(): return {'status':'ok'}
 @app.get('/health/ready')

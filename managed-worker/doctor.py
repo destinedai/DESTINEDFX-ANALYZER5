@@ -27,6 +27,11 @@ def safe_request(url: str, token: str | None = None, timeout: int = 8) -> tuple[
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    access_id = os.environ.get("CF_ACCESS_CLIENT_ID", "").strip()
+    access_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET", "").strip()
+    if access_id and access_secret:
+        headers["Cf-Access-Client-Id"] = access_id
+        headers["Cf-Access-Client-Secret"] = access_secret
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
