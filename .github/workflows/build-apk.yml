@@ -19,6 +19,17 @@ jobs:
         run: python -m pip install -r bridge/requirements.txt
       - name: Run bridge tests
         run: python -m pytest -q bridge
+      - name: Build and smoke-test the owner Docker bridge image
+        run: |
+          env BRIDGE_BASE_URL=https://bridge.ci.example.ts.net \
+            CREDENTIALS_FERNET_KEY=ci-placeholder WORKER_TOKEN=ci-placeholder \
+            TAILSCALE_IPV4=127.0.0.1 BRIDGE_HOST=bridge.ci.example.ts.net \
+            docker compose -f bridge/compose.owner.yaml config --quiet
+          docker build --file bridge/Dockerfile --tag destinedfx-bridge:ci bridge
+          docker run --rm --entrypoint python destinedfx-bridge:ci -c "import app, quantitative; print('Bridge image imports passed')"
+          docker run --rm -e BRIDGE_HOST=bridge.ci.example.ts.net \
+            -v "$GITHUB_WORKSPACE/bridge/Caddyfile.owner:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
       - name: Run managed-worker tests
         run: |
           python -m pytest -q managed-worker --junitxml=/tmp/managed-worker-junit.xml

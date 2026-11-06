@@ -1,5 +1,7 @@
 # Owner-operated Windows bridge with private Tailscale Serve
 
+> **Historical alternative, not the Phase 1 selected recipe:** this page describes the earlier native-Python bridge + private Tailscale Serve setup. The approved Phase 1 choice is the Docker bridge behind the owner's TLS reverse proxy; follow [`owner-operated-docker-bridge.md`](owner-operated-docker-bridge.md) instead. Do not combine the two launch/supervision recipes. This older recipe remains for comparison only and has not been deployed.
+
 This is a prepared first-install path, not a deployed service. It binds the bridge to Windows loopback only, stores the Fernet key and worker token in a DPAPI-protected file for the installing Windows user, and stores SQLite outside temporary directories. The scripts have not been executed on the owner's Windows PC; do not enter broker credentials until that PC passes the readiness checks below.
 
 ## Cost and privacy conditions
