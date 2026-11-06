@@ -46,7 +46,8 @@ jobs:
       - name: Install Gitleaks
         run: go install github.com/gitleaks/gitleaks/v8@v8.24.3
       - name: Scan checked-out tree with redacted findings
-        run: "$(go env GOPATH)/bin/gitleaks" dir --redact=100 --exit-code 1 .
+        run: |
+          "$(go env GOPATH)/bin/gitleaks" dir --redact=100 --exit-code 1 .
 
   mt5-ea-windows-compile:
     name: Compile MT5 EA with genuine MetaEditor
