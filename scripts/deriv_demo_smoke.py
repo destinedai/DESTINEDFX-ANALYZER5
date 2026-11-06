@@ -4,8 +4,8 @@
 Credentials are entered locally through hidden prompts or environment variables.
 The script never prints tokens, passwords, authorization headers, OTPs, or raw
 broker responses. It lists active accounts, requests a fresh account OTP,
-reads balance/portfolio, and requests one public tick. It never calls buy,
-sell, proposal, or any order endpoint.
+reads balance/portfolio, and requests one public tick. It never calls any order
+endpoint.
 
 Requires Python 3.10+ and the optional websocket-client package for the
 account-scoped balance/portfolio and public tick checks:
@@ -17,7 +17,6 @@ import argparse
 import getpass
 import json
 import os
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -26,11 +25,12 @@ import uuid
 
 BASE = "https://api.derivws.com"
 WS_BASE = "wss://api.derivws.com/trading/v1/options/ws/"
+PUBLIC_WS = "wss://api.derivws.com/trading/v1/options/ws/public"
 
 
 def redacted(value: str, keep: int = 4) -> str:
     value = str(value or "")
-    return value[:keep] + "…" if len(value) > keep else "[redacted]"
+    return value[:keep] + "..." if len(value) > keep else "[redacted]"
 
 
 def request_json(path: str, app_id: str, token: str, method: str = "GET") -> dict:
@@ -55,9 +55,10 @@ def request_json(path: str, app_id: str, token: str, method: str = "GET") -> dic
             code = errors[0].get("code", "") if errors else ""
         except Exception:
             code = ""
-        raise RuntimeError(f"Deriv REST rejected the request (HTTP {error.code}{', ' + code if code else ''}).") from None
+        suffix = f", {code}" if code else ""
+        raise RuntimeError(f"Deriv REST rejected the request (HTTP {error.code}{suffix}).") from None
     except (urllib.error.URLError, TimeoutError) as error:
-        raise RuntimeError(f"Deriv REST network request failed: {type(error).__name__}.") from error
+        raise RuntimeError(f"Deriv REST network request failed ({type(error).__name__}).") from error
     except (ValueError, UnicodeError):
         raise RuntimeError("Deriv returned a response that was not valid JSON.") from None
 
@@ -70,17 +71,45 @@ def open_authenticated_socket(url: str):
     return websocket.create_connection(url, timeout=15, enable_multithread=False)
 
 
-def recv_json(socket, timeout: float = 15.0) -> dict:
+def new_request_id() -> int:
+    """Return the integer req_id required by the Deriv JSON schema."""
+    return int(uuid.uuid4().int % 2_000_000_000)
+
+
+def validate_authenticated_ws_url(url: str, mode: str = "demo") -> bool:
+    parsed = urllib.parse.urlparse(str(url or "").strip())
+    expected_path = f"/trading/v1/options/ws/{mode}"
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    return (
+        parsed.scheme == "wss"
+        and parsed.netloc == "api.derivws.com"
+        and parsed.path == expected_path
+        and bool(query.get("otp", [""])[0])
+    )
+
+
+def recv_matching(socket, req_id: int, expected_msg_type: str, timeout: float = 15.0) -> dict:
+    """Ignore unrelated frames and return only the expected correlated response."""
+    deadline = time.monotonic() + timeout
     socket.settimeout(timeout)
-    try:
-        value = json.loads(socket.recv())
-    except Exception as error:
-        raise RuntimeError(f"Deriv WebSocket returned no usable response ({type(error).__name__}).") from error
-    if not isinstance(value, dict):
-        raise RuntimeError("Deriv WebSocket returned an unexpected response shape.")
-    if value.get("error") or value.get("errors"):
-        raise RuntimeError("Deriv WebSocket rejected a read-only request.")
-    return value
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"Deriv WebSocket timed out waiting for {expected_msg_type}.")
+        socket.settimeout(remaining)
+        try:
+            value = json.loads(socket.recv())
+        except Exception as error:
+            raise RuntimeError(f"Deriv WebSocket returned no usable {expected_msg_type} response ({type(error).__name__}).") from error
+        if not isinstance(value, dict):
+            continue
+        if value.get("req_id") != req_id:
+            continue
+        if value.get("error") or value.get("errors"):
+            raise RuntimeError(f"Deriv WebSocket rejected the {expected_msg_type} request.")
+        if value.get("msg_type") != expected_msg_type:
+            raise RuntimeError(f"Deriv WebSocket returned an unexpected response for {expected_msg_type}.")
+        return value
 
 
 def main() -> int:
@@ -125,26 +154,25 @@ def main() -> int:
         method="POST",
     )
     url = str((otp.get("data") or {}).get("url", "")).strip()
-    parsed = urllib.parse.urlparse(url)
-    if not (url.startswith(WS_BASE) and parsed.scheme == "wss" and parsed.netloc == "api.derivws.com" and parsed.query):
-        raise SystemExit("Deriv returned an invalid authenticated WebSocket endpoint; no connection was attempted.")
+    if not validate_authenticated_ws_url(url, "demo"):
+        raise SystemExit("Deriv returned an invalid DEMO authenticated WebSocket endpoint; no connection was attempted.")
 
     socket = open_authenticated_socket(url)
     try:
-        balance_id = str(uuid.uuid4().int % 2_000_000_000)
+        balance_id = new_request_id()
         socket.send(json.dumps({"balance": 1, "subscribe": 0, "req_id": balance_id}))
-        balance = recv_json(socket)
-        portfolio_id = str(uuid.uuid4().int % 2_000_000_000)
+        balance = recv_matching(socket, balance_id, "balance")
+        portfolio_id = new_request_id()
         socket.send(json.dumps({"portfolio": 1, "req_id": portfolio_id}))
-        portfolio = recv_json(socket)
+        portfolio = recv_matching(socket, portfolio_id, "portfolio")
     finally:
         socket.close()
 
-    public = open_authenticated_socket("wss://api.derivws.com/trading/v1/options/ws/public")
+    public = open_authenticated_socket(PUBLIC_WS)
     try:
-        tick_id = str(uuid.uuid4().int % 2_000_000_000)
+        tick_id = new_request_id()
         public.send(json.dumps({"ticks": args.symbol, "subscribe": 0, "req_id": tick_id}))
-        tick = recv_json(public)
+        tick = recv_matching(public, tick_id, "tick")
     finally:
         public.close()
 
