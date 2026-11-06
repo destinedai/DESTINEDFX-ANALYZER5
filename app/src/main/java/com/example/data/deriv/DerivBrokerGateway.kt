@@ -233,7 +233,7 @@ class DerivBrokerGateway(
                 throw IllegalStateException(
                     "No unique active ${requestedMode.uppercase()} Options account was selected for this token" +
                         (if (available.isEmpty()) "." else ". Available account types: " + available.joinToString() + ".") +
-                        " Check that the token has the required account-read and trading permissions."
+                        " Check that the PAT has the trade scope required by the Options account-list endpoint."
                 )
             }
 

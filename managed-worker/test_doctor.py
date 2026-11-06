@@ -91,6 +91,7 @@ def test_stale_or_wrong_identity_never_becomes_verified(monkeypatch, tmp_path, j
     assert result["doctor_status"] == "BLOCKED"
     assert result["webrequest_allowed"] != "YES_BY_FRESH_EA_HEARTBEAT"
     assert result["reported_identity"]["server"] == "FBS-Demo"
+    assert result["reported_identity"]["identity_evidence"] == "UNVERIFIED"
 
 
 def test_main_never_prints_worker_or_mt5_password(monkeypatch, tmp_path, capsys):

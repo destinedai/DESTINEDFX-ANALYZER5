@@ -57,8 +57,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.broker.BrokerType
 import com.example.data.deriv.DerivConnectionFailureMapper
 import com.example.data.deriv.DerivDemoVerificationResult
+import com.example.data.deriv.verifyFreshDerivPublicTick
 import com.example.data.deriv.derivDemoVerificationLabel
-import com.example.data.deriv.redactedDerivAccountPrefix
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.service.DerivDemoBotService
 import com.example.security.AppSecurityGuard
@@ -73,6 +73,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmber
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
@@ -571,7 +572,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     }
                     LoginField("Deriv ${derivMode.uppercase()} API token", derivToken, { derivToken = it }, KeyboardType.Password, true)
                     LoginField("Registered numeric App ID", derivAppId, { derivAppId = it.filter(Char::isDigit) }, KeyboardType.Number)
-                    Text("PATs are encrypted and stored separately by account mode. REAL selection alone does not authorize trading; no REAL session restarts automatically after process death.", color = WarningAmber, fontSize = 10.sp)
+                    Text("Options account listing and OTP require the PAT trade scope. This verifier does not trade, but a trade-scoped PAT is not inherently read-only; keep it private and enter it only here. Options and Deriv MT5 credentials/readiness are separate. PATs are encrypted and stored separately by account mode. REAL selection alone does not authorize trading; no REAL session restarts automatically after process death.", color = WarningAmber, fontSize = 10.sp)
                     Button(
                         onClick = {
                             scope.launch {
@@ -584,18 +585,37 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     require(secrets.saveDerivApiToken(derivToken, "demo")) { "Deriv DEMO PAT could not be saved in encrypted storage." }
                                     require(secrets.saveDerivAppId(derivAppId)) { "Registered Deriv App ID could not be saved." }
                                     val account = viewModel.app.derivBrokerGateway.connectAndAuthorize(derivToken, selectedDerivAccountId.takeIf { it.isNotBlank() }).getOrThrow()
-                                    val ticker = withTimeout(10_000L) { viewModel.app.marketDataRepository.refreshSymbol("R_100") }
+                                    val expectedAccountId = selectedDerivAccountId
                                     val metrics = viewModel.app.derivBrokerGateway.accountMetrics.value
-                                    val balanceReceived = metrics?.currency.equals(account.currency, ignoreCase = true) && metrics?.balance?.isFinite() == true && System.currentTimeMillis() - viewModel.app.derivBrokerGateway.accountMetricsUpdatedAtMs.value in 0..8_000L
+                                    val checkedBeforeTickMs = System.currentTimeMillis()
+                                    val balanceUpdatedAtMs = viewModel.app.derivBrokerGateway.accountMetricsUpdatedAtMs.value
+                                    val balanceAge = checkedBeforeTickMs - balanceUpdatedAtMs
+                                    val balanceValue = metrics?.balance ?: Double.NaN
+                                    val balanceReceived = expectedAccountId.isNotBlank() && account.loginId == expectedAccountId && account.loginId.isNotBlank() && account.accountType.equals("demo", true) && account.currency.isNotBlank() && metrics?.currency.equals(account.currency, ignoreCase = true) && balanceValue.isFinite() && balanceValue >= 0.0 && balanceAge in 0..8_000L
                                     val portfolio = viewModel.app.derivBrokerGateway.portfolioSnapshot.value
-                                    val portfolioReceived = portfolio?.successful == true && portfolio.accountId == account.loginId && portfolio.accountMode.equals("DEMO", true) && portfolio.currency.equals(account.currency, true) && System.currentTimeMillis() - portfolio.retrievedAtMs in 0..8_000L
-                                    val tickReceived = ticker?.isLive == true && ticker.source == "Deriv WebSocket"
-                                    val failure = if (balanceReceived && portfolioReceived && tickReceived) null else "Fresh DEMO evidence was incomplete. Balance, portfolio, and a Deriv public tick are all required."
-                                    derivDemoVerification = DerivDemoVerificationResult(redactedDerivAccountPrefix(account.loginId), "DEMO", account.currency, balanceReceived, portfolioReceived, tickReceived, System.currentTimeMillis(), failure)
+                                    val portfolioRetrievedAtMs = portfolio?.retrievedAtMs ?: 0L
+                                    val portfolioAge = checkedBeforeTickMs - portfolioRetrievedAtMs
+                                    val portfolioReceived = portfolio?.successful == true && portfolio.accountId == account.loginId && portfolio.accountId == expectedAccountId && portfolio.accountMode.equals("DEMO", true) && portfolio.currency.equals(account.currency, true) && portfolioAge in 0..8_000L
+                                    // This opens a new unauthenticated public socket; never reads market cache or changes chart source.
+                                    val tickEvidence = verifyFreshDerivPublicTick("R_100")
+                                    val checkedAt = System.currentTimeMillis()
+                                    val provisional = DerivDemoVerificationResult(
+                                        selectedAccountId = expectedAccountId, accountId = account.loginId,
+                                        accountType = account.accountType, currency = account.currency, balanceValue = balanceValue,
+                                        balanceReceived = balanceReceived, balanceAccountId = if (balanceReceived) account.loginId else "",
+                                        balanceCurrency = metrics?.currency.orEmpty(), balanceUpdatedAtMs = balanceUpdatedAtMs,
+                                        portfolioReceived = portfolioReceived, portfolioAccountId = portfolio?.accountId.orEmpty(),
+                                        portfolioMode = portfolio?.accountMode.orEmpty(), portfolioCurrency = portfolio?.currency.orEmpty(),
+                                        portfolioRetrievedAtMs = portfolioRetrievedAtMs, tickEvidence = tickEvidence,
+                                        checkedAtMs = checkedAt,
+                                    )
+                                    val failure = if (provisional.state == com.example.data.deriv.DerivDemoVerificationState.PASS) null else "Fresh DEMO evidence was incomplete or did not match the selected account."
+                                    derivDemoVerification = provisional.copy(failureMessage = failure)
                                     message = failure ?: "Deriv DEMO verification passed. Read-only evidence only; no order was sent."
                                 } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
                                     val mapped = DerivConnectionFailureMapper.from(e)
-                                    derivDemoVerification = DerivDemoVerificationResult("unverified", "DEMO", "", false, false, false, System.currentTimeMillis(), mapped.message)
+                                    derivDemoVerification = DerivDemoVerificationResult(selectedAccountId = selectedDerivAccountId, accountId = "", accountType = "DEMO", currency = "", balanceValue = Double.NaN, balanceReceived = false, balanceAccountId = "", balanceCurrency = "", balanceUpdatedAtMs = 0L, portfolioReceived = false, portfolioAccountId = "", portfolioMode = "", portfolioCurrency = "", portfolioRetrievedAtMs = 0L, tickEvidence = null, checkedAtMs = System.currentTimeMillis(), failureMessage = mapped.message)
                                     message = "${mapped.message} ${mapped.recovery}"
                                 } finally { busy = false }
                             }
@@ -610,6 +630,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 Text(derivDemoVerificationLabel(verification), color = if (verification.state.name == "PASS") ProfitGreen else WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Black)
                                 Text("Account: ${verification.accountPrefix} · ${verification.accountType} · Currency: ${verification.currency.ifBlank { "unverified" }}", color = TextPrimary, fontSize = 10.sp)
                                 Text("Balance received: ${if (verification.balanceReceived) "YES" else "NO"} · Portfolio received: ${if (verification.portfolioReceived) "YES" else "NO"} · Public tick received: ${if (verification.tickReceived) "YES" else "NO"}", color = TextSecondary, fontSize = 10.sp)
+                                Text("Selected/account ID match: ${verification.selectedAccountId.isNotBlank() && verification.selectedAccountId == verification.accountId} · Balance ID match: ${verification.balanceAccountId == verification.accountId} · Portfolio ID match: ${verification.portfolioAccountId == verification.accountId}", color = TextSecondary, fontSize = 9.sp)
+                                verification.tickEvidence?.let { tick -> Text("Tick ${tick.symbol} · quote ${tick.quote} · provider ${tick.providerTimestampMs} · received ${tick.receivedAtMs} · started ${tick.verificationStartedAtMs}", color = TextSecondary, fontSize = 9.sp) }
                                 Text("Checked: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss z", java.util.Locale.US).format(java.util.Date(verification.checkedAtMs))}", color = TextSecondary, fontSize = 9.sp)
                                 verification.failureMessage?.let { Text("Reason: $it", color = LossRed, fontSize = 9.sp) }
                             }

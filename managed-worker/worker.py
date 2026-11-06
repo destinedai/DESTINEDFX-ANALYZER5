@@ -6,6 +6,7 @@ arguments. Importing this module is safe on non-Windows hosts for unit testing.
 from __future__ import annotations
 
 import argparse
+import csv
 import ipaddress
 import math
 import json
@@ -233,6 +234,45 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
                 backend_status = None
         state = process_is_owned(pid, executable)
         if state == ProcessState.OWNED_RUNNING:
+            if record.get("restart_requires_reauthentication"):
+                acknowledged = bool(record.get("restart_auth_acknowledged"))
+                fresh_ready = backend_status == "READY" and acknowledged
+                started = float(record.get("last_restart", time.time()) or time.time())
+                if not fresh_ready and time.time() - started >= max(1, int(settings.get("auth_timeout_seconds", 300))):
+                    ended = terminate_owned_process(pid, executable)
+                    if ended == ProcessState.DEFINITELY_DEAD:
+                        remove_terminal_configs(terminal_home.parent)
+                        record["status"] = "FAILED"
+                        record["restart_requires_reauthentication"] = False
+                        update_marker(marker, record)
+                        if base and token and worker_id:
+                            try:
+                                post_state(base, token, record["job_id"], worker_id, "FAILED", "AUTH_TIMEOUT", "Terminal authentication timed out")
+                            except ProvisionError:
+                                pass
+                        results.append({"job_id": record["job_id"], "status": "FAILED"})
+                        continue
+                    record["status"] = "OPERATOR_REVIEW"
+                    update_marker(marker, record)
+                    results.append({"job_id": record["job_id"], "status": "OPERATOR_REVIEW", "process_state": ended.value})
+                    continue
+                if backend_status == "AUTHENTICATING":
+                    if not record.get("restart_auth_acknowledged"):
+                        record["restart_auth_acknowledged"] = True
+                    record["status"] = "AUTHENTICATING"
+                    update_marker(marker, record)
+                elif backend_status == "READY" and record.get("restart_auth_acknowledged"):
+                    remove_terminal_configs(terminal_home.parent)
+                    record["restart_requires_reauthentication"] = False
+                    record["status"] = "READY"
+                    update_marker(marker, record)
+                    results.append({"job_id": record["job_id"], "status": "READY"})
+                    continue
+                else:
+                    record["status"] = "AUTHENTICATING"
+                    update_marker(marker, record)
+                    results.append({"job_id": record["job_id"], "status": "AUTHENTICATING"})
+                    continue
             record["status"] = backend_status or "RUNNING"
             update_marker(marker, record)
             results.append({"job_id": record["job_id"], "status": record["status"]})
@@ -269,14 +309,13 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
                                     shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, close_fds=True)
         except (OSError, ProvisionError):
+            restart_ini.unlink(missing_ok=True)
             record["status"] = "RESTART_FAILED"
             update_marker(marker, record)
             results.append({"job_id": record["job_id"], "status": "RESTART_FAILED"})
             continue
-        finally:
-            restart_ini.unlink(missing_ok=True)
         record.update(pid=proc.pid, restart_count=retries + 1, status="AUTHENTICATING", last_restart=time.time(),
-                      restart_requires_reauthentication=True)
+                      restart_requires_reauthentication=True, restart_auth_acknowledged=False)
         try:
             update_marker(marker, record)
         except Exception:
@@ -457,6 +496,38 @@ def wait_for_terminal(base: str, token: str, job_id: str, worker_id: str, timeou
     return "TIMEOUT"
 
 
+def remove_terminal_configs(account_dir: Path) -> None:
+    """Remove credential-bearing startup INIs only after authenticated READY."""
+    for ini in account_dir.glob("startup-*.ini"):
+        ini.unlink(missing_ok=True)
+    for ini in account_dir.glob("restart-*.ini"):
+        ini.unlink(missing_ok=True)
+
+
+def stop_terminal_for_timeout(settings: dict, job_id: str) -> str:
+    """On auth timeout, remove account data only after verified termination."""
+    root = Path(settings["data_root"]).resolve()
+    for marker, record in terminal_records(root):
+        if record.get("job_id") != job_id:
+            continue
+        executable = Path(record.get("executable") or (marker.parent / Path(settings["terminal_exe"]).name)).resolve()
+        pid = int(record.get("pid", 0) or 0)
+        state = process_is_owned(pid, executable)
+        if state == ProcessState.OWNED_RUNNING:
+            state = terminate_owned_process(pid, executable)
+        if state != ProcessState.DEFINITELY_DEAD:
+            record["status"] = "OPERATOR_REVIEW"
+            try:
+                update_marker(marker, record)
+            except OSError:
+                pass
+            return "OPERATOR_REVIEW"
+        account_dir = marker.parent.parent
+        shutil.rmtree(account_dir)
+        return "TERMINATED"
+    return "NOT_FOUND"
+
+
 def revoke_pairing(settings: dict, pairing_id: str) -> None:
     """Stop only the terminal process recorded by this worker, then erase its local account tree."""
     if not SAFE_ID.fullmatch(pairing_id):
@@ -499,6 +570,14 @@ def write_private(path: Path, text: str) -> None:
     # account ACL (see README); chmod is additionally useful on POSIX tests.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
+        if os.name == "nt":
+            sid = current_process_user_sid()
+            result = subprocess.run(["icacls.exe", str(path), "/inheritance:r", "/grant:r",
+                                     "*S-1-5-18:F", "*S-1-5-32-544:F", f"*{sid}:F"],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=15, check=False)
+            if result.returncode != 0:
+                raise OSError("Could not secure private configuration ACL")
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
             f.flush()
@@ -506,6 +585,26 @@ def write_private(path: Path, text: str) -> None:
     except Exception:
         path.unlink(missing_ok=True)
         raise
+
+
+def current_process_user_sid() -> str:
+    """Resolve and validate the current Windows identity SID for a file ACL."""
+    try:
+        result = subprocess.run(["whoami.exe", "/user", "/fo", "csv", "/nh"],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=10, check=False, text=True, encoding="utf-8")
+    except (OSError, subprocess.TimeoutExpired):
+        raise OSError("Could not determine current process identity") from None
+    if result.returncode != 0:
+        raise OSError("Could not determine current process identity")
+    try:
+        rows = list(csv.reader(result.stdout.splitlines()))
+        sid = rows[0][1].strip() if len(rows) == 1 and len(rows[0]) == 2 else ""
+    except (csv.Error, IndexError):
+        sid = ""
+    if not re.fullmatch(r"S-1-(?:[0-9]+-){1,14}[0-9]+", sid, re.IGNORECASE):
+        raise OSError("Current process identity SID is invalid")
+    return sid
 
 
 def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
@@ -656,7 +755,7 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
     presets = terminal_home / "MQL5" / "Presets"
     presets.mkdir(parents=True, exist_ok=True)
     write_private(presets / "DestinedFXTraderEA.set", make_set_file(job["bridge_url"], job["pairing_code"], job["account"]))
-    # Credentials exist only in this short-lived INI until process creation.
+    # The protected INI must remain available for delayed MT5 initialization.
     ini = account_dir / f"startup-{uuid.uuid4().hex}.ini"
     write_private(ini, ini_text(job, job["account"]["access_type"], settings.get("symbol", "EURUSD")))
     if not launch:
@@ -690,14 +789,8 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
                     update_marker(marker, record)
                 except OSError:
                     pass
-                ini.unlink(missing_ok=True)
                 raise ProvisionError("TERMINAL_OWNERSHIP_UNVERIFIED") from None
-        ini.unlink(missing_ok=True)
         raise ProvisionError("TERMINAL_LAUNCH_FAILED") from None
-    finally:
-        # Terminal reads /config synchronously during startup; remove as soon as
-        # CreateProcess returns. persisted broker login material is terminal-owned.
-        ini.unlink(missing_ok=True)
     return account_dir
 
 
@@ -774,13 +867,16 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
         terminal_status = wait_for_terminal(base, operator_token, job_id, worker_id,
                                             int(settings.get("auth_timeout_seconds", 300)))
         if terminal_status == "READY":
+            # Bridge READY is emitted only for a fresh authenticated heartbeat
+            # whose account identity matches the pairing/job identity.
+            remove_terminal_configs(safe_child(Path(settings["data_root"]), job_id))
             LOG.info("Terminal authenticated and fresh for job %s", job_id)
         elif terminal_status == "FAILED":
             quarantine_terminal(settings, job_id)
             LOG.error("Terminal authentication failed for job %s", job_id)
         elif terminal_status == "TIMEOUT":
             post_state(base, operator_token, job_id, worker_id, "FAILED", "TERMINAL_AUTH_TIMEOUT", "Terminal did not authenticate in time")
-            quarantine_terminal(settings, job_id)
+            stop_terminal_for_timeout(settings, job_id)
             LOG.error("Terminal authentication timed out for job %s", job_id)
     except ProvisionError as exc:
         try:

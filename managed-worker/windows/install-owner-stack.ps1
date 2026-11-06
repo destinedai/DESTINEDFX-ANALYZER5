@@ -3,7 +3,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
-    [Parameter(Mandatory=$true)][ValidatePattern('^https://[A-Za-z0-9.-]+(?::[0-9]+)?$')][string]$TailnetOrigin
+    [Parameter(Mandatory=$true)][ValidatePattern('^https://[A-Za-z0-9.-]+(?::[0-9]+)?$')][string]$TailnetOrigin,
+    [switch]$AddBroker
 )
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'This installer only runs on Windows.' }
@@ -22,6 +23,10 @@ $logDir = Join-Path $base 'logs'
 $workerData = Join-Path $base 'accounts'
 $venvDir = Join-Path $base 'venv'
 $resume = Test-Path $secretsPath
+$workerConfig = Join-Path $configDir 'worker.toml'
+$identityPath = Join-Path $configDir 'worker-id.txt'
+if ($AddBroker -and (-not $resume -or -not (Test-Path $workerConfig) -or -not (Test-Path $identityPath))) { throw '-AddBroker requires a complete existing owner stack.' }
+if ((Test-Path $workerConfig) -and -not $AddBroker) { throw 'Existing config found. Use -AddBroker; reinstall will not replace worker config or identity.' }
 New-Item -ItemType Directory -Force -Path $dataDir,$backupDir,$configDir,$logDir,$workerData | Out-Null
 # Keep persistent files readable only by the interactive owner, SYSTEM, and local Administrators.
 $owner = "$env:USERDOMAIN\$env:USERNAME"
@@ -41,31 +46,46 @@ if (-not (Test-Path (Join-Path $venvDir 'Scripts\python.exe'))) {
 $venvPython = Join-Path $venvDir 'Scripts\python.exe'
 & $venvPython -m pip install --disable-pip-version-check -r (Join-Path $bridgeDir 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Bridge dependency installation failed.' }
-$eaSource = (Resolve-Path (Read-Host 'Path to DestinedFXTraderEA.mq5')).Path
-if (-not $eaSource.EndsWith('.mq5',[StringComparison]::OrdinalIgnoreCase)) { throw 'EA source must be the genuine .mq5 file.' }
-$brokerTerminals = @{}
-foreach ($broker in @('FBS','EXNESS','HFM','DERIV')) {
-    $terminalInstall = (Resolve-Path (Read-Host "Exact genuine $broker MT5 installation directory")).Path
-    $terminalExe = Join-Path $terminalInstall 'terminal64.exe'
-    $metaEditor = Join-Path $terminalInstall 'metaeditor64.exe'
-    if (-not (Test-Path $terminalExe -PathType Leaf) -or -not (Test-Path $metaEditor -PathType Leaf)) { throw "Both terminal64.exe and metaeditor64.exe must exist in the supplied genuine $broker installation." }
-    $brokerTerminals[$broker] = @{ mt5_install=$terminalInstall; terminal_exe=$terminalExe; metaeditor_exe=$metaEditor }
+if ($AddBroker) {
+    $eaSource = (& $venvPython -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["ea_source"])' $workerConfig).Trim()
+} else {
+    $eaSource = (Resolve-Path (Read-Host 'Path to DestinedFXTraderEA.mq5')).Path
+    if (-not $eaSource.EndsWith('.mq5',[StringComparison]::OrdinalIgnoreCase)) { throw 'EA source must be the genuine .mq5 file.' }
+}
+$broker = (Read-Host 'Selected genuine MT5 broker brand (FBS, EXNESS, HFM, DERIV)').Trim().ToUpperInvariant()
+if ($broker -notin @('FBS','EXNESS','HFM','DERIV')) { throw 'Select exactly one supported broker brand.' }
+$terminalInstall = (Resolve-Path (Read-Host "Exact genuine $broker MT5 installation directory")).Path
+$terminalExe = Join-Path $terminalInstall 'terminal64.exe'
+$metaEditor = Join-Path $terminalInstall 'metaeditor64.exe'
+if (-not (Test-Path $terminalExe -PathType Leaf) -or -not (Test-Path $metaEditor -PathType Leaf)) { throw "Both terminal64.exe and metaeditor64.exe must exist in the supplied genuine $broker installation." }
+$brokerTerminals = @{ $broker = @{ mt5_install=$terminalInstall; terminal_exe=$terminalExe; metaeditor_exe=$metaEditor } }
+$brokerAlreadyConfigured = $false
+if ($AddBroker) {
+    $existingTerminal = (& $venvPython -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb")).get("broker_terminals",{}).get(sys.argv[2],{}).get("mt5_install",""))' $workerConfig $broker).Trim()
+    if ($existingTerminal) {
+        if ([IO.Path]::GetFullPath($existingTerminal) -ne [IO.Path]::GetFullPath($terminalInstall)) { throw "$broker already maps to a different terminal; refusing to change its terminal or data." }
+        $brokerAlreadyConfigured = $true
+        Write-Host "$broker already has this exact terminal mapping; add-broker operation is an idempotent no-op."
+    }
 }
 $capacityText = (Read-Host 'Measured safe simultaneous DEMO terminal capacity on this PC (1-4)').Trim()
 [int]$measuredCapacity = 0
 if (-not [int]::TryParse($capacityText,[ref]$measuredCapacity) -or $measuredCapacity -lt 1 -or $measuredCapacity -gt 4) { throw 'Enter a measured safe capacity from 1 through 4; do not claim capacity from account-slot count.' }
-$workerId = (Read-Host 'Stable worker ID (letters, digits, underscore, hyphen)').Trim()
+if ($resume -and (Test-Path $identityPath)) { $workerId = [IO.File]::ReadAllText($identityPath).Trim(); Write-Host 'Preserving installed worker identity.' } else { $workerId = (Read-Host 'Stable worker ID (letters, digits, underscore, hyphen)').Trim() }
 if ($workerId -notmatch '^[A-Za-z0-9_-]{1,128}$') { throw 'Invalid stable worker ID.' }
 $origin = $TailnetOrigin.TrimEnd('/')
+if ($AddBroker) { $installedOrigin = (& $venvPython -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["control_plane_url"].rstrip("/"))' $workerConfig).Trim(); if ($installedOrigin -ne $origin) { throw 'Add-broker must use the exact existing tailnet origin; refusing Serve/config changes.' } }
 $parsed = [uri]$origin
 if ($parsed.Host -notmatch '\.ts\.net$' -or $parsed.UserInfo -or $parsed.AbsolutePath -ne '/' -or $parsed.Query -or $parsed.Fragment) { throw 'Use the exact HTTPS *.ts.net hostname shown by tailscale serve status; no path, user-info, query, or fragment.' }
 $tailscale = Get-Command tailscale.exe -ErrorAction SilentlyContinue
 if (-not $tailscale) { throw 'Install and authenticate Tailscale on this PC first.' }
 $tsStatus = & $tailscale.Source status 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { throw 'Tailscale is not connected. Connect this PC to the owner-authorized tailnet first.' }
-Write-Host 'Configuring private tailnet HTTPS proxy to the loopback-only bridge (Serve, not Funnel)...'
-& $tailscale.Source serve --bg --https=443 http://127.0.0.1:8000
-if ($LASTEXITCODE -ne 0) { throw 'Tailscale Serve setup failed. Complete HTTPS/certificate consent in the Tailscale admin console, then rerun.' }
+if (-not $AddBroker) {
+    Write-Host 'Configuring private tailnet HTTPS proxy to the loopback-only bridge (Serve, not Funnel)...'
+    & $tailscale.Source serve --bg --https=443 http://127.0.0.1:8000
+    if ($LASTEXITCODE -ne 0) { throw 'Tailscale Serve setup failed. Complete HTTPS/certificate consent in the Tailscale admin console, then rerun.' }
+} else { Write-Host 'Add-broker mode verifies but does not reconfigure existing Tailscale Serve.' }
 $serveStatus = & $tailscale.Source serve status 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0 -or $serveStatus -notmatch [regex]::Escape($parsed.Host)) { throw 'Serve status did not confirm the supplied tailnet host. Check the URL and rerun.' }
 # Reuse a valid DPAPI secret bundle on repair; only first install generates secrets.
@@ -86,9 +106,25 @@ if ($resume) {
     $secretObject = $generated | ConvertFrom-Json
     $secretJson = $generated
 }
-$workerConfig = Join-Path $configDir 'worker.toml'
 function TomlString([string]$Value) { '"' + $Value.Replace('\','\\').Replace('"','\"') + '"' }
-$toml = @"
+if ($AddBroker -and -not $brokerAlreadyConfigured) {
+    $existingConfig = [IO.File]::ReadAllText($workerConfig)
+    $currentCapacity = [int]((& $venvPython -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["max_terminals"])' $workerConfig).Trim())
+    $newCapacity = [Math]::Max($currentCapacity, $measuredCapacity)
+    $existingConfig = [regex]::Replace($existingConfig, '(?m)^max_terminals\s*=\s*\d+\s*$', "max_terminals = $newCapacity", 1)
+    $brandConfig = @"
+
+[broker_terminals.$broker]
+mt5_install = $(TomlString $brokerTerminals[$broker].mt5_install)
+terminal_exe = $(TomlString $brokerTerminals[$broker].terminal_exe)
+metaeditor_exe = $(TomlString $brokerTerminals[$broker].metaeditor_exe)
+"@
+    if ($existingConfig -notmatch '(?m)^max_terminals\s*=') { throw 'Could not update max_terminals; config left unchanged.' }
+    [IO.File]::WriteAllText($workerConfig, $existingConfig.TrimEnd() + "`n" + $brandConfig + "`n", [Text.UTF8Encoding]::new($false))
+} elseif ($AddBroker) {
+    # An exact repeat is a true no-op: preserve every existing broker mapping.
+} else {
+    $toml = @"
 control_plane_url = $(TomlString $origin)
 data_root = $(TomlString $workerData)
 max_terminals = $measuredCapacity
@@ -100,29 +136,14 @@ auth_timeout_seconds = 300
 max_restart_retries = 3
 restart_backoff_seconds = 30
 
-[broker_terminals.FBS]
-mt5_install = $(TomlString $brokerTerminals['FBS'].mt5_install)
-terminal_exe = $(TomlString $brokerTerminals['FBS'].terminal_exe)
-metaeditor_exe = $(TomlString $brokerTerminals['FBS'].metaeditor_exe)
-
-[broker_terminals.EXNESS]
-mt5_install = $(TomlString $brokerTerminals['EXNESS'].mt5_install)
-terminal_exe = $(TomlString $brokerTerminals['EXNESS'].terminal_exe)
-metaeditor_exe = $(TomlString $brokerTerminals['EXNESS'].metaeditor_exe)
-
-[broker_terminals.HFM]
-mt5_install = $(TomlString $brokerTerminals['HFM'].mt5_install)
-terminal_exe = $(TomlString $brokerTerminals['HFM'].terminal_exe)
-metaeditor_exe = $(TomlString $brokerTerminals['HFM'].metaeditor_exe)
-
-[broker_terminals.DERIV]
-mt5_install = $(TomlString $brokerTerminals['DERIV'].mt5_install)
-terminal_exe = $(TomlString $brokerTerminals['DERIV'].terminal_exe)
-metaeditor_exe = $(TomlString $brokerTerminals['DERIV'].metaeditor_exe)
+[broker_terminals.$broker]
+mt5_install = $(TomlString $brokerTerminals[$broker].mt5_install)
+terminal_exe = $(TomlString $brokerTerminals[$broker].terminal_exe)
+metaeditor_exe = $(TomlString $brokerTerminals[$broker].metaeditor_exe)
 "@
-[IO.File]::WriteAllText($workerConfig,$toml,[Text.UTF8Encoding]::new($false))
-$identityPath = Join-Path $configDir 'worker-id.txt'
-[IO.File]::WriteAllText($identityPath,$workerId,[Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($workerConfig,$toml,[Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($identityPath,$workerId,[Text.UTF8Encoding]::new($false))
+}
 if (-not $resume) {
     $secretJson = @{fernet_key=$secretObject.fernet_key;worker_token=$secretObject.worker_token;cf_access_client_id=[string]$secretObject.cf_access_client_id;cf_access_client_secret=[string]$secretObject.cf_access_client_secret} | ConvertTo-Json -Compress
     $secureSecret = ConvertTo-SecureString $secretJson -AsPlainText -Force
@@ -134,6 +155,7 @@ $secretJson=$null; $secretObject=$null; $generated=$null
 $supervisor = Join-Path $PSScriptRoot 'run-owner-stack.ps1'
 $backupScript = Join-Path $PSScriptRoot 'backup-bridge.ps1'
 if (-not (Test-Path $supervisor) -or -not (Test-Path $backupScript)) { throw 'Owner stack support scripts are missing.' }
+if (-not $AddBroker) {
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$supervisor`" -ProjectRoot `"$project`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $owner
 $settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
@@ -143,6 +165,7 @@ $backupAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\Windo
 $backupTrigger = New-ScheduledTaskTrigger -Daily -At '3:00AM'
 Register-ScheduledTask -TaskName 'DestinedFX Bridge SQLite Backup' -Action $backupAction -Trigger $backupTrigger -Settings $settings -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker'
+} else { Write-Host 'Existing scheduled tasks and running worker are left untouched; the new broker mapping takes effect on the next normal stack start.' }
 $env:DESTINEDFX_HEALTH_URL="$origin/health/ready"
 $healthCode = @'
 import json,os,sys,urllib.error,urllib.request
@@ -166,12 +189,12 @@ for($attempt=0;$attempt -lt 12;$attempt++){
     Start-Sleep -Seconds 5
 }
 Remove-Item Env:DESTINEDFX_HEALTH_URL -ErrorAction SilentlyContinue
-if(-not $ready){Stop-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -ErrorAction SilentlyContinue;throw 'Owner bridge did not pass the private HTTPS configuration check. Do not submit broker credentials; inspect Tailscale Serve status and local logs.'}
+if(-not $ready){if (-not $AddBroker) { Stop-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -ErrorAction SilentlyContinue };throw 'Owner bridge did not pass the private HTTPS configuration check. Do not submit broker credentials; inspect Tailscale Serve status and local logs.'}
 & $venvPython (Join-Path $PSScriptRoot 'backup-bridge.py')
 if($LASTEXITCODE -ne 0){Write-Warning 'Initial database backup failed; check ProgramData\DestinedFX\backups before using this setup.'}
-Write-Host "$(if($resume){'Resumed/repaired'}else{'Installed'}) for $owner. Durable bridge configuration is live. /health/ready remains blocked until a real terminal pairing has a fresh authenticated EA heartbeat."
+Write-Host "$(if($AddBroker){'Added broker'}elseif($resume){'Resumed/repaired'}else{'Installed'}) for $owner. Durable bridge configuration is live. /health/ready remains blocked until a real terminal pairing has a fresh authenticated EA heartbeat."
 Write-Host "Bridge binds only to 127.0.0.1:8000; private HTTPS origin: $origin"
 Write-Host "Durable SQLite path: $(Join-Path $dataDir 'bridge.sqlite3'); rolling backups: $backupDir"
 Write-Host "Worker config: $workerConfig; worker ID: $workerId"
 Write-Host 'Add the exact HTTPS tailnet origin to each isolated MT5 terminal WebRequest allowlist. Begin with DEMO only.'
-Write-Host 'This stack starts at Windows sign-in. Keep this PC powered on, awake, and connected to the internet.'
+Write-Host 'Interactive-logon scheduled task is NOT a 24/7 service: Windows sign-in, powered/awake host, and network connectivity are required.'

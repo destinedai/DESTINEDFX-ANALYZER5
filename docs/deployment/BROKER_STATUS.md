@@ -1,6 +1,6 @@
 # Broker verification status
 
-Status snapshot 2026-11-06. No broker account or terminal was accessible from the sandbox. No broker is verified working. No LIVE order was placed. The rows below describe this release's evidence status, not broker service availability.
+Status snapshot 2026-11-06. No broker account or terminal was accessible from the sandbox. The installer now stages one selected genuine MT5 broker rather than requiring all broker installations; that scaffolding change is not broker verification. No broker is verified working. No LIVE order was placed. The rows below describe this release's evidence status, not broker service availability.
 
 | Product | Status | Evidence and blocker |
 | --- | --- | --- |

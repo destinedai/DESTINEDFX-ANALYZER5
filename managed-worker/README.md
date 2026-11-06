@@ -37,6 +37,12 @@ The worker writes the exact public HTTPS origin into the EA input `InpBridgeBase
 MetaQuotes documents `/config` startup with account login, server, password, and EA auto-start parameters; the official terminal is therefore technically automatable on Windows. This is distinct from MetaQuotes Virtual Hosting, which is rented/migrated through an MT5/MQL5 user workflow and cannot be assumed to be a free, centrally provisioned DestinedFX fleet. See the platform references in `../docs/mql5-platform-notes.md` and cost/setup notes in `../docs/managed-execution-operator-setup.md`.
 
 
+## Owner-stack staging notes
+
+The Windows owner-stack installer is a local single-broker staging path: install only the selected genuine broker MT5 terminal plus MetaEditor, then supply its actual path. FBS, Exness, HFM and Deriv are choices, not four prerequisites. A later explicit `-AddBroker` call appends a new broker mapping without replacing the existing worker ID or DPAPI secrets, deleting account data, or restarting the existing task/connections; it requires the same tailnet origin and duplicate brands are refused. The mapping is consumed on the next ordinary stack start.
+
+The owner scheduled task is configured for **interactive logon**, not unattended 24/7 operation. Windows must remain signed in, powered on, awake and network-connected; logout, sleep, shutdown/reboot, or network loss interrupts the stack. No Tailscale Funnel, public exposure, paid VPS, or paid service is required or configured. `doctor.py` reports host Python/Tailscale status, terminal/MetaEditor/EA files, configured (not measured) capacity, and broker/account identity evidence. Only actual authenticated, fresh, account-matched EA heartbeat status can yield READY; broker label, selected path and HTTP reachability cannot.
+
 ## Quick-start worker kit
 
 The GitHub Actions workflow publishes the DestinedFX-Windows-Worker-Kit artifact with the Python worker, sample config, EA source and launch-worker.ps1. Extract on Windows with the genuine broker MT5 desktop terminal and MetaEditor installed. The launcher prompts for the service URL and paths, reads the worker token through hidden input, and never writes the token into worker.toml. It runs in the foreground. MT5 WebRequest allowlisting is still a manual step. Running the worker process alone is not proof of account readiness.

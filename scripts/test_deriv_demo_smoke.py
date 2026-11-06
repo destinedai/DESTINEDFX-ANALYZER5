@@ -2,6 +2,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import time
 
 import pytest
 
@@ -96,9 +97,9 @@ def test_unrelated_first_message_is_ignored_and_integer_ids_are_sent(monkeypatch
         {"msg_type": "portfolio", "req_id": 1002, "portfolio": {"contracts": []}},
     ])
     tick_socket = FakeSocket([
-        {"msg_type": "tick", "req_id": 1003, "tick": {"symbol": "R_100", "quote": 1.0}},
+        {"msg_type": "tick", "req_id": 1003, "tick": {"symbol": "R_100", "quote": 1.0, "epoch": time.time() + 1}, "subscription": {"id": "sub-1"}},
     ])
-    ids = iter([1001, 1002, 1003])
+    ids = iter([1001, 1002, 1003, 1004])
     monkeypatch.setattr(smoke, "new_request_id", lambda: next(ids))
     run_main(monkeypatch, [account("VRTC123")], sockets=[balance_socket, tick_socket])
 
@@ -107,7 +108,9 @@ def test_unrelated_first_message_is_ignored_and_integer_ids_are_sent(monkeypatch
         {"balance": 1, "subscribe": 0, "req_id": 1001},
         {"portfolio": 1, "req_id": 1002},
     ]
-    assert tick_socket.sent == [{"ticks": "R_100", "subscribe": 0, "req_id": 1003}]
+    assert tick_socket.sent[0] == {"ticks": "R_100", "subscribe": 1, "req_id": 1003}
+    assert tick_socket.sent[1] == {"forget": "sub-1", "req_id": 1004}
+    assert tick_socket.closed
     assert all(isinstance(payload["req_id"], int) for payload in balance_socket.sent + tick_socket.sent)
 
 
@@ -140,7 +143,42 @@ def test_invalid_otp_url_stops_before_socket(monkeypatch):
     assert sockets == []
 
 
-def test_source_has_no_order_endpoint_names():
+@pytest.mark.parametrize("tick", [
+    {"symbol": "R_50", "quote": 1.0, "epoch": time.time()},
+    {"symbol": "R_100", "quote": 0, "epoch": time.time()},
+    {"symbol": "R_100", "quote": -1.0, "epoch": time.time()},
+    {"symbol": "R_100", "quote": float("nan"), "epoch": time.time()},
+    {"symbol": "R_100", "quote": float("inf"), "epoch": time.time()},
+    {"symbol": "R_100", "quote": 1.0, "epoch": time.time() - 30},
+    {"symbol": "R_100", "quote": 1.0, "epoch": time.time() + 60},
+    {"symbol": "R_100", "quote": 1.0},
+])
+def test_invalid_public_tick_fails_and_socket_closes(monkeypatch, tick):
+    public = FakeSocket([{"msg_type": "tick", "req_id": 1003, "tick": tick, "subscription": {"id": "sub-invalid"}}])
+    ids = iter([1001, 1002, 1003, 1004])
+    monkeypatch.setattr(smoke, "new_request_id", lambda: next(ids))
+    run_main(monkeypatch, [account("VRTC123")], sockets=[
+        FakeSocket([{"msg_type": "balance", "req_id": 1001, "balance": {"balance": 100, "currency": "USD"}}, {"msg_type": "portfolio", "req_id": 1002, "portfolio": {"contracts": []}}]), public
+    ])
+    with pytest.raises(RuntimeError, match="fresh, valid R_100"):
+        smoke.main()
+    assert public.sent[-1]["forget"] == "sub-invalid"
+    assert public.closed
+
+
+def test_source_has_no_trade_endpoint_actions():
     source = MODULE_PATH.read_text(encoding="utf-8")
     for endpoint in ("/proposal", "/buy", "/sell", "/cancel", "/orders"):
         assert endpoint not in source
+    for action in ('"proposal"', '"buy"', '"sell"', '"cancel"', '"orders"'):
+        assert action not in source
+
+
+def test_verification_does_not_change_selected_chart_source():
+    ui = (MODULE_PATH.parent.parent / "app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt").read_text(encoding="utf-8")
+    market = (MODULE_PATH.parent.parent / "app/src/main/java/com/example/data/market/MarketDataRepositoryImpl.kt").read_text(encoding="utf-8")
+    start = ui.index("VERIFY DERIV DEMO · READ ONLY")
+    verification_region = ui[ui.rfind("Button(", 0, start):ui.index("val matchingDerivAccounts", start)]
+    assert "marketDataRepository.refreshSymbol" not in verification_region
+    assert "selectedApiSource" not in verification_region
+    assert 'override val selectedApiSource = MutableStateFlow("TRADINGVIEW")' in market

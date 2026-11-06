@@ -21,7 +21,7 @@ internal object DerivConnectionFailureMapper {
             text.contains("app id") || text.contains("token") || text.contains("trade scope") || text.contains("401") || text.contains("unauthorized") -> DerivConnectionFailure(
                 DerivConnectionFailure.Code.UNAUTHORIZED,
                 "Deriv authentication was rejected.",
-                "Check the current App ID and create a fresh PAT for this app with account-read and trade scope."
+                "Check the current App ID and create a fresh PAT for this app with the trade scope required by the Options account-list and OTP endpoints. Keep the PAT private; this verifier does not trade, but a trade-scoped PAT is not inherently read-only."
             )
             text.contains("no unique active") || text.contains("no active") || text.contains("account") && text.contains("selected") -> DerivConnectionFailure(
                 DerivConnectionFailure.Code.NO_DEMO_ACCOUNT,

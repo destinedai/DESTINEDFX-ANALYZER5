@@ -9,6 +9,8 @@ import argparse
 import getpass
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -122,8 +124,20 @@ def inspect_one(brand: str, settings: dict[str, Any], token: str, args: argparse
     data_root = Path(settings["data_root"]).expanduser().resolve()
     markers = [(path, record) for path, record in worker.terminal_records(data_root) if str(record.get("broker_brand", "")).upper() == brand]
     marker_path, marker = markers[-1] if markers else (None, None)
+    tailscale_path = shutil.which("tailscale.exe") or shutil.which("tailscale")
+    tailscale_status = "NOT INSTALLED"
+    if tailscale_path:
+        try:
+            proc = subprocess.run([tailscale_path, "status"], capture_output=True, text=True, timeout=8)
+            tailscale_status = "CONNECTED" if proc.returncode == 0 else "DISCONNECTED"
+        except Exception:
+            tailscale_status = "ERROR"
     output: dict[str, Any] = {
         "broker": brand,
+        "python": {"found": bool(shutil.which("py.exe") or shutil.which("python3") or shutil.which("python")), "required": "3.11+"},
+        "tailscale": tailscale_status,
+        "configured_capacity": settings.get("max_terminals", "UNKNOWN"),
+        "capacity_note": "Measure safe simultaneous terminal capacity on this host; configured capacity is not proof.",
         "terminal_path": file_check(str(terminal), "terminal64.exe"),
         "metaeditor_path": file_check(str(metaeditor), "metaeditor64.exe"),
         "ea_source": file_check(str(Path(settings["ea_source"])), "DestinedFXTraderEA.mq5"),
@@ -142,6 +156,8 @@ def inspect_one(brand: str, settings: dict[str, Any], token: str, args: argparse
         "server": marker.get("expected_server", "UNKNOWN") if marker else "UNKNOWN",
         "mode": marker.get("account_mode", "UNKNOWN") if marker else "UNKNOWN",
         "company": marker.get("expected_company", "UNKNOWN") if marker else "UNKNOWN",
+        "currency": marker.get("expected_currency", "UNKNOWN") if marker else "UNKNOWN",
+        "identity_evidence": "SERVER_AUTHENTICATED_FRESH_ACCOUNT_MATCHED_HEARTBEAT" if output["worker_status"] == "READY" and output["pairing_state"] == "PAIRED" else "UNVERIFIED",
         "trade_allowed": "UNKNOWN until fresh EA heartbeat",
         "last_heartbeat_age": "UNKNOWN until bridge state is queried with app credentials",
     }
@@ -149,11 +165,11 @@ def inspect_one(brand: str, settings: dict[str, Any], token: str, args: argparse
         output["terminal_path"]["found"] and output["metaeditor_path"]["found"] and
         output["ea_source"]["found"] and output["ea_attached"] and
         output["webrequest_allowed"] == "YES_BY_FRESH_EA_HEARTBEAT" and output["pairing_state"] == "PAIRED" and
-        output["worker_status"] == "READY"
+        output["worker_status"] == "READY" and output["tailscale"] == "CONNECTED"
     )
     output["doctor_status"] = "READY" if ready else "BLOCKED"
     if not ready:
-        output["reason"] = "A real fresh EA heartbeat and authenticated worker READY state are required; HTTP reachability alone is insufficient."
+        output["reason"] = "Require valid Python, terminal and MetaEditor files, connected Tailscale, EA attachment, allowlisted WebRequest evidenced by a fresh authenticated account-matched EA heartbeat, and worker READY; HTTP reachability alone is insufficient."
     return output
 
 

@@ -2,6 +2,9 @@
 """Read-only Deriv Options DEMO smoke harness.
 
 Credentials are entered locally through hidden prompts or environment variables.
+The Options account-list and OTP endpoints require a PAT with the ``trade``
+scope. This harness sends no trade, but the PAT itself is not inherently
+read-only; keep it private and enter it only at the hidden local prompt.
 The script never prints tokens, passwords, authorization headers, OTPs, or raw
 broker responses. It lists active accounts, requests a fresh account OTP,
 reads balance/portfolio, and requests one public tick. It never calls any order
@@ -119,6 +122,8 @@ def main() -> int:
     parser.add_argument("--account-id", default=os.getenv("DERIV_DEMO_ACCOUNT_ID"))
     parser.add_argument("--symbol", default="R_100", help="Public tick symbol; default R_100")
     args = parser.parse_args()
+    if args.symbol != "R_100":
+        raise SystemExit("The verification symbol is fixed to R_100.")
 
     app_id = (args.app_id or input("Deriv App ID: ")).strip()
     token = (args.token or getpass.getpass("Deriv DEMO PAT (hidden): ")).strip()
@@ -136,7 +141,7 @@ def main() -> int:
         and str(row.get("account_type", "")).lower() == "demo"
     ]
     if not active_demo:
-        raise SystemExit("No active DEMO Options account was returned. Check PAT account-read/trade scope and DEMO availability.")
+        raise SystemExit("No active DEMO Options account was returned. Check the PAT trade scope required by the Options account-list endpoint and DEMO availability.")
     requested = (args.account_id or "").strip()
     account = next((row for row in active_demo if str(row.get("account_id", "")) == requested), None) if requested else None
     if account is None:
@@ -169,25 +174,51 @@ def main() -> int:
         socket.close()
 
     public = open_authenticated_socket(PUBLIC_WS)
+    tick_started_at = time.time()
+    subscription_id = None
     try:
         tick_id = new_request_id()
-        public.send(json.dumps({"ticks": args.symbol, "subscribe": 0, "req_id": tick_id}))
+        public.send(json.dumps({"ticks": "R_100", "subscribe": 1, "req_id": tick_id}))
         tick = recv_matching(public, tick_id, "tick")
+        tick_obj = tick.get("tick") or {}
+        subscription_id = (tick.get("subscription") or {}).get("id")
+        quote = tick_obj.get("quote")
+        provider_epoch = tick_obj.get("epoch")
+        received_at = time.time()
+        if (tick_obj.get("symbol") != "R_100" or isinstance(quote, bool) or not isinstance(quote, (int, float))
+                or not (float(quote) > 0 and float(quote) < float("inf"))
+                or isinstance(provider_epoch, bool) or not isinstance(provider_epoch, (int, float))
+                or not (int(tick_started_at) <= float(provider_epoch) <= received_at + 2)
+                or received_at - float(provider_epoch) > 10):
+            raise RuntimeError("Deriv public tick was not a fresh, valid R_100 quote.")
     finally:
-        public.close()
+        try:
+            if subscription_id:
+                public.send(json.dumps({"forget": subscription_id, "req_id": new_request_id()}))
+        finally:
+            public.close()
 
     balance_obj = balance.get("balance") or {}
     portfolio_obj = portfolio.get("portfolio") or {}
-    tick_obj = tick.get("tick") or {}
+    balance_value = balance_obj.get("balance")
+    currency = str(account.get("currency", "")).strip()
+    balance_ok = (isinstance(balance_value, (int, float)) and not isinstance(balance_value, bool)
+                  and float(balance_value) >= 0 and float(balance_value) < float("inf")
+                  and str(balance_obj.get("currency", "")).upper() == currency.upper())
+    if not account_id or str(account.get("account_type", "")).lower() != "demo" or not currency or not balance_ok or not portfolio_obj:
+        raise RuntimeError("Fresh DEMO account identity, balance, or portfolio evidence was incomplete.")
     print(json.dumps({
         "result": "PASS_READ_ONLY_DEMO",
         "account": redacted(account_id),
         "account_type": str(account.get("account_type", "")).upper(),
         "currency": str(account.get("currency", "")),
-        "balance_received": bool(balance_obj),
+        "balance_received": balance_ok,
         "portfolio_received": bool(portfolio_obj),
         "tick_received": bool(tick_obj),
-        "tick_symbol": tick_obj.get("symbol", args.symbol),
+        "tick_symbol": tick_obj.get("symbol"),
+        "tick_quote": float(tick_obj["quote"]),
+        "tick_provider_epoch": float(tick_obj["epoch"]),
+        "tick_received_epoch": received_at,
         "checked_at_epoch": int(time.time()),
         "orders_sent": False,
         "secrets_printed": False,
