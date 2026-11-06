@@ -143,3 +143,20 @@ def test_safe_request_omits_partial_cloudflare_credentials(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", open_request)
     doctor.safe_request("https://bridge.invalid/health/ready")
     assert not any(key.lower().startswith("cf-access-client-") for key in captured)
+
+
+def test_safe_request_without_cloudflare_credentials_keeps_headers_unchanged(monkeypatch):
+    import io
+    import urllib.request
+    captured = {}
+    class Response(io.BytesIO):
+        status = 200
+    def open_request(req, timeout):
+        captured.update(req.header_items())
+        return Response(b"{}")
+    monkeypatch.delenv("CF_ACCESS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("CF_ACCESS_CLIENT_SECRET", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", open_request)
+    assert doctor.safe_request("https://bridge.invalid/health/ready", token="worker-token")[0] == 200
+    assert not any(key.lower().startswith("cf-access-client-") for key in captured)
+    assert captured["Authorization"] == "Bearer worker-token"
