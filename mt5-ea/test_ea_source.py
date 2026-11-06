@@ -133,6 +133,23 @@ def test_followup_safety_contracts():
     assert "effectiveMaxAge=MathMin" in source and "InpNewsFreshnessSeconds" in source
 
 
+def test_quote_freshness_is_conservative_and_instrument_aware():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert "InpQuoteFreshnessSeconds=15" in source
+    assert "QuoteFreshnessSeconds(string sym)" in source
+    assert "StringFind(u,\"XAU\")" in source
+    assert "StringFind(u,\"BTC\")" in source
+    assert "!QuoteFresh(sym,q)" in source
+    assert "InpQuoteFreshnessSeconds>60" in source
+
+
+def test_news_block_is_checked_before_signal_is_consumed():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    news = source.index("if(!NewsClear(sym))")
+    remember = source.index("if(!Remember(key))")
+    assert news < remember, "a temporary news rejection must remain retryable"
+
+
 
 def test_trade_report_fields_come_from_ea_owned_broker_history():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()

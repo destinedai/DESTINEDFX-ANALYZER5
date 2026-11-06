@@ -109,6 +109,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var message by remember { mutableStateOf<String?>(null) }
     var serviceUrl by remember { mutableStateOf("") }
     var serviceReadiness by remember { mutableStateOf<MT5RemoteBridgeClient.ServiceReadiness?>(null) }
+    var showAdvancedConnection by remember { mutableStateOf(false) }
     var mt5Snapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
     var showPairingRevokeDialog by remember(mt5Profile) { mutableStateOf(false) }
     var showLiveAuthorizationDialog by remember(mt5Profile) { mutableStateOf(false) }
@@ -200,12 +201,32 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         BrokerType.DERIV -> botActive || DerivDemoBotService.state.value == "RUNNING"
         else -> botActive
     }
+    val botUiState = when {
+        busy && !connected -> "CONNECTING"
+        broker == BrokerType.MT5 && mt5Snapshot?.heartbeatFresh == false -> "EA OFFLINE"
+        broker == BrokerType.MT5 && mt5Snapshot?.terminalOnline == false -> "TERMINAL OFFLINE"
+        !connected -> if (broker == BrokerType.MT5 && !bridge?.hasPairing().orFalse()) "PAIRING REQUIRED" else "NOT CONFIGURED"
+        mt5Snapshot?.state == "PAUSED" -> "PAUSED"
+        mt5Snapshot?.state == "STOPPED" -> "STOPPED"
+        running -> "RUNNING"
+        connected -> "READY"
+        else -> "ERROR"
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("DESTINEDFX BOT", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
         Text("Connect an account, then let the engine scan eligible markets automatically.", color = TextSecondary, fontSize = 11.sp)
+        Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CardBorder)) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("BOT STATE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text(botUiState, color = if (botUiState in setOf("READY", "RUNNING", "CONNECTED")) ProfitGreen else WarningAmber, fontSize = 12.sp, fontWeight = FontWeight.Black)
+            }
+        }
 
-        Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, CardBorder)) {
+        OutlinedButton(onClick = { showAdvancedConnection = !showAdvancedConnection }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (showAdvancedConnection) "HIDE ADVANCED CONNECTION SETTINGS" else "ADVANCED CONNECTION SETTINGS")
+        }
+        if (showAdvancedConnection) Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, CardBorder)) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("MANAGED HTTPS BRIDGE", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 OutlinedTextField(value = serviceUrl, onValueChange = { serviceUrl = it }, label = { Text("Owner-managed HTTPS origin") }, placeholder = { Text("https://your-host.example") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
@@ -517,8 +538,16 @@ private fun ConnectedBotDashboard(
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("CONNECTED ACCOUNT", color = ProfitGreen, fontSize = 10.sp, fontWeight = FontWeight.Black)
             Text(if (broker == BrokerType.MT5) "MetaTrader 5 · ${mt5Snapshot?.actualAccountMode ?: "unverified"}" else "Deriv · ${derivAccount?.mode?.uppercase() ?: "unverified"}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Text("Account: ${if (broker == BrokerType.MT5) mt5Snapshot?.actualLogin ?: "unverified" else derivAccount?.loginId ?: "unverified"}", color = TextSecondary, fontSize = 11.sp)
-            Text("Balance: ${if (broker == BrokerType.MT5) mt5Snapshot?.balance ?: accountMetrics?.balance ?: Double.NaN else derivAccount?.balance ?: Double.NaN}", color = TextSecondary, fontSize = 11.sp)
+            val accountId = if (broker == BrokerType.MT5) mt5Snapshot?.actualLogin else derivAccount?.loginId
+            Text("Account: ${maskAccountId(accountId)}", color = TextSecondary, fontSize = 11.sp)
+            if (broker == BrokerType.MT5) {
+                Text("Server: ${mt5Snapshot?.actualServer ?: "unverified"} · Currency: ${mt5Snapshot?.currency ?: "unverified"}", color = TextSecondary, fontSize = 11.sp)
+                Text("Balance: ${mt5Snapshot?.balance?.toString() ?: "unavailable"} · Equity: ${mt5Snapshot?.equity?.toString() ?: "unavailable"}", color = TextSecondary, fontSize = 11.sp)
+                Text("Free margin: ${mt5Snapshot?.freeMargin?.toString() ?: "unavailable"} · Leverage: ${mt5Snapshot?.leverage?.toString() ?: "unavailable"}", color = TextSecondary, fontSize = 11.sp)
+                Text("Terminal: ${if (mt5Snapshot?.terminalConnected == true) "CONNECTED" else "OFFLINE"} · EA heartbeat: ${if (mt5Snapshot?.heartbeatFresh == true) "FRESH" else "STALE"} · Trade permission: ${if (mt5Snapshot?.tradeAllowed == true) "ALLOWED" else "BLOCKED"}", color = TextSecondary, fontSize = 10.sp)
+            } else {
+                Text("Balance: ${derivAccount?.balance?.toString() ?: "unavailable"} · Currency: ${derivAccount?.currency ?: "unverified"}", color = TextSecondary, fontSize = 11.sp)
+            }
             Text(if (running) "Scanning eligible markets" else "Connected and ready", color = if (running) ElectricCyan else ProfitGreen, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             selectedOpportunity?.let { Text("Selected opportunity: ${it.symbol} · ${userFacingSignalLabel(it.signalState, it.direction)}", color = TextPrimary, fontSize = 11.sp) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -529,3 +558,11 @@ private fun ConnectedBotDashboard(
         }
     }
 }
+
+private fun maskAccountId(value: String?): String {
+    val normalized = value?.trim().orEmpty()
+    if (normalized.isBlank()) return "unverified"
+    return if (normalized.length <= 4) "••••" else "••••${normalized.takeLast(4)}"
+}
+
+private fun Boolean?.orFalse(): Boolean = this == true
