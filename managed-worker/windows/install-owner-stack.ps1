@@ -151,7 +151,11 @@ except urllib.error.HTTPError as e:
 try: result=json.loads(body)
 except Exception: result={"response":"unreadable"}
 print(json.dumps({"http_status":code,**result},separators=(",",":")))
-sys.exit(0 if code==200 and result.get("status")=="ready" and result.get("database")=="ok" and result.get("managed_execution")=="configured" else 2)
+detail=result.get("detail") if isinstance(result,dict) else {}
+code_name=detail.get("code") if isinstance(detail,dict) else ""
+# Installation is complete when durable configuration is live. The bridge must
+# remain 503 until a real terminal pairing has supplied a fresh EA heartbeat.
+sys.exit(0 if ((code==200 and result.get("status")=="ready" and result.get("database")=="ok" and result.get("managed_execution")=="configured") or code_name=="NO_VERIFIED_TERMINAL_PAIRING") else 2)
 '@
 $ready=$false
 for($attempt=0;$attempt -lt 12;$attempt++){
@@ -160,10 +164,10 @@ for($attempt=0;$attempt -lt 12;$attempt++){
     Start-Sleep -Seconds 5
 }
 Remove-Item Env:DESTINEDFX_HEALTH_URL -ErrorAction SilentlyContinue
-if(-not $ready){Stop-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -ErrorAction SilentlyContinue;throw 'Owner bridge did not pass the private HTTPS readiness check. Do not submit broker credentials; inspect Tailscale Serve status and local logs.'}
+if(-not $ready){Stop-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -ErrorAction SilentlyContinue;throw 'Owner bridge did not pass the private HTTPS configuration check. Do not submit broker credentials; inspect Tailscale Serve status and local logs.'}
 & $venvPython (Join-Path $PSScriptRoot 'backup-bridge.py')
 if($LASTEXITCODE -ne 0){Write-Warning 'Initial database backup failed; check ProgramData\DestinedFX\backups before using this setup.'}
-Write-Host "$(if($resume){'Resumed/repaired'}else{'Installed'}) for $owner. Bridge readiness returned status=ready, database=ok, managed_execution=configured through the Windows Python HTTPS client."
+Write-Host "$(if($resume){'Resumed/repaired'}else{'Installed'}) for $owner. Durable bridge configuration is live. /health/ready remains blocked until a real terminal pairing has a fresh authenticated EA heartbeat."
 Write-Host "Bridge binds only to 127.0.0.1:8000; private HTTPS origin: $origin"
 Write-Host "Durable SQLite path: $(Join-Path $dataDir 'bridge.sqlite3'); rolling backups: $backupDir"
 Write-Host "Worker config: $workerConfig; worker ID: $workerId"

@@ -733,13 +733,13 @@ def test_readiness_requires_valid_managed_configuration_and_storage(monkeypatch)
     assert response.status_code==503
     managed_env(monkeypatch)
     response=client.get('/health/ready')
-    assert response.status_code==200
-    assert response.json()=={'status':'ready','database':'ok','managed_execution':'configured'}
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
 
 def test_worker_claim_receives_persisted_bridge_origin_and_readiness_fails_closed(monkeypatch):
     managed_env(monkeypatch)
     expected='https://bridge.destinedfx.internal'
-    assert client.get('/health/ready').status_code==200
+    assert client.get('/health/ready').status_code==503
     p,ah=managed_pair()
     assert client.post('/v1/app/managed-account',headers=ah,json={
         'login':'123456','server':'Demo-Server','password':'test-only',
@@ -766,7 +766,8 @@ def test_documented_health_paths_are_implemented(monkeypatch):
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN','operator-secret-test-fixture-2026-very-long')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.realcop.com')
-    assert client.get('/health/ready').status_code==200
+    assert client.get('/health/ready').status_code==503
+    assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
 
 
 def test_malformed_managed_origin_fails_closed(monkeypatch):
@@ -954,7 +955,8 @@ def test_render_external_url_fallback_can_make_bridge_ready(monkeypatch):
     monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN','render-worker-token-test-fixture-at-least-32-chars')
-    assert client.get('/health/ready').status_code==200
+    assert client.get('/health/ready').status_code==503
+    assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
 
 def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(monkeypatch):
     from starlette.requests import Request

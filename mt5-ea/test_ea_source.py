@@ -337,3 +337,14 @@ def test_journal_failure_contracts_fail_closed_before_ack_or_submission():
     assert 'if(!SaveCursor())' in commands and 'g_cursor=previousCursor' in commands
     assert 'g_ackOutcomes[ai]=="IN_PROGRESS"' in commands and 'was not re-applied' in commands
     assert 'if(g_sigExecutionState=="SUBMISSION_INTENT"' in scan
+
+
+def test_real_terminal_fixes_are_fail_closed_and_telemetry_is_authoritative():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert "input int InpQuoteFreshnessSeconds=15;" in source
+    assert "TimeCurrent()-q.time>InpQuoteFreshnessSeconds" in source
+    assert "TimeCurrent()-tq.time>InpQuoteFreshnessSeconds" in source
+    assert "InpQuoteFreshnessSeconds<1||InpQuoteFreshnessSeconds>120" in source
+    place = source[source.index("bool Place("):source.index("\nvoid SetWait", source.index("bool Place("))]
+    assert place.index("if(!NewsClear(sym))") < place.index("if(!Remember(key))")
+    assert "g_sigEntry=entry;g_sigSL=sl;g_sigTP=tp;" in place
