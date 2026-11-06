@@ -22,7 +22,7 @@ class MT5RemoteBridgeClientTest {
     @Test fun unavailableEncryptedStorageBlocksManagedRegistrationBeforeNetwork() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
-        val client = MT5RemoteBridgeClient(secrets)
+        val client = MT5RemoteBridgeClient(secrets, "FBS_DEMO", accountMode = "DEMO", brokerBrand = "FBS")
         val failure = runCatching {
             client.registerManagedAccount(
                 login = "12345", password = "test-password", server = "Broker-Demo",
@@ -69,6 +69,22 @@ class MT5RemoteBridgeClientTest {
         }
     }
 
+    @Test fun allEightExplicitBrokerModeSlotsRemainIndependentAndAreRequired() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
+        listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
+            listOf("DEMO", "LIVE").forEach { mode ->
+                val slot = "${brand}_${mode}"
+                val client = MT5RemoteBridgeClient(secrets, slot, accountMode = mode, brokerBrand = brand)
+                assertEquals(slot, client.profile)
+                assertEquals(brand, client.brokerBrand)
+                assertEquals(mode, client.accountMode)
+                assertThrows(IllegalArgumentException::class.java) {
+                    MT5RemoteBridgeClient(secrets, slot, accountMode = if (mode == "DEMO") "LIVE" else "DEMO", brokerBrand = brand)
+                }
+            }
+        }
+    }
     @Test fun riskMustBeFiniteAndWithinTheExactSupportedInterval() {
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(0.25))
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(1.0))
@@ -170,7 +186,7 @@ class MT5RemoteBridgeClientTest {
     private fun snapshot(orders: List<JSONObject>) = MT5RemoteBridgeClient.Snapshot(
         managedState = "READY", accessType = "MASTER", profileMode = "DEMO", connected = true, terminalOnline = true,
         heartbeatFresh = true, state = "READY", account = "123 @ Broker-Demo", actualLogin = "123", actualServer = "Broker-Demo",
-        actualAccountMode = "DEMO", liveAuthorized = false, tradeAllowed = true, terminalConnected = true, accountVerified = true,
+        actualAccountMode = "DEMO", liveAuthorized = false, tradeAllowed = true, terminalConnected = true, accountVerified = true, brokerIdentityVerified = true,
         currency = "USD", balance = null, equity = null, margin = null, freeMargin = null, marginLevel = null, leverage = null,
         positions = emptyList(), activeOrders = orders, closedDeals = emptyList(), snapshotsValid = true,
         lastSignal = null, newsVerdict = null, raw = JSONObject()

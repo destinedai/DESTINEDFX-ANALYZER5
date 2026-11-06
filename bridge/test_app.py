@@ -203,7 +203,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
+    assert set(state)=={'pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 
@@ -265,6 +265,8 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
     assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
+    state=client.get('/v1/app/state',headers=ah).json()['managed_execution']
+    assert state['worker_status']=='LEASED' and state['status']!='READY'
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
 
 def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypatch):
@@ -414,6 +416,29 @@ def test_worker_lease_capacity_blocks_second_simultaneous_claim(monkeypatch):
     assert second.status_code == 200
     assert second.json() == {'job':None}
 
+
+def test_bridge_claim_payload_validates_in_worker_for_all_canonical_brands_and_modes(monkeypatch):
+    import sys
+    from pathlib import Path
+    worker_dir = str(Path(__file__).resolve().parents[1] / 'managed-worker')
+    if worker_dir not in sys.path:
+        sys.path.insert(0, worker_dir)
+    import worker
+    managed_env(monkeypatch)
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    for index, brand in enumerate(('FBS','EXNESS','HFM','DERIV')):
+        for mode in ('DEMO','LIVE'):
+            _, headers = managed_pair()
+            assert client.post('/v1/app/managed-account', headers=headers, json={
+                'login':f'800{index}{1 if mode == "LIVE" else 0}','server':'Broker-Server','password':'fixture-secret',
+                'access_type':'MASTER','account_mode':mode,'broker_brand':brand.lower(),'consent':True
+            }).status_code == 202
+            claim = client.post('/v1/worker/jobs/claim', headers=wh, json={'worker_id':f'worker-{index}-{mode}'})
+            assert claim.status_code == 200
+            payload = claim.json()
+            assert payload['account']['broker_brand'] == brand
+            assert payload['account']['account_mode'] == mode
+            assert worker.validate_job(payload)['account']['broker_brand'] == brand
 
 def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
     managed_env(monkeypatch)
@@ -708,8 +733,26 @@ def test_readiness_requires_valid_managed_configuration_and_storage(monkeypatch)
     assert response.status_code==503
     managed_env(monkeypatch)
     response=client.get('/health/ready')
-    assert response.status_code==200
-    assert response.json()=={'status':'ready','database':'ok','managed_execution':'configured'}
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
+
+def test_worker_claim_receives_persisted_bridge_origin_and_readiness_fails_closed(monkeypatch):
+    managed_env(monkeypatch)
+    expected='https://bridge.destinedfx.internal'
+    assert client.get('/health/ready').status_code==503
+    p,ah=managed_pair()
+    assert client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'123456','server':'Demo-Server','password':'test-only',
+        'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+    }).status_code==202
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    claim=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'origin-regression-worker'})
+    assert claim.status_code==200
+    assert claim.json()['bridge_url']==expected
+    monkeypatch.delenv('BRIDGE_BASE_URL',raising=False)
+    response=client.get('/health/ready')
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='CONFIGURATION_REQUIRED'
 
 def test_non_durable_storage_is_not_execution_ready(monkeypatch):
     managed_env(monkeypatch)
@@ -723,7 +766,8 @@ def test_documented_health_paths_are_implemented(monkeypatch):
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN','operator-secret-test-fixture-2026-very-long')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.realcop.com')
-    assert client.get('/health/ready').status_code==200
+    assert client.get('/health/ready').status_code==503
+    assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
 
 
 def test_malformed_managed_origin_fails_closed(monkeypatch):
@@ -911,7 +955,8 @@ def test_render_external_url_fallback_can_make_bridge_ready(monkeypatch):
     monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN','render-worker-token-test-fixture-at-least-32-chars')
-    assert client.get('/health/ready').status_code==200
+    assert client.get('/health/ready').status_code==503
+    assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
 
 def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(monkeypatch):
     from starlette.requests import Request

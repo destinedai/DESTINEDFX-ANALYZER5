@@ -35,12 +35,12 @@ android {
     applicationId = "com.aistudio.destinedfx.qwvzxp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 10
-    versionName = "1.0.10"
+    versionCode = 13
+    versionName = "1.0.13"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
+    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
   signingConfigs {
@@ -114,19 +114,25 @@ android {
   }
 }
 
+chaquopy {
+  defaultConfig {
+    version = "3.12"
+    buildPython("/usr/bin/python3.12")
+    pip { install("tzdata==2025.2") }
+  }
+  sourceSets {
+    getByName("main") {
+      setSrcDirs(listOf("../bridge"))
+      include("quantitative.py")
+    }
+  }
+}
+
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
-}
-
-chaquopy {
-  defaultConfig {
-    version = "3.13"
-    pip { install("tzdata==2025.2") }
-  }
-  sourceSets { getByName("main") { srcDir("src/main/python") } }
 }
 
 // Dependencies

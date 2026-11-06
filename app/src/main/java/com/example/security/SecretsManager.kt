@@ -398,6 +398,27 @@ class SecretsManager internal constructor(
             .remove("${prefix}_save_password").commit()
     }
 
+    /** Stable account slots. Each slot is an independent encrypted namespace; no DEMO/LIVE values are shared. */
+    fun getManagedMT5AccountRegistry(): List<com.example.data.mt5.MT5AccountSlot> {
+        val slots = listOf("FBS", "EXNESS", "HFM", "DERIV").flatMap { brand ->
+            listOf("DEMO", "LIVE").map { mode ->
+                val key = "${brand}_${mode}"
+                com.example.data.mt5.MT5AccountSlot(
+                    accountId = key,
+                    broker = brand,
+                    platform = "MT5",
+                    accountMode = mode,
+                    login = getManagedMT5AccountLogin(key),
+                    server = getManagedMT5AccountServer(key),
+                    accessType = getManagedMT5AccountAccessType(key),
+                    connected = false,
+                    passwordSaved = isManagedMT5AccountPasswordSaveEnabled(key)
+                )
+            }
+        }
+        return slots
+    }
+
     fun saveMT5BridgeAccountPendingCommand(requestId: String, action: String, profileKey: String): Boolean {
         if (!isSecureStorageAvailable || requestId.isBlank() || action.isBlank()) return false
         val prefix = mt5AccountKey("pending", profileKey).removeSuffix("_pending")

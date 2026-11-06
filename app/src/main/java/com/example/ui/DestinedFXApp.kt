@@ -348,11 +348,11 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedScreen) {
                     DestinedFXScreen.Home -> HomeDashboardTab(viewModel)
-                    DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel, onExportAnalysis = { showExportDialog = true })
+                    DestinedFXScreen.Analyzer -> SimplifiedAnalyzerTab(viewModel, onExportAnalysis = { showExportDialog = true })
                     DestinedFXScreen.ImageAnalyzer -> ChartImageAnalyzerTab(viewModel)
                     DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
                     DestinedFXScreen.Calendar -> CalendarTab(viewModel)
-                    DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
+                    DestinedFXScreen.Bot -> SimplifiedBotWorkstation(viewModel)
                     DestinedFXScreen.Watchlist -> WatchlistTab(viewModel)
                     DestinedFXScreen.More -> MoreTab(viewModel)
                     DestinedFXScreen.Chat -> ChatWorkstationTab(viewModel)
@@ -933,6 +933,23 @@ private fun FullAnalysisReport(result: DynamicAnalysisInfo?) {
         InsightLine("Confluence score (not a win probability)", result.confidencePct.takeIf { it > 0 }?.let { "$it/100" } ?: "Not scored")
         InsightLine("Data source", result.dataSource.ifBlank { "UNKNOWN" })
         InsightLine("Ruleset version", result.strategyVersion.ifBlank { "Not supplied" })
+        HorizontalDivider(color = CardBorder)
+        Text("PYTHON QUANTITATIVE CANDIDATE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        val python = result.pythonAnalysis
+        InsightLine("Python state", python?.state ?: "UNAVAILABLE")
+        InsightLine("Python direction", if (python?.state == "CANDIDATE") python.direction else "WAIT")
+        InsightLine("Python entry", python?.entry?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python stop-loss", python?.stopLoss?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python take-profit", python?.takeProfit?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python R:R", python?.rewardToRisk?.let { "1:${String.format(Locale.US, "%.2f", it)}" } ?: "N/A")
+        InsightLine("Python candle", python?.candleTimestampMs?.takeIf { it > 0L }?.let { java.util.Date(it).toString() } ?: "N/A")
+        InsightLine("Python engine", python?.strategyId?.ifBlank { "Not initialized" } ?: "Not initialized")
+        InsightLine("Python ruleset", python?.strategyVersion?.ifBlank { "Not supplied" } ?: "Not supplied")
+        InsightLine("Parity", when { python == null -> "Not assessed"; python.conflict -> "CONFLICT"; else -> "Analysis only" })
+        Text(python?.reason?.ifBlank { "No Python candidate reason returned." } ?: "Python analysis not available.", fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+        python?.evidence.orEmpty().take(6).forEach { evidence ->
+            Text("• $evidence", color = TextPrimary, fontSize = 10.sp, lineHeight = 15.sp)
+        }
         InsightLine("MTF state", result.mtfStatus.ifBlank { "WAIT" })
         InsightLine("MTF summary", result.mtfSummary.ifBlank { "No summary returned" })
         InsightLine("Risk gate", result.riskNote.ifBlank { "No risk note returned" })
