@@ -16,7 +16,7 @@
 
 ## Official Exness API update (23 October 2026)
 
-Exness now documents an official REST and WebSocket API for eligible Exness-platform accounts, including account information, instruments, market data and trading: [Exness API](https://get.exness.help/hc/en-us/articles/27866287512476-Exness-API). The page explicitly excludes standard MT4/MT5 accounts. Therefore this application must continue to authenticate and trade Exness MT5 accounts through the managed MetaTrader 5 terminal, exact account server, EA and bridge. The Exness API is not an authentication or trading shortcut for Exness MT5. It may be considered later only as a separate optional integration for eligible Exness-platform accounts.
+Exness documents a separate REST and WebSocket API for eligible Exness-platform accounts, including account information, instruments, market data and trading: [Exness API](https://get.exness.help/hc/en-us/articles/27866287512476-Exness-API). The current Help Center article (updated 2026-09-29) says this API is **only available in Vietnam and Thailand** and explicitly excludes standard MT4/MT5 accounts. Nigeria is outside the published API regions. Therefore this application must continue to authenticate and trade an owner-identified Exness MT5 account only through the managed MetaTrader 5 terminal, exact account server, EA and bridge. The separate Exness API is not an authentication or trading shortcut for Exness MT5 and is deferred/no-code for the user's Nigeria region.
 
 ## Implementation constraints and documented gaps
 

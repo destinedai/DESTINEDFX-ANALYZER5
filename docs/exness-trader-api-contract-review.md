@@ -1,12 +1,12 @@
 # Exness Trader API contract review
 
-**Reviewed:** 2026-11-05 against the linked official Exness Developer Portal and OpenAPI YAML.
+**Reviewed:** 2026-11-06 against the linked official Exness Developer Portal, OpenAPI YAML, and current Exness Help Center regional restriction.
 
 This note records the source contracts found while assessing a separate Exness Trader API integration. It is not evidence of a live eligible account, a successful authentication, or an implemented integration.
 
 ## Verified documentation and key account distinction
 
-Exness describes the Trader API as a distinct product from MetaTrader connectivity. Its help article says standard MetaTrader accounts cannot connect to the Trader API; those accounts must remain on the genuine MT5 terminal route. The same help article describes Exness trading accounts as eligible subject to verification and API access requirements. Do not interpret this as API eligibility for every MT account.[1]
+Exness describes the Trader API as a distinct product from MetaTrader connectivity. The current Help Center article, updated 2026-09-29, says the Exness API is **only available in Vietnam and Thailand** and that standard MetaTrader accounts cannot connect; those accounts must remain on the genuine MT5 terminal route. The published region restriction excludes this project's Nigeria account from the API path; account/API access is also subject to Exness verification and terms. Do not interpret “eligible Exness trading account” as API access for every region or MT account.[1] [5]
 
 The API overview instructs clients to use the Gateway host supplied by the API Key Management DNS widget and discover the account Access Point before making REST or WebSocket requests. It states private signing material must remain in a trusted server-side environment and not be placed in mobile apps, browser code, public repositories, or client-side scripts.[2]
 
@@ -40,7 +40,7 @@ For signed HTTP requests the official reference documents the headers `EXN-API-K
 
 The supplied legacy `/trading` reference URL currently returns Page Not Found. The current official reference is the linked API Reference page and OpenAPI YAML above. The official Access Point guide describes the Gateway-to-account-Access-Point discovery concept, but its example endpoint/path is conditional on a separate Access Point YAML contract. The account-access-point operation is not present in the retrieved Trader API OpenAPI paths. Therefore this review does **not** verify the discovery request method/path, exact query or response schema, signing requirements, cache lifetime, or WebSocket host/handshake. Do not implement or hard-code `/v1/trading/access-point?account_id=...` as a guaranteed route until Exness supplies the authoritative current schema.[4]
 
-The operation schemas in the official OpenAPI are sufficient to begin isolated contract tests and a server-side signing layer, but not sufficient to declare the requested full integration complete while Access Point discovery/host selection and real account eligibility remain unverified. Do not place API-key identifiers or private keys in Android, APK resources, Git, screenshots, logs, or chat. No owner credentials were requested or used here.
+The operation schemas in the official OpenAPI describe a distinct API product but do not make it eligible for a Nigeria resident: the current published region list is Vietnam/Thailand only. They are documentation-only in this Phase 1 task. The exact Access Point discovery operation path/schema also remains unresolved. Do not place API-key identifiers or private keys in Android, APK resources, Git, screenshots, logs, or chat. No owner credentials were requested or used here.
 
 ## References
 
@@ -48,3 +48,4 @@ The operation schemas in the official OpenAPI are sufficient to begin isolated c
 [2]: https://www.exness-api.com/ "Exness API developer overview"
 [3]: https://www.exness-api.com/reference/trading/exness-trader-api "Exness Trader API reference and linked OpenAPI"
 [4]: https://www.exness-api.com/trading/get-started/access-point-host-discovery "Exness Access Point host discovery"
+[5]: https://get.exness.help/hc/en-us/articles/27866287512476-Exness-API "Exness API availability and eligibility, updated 2026-09-29"

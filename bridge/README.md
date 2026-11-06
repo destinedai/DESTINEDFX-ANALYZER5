@@ -20,6 +20,8 @@ Automated execution also requires `NEWS_PROVIDER_URL` to be configured with an a
 
 ## Deployment and TLS
 
+For Phase 1's owner-operated Windows host, use [`../docs/owner-operated-docker-bridge.md`](../docs/owner-operated-docker-bridge.md) with [`compose.owner.yaml`](compose.owner.yaml) and [`Caddyfile.owner`](Caddyfile.owner). It publishes only the TLS proxy on the Windows host's Tailscale interface; the bridge itself has no host port. This private recipe is distinct from public hosting and has not been deployed or tested on the owner's machine.
+
 Copy `.env.example` to `.env`, set persistent `BRIDGE_DB_PATH=/data/bridge.sqlite3`, keep `ALLOW_LOOPBACK_HTTP=false`, and change limits only with care. `docker compose up -d --build` runs an unprivileged container and persists its WAL/database in the named volume. Back up the volume consistently; SQLite WAL files must be included in live backups or use SQLite's online backup API.
 
 Put a maintained TLS reverse proxy (for example Caddy, nginx, or a managed HTTPS load balancer) in front. Use a valid public certificate, redirect HTTP to HTTPS at the proxy, permit only the intended hostname, set a request body limit at or below 64 KiB, and forward requests only to the private bridge port. Do not expose port 8000 directly. Configure proxy trust so spoofed forwarded headers cannot be supplied by arbitrary clients; the sample container trusts forwarded headers because it is intended to be reachable only from the proxy network. Health and API endpoints must also be served exclusively through HTTPS.

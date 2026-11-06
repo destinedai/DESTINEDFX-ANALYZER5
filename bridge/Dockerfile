@@ -4,6 +4,7 @@ WORKDIR /srv/bridge
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
+COPY quantitative.py .
 RUN useradd --system --uid 10001 bridge && mkdir -p /data && chown -R bridge:bridge /data /srv/bridge
 USER bridge
 EXPOSE 8000
