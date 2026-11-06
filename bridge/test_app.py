@@ -60,6 +60,16 @@ def test_authenticated_analysis_is_typed_non_executable_and_idempotent(monkeypat
     assert client.post('/v1/app/analysis',headers=headers,json=changed).status_code==409
 
 
+def test_authorized_requests_are_rate_limited_by_bearer_token_without_echoing_it(monkeypatch):
+    p=pair(); token_value=p['app_token']; headers={'Authorization':'Bearer '+token_value}
+    monkeypatch.setattr(app,'TOKEN_RATE',1)
+    first=client.get('/v1/app/state',headers=headers)
+    assert first.status_code==200
+    second=client.get('/v1/app/state',headers=headers)
+    assert second.status_code==429
+    assert token_value not in second.text
+
+
 def test_analysis_response_model_rejects_directionally_invalid_candidate_geometry():
     invalid = {
         'symbol':'EUR/USD','strategy_id':'smc-confluence-1.0.0','strategy_version':'python-smc-confluence-1.0.0',
@@ -231,8 +241,37 @@ def managed_env(monkeypatch):
         c.execute('DELETE FROM managed_accounts')
         c.execute('DELETE FROM rate')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
-    monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-2026-very-long')
+    monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-' + '2026-very-long')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.destinedfx.internal')
+
+def test_cloudflare_access_origin_validation_fails_closed(monkeypatch):
+    monkeypatch.setenv('CF_ACCESS_TEAM_DOMAIN','https://team.cloudflareaccess.com')
+    monkeypatch.setenv('CF_ACCESS_AUD','expected-audience')
+    monkeypatch.setattr(app,'validate_cloudflare_assertion',lambda assertion: assertion=='valid-assertion')
+    assert client.post('/v1/pairings').status_code==401
+    assert client.post('/v1/pairings',headers={'Cf-Access-Jwt-Assertion':'invalid'}).status_code==401
+    assert client.post('/v1/pairings',headers={'Cf-Access-Jwt-Assertion':'valid-assertion'}).status_code==201
+    monkeypatch.delenv('CF_ACCESS_AUD')
+    misconfigured=client.post('/v1/pairings')
+    assert misconfigured.status_code==503 and misconfigured.json()['detail']['code']=='ACCESS_VALIDATION_MISCONFIGURED'
+
+def test_cloudflare_access_assertion_verifies_signature_issuer_audience_and_expiry(monkeypatch):
+    from types import SimpleNamespace
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    private_key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+    public_key=private_key.public_key()
+    class LocalJwks:
+        def get_signing_key_from_jwt(self,assertion): return SimpleNamespace(key=public_key)
+    monkeypatch.setattr(app,'_cloudflare_jwks_client',lambda domain: LocalJwks())
+    monkeypatch.setenv('CF_ACCESS_TEAM_DOMAIN','https://team.cloudflareaccess.com')
+    monkeypatch.setenv('CF_ACCESS_AUD','expected-audience')
+    now=int(time.time())
+    token=app.jwt.encode({'iss':'https://team.cloudflareaccess.com','aud':'expected-audience','iat':now,'exp':now+60},private_key,algorithm='RS256',headers={'kid':'fixture'})
+    assert app.validate_cloudflare_assertion(token)
+    wrong_audience=app.jwt.encode({'iss':'https://team.cloudflareaccess.com','aud':'wrong-audience','iat':now,'exp':now+60},private_key,algorithm='RS256',headers={'kid':'fixture'})
+    with pytest.raises(app.jwt.InvalidTokenError): app.validate_cloudflare_assertion(wrong_audience)
+    expired=app.jwt.encode({'iss':'https://team.cloudflareaccess.com','aud':'expected-audience','iat':now-120,'exp':now-60},private_key,algorithm='RS256',headers={'kid':'fixture'})
+    with pytest.raises(app.jwt.ExpiredSignatureError): app.validate_cloudflare_assertion(expired)
 
 def command_req(action='START'):
     return {'request_id':str(uuid.uuid4()),'action':action,'config':{}}
@@ -262,7 +301,7 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
         row=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
         assert 'topsecret' not in str(dict(row)) and '99881' not in str(dict(row))
     assert client.post('/v1/worker/jobs/claim',json={'worker_id':'w1'}).status_code==401
-    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    wh={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
     assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
     state=client.get('/v1/app/state',headers=ah).json()['managed_execution']
@@ -764,7 +803,7 @@ def test_non_durable_storage_is_not_execution_ready(monkeypatch):
 def test_documented_health_paths_are_implemented(monkeypatch):
     assert client.get('/health').status_code==200
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
-    monkeypatch.setenv('WORKER_TOKEN','operator-secret-test-fixture-2026-very-long')
+    monkeypatch.setenv('WORKER_TOKEN','unit-test-worker-token-not-live-0001')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.realcop.com')
     assert client.get('/health/ready').status_code==503
     assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'

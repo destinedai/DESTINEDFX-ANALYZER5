@@ -73,6 +73,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 sealed interface BotUiState {
     val label: String
@@ -114,6 +116,42 @@ fun deriveBotUiState(
     else -> BotUiState.NOT_CONFIGURED
 }
 
+fun isVerifiedMt5Connection(
+    snapshotConnected: Boolean,
+    workerReady: Boolean,
+    terminalOnline: Boolean,
+    heartbeatFresh: Boolean,
+    accountVerified: Boolean,
+    brokerIdentityVerified: Boolean,
+    actualMode: String,
+    expectedMode: String,
+    actualLogin: String,
+    expectedLogin: String,
+    actualServer: String,
+    expectedServer: String,
+): Boolean = snapshotConnected && workerReady && terminalOnline && heartbeatFresh && accountVerified &&
+    brokerIdentityVerified && actualMode == expectedMode && actualLogin.isNotBlank() && actualLogin == expectedLogin &&
+    actualServer.isNotBlank() && actualServer == expectedServer
+
+fun isValidDemoPassEvidence(
+    expectedBroker: String,
+    expectedLogin: String,
+    expectedServer: String,
+    broker: String,
+    mode: String,
+    status: String,
+    login: String,
+    server: String,
+    soakDays: Int,
+    orderLifecyclePass: Boolean,
+    dailyReconciliationPass: Boolean,
+    restartTestPass: Boolean,
+    riskControlsPass: Boolean,
+    evidencePathCount: Int,
+): Boolean = broker == expectedBroker && mode == "DEMO" && status == "PASS" &&
+    expectedLogin.isNotBlank() && login == expectedLogin && expectedServer.isNotBlank() && server == expectedServer &&
+    soakDays in 5..7 && orderLifecyclePass && dailyReconciliationPass && restartTestPass && riskControlsPass && evidencePathCount > 0
+
 @Composable
 fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val context = LocalContext.current
@@ -148,6 +186,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var serviceUrl by remember { mutableStateOf("") }
+    var cloudflareClientId by remember { mutableStateOf("") }
+    var cloudflareClientSecret by remember { mutableStateOf("") }
     var serviceReadiness by remember { mutableStateOf<MT5RemoteBridgeClient.ServiceReadiness?>(null) }
     var showAdvancedConnection by remember { mutableStateOf(false) }
     var mt5Snapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
@@ -156,16 +196,62 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var liveAuthorizationExpiry by remember(mt5Profile) { mutableStateOf("") }
     var selectedOpportunity by remember { mutableStateOf<com.example.domain.model.TradeSignal?>(null) }
     var commandPending by remember { mutableStateOf(false) }
+    var demoPassDigests by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val secrets = viewModel.app.secretsManager
     LaunchedEffect(secrets) {
         serviceUrl = secrets.getManagedMT5ServiceUrl()
+        cloudflareClientId = secrets.getCloudflareAccessClientId()
+        cloudflareClientSecret = secrets.getCloudflareAccessClientSecret()
         derivMode = secrets.getDerivAccountMode()
         derivToken = secrets.getDerivApiToken(derivMode)
         derivAppId = secrets.getDerivAppId()
     }
     val bridge = remember(mt5Profile) { if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) MT5RemoteBridgeClient(secrets, mt5Profile, { AppSecurityGuard.authorizeSensitiveAction() }, accountMode = mt5Mode, brokerBrand = selectedMt5Broker) else null }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val demoPassLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) {
+            message = "No DEMO evidence file was selected. LIVE remains locked."
+        } else {
+            val result = runCatching {
+                val bytes = requireNotNull(context.contentResolver.openInputStream(uri)).use { it.readBytes() }
+                require(bytes.size in 1..65536) { "Evidence file must be between 1 byte and 64 KiB." }
+                val evidence = JSONObject(String(bytes, StandardCharsets.UTF_8))
+                val broker = selectedMt5Broker
+                val demoLogin = secrets.getManagedMT5AccountLogin("${broker}_DEMO")
+                val demoServer = secrets.getManagedMT5AccountServer("${broker}_DEMO")
+                val paths = evidence.optJSONArray("evidence_paths")
+                val valid = isValidDemoPassEvidence(
+                    expectedBroker = broker,
+                    expectedLogin = demoLogin,
+                    expectedServer = demoServer,
+                    broker = evidence.optString("broker"),
+                    mode = evidence.optString("mode"),
+                    status = evidence.optString("status"),
+                    login = evidence.optString("account_login"),
+                    server = evidence.optString("server"),
+                    soakDays = evidence.optInt("soak_days", -1),
+                    orderLifecyclePass = evidence.optBoolean("order_lifecycle_pass", false),
+                    dailyReconciliationPass = evidence.optBoolean("daily_reconciliation_pass", false),
+                    restartTestPass = evidence.optBoolean("restart_test_pass", false),
+                    riskControlsPass = evidence.optBoolean("risk_controls_pass", false),
+                    evidencePathCount = paths?.length() ?: 0,
+                )
+                require(valid) { "DEMO PASS evidence is incomplete or does not match the selected broker's saved DEMO account." }
+                val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+                digest
+            }
+            result.onSuccess { digest ->
+                demoPassDigests = demoPassDigests + (selectedMt5Broker to digest)
+                message = "DEMO PASS file accepted for $selectedMt5Broker. SHA-256 $digest. LIVE still requires exact LIVE identity, short lease, owner approval, and all other gates."
+            }.onFailure {
+                message = "DEMO PASS file rejected: ${it.message?.take(180) ?: "invalid evidence"}. LIVE remains locked."
+            }
+        }
+    }
     val selectMt5Slot: (String, String) -> Unit = { brand, mode ->
+        if (mode == "LIVE" && brand !in demoPassDigests) {
+            message = "LIVE is locked. Import a matching broker-specific DEMO PASS file after the required soak and evidence gates."
+        } else {
         val changed = selectedMt5Broker != brand || mt5Mode != mode
         val previousBridge = bridge
         val applySelection = {
@@ -182,6 +268,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 finally { busy = false }
             }
         } else applySelection()
+        }
     }
     val selectBrokerType: (BrokerType) -> Unit = { type ->
         val previousBridge = bridge
@@ -227,9 +314,20 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
 
     val connected = when (broker) {
         BrokerType.MT5 -> mt5Snapshot?.let {
-            it.connected && it.workerStatus == "READY" && it.terminalOnline && it.heartbeatFresh && it.accountVerified && it.brokerIdentityVerified &&
-                it.actualAccountMode == mt5Mode && it.actualLogin == secrets.getManagedMT5AccountLogin(mt5Profile) &&
-                it.actualServer == secrets.getManagedMT5AccountServer(mt5Profile)
+            isVerifiedMt5Connection(
+                snapshotConnected = it.connected,
+                workerReady = it.workerStatus == "READY",
+                terminalOnline = it.terminalOnline,
+                heartbeatFresh = it.heartbeatFresh,
+                accountVerified = it.accountVerified,
+                brokerIdentityVerified = it.brokerIdentityVerified,
+                actualMode = it.actualAccountMode,
+                expectedMode = mt5Mode,
+                actualLogin = it.actualLogin,
+                expectedLogin = secrets.getManagedMT5AccountLogin(mt5Profile),
+                actualServer = it.actualServer,
+                expectedServer = secrets.getManagedMT5AccountServer(mt5Profile),
+            )
         } == true
         BrokerType.DERIV -> derivAccountReady &&
             derivAccount?.let { it.mode.equals(derivMode, true) && it.accountType.equals(derivMode, true) &&
@@ -255,6 +353,43 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     Column(modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("DESTINEDFX BOT", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
         Text("Connect an account, then let the engine scan eligible markets automatically.", color = TextSecondary, fontSize = 11.sp)
+        val setupStep = when {
+            !connected && login.isBlank() -> 1
+            !connected -> 2
+            !running -> 3
+            else -> 4
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CardBorder)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("SETUP · STEP $setupStep OF 4", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text("1 Broker and mode  →  2 Account identity  →  3 Verify fresh EA heartbeat  →  4 DEMO acceptance and soak", color = TextSecondary, fontSize = 10.sp)
+                Text("LIVE remains subject to a broker-specific DEMO PASS and a separate short lease. No LIVE order is authorized by this screen.", color = WarningAmber, fontSize = 9.sp)
+            }
+        }
+        if ((broker == BrokerType.MT5 && bridge?.hasPairing() == true) || running) {
+            Button(
+                onClick = {
+                    scope.launch {
+                        commandPending = true
+                        try {
+                            if (broker == BrokerType.MT5) {
+                                val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "EMERGENCY_STOP")
+                                message = if (result.queued) "EMERGENCY STOP acknowledged by bridge request; verify fresh EA acknowledgement and stop state. Open positions are not liquidated." else result.detail
+                            } else {
+                                DerivDemoBotService.stop(context)
+                                secrets.invalidateDerivRealAuthorization()
+                                viewModel.setBotStatus(false)
+                                message = "Emergency stop requested locally. Verify broker state; existing positions are not liquidated."
+                            }
+                        } catch (e: Exception) { message = e.message?.take(240) ?: "Emergency stop was not confirmed; stop manually in the terminal." }
+                        finally { commandPending = false }
+                    }
+                },
+                enabled = !commandPending,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)
+            ) { Icon(Icons.Default.Stop, contentDescription = null); Text("EMERGENCY STOP · STOP NEW ENTRIES", fontWeight = FontWeight.Black) }
+        }
         Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CardBorder)) {
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("BOT STATE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Black)
@@ -269,6 +404,21 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("MANAGED HTTPS BRIDGE", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 OutlinedTextField(value = serviceUrl, onValueChange = { serviceUrl = it }, label = { Text("Owner-managed HTTPS origin") }, placeholder = { Text("https://your-host.example") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                Text("Optional Cloudflare Access service token. Use this only if Cloudflare is the single selected network path and bridge-side JWT validation is enabled. Leave both fields blank for private Tailscale Serve.", color = WarningAmber, fontSize = 9.sp)
+                OutlinedTextField(value = cloudflareClientId, onValueChange = { cloudflareClientId = it }, label = { Text("CF Access client ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = cloudflareClientSecret, onValueChange = { cloudflareClientSecret = it }, label = { Text("CF Access client secret") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = {
+                        val saved = if (cloudflareClientId.isBlank() && cloudflareClientSecret.isBlank()) secrets.clearCloudflareAccessServiceToken()
+                        else secrets.saveCloudflareAccessServiceToken(cloudflareClientId, cloudflareClientSecret)
+                        message = if (saved) "Cloudflare Access service token saved in encrypted device storage. It is sent only with bridge requests." else "Cloudflare Access token was not saved. Check that both fields are present and secure storage is available."
+                    }, modifier = Modifier.weight(1f)) { Text("SAVE ACCESS TOKEN") }
+                    OutlinedButton(onClick = {
+                        val cleared = secrets.clearCloudflareAccessServiceToken()
+                        if (cleared) { cloudflareClientId = ""; cloudflareClientSecret = "" }
+                        message = if (cleared) "Cloudflare Access service token cleared." else "Secure storage unavailable; token was not cleared."
+                    }, modifier = Modifier.weight(1f)) { Text("CLEAR TOKEN") }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = {
                         val normalized = MT5RemoteBridgeClient.validServiceOrigin(serviceUrl).orEmpty()
@@ -305,6 +455,12 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 }
                 if (broker == BrokerType.MT5) {
                     Text("MT5 ACCOUNTS", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { demoPassLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }, enabled = mt5Mode == "DEMO" && secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_DEMO").isNotBlank() && secrets.getManagedMT5AccountServer("${selectedMt5Broker}_DEMO").isNotBlank()) {
+                            Text("IMPORT DEMO PASS FILE")
+                        }
+                        Text(if (selectedMt5Broker in demoPassDigests) "PASS · ${demoPassDigests[selectedMt5Broker]?.take(12)}" else "LIVE LOCKED", color = if (selectedMt5Broker in demoPassDigests) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                    }
                     listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
                             Text(brand, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -324,14 +480,25 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     connected -> "Connected"
                                     else -> "Authenticating"
                                 } else if (secrets.getMT5BridgeAccountAppToken(slot).isNotBlank()) "Paired" else if (saved) "Registered" else "Not configured"
-                                FilterChip(selected = selected, onClick = { selectMt5Slot(brand, mode) }, label = { Text("$mode · $status", fontSize = 9.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
+                                FilterChip(selected = selected, enabled = mode != "LIVE" || brand in demoPassDigests, onClick = { selectMt5Slot(brand, mode) }, label = { Text(if (mode == "LIVE" && brand !in demoPassDigests) "$mode · DEMO PASS REQUIRED" else "$mode · $status", fontSize = 9.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
                             }
                         }
                     }
                     Text("Broker selection is not identity proof. Use the exact server assigned to this MT5 account; verify terminal-reported company separately.", color = WarningAmber, fontSize = 9.sp)
                     LoginField("Login", login, { login = it.filter(Char::isDigit) }, KeyboardType.Number)
                     LoginField("Password", password, { password = it }, KeyboardType.Password, true)
-                    LoginField("Server", server, { server = it }, KeyboardType.Text)
+                    LoginField("Exact broker server", server, { server = it }, KeyboardType.Text)
+                    val savedServerSuggestions = listOf("FBS", "EXNESS", "HFM", "DERIV").flatMap { brand ->
+                        listOf("DEMO", "LIVE").map { mode -> secrets.getManagedMT5AccountServer("${brand}_${mode}").trim() }
+                    }.filter { it.isNotBlank() && !it.equals(server.trim(), ignoreCase = true) }.distinct().take(6)
+                    if (savedServerSuggestions.isNotEmpty()) {
+                        Text("Previously saved server suggestions only. Confirm the exact server in the broker-issued terminal.", color = TextSecondary, fontSize = 9.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            savedServerSuggestions.forEach { suggestion ->
+                                FilterChip(selected = false, onClick = { server = suggestion }, label = { Text(suggestion, fontSize = 9.sp) })
+                            }
+                        }
+                    }
                     Text("Access type", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("MASTER", "INVESTOR").forEach { access ->

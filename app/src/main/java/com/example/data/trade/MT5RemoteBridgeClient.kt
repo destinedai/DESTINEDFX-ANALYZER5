@@ -75,7 +75,8 @@ class MT5RemoteBridgeClient(
     /** Probes service readiness independently of any paired account or terminal. HTTP 200 alone is not trading readiness. */
     suspend fun checkServiceReadiness(): ServiceReadiness = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: return@withContext ServiceReadiness(false, null, "CONFIGURATION_REQUIRED", "unknown", "unknown")
-        val req = Request.Builder().url(base + "/health/ready").header("Accept", "application/json").get().build()
+        val req = Request.Builder().url(base + "/health/ready").header("Accept", "application/json")
+            .apply { addOptionalAccessHeaders(this) }.get().build()
         try {
             http.newCall(req).execute().use { response ->
                 val body = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrElse { JSONObject() }
@@ -357,6 +358,7 @@ class MT5RemoteBridgeClient(
     private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException(if (!managedConfigured()) "CONFIGURATION_REQUIRED" else "Managed service URL is invalid; HTTPS is required.")
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
+        addOptionalAccessHeaders(builder)
         secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->
@@ -375,6 +377,15 @@ class MT5RemoteBridgeClient(
 
     private fun validateBaseUrl(raw: String): String? {
         return validServiceOrigin(raw)
+    }
+    private fun addOptionalAccessHeaders(builder: Request.Builder) {
+        val clientId = secrets.getCloudflareAccessClientId()
+        val clientSecret = secrets.getCloudflareAccessClientSecret()
+        require(clientId.isBlank() == clientSecret.isBlank()) { "Cloudflare Access service-token ID and secret must be configured together." }
+        if (clientId.isNotBlank()) {
+            builder.header("CF-Access-Client-Id", clientId)
+            builder.header("CF-Access-Client-Secret", clientSecret)
+        }
     }
     private fun finite(obj: JSONObject, key: String): Double? = obj.optDouble(key).takeIf { it.isFinite() }
     private fun finiteInt(obj: JSONObject, key: String): Int? = obj.optInt(key).takeIf { it > 0 }

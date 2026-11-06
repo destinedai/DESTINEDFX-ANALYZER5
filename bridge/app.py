@@ -1,12 +1,16 @@
 import os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error
+import re
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse, quote, urlencode
 from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from cryptography.fernet import Fernet, InvalidToken
+import jwt
+from jwt import PyJWKClient
 from quantitative import STRATEGY_RULESETS, analyze_json
 
 
@@ -14,6 +18,7 @@ DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
 ALLOW_LOOPBACK=os.getenv('ALLOW_LOOPBACK_HTTP','false').lower()=='true'
 MAX_BODY=int(os.getenv('MAX_BODY_BYTES','65536'))
 PAIR_RATE=int(os.getenv('PAIR_RATE_LIMIT','10'))
+TOKEN_RATE=int(os.getenv('TOKEN_RATE_LIMIT','180'))
 STALE=int(os.getenv('HEARTBEAT_STALE_SECONDS','15'))
 RECOVERY_GRACE=int(os.getenv('HEARTBEAT_RECOVERY_GRACE_SECONDS','120'))
 NEWS_BEFORE=int(os.getenv('NEWS_BLACKOUT_BEFORE_SECONDS','1800'))
@@ -38,6 +43,31 @@ ANALYSIS_SYMBOL_POLICY={
 ANALYSIS_SESSION_POLICY={'FOREX':True,'METAL':True,'CRYPTO':False}
 _NEWS_CACHE={}
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
+
+def cloudflare_access_settings():
+    team_domain=os.getenv('CF_ACCESS_TEAM_DOMAIN','').strip().rstrip('/')
+    audience=os.getenv('CF_ACCESS_AUD','').strip()
+    if not team_domain and not audience: return None
+    parsed=urlparse(team_domain)
+    host=(parsed.hostname or '').lower().rstrip('.')
+    if (parsed.scheme!='https' or parsed.port is not None or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password or
+        not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.cloudflareaccess\.com',host) or
+        not audience or len(audience)>2048):
+        raise ValueError('Cloudflare Access origin validation is incompletely or incorrectly configured')
+    return team_domain,audience
+
+@lru_cache(maxsize=4)
+def _cloudflare_jwks_client(team_domain):
+    return PyJWKClient(team_domain+'/cdn-cgi/access/certs',cache_jwk_set=True,lifespan=300,timeout=5)
+
+def validate_cloudflare_assertion(assertion):
+    settings=cloudflare_access_settings()
+    if settings is None: return False
+    team_domain,audience=settings
+    signing_key=_cloudflare_jwks_client(team_domain).get_signing_key_from_jwt(assertion)
+    claims=jwt.decode(assertion,signing_key.key,algorithms=['RS256'],audience=audience,issuer=team_domain,
+        options={'require':['exp','iat','iss','aud']},leeway=30)
+    return isinstance(claims,dict)
 
 def now(): return datetime.now(timezone.utc)
 def iso(dt=None): return (dt or now()).isoformat().replace('+00:00','Z')
@@ -75,6 +105,7 @@ def db():
     CREATE TABLE IF NOT EXISTS close_all_confirmations(token_hash TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, account_mode TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS command_items(command_id INTEGER NOT NULL REFERENCES commands(id) ON DELETE CASCADE, ticket TEXT NOT NULL, target_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_volume REAL NOT NULL DEFAULT 0.0, remaining_volume REAL, ack_status TEXT, message TEXT NOT NULL DEFAULT '', operational_status TEXT NOT NULL DEFAULT 'PENDING', ack_heartbeat_seq INTEGER, PRIMARY KEY(command_id,ticket));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS request_rate(token_hash TEXT PRIMARY KEY, window INTEGER NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED', broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN');
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
@@ -125,6 +156,28 @@ def secure(request):
 @app.middleware('http')
 async def limits(request:Request, call_next):
     secure(request)
+    try:
+        access_settings=cloudflare_access_settings()
+    except ValueError:
+        return JSONResponse({'detail':{'code':'ACCESS_VALIDATION_MISCONFIGURED'}},503)
+    if access_settings is not None:
+        assertion=request.headers.get('cf-access-jwt-assertion','').strip()
+        if not assertion: return JSONResponse({'detail':{'code':'ACCESS_ASSERTION_REQUIRED'}},401)
+        try: valid_access=validate_cloudflare_assertion(assertion)
+        except Exception: valid_access=False
+        if not valid_access: return JSONResponse({'detail':{'code':'ACCESS_ASSERTION_INVALID'}},401)
+    authorization=request.headers.get('authorization','').strip()
+    if authorization and not request.url.path.startswith('/health/'):
+        token_hash=digest(authorization)
+        window=int(time.time()//60)
+        with tx(immediate=True) as c:
+            row=c.execute('SELECT window,count FROM request_rate WHERE token_hash=?',(token_hash,)).fetchone()
+            if row and row['window']==window and row['count']>=TOKEN_RATE:
+                return JSONResponse({'detail':'Per-token request rate limit exceeded'},429,headers={'Retry-After':'60'})
+            c.execute('''INSERT INTO request_rate(token_hash,window,count) VALUES(?,?,1)
+                ON CONFLICT(token_hash) DO UPDATE SET
+                count=CASE WHEN request_rate.window=excluded.window THEN request_rate.count+1 ELSE 1 END,
+                window=excluded.window''',(token_hash,window))
     if request.method in ('POST','PUT','PATCH'):
         try: length=int(request.headers.get('content-length','0'))
         except ValueError: return JSONResponse({'detail':'Invalid content length'},400)

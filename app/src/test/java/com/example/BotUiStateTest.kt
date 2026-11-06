@@ -2,6 +2,8 @@ package com.example
 
 import com.example.ui.BotUiState
 import com.example.ui.deriveBotUiState
+import com.example.ui.isVerifiedMt5Connection
+import com.example.ui.isValidDemoPassEvidence
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -45,5 +47,65 @@ class BotUiStateTest {
             BotUiState.RUNNING,
             deriveBotUiState(false, true, false, true, true, "RUNNING", false),
         )
+    }
+
+    @Test fun httpSuccessPairingStaleHeartbeatAndIdentityMismatchNeverConnect() {
+        fun verified(
+            connected: Boolean = true,
+            heartbeatFresh: Boolean = true,
+            actualLogin: String = "123456",
+            actualServer: String = "Broker-Demo",
+            actualMode: String = "DEMO",
+        ) = isVerifiedMt5Connection(
+            snapshotConnected = connected,
+            workerReady = true,
+            terminalOnline = true,
+            heartbeatFresh = heartbeatFresh,
+            accountVerified = true,
+            brokerIdentityVerified = true,
+            actualMode = actualMode,
+            expectedMode = "DEMO",
+            actualLogin = actualLogin,
+            expectedLogin = "123456",
+            actualServer = actualServer,
+            expectedServer = "Broker-Demo",
+        )
+
+        assertEquals(false, verified(connected = false)) // HTTP readiness or pairing alone
+        assertEquals(false, verified(heartbeatFresh = false))
+        assertEquals(false, verified(actualLogin = "999999"))
+        assertEquals(false, verified(actualServer = "Broker-Live"))
+        assertEquals(false, verified(actualMode = "LIVE"))
+        assertEquals(true, verified())
+    }
+
+    @Test fun liveRequiresMatchingBrokerDemoPassEvidenceAndFullGateSet() {
+        fun accepted(
+            broker: String = "FBS",
+            status: String = "PASS",
+            soakDays: Int = 5,
+            restartTestPass: Boolean = true,
+        ) = isValidDemoPassEvidence(
+            expectedBroker = "FBS",
+            expectedLogin = "123456",
+            expectedServer = "FBS-Demo",
+            broker = broker,
+            mode = "DEMO",
+            status = status,
+            login = "123456",
+            server = "FBS-Demo",
+            soakDays = soakDays,
+            orderLifecyclePass = true,
+            dailyReconciliationPass = true,
+            restartTestPass = restartTestPass,
+            riskControlsPass = true,
+            evidencePathCount = 1,
+        )
+
+        assertEquals(true, accepted())
+        assertEquals(false, accepted(broker = "EXNESS"))
+        assertEquals(false, accepted(status = "BLOCKED"))
+        assertEquals(false, accepted(soakDays = 4))
+        assertEquals(false, accepted(restartTestPass = false))
     }
 }

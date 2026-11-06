@@ -62,13 +62,15 @@ Before planned maintenance or revocation, stop the active Bot and revoke its pai
 
 No service was purchased, rented, enrolled, or changed. Prices below are the current prices shown on the linked official pages and are planning figures, not an authorization to spend.
 
-| Option | Official price evidence | Network shape | Main risks and requirements | Decision |
-| --- | --- | --- | --- | --- |
-| Private Tailscale Serve | Personal is $0 forever for up to 6 users, but Tailscale says it is only suitable for non-commercial use. Standard is $8 per user per month and Premium is $18 per user per month.[3] | Private tailnet access from the phone to the Windows PC. The bridge stays on loopback and Serve forwards to `127.0.0.1`. | Personal eligibility is not safe to assume for business use. HTTPS requires MagicDNS and certificates. Certificate hostnames appear in Certificate Transparency. | Recommended only if the owner's existing tailnet is eligible under the applicable terms. Otherwise do not proceed without selecting an eligible paid plan. |
-| Cloudflare Tunnel | Cloudflare advertises a free Zero Trust plan and says to start a proof of concept with it. The cited pricing page does not publish a fixed paid Tunnel total, so paid cost is `contact sales` or account-specific.[5] | `cloudflared` makes outbound-only connections, so no inbound Windows firewall port is required.[6] | Requires a Cloudflare account and a domain or hostname configuration. A public hostname increases exposure and must retain bearer token authentication, rate limits, logging controls, and strict access policy. | Viable fallback after explicit owner approval of the account, domain, public hostname, and security policy. |
-| Public HTTPS reverse proxy with a domain | A DigitalOcean Basic Droplet starts at $4 per month for 512 MiB, 1 vCPU, 10 GiB SSD, and 500 GiB transfer. Daily backups cost 30% of Droplet cost, or $1.20 per month at that smallest plan. Let's Encrypt certificates are free. Domain registration is additional and varies by registrar and TLD, so no domain total is claimed.[7] [8] [9] | Public DNS points the phone to a proxy host, which forwards HTTPS to the bridge. The Windows machine needs an outbound connection to the proxy and must not expose MT5 or port 8000. | Adds a second host, domain renewal, patching, firewall, proxy hardening, monitoring, backup, and a new credential boundary. A 512 MiB host may be too small once proxy, logs, and controls are included. | Not recommended for the first DEMO path unless the owner explicitly approves the recurring host and domain costs and accepts public exposure. |
+| Option | Published price checked 2026-11-06 | Windows licence | Network shape and fit |
+| --- | --- | --- | --- |
+| Private Tailscale Serve | Personal $0, non-commercial only. Standard $8 per user per month.[3] | Not applicable | Selected private phone-to-host route. Bridge remains loopback. Use only if the existing plan is eligible. |
+| MassiveGRID Growth, 2 vCPU and 4 GB | $9.58 compute plus $12.62 for 2 vCPU licence = **$22.20/month**.[10] | Permanent Windows Server licence at $6.31 per vCPU/month | Candidate single-broker first host; locations listed as New York, London, Frankfurt, Singapore. |
+| Raff Forex VM, 2 vCPU and 4 GB | **$37.99/month recurring** after $22.99 first month on the first server billed monthly.[11] | Included | Vendor describes one MT5 terminal or two MT4 terminals. Annual billing is shown as $34.16/month. |
+| MassiveGRID Pro, 4 vCPU and 8 GB | $19.16 compute plus $25.24 for 4 vCPU licence = **$44.40/month**.[10] | Permanent Windows Server licence at $6.31 per vCPU/month | Candidate later four-terminal host only after per-broker stages, isolation, and resource tests. |
+| Raff Forex VM, 4 vCPU and 8 GB | **$55.99/month recurring** after $40.99 first month on the first server billed monthly.[11] | Included | Vendor describes two or three terminals. Four MT5 terminals are not guaranteed by that page. |
 
-For `WINDOWS_VPS`, the conditional recommendation is private Tailscale Serve because it keeps the bridge private and leaves port 8000 on loopback. This recommendation is not approval to use the Personal plan for commercial activity. The owner must first confirm that the existing tailnet and intended use satisfy Tailscale's terms. If they do not, stop and ask the owner to choose Cloudflare Tunnel or a public reverse proxy and approve its account, domain, recurring price, and exposure model. Do not configure either alternative silently.
+Start with one broker only and size its MT5 host at 4 GB RAM. Consider 8 GB only after each broker has passed its own DEMO gates and host load tests. A 2 GB host is a floor for one light terminal, not a preferred capacity claim for this app. These vendor prices do not prove the product's workload will fit or remain available. No service was purchased. Written owner approval is required before spending. Do not configure a Cloudflare Tunnel or public proxy under this Tailscale-only setup.
 
 ## Current limits
 
@@ -80,11 +82,8 @@ This sandbox did not have the owner's Windows PC, Tailscale tailnet, MT5 termina
 [2]: https://tailscale.com/docs/how-to/set-up-https-certificates "Tailscale HTTPS certificates"
 [3]: https://tailscale.com/pricing "Tailscale pricing and plan eligibility"
 [4]: https://tailscale.com/docs/reference/tailscale-cli/serve "Tailscale Serve CLI reference"
-[5]: https://www.cloudflare.com/plans/zero-trust-services/ "Cloudflare Zero Trust plans and pricing"
-[6]: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ "Cloudflare Tunnel outbound-only connections"
-[7]: https://www.digitalocean.com/pricing/droplets "DigitalOcean Droplet pricing"
-[8]: https://www.digitalocean.com/pricing/backups "DigitalOcean Droplet backup pricing"
-[9]: https://letsencrypt.org/ "Let's Encrypt free TLS certificates"
+[10]: https://massivegrid.com/windows-vps/ "MassiveGRID Windows VPS pricing and license costs"
+[11]: https://rafftechnologies.com/products/forex-vm "Raff Forex VM pricing with Windows license"
 
 ## Read-only MT5 connection doctor
 

@@ -20,9 +20,33 @@ jobs:
       - name: Run bridge tests
         run: python -m pytest -q bridge
       - name: Run managed-worker tests
-        run: python -m unittest discover -s managed-worker -p 'test_*.py' -v
+        run: |
+          python -m pytest -q managed-worker --junitxml=/tmp/managed-worker-junit.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = ET.parse('/tmp/managed-worker-junit.xml').getroot()
+          doctor = [case for case in root.iter('testcase') if 'test_doctor' in case.attrib.get('classname', '') or 'test_doctor' in case.attrib.get('file', '')]
+          executed = [case for case in doctor if case.find('skipped') is None]
+          if len(executed) < 9:
+              raise SystemExit(f'Expected at least 9 executed test_doctor.py cases, found {len(executed)}.')
+          print(f'test_doctor.py cases executed: {len(executed)}')
+          PY
       - name: Run MT5 EA source-contract and safety-math regressions
         run: python -m pytest -q mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py
+
+  secret-scan:
+    name: Scan current tree for secrets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Install Gitleaks
+        run: go install github.com/gitleaks/gitleaks/v8@v8.24.3
+      - name: Scan checked-out tree with redacted findings
+        run: "$(go env GOPATH)/bin/gitleaks" dir --redact=100 --exit-code 1 .
 
   mt5-ea-windows-compile:
     name: Compile MT5 EA with genuine MetaEditor
