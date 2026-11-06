@@ -86,7 +86,7 @@ class SignalEnginePythonParityTest {
             "reasons=${report.reasons.joinToString("|")}",
             "blockers=${report.blockers.joinToString("|")}",
             "components=${report.components.map { it.name }}",
-            "sweeps=${report.sweeps.map { it.type.name + ":" + it.impliedDir.name }}",
+            "sweeps=${report.sweeps.map { it.level.kind.name + ":" + it.impliedDir.name }}",
             "fvgs=${report.fvgs.size}"
         ).joinToString("; ")
     }
