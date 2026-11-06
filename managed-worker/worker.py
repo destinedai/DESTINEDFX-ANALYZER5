@@ -162,6 +162,21 @@ def update_marker(path: Path, record: dict[str, Any]) -> None:
     write_marker_atomic(path, record)
 
 
+def recorded_terminal_executable(marker: Path, record: dict[str, Any]) -> Path:
+    """Return the absolute executable recorded for this worker-owned terminal."""
+    raw = record.get("executable")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ProvisionError("TERMINAL_MARKER_EXECUTABLE_MISSING")
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        raise ProvisionError("TERMINAL_MARKER_EXECUTABLE_INVALID")
+    terminal_home = marker.parent.resolve()
+    executable = candidate.resolve()
+    if executable.parent != terminal_home:
+        raise ProvisionError("TERMINAL_MARKER_EXECUTABLE_INVALID")
+    return executable
+
+
 def terminate_owned_process(pid: int, executable: Path) -> ProcessState:
     """Terminate only an identity-verified process and re-check that it exited."""
     state = process_is_owned(pid, executable)
@@ -222,7 +237,17 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
     results = []
     for marker, record in terminal_records(root):
         terminal_home = marker.parent
-        executable = (terminal_home / Path(settings["terminal_exe"]).name).resolve()
+        try:
+            executable = recorded_terminal_executable(marker, record)
+        except ProvisionError as exc:
+            record["status"] = "OPERATOR_REVIEW"
+            try:
+                update_marker(marker, record)
+            except OSError:
+                pass
+            LOG.error("Terminal marker rejected for job %s (%s)", record.get("job_id", "unknown"), exc.code)
+            results.append({"job_id": record.get("job_id", "unknown"), "status": "OPERATOR_REVIEW", "error": exc.code})
+            continue
         pid = int(record.get("pid", 0) or 0)
         backend_status = None
         if base and token and worker_id:
@@ -347,7 +372,7 @@ def quarantine_terminal(settings: dict, job_id: str) -> str:
         if record.get("job_id") != job_id:
             continue
         terminal_home = marker.parent
-        executable = (terminal_home / Path(settings["terminal_exe"]).name).resolve()
+        executable = recorded_terminal_executable(marker, record)
         state = process_is_owned(int(record.get("pid", 0) or 0), executable)
         if state == ProcessState.OWNED_RUNNING:
             record["status"] = "OPERATOR_REVIEW"
@@ -510,7 +535,7 @@ def stop_terminal_for_timeout(settings: dict, job_id: str) -> str:
     for marker, record in terminal_records(root):
         if record.get("job_id") != job_id:
             continue
-        executable = Path(record.get("executable") or (marker.parent / Path(settings["terminal_exe"]).name)).resolve()
+        executable = recorded_terminal_executable(marker, record)
         pid = int(record.get("pid", 0) or 0)
         state = process_is_owned(pid, executable)
         if state == ProcessState.OWNED_RUNNING:
@@ -542,7 +567,7 @@ def revoke_pairing(settings: dict, pairing_id: str) -> None:
                 continue
             found = True
             pid = int(data.get("pid", 0))
-            exe = Path(data.get("executable") or (marker.parent / Path(settings["terminal_exe"]).name).resolve())
+            exe = recorded_terminal_executable(marker, data)
             state = process_is_owned(pid, exe)
             if state == ProcessState.OWNED_RUNNING:
                 state = terminate_owned_process(pid, exe)
@@ -812,7 +837,7 @@ def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
         if marker.exists():
             try:
                 record = json.loads(marker.read_text(encoding="utf-8"))
-                executable = Path(record.get("executable", ""))
+                executable = recorded_terminal_executable(marker, record)
                 state = process_is_owned(int(record.get("pid", 0) or 0), executable)
                 if state == ProcessState.OWNED_RUNNING:
                     state = terminate_owned_process(int(record["pid"]), executable)
@@ -821,7 +846,9 @@ def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
                 else:
                     record["status"] = "OPERATOR_REVIEW"
                     update_marker(marker, record)
-            except (OSError, ValueError, TypeError, KeyError):
+            except (OSError, ValueError, TypeError, KeyError, ProvisionError):
+                # If marker identity cannot be validated, preserve the tree for
+                # operator review rather than risking deletion of an unknown process.
                 pass
         elif account_dir.exists():
             # The marker is created before Popen. Absence therefore proves that

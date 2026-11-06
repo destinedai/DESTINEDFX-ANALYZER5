@@ -117,6 +117,75 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(worker.ProvisionError):
             worker.settings_for_broker(mapped, "HFM")
 
+    def test_mapping_only_configuration_loads_all_four_brokers_without_global_terminal(self):
+        config = self.root / "mapping-only-worker.toml"
+        lines = [
+            'control_plane_url = "https://bridge.realcop.com"',
+            f'data_root = "{self.root / "accounts"}"',
+            f'ea_source = "{self.source}"',
+            'max_terminals = 4',
+            '[broker_terminals.FBS]',
+            f'mt5_install = "{self.install}"',
+            f'terminal_exe = "{self.term}"',
+            f'metaeditor_exe = "{self.meta}"',
+            '[broker_terminals.EXNESS]',
+            f'mt5_install = "{self.install}"',
+            f'terminal_exe = "{self.term}"',
+            f'metaeditor_exe = "{self.meta}"',
+            '[broker_terminals.HFM]',
+            f'mt5_install = "{self.install}"',
+            f'terminal_exe = "{self.term}"',
+            f'metaeditor_exe = "{self.meta}"',
+            '[broker_terminals.DERIV]',
+            f'mt5_install = "{self.install}"',
+            f'terminal_exe = "{self.term}"',
+            f'metaeditor_exe = "{self.meta}"',
+        ]
+        config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        loaded = worker.load_settings(config)
+        self.assertNotIn("terminal_exe", loaded)
+        self.assertEqual(set(loaded["broker_terminals"]), {"FBS", "EXNESS", "HFM", "DERIV"})
+        for brand in worker.SUPPORTED_BROKER_BRANDS:
+            self.assertEqual(worker.settings_for_broker(loaded, brand)["selected_broker_brand"], brand)
+
+    def test_mapping_only_provisions_two_brokers_and_supervises_recorded_executables(self):
+        import shutil
+        installs = {}
+        for brand in ("FBS", "EXNESS"):
+            install = self.root / brand.lower()
+            shutil.copytree(self.install, install)
+            installs[brand] = install
+        compiled = self.root / "trusted.ex5"
+        compiled.write_bytes(b"trusted compiled EA")
+        mapped = {
+            "data_root": str(self.root / "accounts"), "ea_source": str(self.source),
+            "max_terminals": 4, "broker_terminals": {
+                brand: {"mt5_install": str(path), "terminal_exe": str(path / "terminal64.exe"),
+                        "metaeditor_exe": str(path / "metaeditor64.exe"), "compiled_ea": str(compiled)}
+                for brand, path in installs.items()
+            },
+        }
+        jobs = []
+        for brand, job_id in (("FBS", "fbs_job"), ("EXNESS", "exness_job")):
+            jobs.append({**self.job, "job_id": job_id, "pairing_id": f"{brand.lower()}_pair",
+                         "account": {**self.job["account"], "broker_brand": brand}})
+        processes = [type("Process", (), {"pid": 1001})(), type("Process", (), {"pid": 1002})()]
+        with patch.object(worker.subprocess, "Popen", side_effect=processes):
+            results = [worker.provision(job, mapped) for job in jobs]
+        executable_paths = []
+        for result in results:
+            marker = result / "terminal" / ".destinedfx-worker.json"
+            record = worker.json.loads(marker.read_text())
+            executable = Path(record["executable"])
+            executable_paths.append(executable)
+            self.assertTrue(executable.is_absolute())
+            self.assertEqual(executable.parent, marker.parent.resolve())
+        self.assertNotEqual(executable_paths[0], executable_paths[1])
+        with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.OWNED_RUNNING):
+            outcome = worker.supervise_terminals(mapped)
+        self.assertEqual({item["job_id"] for item in outcome}, {"fbs_job", "exness_job"})
+        self.assertTrue(all(item["status"] == "RUNNING" for item in outcome))
+
     def test_active_terminal_capacity_counts_inconclusive_processes(self):
         marker = Path(self.settings["data_root"]) / "job_123" / "terminal" / ".destinedfx-worker.json"
         marker.parent.mkdir(parents=True)
@@ -295,7 +364,7 @@ class WorkerTests(unittest.TestCase):
     def test_revoke_removes_only_matching_worker_owned_tree(self):
         result = worker.provision(self.job, self.settings, launch=False)
         marker = result / "terminal" / ".destinedfx-worker.json"
-        marker.write_text('{"pairing_id":"pair_456","pid":123}', encoding="utf-8")
+        marker.write_text('{"pairing_id":"pair_456","pid":123,"executable":"' + str(result / "terminal" / "terminal64.exe") + '"}', encoding="utf-8")
         # PID 123 may be a live unrelated process on the host; pin the ownership result so the
         # test does not depend on host PIDs. Fail-closed behaviour is covered by other tests.
         with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD):
@@ -322,7 +391,7 @@ class WorkerTests(unittest.TestCase):
     def test_duplicate_pairing_is_rejected_before_second_launch(self):
         result = worker.provision(self.job, self.settings, launch=False)
         marker = result / "terminal" / ".destinedfx-worker.json"
-        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":123,"status":"AUTHENTICATING"}', encoding="utf-8")
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":123,"executable":"' + str(result / "terminal" / "terminal64.exe") + '","status":"AUTHENTICATING"}', encoding="utf-8")
         with self.assertRaises(worker.ProvisionError) as error:
             worker.provision({**self.job, "job_id": "job_789"}, self.settings, launch=False)
         self.assertEqual(error.exception.code, "DUPLICATE_TERMINAL")
@@ -330,7 +399,7 @@ class WorkerTests(unittest.TestCase):
     def test_supervision_restarts_owned_terminal_with_bounded_retries(self):
         result = worker.provision(self.job, self.settings, launch=False)
         marker = result / "terminal" / ".destinedfx-worker.json"
-        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO","access_type":"MASTER","bridge_url":"https://bridge.realcop.com","broker_brand":"FBS"}', encoding="utf-8")
+        marker.write_text('{"job_id":"job_123","pairing_id":"pair_456","pid":99,"restart_count":0,"executable":"' + str(result / "terminal" / "terminal64.exe") + '","status":"RUNNING","expected_login":"123456","expected_server":"Demo-Server","account_mode":"DEMO","access_type":"MASTER","bridge_url":"https://bridge.realcop.com","broker_brand":"FBS"}', encoding="utf-8")
         fake = type("Process", (), {"pid": 100})()
         with patch.object(worker, "process_is_owned", return_value=worker.ProcessState.DEFINITELY_DEAD), patch.object(worker.subprocess, "Popen", return_value=fake) as popen:
             outcome = worker.supervise_terminals({**self.settings, "max_restart_retries": 1, "restart_backoff_seconds": 0})
@@ -352,6 +421,7 @@ class WorkerTests(unittest.TestCase):
         record = {"job_id":"job_123", "pairing_id":"pair_456", "pid":77, "restart_count":1,
                   "status":"AUTHENTICATING", "restart_requires_reauthentication":True,
                   "restart_auth_acknowledged":False, "last_restart":__import__("time").time(),
+                  "executable":str(result / "terminal" / "terminal64.exe"),
                   "expected_login":"123456", "expected_server":"Demo-Server", "account_mode":"DEMO",
                   "access_type":"MASTER", "bridge_url":"https://bridge.realcop.com", "broker_brand":"FBS"}
         worker.write_marker_atomic(marker, record)
@@ -431,7 +501,8 @@ class WorkerTests(unittest.TestCase):
         marker = result / "terminal" / ".destinedfx-worker.json"
         worker.write_marker_atomic(marker, {"job_id":"job_123", "pairing_id":"pair_456", "pid":88,
             "restart_count":0, "status":"RUNNING", "expected_login":"123456", "expected_server":"Demo-Server",
-            "account_mode":"DEMO", "access_type":"MASTER", "bridge_url":"https://bridge.realcop.com", "broker_brand":"FBS"})
+            "account_mode":"DEMO", "access_type":"MASTER", "bridge_url":"https://bridge.realcop.com", "broker_brand":"FBS",
+            "executable":str(result / "terminal" / "terminal64.exe")})
         processes = []
         real_popen = subprocess.Popen
         def tracked_popen(*args, **kwargs):
