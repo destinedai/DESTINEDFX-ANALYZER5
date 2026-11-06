@@ -58,6 +58,18 @@ To check tasks and health, use `Get-ScheduledTask -TaskName 'DestinedFX Owner Br
 
 Before planned maintenance or revocation, stop the active Bot and revoke its pairing/authorization through the app's existing account controls. Then use `Stop-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker'`. To remove only this dedicated Serve configuration, use `tailscale serve --https=443 http://127.0.0.1:8000 off`; do not run `tailscale serve reset` if the node hosts any other Serve routes. Windows removal of the scheduled task or data must be an explicit owner action after a verified backup. Do not delete the database or DPAPI file as a troubleshooting shortcut.
 
+## Hosting comparison checked 2026-11-06
+
+No service was purchased, rented, enrolled, or changed. Prices below are the current prices shown on the linked official pages and are planning figures, not an authorization to spend.
+
+| Option | Official price evidence | Network shape | Main risks and requirements | Decision |
+| --- | --- | --- | --- | --- |
+| Private Tailscale Serve | Personal is $0 forever for up to 6 users, but Tailscale says it is only suitable for non-commercial use. Standard is $8 per user per month and Premium is $18 per user per month.[3] | Private tailnet access from the phone to the Windows PC. The bridge stays on loopback and Serve forwards to `127.0.0.1`. | Personal eligibility is not safe to assume for business use. HTTPS requires MagicDNS and certificates. Certificate hostnames appear in Certificate Transparency. | Recommended only if the owner's existing tailnet is eligible under the applicable terms. Otherwise do not proceed without selecting an eligible paid plan. |
+| Cloudflare Tunnel | Cloudflare advertises a free Zero Trust plan and says to start a proof of concept with it. The cited pricing page does not publish a fixed paid Tunnel total, so paid cost is `contact sales` or account-specific.[5] | `cloudflared` makes outbound-only connections, so no inbound Windows firewall port is required.[6] | Requires a Cloudflare account and a domain or hostname configuration. A public hostname increases exposure and must retain bearer token authentication, rate limits, logging controls, and strict access policy. | Viable fallback after explicit owner approval of the account, domain, public hostname, and security policy. |
+| Public HTTPS reverse proxy with a domain | A DigitalOcean Basic Droplet starts at $4 per month for 512 MiB, 1 vCPU, 10 GiB SSD, and 500 GiB transfer. Daily backups cost 30% of Droplet cost, or $1.20 per month at that smallest plan. Let's Encrypt certificates are free. Domain registration is additional and varies by registrar and TLD, so no domain total is claimed.[7] [8] [9] | Public DNS points the phone to a proxy host, which forwards HTTPS to the bridge. The Windows machine needs an outbound connection to the proxy and must not expose MT5 or port 8000. | Adds a second host, domain renewal, patching, firewall, proxy hardening, monitoring, backup, and a new credential boundary. A 512 MiB host may be too small once proxy, logs, and controls are included. | Not recommended for the first DEMO path unless the owner explicitly approves the recurring host and domain costs and accepts public exposure. |
+
+For `WINDOWS_VPS`, the conditional recommendation is private Tailscale Serve because it keeps the bridge private and leaves port 8000 on loopback. This recommendation is not approval to use the Personal plan for commercial activity. The owner must first confirm that the existing tailnet and intended use satisfy Tailscale's terms. If they do not, stop and ask the owner to choose Cloudflare Tunnel or a public reverse proxy and approve its account, domain, recurring price, and exposure model. Do not configure either alternative silently.
+
 ## Current limits
 
 This sandbox did not have the owner's Windows PC, Tailscale tailnet, MT5 terminal, MetaEditor, signing key, or Android SDK/emulator attached. These scripts and this architecture are therefore prepared but not Windows-tested, not deployed, and not broker-accepted. The installer supports one selected broker brand and one concurrent terminal by default. Additional broker installations/capacity must be configured against the worker's supported multi-terminal config and tested on the real PC; do not change `max_terminals` without checking the PC's disk, memory, isolation, and account policy.
@@ -68,6 +80,11 @@ This sandbox did not have the owner's Windows PC, Tailscale tailnet, MT5 termina
 [2]: https://tailscale.com/docs/how-to/set-up-https-certificates "Tailscale HTTPS certificates"
 [3]: https://tailscale.com/pricing "Tailscale pricing and plan eligibility"
 [4]: https://tailscale.com/docs/reference/tailscale-cli/serve "Tailscale Serve CLI reference"
+[5]: https://www.cloudflare.com/plans/zero-trust-services/ "Cloudflare Zero Trust plans and pricing"
+[6]: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/ "Cloudflare Tunnel outbound-only connections"
+[7]: https://www.digitalocean.com/pricing/droplets "DigitalOcean Droplet pricing"
+[8]: https://www.digitalocean.com/pricing/backups "DigitalOcean Droplet backup pricing"
+[9]: https://letsencrypt.org/ "Let's Encrypt free TLS certificates"
 
 ## Read-only MT5 connection doctor
 
