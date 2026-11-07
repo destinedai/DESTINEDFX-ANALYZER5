@@ -42,7 +42,6 @@ import com.destinedfx.core.strategy.StrategyRegistry
 import com.example.ui.chart.TradingChartContainer
 import com.example.ui.export.AnalysisExportSelectionDialog
 import com.example.ui.workstations.CalendarTab
-import com.example.ui.workstations.BotWorkstationTab
 import com.example.ui.DestinedFXScreen
 import com.example.ui.components.*
 import com.example.ui.theme.*
