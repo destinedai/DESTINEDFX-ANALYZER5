@@ -52,7 +52,7 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request(riskCaps = false)).isSuccess)
         assertFalse(policy.armLive(request(reauthenticated = false)).isSuccess)
         assertFalse(policy.armLive(request(demoIdentity = identity(account = "999999"))).isSuccess)
-        assertFalse(policy.armLive(request(demoIdentity = identity(generation = "rotated"))).isSuccess)
+        assertFalse(policy.armLive(request(demoIdentity = identity(), currentDemoGeneration = "rotated")).isSuccess)
         assertFalse(policy.armLive(request(liveVerified = verified(identity(mode = AccountMode.LIVE).copy(accountId = "999999")))).isSuccess)
     }
 
@@ -60,7 +60,7 @@ class ModeArmingPolicyTest {
         val policy = ModeArmingPolicy(nowMs = { 2_000_000L })
         val demo = identity(ModePath.DERIV_OPTIONS, AccountMode.DEMO, "CR123", "deriv-gen", "")
         val live = demo.copy(mode = AccountMode.LIVE)
-        val lease = policy.armLive(request(live, demo, verified(live))).getOrThrow()
+        val lease = policy.armLive(request(live, demo, verified(live, now = 2_000_000L))).getOrThrow()
         assertEquals(60L * 60L * 1000L, lease.expiresAtMs - lease.armedAtMs)
         val ctDemo = identity(ModePath.CTRADER_ACCOUNT, AccountMode.DEMO, "789", "ct-gen", "")
         val ctLive = ctDemo.copy(mode = AccountMode.LIVE)
