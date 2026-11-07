@@ -265,25 +265,23 @@ class TradingViewAndMtfValidationTest {
     @Test
     fun testMobileNavigationMatchesWebsitePrimaryTabsAndSecondaryRoutes() {
         assertEquals(
-            listOf("Analyzer", "Strategies", "Calendar", "Watchlist", "Risk", "Settings"),
+            listOf("Analyzer", "Strategies", "Calendar", "Bot", "Risk", "Settings"),
             DestinedFXScreen.primaryScreens.map { it.title }
         )
         assertTrue(DestinedFXScreen.moreScreens.map { it.title }.containsAll(
-            listOf("Home", "Image Analyzer", "Chat", "About & Disclosure", "Contact")
+            listOf("Home", "Image Analyzer", "Watchlist", "Chat", "About & Disclosure", "Contact")
         ))
         assertEquals(
             DestinedFXScreen.allScreens.toSet(),
-            (DestinedFXScreen.primaryScreens + DestinedFXScreen.moreScreens + DestinedFXScreen.More + DestinedFXScreen.Bot).toSet()
+            (DestinedFXScreen.primaryScreens + DestinedFXScreen.moreScreens + DestinedFXScreen.More).toSet()
         )
         assertEquals(DestinedFXScreen.allScreens.size, DestinedFXScreen.allScreens.distinct().size)
         assertTrue(DestinedFXScreen.allScreens.contains(DestinedFXScreen.Watchlist))
-        assertTrue("Watchlist is a read-only phone-first workspace",
+        assertFalse("Watchlist belongs under More, not the primary bottom bar",
             DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Watchlist))
         assertTrue(DestinedFXScreen.primaryScreens.containsAll(
-            listOf(DestinedFXScreen.Risk, DestinedFXScreen.Settings)
+            listOf(DestinedFXScreen.Bot, DestinedFXScreen.Risk, DestinedFXScreen.Settings)
         ))
-        assertFalse("Bot workspace is excluded from primary navigation",
-            DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Bot))
         assertEquals("nav_tab_more", DestinedFXScreen.More.tag)
     }
 

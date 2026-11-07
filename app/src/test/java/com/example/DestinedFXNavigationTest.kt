@@ -15,10 +15,9 @@ class DestinedFXNavigationTest {
     @Test
     fun primaryNavigationExposesTheSixCoreWorkspacesInOrder() {
         assertEquals(
-            listOf("Analyzer", "Strategies", "Calendar", "Watchlist", "Risk", "Settings"),
+            listOf("Analyzer", "Strategies", "Calendar", "Bot", "Risk", "Settings"),
             DestinedFXScreen.primaryScreens.map { it.title }
         )
-        assertFalse(DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Bot))
     }
 
     @Test

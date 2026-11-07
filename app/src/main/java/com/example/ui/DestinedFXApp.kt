@@ -163,7 +163,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                     letterSpacing = 1.sp
                                 )
                                 Text(
-                                    text = "READ-ONLY MARKET ANALYSIS • v${BuildConfig.VERSION_NAME}",
+                                    text = "INSTITUTIONAL TERMINAL • v${BuildConfig.VERSION_NAME}",
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     fontFamily = FontFamily.Monospace,
@@ -351,7 +351,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     DestinedFXScreen.ImageAnalyzer -> ChartImageAnalyzerTab(viewModel)
                     DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
                     DestinedFXScreen.Calendar -> CalendarTab(viewModel)
-                    DestinedFXScreen.Bot -> ReadOnlyScopeScreen()
+                    DestinedFXScreen.Bot -> SimplifiedBotWorkstation(viewModel)
                     DestinedFXScreen.Watchlist -> WatchlistTab(viewModel)
                     DestinedFXScreen.More -> MoreTab(viewModel)
                     DestinedFXScreen.Chat -> ChatWorkstationTab(viewModel)
@@ -439,7 +439,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
         }
     }
 
-    // Read-only analysis runs on demand; this action never submits a broker order.
+    // Manual analysis control: Analysis is executed on-demand when the user taps 'RUN LIVE ANALYSIS' below.
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(DarkBackground),
@@ -450,7 +450,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("MARKET ANALYSIS", fontSize = 9.sp, color = ElectricCyan,
+                    Text("LIVE ALGORITHMIC ANALYZER", fontSize = 9.sp, color = ElectricCyan,
                         fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                     Text(activeSymbol, fontSize = 23.sp, color = TextPrimary, fontWeight = FontWeight.Black)
                     Text("TradingView chart · rule-based analysis", fontSize = 10.sp, color = TextSecondary)
@@ -589,7 +589,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
                         } else {
                             Icon(Icons.Default.QueryStats, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("RUN MARKET ANALYSIS", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                            Text("RUN LIVE ANALYSIS", fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                         }
                     }
                     OutlinedButton(
@@ -880,7 +880,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
 private fun MarketStructureReport(result: DynamicAnalysisInfo?) {
     InsightCard("MARKET STRUCTURE / KEY LEVELS") {
         if (result == null) {
-            Text("Run market analysis to populate structure, order blocks and levels.", fontSize = 11.sp, color = TextSecondary)
+            Text("Run live analysis to populate structure, order blocks and levels.", fontSize = 11.sp, color = TextSecondary)
         } else {
             Text(
                 result.marketStructureNote.ifBlank { result.smcAnalysis.ifBlank { "No structural narrative was returned for this scan." } },
@@ -973,7 +973,7 @@ private fun FullAnalysisReport(result: DynamicAnalysisInfo?) {
             }
         }
         HorizontalDivider(color = CardBorder)
-        Text("ANALYSIS REJECTIONS / LIMITATIONS", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        Text("BLOCKERS / EXECUTION LIMITS", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
         if (result.blockReasons.isEmpty()) {
             Text(
                 "No explicit blocker strings were supplied. Execution still depends on live market health, broker authentication and RiskEngine validation.",

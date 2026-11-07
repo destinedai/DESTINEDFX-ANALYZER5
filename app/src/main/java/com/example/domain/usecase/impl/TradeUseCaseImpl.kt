@@ -83,7 +83,6 @@ class TradeUseCaseImpl(
     )
 
     override suspend fun executeTrade(signal: TradeSignal) {
-        ReadOnlyExecutionPolicy.requireTradingDisabled()
         if (!sensitiveActionAuthorized()) {
             throw IllegalStateException("REAUTHENTICATION_REQUIRED: authenticate again before submitting a trading action")
         }
@@ -131,7 +130,7 @@ class TradeUseCaseImpl(
         // Recalculate from broker quote if available
         val bq = brokerQuote ?: quote
         val executionPrice = if (isLong) bq?.ask ?: bq?.mid else bq?.bid ?: bq?.mid
-        val brokerPlan = if (executionPrice != null && executionPrice > 0.0 && spec != null && effPlan != null) {
+        val brokerPlan = if (executionPrice != null && executionPrice > 0.0 && spec != null) {
             val p = effPlan
             val diff = executionPrice - p.entry
             val newSl = spec.roundToTick(p.stopLoss + diff)
@@ -165,11 +164,6 @@ class TradeUseCaseImpl(
             throw IllegalStateException("Sizing failure after broker recalculation")
         }
 
-        // Bind validated non-null values explicitly. Kotlin does not retain the
-        // nullable smart-cast across the captured plan/sizing expressions above.
-        val approvedBrokerPlan = requireNotNull(brokerPlan)
-        val approvedSizing = requireNotNull(finalSizing)
-
         if (!guard.tryClaim(key)) { record(signal, 0.0, "BLOCKED", "Duplicate order", report, now); throw IllegalStateException("Duplicate order blocked") }
 
         // Execute via unified BrokerGateway using CanonicalTradePlan
@@ -181,30 +175,30 @@ class TradeUseCaseImpl(
             strategy = report.strategyVersion,
             direction = signal.direction,
             status = report.state.name,
-            entry = approvedBrokerPlan.entry,
-            bid = bq?.bid ?: approvedBrokerPlan.entry,
-            ask = bq?.ask ?: approvedBrokerPlan.entry,
+            entry = brokerPlan.entry,
+            bid = bq?.bid ?: brokerPlan.entry,
+            ask = bq?.ask ?: brokerPlan.entry,
             spread = quote?.spread ?: 0.0,
-            stopLoss = approvedBrokerPlan.stopLoss,
-            takeProfit = approvedBrokerPlan.primary.price,
-            rr = approvedBrokerPlan.primary.rr,
+            stopLoss = brokerPlan.stopLoss,
+            takeProfit = brokerPlan.primary.price,
+            rr = brokerPlan.primary.rr,
             riskPercent = cfg.riskPercent,
-            riskAmount = approvedSizing.moneyRiskActual,
-            positionSize = approvedSizing.lots,
-            invalidation = approvedBrokerPlan.stopLoss,
+            riskAmount = finalSizing.moneyRiskActual,
+            positionSize = finalSizing.lots,
+            invalidation = brokerPlan.stopLoss,
             timestamp = now,
             marketDataTimestamp = quote?.timestampMs ?: now,
             dataHealth = health.name,
             reason = report.reasons.firstOrNull() ?: "Verified technical setup",
             strategyVersion = report.strategyVersion,
             confluenceScore = report.confluenceScore,
-            targets = approvedBrokerPlan.targets.map { CanonicalTarget(it.label, it.price, it.rr, it.source) },
+            targets = brokerPlan.targets.map { CanonicalTarget(it.label, it.price, it.rr, it.source) },
             newsStatus = "CLEAR"
         )
 
         val result = broker.executeTrade(canonicalPlan)
         val orderRef = result.getOrNull()
-        record(signal, approvedSizing.lots, if (result.isSuccess) "OPEN" else "FAILED", result.exceptionOrNull()?.message ?: "broker=${broker.displayName} orderRef=$orderRef", report, now, orderRef)
+        record(signal, finalSizing.lots, if (result.isSuccess) "OPEN" else "FAILED", result.exceptionOrNull()?.message ?: "broker=${broker.displayName} orderRef=$orderRef", report, now, orderRef)
         if (result.isFailure) { guard.release(key); throw Exception(result.exceptionOrNull()?.message ?: "Execution failed") }
     }
 

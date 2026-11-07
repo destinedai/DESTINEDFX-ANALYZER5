@@ -125,7 +125,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                     Text("WORKSPACE SHORTCUTS", fontSize = 9.sp, color = ElectricCyan,
                         fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedButton(onClick = { viewModel.selectScreen(DestinedFXScreen.Bot) }, modifier = Modifier.weight(1f).testTag("settings_open_read_only_scope")) { Text("Product scope", fontSize = 10.sp) }
+                        OutlinedButton(onClick = { viewModel.selectScreen(DestinedFXScreen.Bot) }, modifier = Modifier.weight(1f).testTag("settings_open_bot")) { Text("Broker / Bot", fontSize = 10.sp) }
                         OutlinedButton(onClick = { viewModel.selectScreen(DestinedFXScreen.Analyzer) }, modifier = Modifier.weight(1f).testTag("settings_open_analyzer")) { Text("Market data", fontSize = 10.sp) }
                         OutlinedButton(onClick = { viewModel.selectScreen(DestinedFXScreen.Calendar) }, modifier = Modifier.weight(1f).testTag("settings_open_calendar")) { Text("Calendar", fontSize = 10.sp) }
                     }
