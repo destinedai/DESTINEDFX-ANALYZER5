@@ -165,6 +165,11 @@ class TradeUseCaseImpl(
             throw IllegalStateException("Sizing failure after broker recalculation")
         }
 
+        // Bind validated non-null values explicitly. Kotlin does not retain the
+        // nullable smart-cast across the captured plan/sizing expressions above.
+        val approvedBrokerPlan = requireNotNull(brokerPlan)
+        val approvedSizing = requireNotNull(finalSizing)
+
         if (!guard.tryClaim(key)) { record(signal, 0.0, "BLOCKED", "Duplicate order", report, now); throw IllegalStateException("Duplicate order blocked") }
 
         // Execute via unified BrokerGateway using CanonicalTradePlan
@@ -176,30 +181,30 @@ class TradeUseCaseImpl(
             strategy = report.strategyVersion,
             direction = signal.direction,
             status = report.state.name,
-            entry = brokerPlan.entry,
-            bid = bq?.bid ?: brokerPlan.entry,
-            ask = bq?.ask ?: brokerPlan.entry,
+            entry = approvedBrokerPlan.entry,
+            bid = bq?.bid ?: approvedBrokerPlan.entry,
+            ask = bq?.ask ?: approvedBrokerPlan.entry,
             spread = quote?.spread ?: 0.0,
-            stopLoss = brokerPlan.stopLoss,
-            takeProfit = brokerPlan.primary.price,
-            rr = brokerPlan.primary.rr,
+            stopLoss = approvedBrokerPlan.stopLoss,
+            takeProfit = approvedBrokerPlan.primary.price,
+            rr = approvedBrokerPlan.primary.rr,
             riskPercent = cfg.riskPercent,
-            riskAmount = finalSizing.moneyRiskActual,
-            positionSize = finalSizing.lots,
-            invalidation = brokerPlan.stopLoss,
+            riskAmount = approvedSizing.moneyRiskActual,
+            positionSize = approvedSizing.lots,
+            invalidation = approvedBrokerPlan.stopLoss,
             timestamp = now,
             marketDataTimestamp = quote?.timestampMs ?: now,
             dataHealth = health.name,
             reason = report.reasons.firstOrNull() ?: "Verified technical setup",
             strategyVersion = report.strategyVersion,
             confluenceScore = report.confluenceScore,
-            targets = brokerPlan.targets.map { CanonicalTarget(it.label, it.price, it.rr, it.source) },
+            targets = approvedBrokerPlan.targets.map { CanonicalTarget(it.label, it.price, it.rr, it.source) },
             newsStatus = "CLEAR"
         )
 
         val result = broker.executeTrade(canonicalPlan)
         val orderRef = result.getOrNull()
-        record(signal, finalSizing.lots, if (result.isSuccess) "OPEN" else "FAILED", result.exceptionOrNull()?.message ?: "broker=${broker.displayName} orderRef=$orderRef", report, now, orderRef)
+        record(signal, approvedSizing.lots, if (result.isSuccess) "OPEN" else "FAILED", result.exceptionOrNull()?.message ?: "broker=${broker.displayName} orderRef=$orderRef", report, now, orderRef)
         if (result.isFailure) { guard.release(key); throw Exception(result.exceptionOrNull()?.message ?: "Execution failed") }
     }
 
