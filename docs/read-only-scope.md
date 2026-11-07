@@ -31,7 +31,9 @@ The Android source exposes broker and bot workspaces, includes order-submission 
 - `git ls-remote` and `git fetch origin free/phone-only-v1` confirmed the baseline commit above.
 - Baseline `./gradlew testDebugUnitTest --no-daemon`: **not run**; Gradle failed during task configuration because no Android SDK was installed/configured (`SDK location not found`, no `ANDROID_HOME` or `local.properties` sdk.dir).
 - Initial baseline `python3 -m pytest -q bridge scripts/test_deriv_demo_smoke.py`: **not run**; system Python reported `No module named pytest`.
-- After installing the repository's `bridge/requirements.txt` into an isolated temporary virtual environment, `python -m pytest -q bridge scripts/test_deriv_demo_smoke.py`: **160 passed, 1 warning** (Starlette imports deprecated `anyio.abc.BlockingPortal`). The backend implementation was not changed in this conversion slice; this verifies its existing tests, not read-only behavior.
+- Against commit `8e22edb3e819fcaac24b11d630230b5af2ad5186`, after installing the repository's `bridge/requirements.txt` into an isolated temporary virtual environment, `python -m pytest -q bridge scripts/test_deriv_demo_smoke.py`: **160 passed, 1 warning** (Starlette imports deprecated `anyio.abc.BlockingPortal`). The backend implementation was not changed in this conversion slice; this verifies its existing tests, not read-only behavior.
+- Against commit `8e22edb3e819fcaac24b11d630230b5af2ad5186`, `./gradlew testDebugUnitTest --no-daemon`: **blocked before tests ran** because Gradle could not locate the Android SDK (`ANDROID_HOME` unset and no `local.properties` sdk.dir).
+- Python XML validation of the changed Android manifest passed: no service/receiver declarations, no cTrader callback data route, and none of the four removed service/boot permissions remained. `git diff --check` passed before commit.
 - No successful Android build, Android unit/UI test, emulator test, APK artifact, or complete CI run is claimed for this revision.
 
 ## Implemented vs incomplete
