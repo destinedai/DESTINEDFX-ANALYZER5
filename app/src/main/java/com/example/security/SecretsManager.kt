@@ -47,6 +47,7 @@ class SecretsManager internal constructor(
         private const val DERIV_API_TOKEN_REAL = "deriv_api_token_real"
         private const val DERIV_APP_ID = "deriv_app_id"
         private const val DERIV_ACCOUNT_MODE = "deriv_account_mode"
+        private const val DERIV_SAVE_TOKEN = "deriv_save_token"
         private const val DERIV_DEMO_ACCEPTED = "deriv_demo_accepted"
         private const val DERIV_DEMO_ACCEPTED_ACCOUNT = "deriv_demo_accepted_account"
         private const val DERIV_DEMO_ACCEPTED_CURRENCY = "deriv_demo_accepted_currency"
@@ -280,6 +281,17 @@ class SecretsManager internal constructor(
         return prefs.edit().putString(key, v.trim()).remove(DERIV_API_TOKEN)
             .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT).commit()
     }
+    fun saveDerivApiTokenIfAllowed(v: String, mode: String, save: Boolean): Boolean {
+        val normalizedMode = mode.trim().lowercase()
+        if (!isSecureStorageAvailable || v.isBlank() || normalizedMode !in setOf("demo", "real")) return false
+        invalidateDerivRealAuthorization()
+        val key = if (normalizedMode == "real") DERIV_API_TOKEN_REAL else DERIV_API_TOKEN_DEMO
+        val edit = prefs.edit().putBoolean(DERIV_SAVE_TOKEN, save)
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT)
+        if (save) edit.putString(key, v.trim()) else edit.remove(key)
+        return edit.remove(DERIV_API_TOKEN).commit()
+    }
+    fun isDerivApiTokenSaveEnabled(): Boolean = isSecureStorageAvailable && prefs.getBoolean(DERIV_SAVE_TOKEN, false)
     fun saveDerivAppId(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
         invalidateDerivRealAuthorization()
@@ -381,7 +393,7 @@ class SecretsManager internal constructor(
         if (!isSecureStorageAvailable) return false
         invalidateDerivRealAuthorization()
         return prefs.edit().remove(DERIV_API_TOKEN).remove(DERIV_API_TOKEN_DEMO).remove(DERIV_API_TOKEN_REAL)
-            .remove(DERIV_APP_ID).remove(DERIV_ACCOUNT_MODE).commit()
+            .remove(DERIV_APP_ID).remove(DERIV_ACCOUNT_MODE).remove(DERIV_SAVE_TOKEN).commit()
     }
     fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()

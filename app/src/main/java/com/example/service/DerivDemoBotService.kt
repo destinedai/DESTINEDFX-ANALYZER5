@@ -39,6 +39,8 @@ import kotlinx.coroutines.flow.asStateFlow
 class DerivDemoBotService : Service() {
     companion object {
         const val ACTION_START = "com.example.service.DERIV_DEMO_START"
+        const val ACTION_PAUSE = "com.example.service.DERIV_DEMO_PAUSE"
+        const val ACTION_RESUME = "com.example.service.DERIV_DEMO_RESUME"
         const val ACTION_STOP = "com.example.service.DERIV_DEMO_STOP"
         const val EXTRA_SYMBOL = "symbol"
         const val EXTRA_STRATEGY = "strategy"
@@ -115,12 +117,21 @@ class DerivDemoBotService : Service() {
         fun stop(context: android.content.Context) {
             context.startService(Intent(context, DerivDemoBotService::class.java).setAction(ACTION_STOP))
         }
+
+        fun pause(context: android.content.Context) {
+            context.startService(Intent(context, DerivDemoBotService::class.java).setAction(ACTION_PAUSE))
+        }
+
+        fun resume(context: android.content.Context) {
+            context.startService(Intent(context, DerivDemoBotService::class.java).setAction(ACTION_RESUME))
+        }
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var loopJob: Job? = null
     private var healthJob: Job? = null
     @Volatile private var stopRequested = false
+    @Volatile private var pauseRequested = false
 
     override fun onCreate() {
         super.onCreate()
@@ -135,8 +146,19 @@ class DerivDemoBotService : Service() {
                 stopSafely()
                 return START_NOT_STICKY
             }
+            ACTION_PAUSE -> {
+                pauseRequested = true
+                update("PAUSED — monitoring continues; no new DEMO entries will be submitted")
+                return START_NOT_STICKY
+            }
+            ACTION_RESUME -> {
+                pauseRequested = false
+                update("RUNNING — DEMO entry scanning resumed after explicit owner action")
+                return START_NOT_STICKY
+            }
             ACTION_START -> {
                 stopRequested = false
+                pauseRequested = false
                 loopJob?.cancel()
                 val symbol = intent.getStringExtra(EXTRA_SYMBOL)?.trim().orEmpty()
                 val strategy = intent.getStringExtra(EXTRA_STRATEGY)?.trim().orEmpty()
@@ -491,6 +513,11 @@ class DerivDemoBotService : Service() {
                 ) warningMessages += "90% daily-loss critical warning"
                 if (warningMessages.isNotEmpty()) {
                     update("Running — ${warningMessages.joinToString(" + ")}; ${"%.1f".format(dailyRisk.limitUsedPercent)}% of daily limit consumed")
+                }
+                if (pauseRequested) {
+                    update("PAUSED — monitoring continues; no new DEMO entries will be submitted")
+                    delay(5_000L)
+                    continue
                 }
                 val stake = DerivMultiplierRules.safeStakeForBalance(balance)
                 val minimumStake = com.destinedfx.core.broker.DerivContractLimits.getMinimumStake(

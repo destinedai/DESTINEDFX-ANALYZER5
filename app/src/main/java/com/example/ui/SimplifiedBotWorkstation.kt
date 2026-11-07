@@ -203,7 +203,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var server by remember { mutableStateOf("") }
     var accessType by remember { mutableStateOf("MASTER") }
     var derivToken by remember { mutableStateOf("") }
-    var derivStorageConsent by remember { mutableStateOf(false) }
+    var derivSaveToken by remember { mutableStateOf(false) }
     var derivAppId by remember { mutableStateOf("") }
     var derivMode by remember { mutableStateOf("demo") }
     var selectedDerivAccountId by remember { mutableStateOf("") }
@@ -270,6 +270,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         derivMode = secrets.getDerivAccountMode()
         derivToken = secrets.getDerivApiToken(derivMode)
         derivAppId = secrets.getDerivAppId()
+        derivSaveToken = secrets.isDerivApiTokenSaveEnabled()
     }
     LaunchedEffect(context) {
         DerivDemoBotService.restorePersistedStatus(context)
@@ -505,7 +506,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     }
     val running = when (broker) {
         BrokerType.MT5 -> mt5Snapshot?.state in setOf("RUNNING", "PAUSED")
-        BrokerType.DERIV -> derivBotServiceState == "RUNNING"
+        BrokerType.DERIV -> derivBotServiceState in setOf("RUNNING", "PAUSED")
         else -> botActive
     }
     val botUiState = deriveBotUiState(
@@ -925,7 +926,6 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 if (secrets.saveDerivAccountMode(mode)) {
                                     derivMode = mode
                                     derivToken = secrets.getDerivApiToken(mode)
-                                    derivStorageConsent = false
                                     derivDemoVerification = null
                                     selectedDerivAccountId = ""
                                     message = "Deriv $mode selected. Existing authorization invalidated; connect and verify this mode explicitly."
@@ -933,12 +933,13 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             }, label = { Text(mode.uppercase()) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "real") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
                         }
                     }
-                    LoginField("Deriv ${derivMode.uppercase()} API token", derivToken, { derivToken = it; derivStorageConsent = false }, KeyboardType.Password, true)
+                    LoginField("Deriv ${derivMode.uppercase()} API token", derivToken, { derivToken = it }, KeyboardType.Password, true)
                     LoginField("Registered numeric App ID", derivAppId, { derivAppId = it.filter(Char::isDigit) }, KeyboardType.Number)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Switch(checked = derivStorageConsent, onCheckedChange = { derivStorageConsent = it })
-                        Text("I confirm the PAT and App ID may be stored only in Android encrypted storage on this device.", color = TextSecondary, fontSize = 9.sp)
+                        Switch(checked = derivSaveToken, onCheckedChange = { derivSaveToken = it })
+                        Text("Save password in encrypted device storage", color = TextSecondary, fontSize = 10.sp)
                     }
+                    Text("Status: ${if (derivState == com.example.data.deriv.DerivConnectionState.READY) "CONNECTED" else derivLifecycleLabel}", color = if (derivAccountReady) ProfitGreen else WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
                         TextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://doc-deriv.readme.io/docs/account-setup"))) }.onFailure { message = "Could not open Deriv account setup help." } }, modifier = Modifier.weight(1f)) { Text("App ID and PAT help", fontSize = 9.sp) }
                         TextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://developers.deriv.com/docs/options/"))) }.onFailure { message = "Could not open Deriv API documentation." } }, modifier = Modifier.weight(1f)) { Text("Options API docs", fontSize = 9.sp) }
@@ -953,10 +954,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 try {
                                     require(derivMode == "demo") { "Verify Deriv DEMO is available only while DEMO mode is selected. LIVE remains blocked." }
                                     require(derivToken.isNotBlank() && derivAppId.isNotBlank()) { "Enter a Deriv DEMO PAT and registered numeric App ID." }
-                                    require(derivStorageConsent) { "Confirm encrypted device storage before saving the DEMO PAT and App ID." }
+                                    if (derivSaveToken) require(secrets.isSecureStorageAvailable) { "Secure Android storage is unavailable; password was not saved." }
                                     val previousGeneration = secrets.getDerivCredentialGeneration("demo")
                                     val previousAccountId = derivAccount?.loginId ?: selectedDerivAccountId
-                                    require(secrets.saveDerivApiToken(derivToken, "demo")) { "Deriv DEMO PAT could not be saved in encrypted storage." }
+                                    require(secrets.saveDerivApiTokenIfAllowed(derivToken, "demo", derivSaveToken)) { "Deriv DEMO PAT could not be processed in encrypted storage." }
                                     require(secrets.saveDerivAppId(derivAppId)) { "Registered Deriv App ID could not be saved." }
                                     val nextGeneration = secrets.getDerivCredentialGeneration("demo")
                                     if (previousGeneration.isNotBlank() && previousGeneration != nextGeneration && previousAccountId.isNotBlank()) {
@@ -1005,10 +1006,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 } finally { busy = false }
                             }
                         },
-                        enabled = !busy && derivMode == "demo" && derivStorageConsent && secrets.isSecureStorageAvailable,
+                        enabled = !busy && derivMode == "demo" && derivToken.isNotBlank() && derivAppId.isNotBlank(),
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
-                    ) { Text("VERIFY DERIV DEMO · READ ONLY", fontWeight = FontWeight.Black) }
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5B85C), contentColor = DarkBackground)
+                    ) { Text("LOGIN · VERIFY DEMO READ ONLY", fontWeight = FontWeight.Black) }
                     derivDemoVerification?.let { verification ->
                         Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, if (verification.state.name == "PASS") ProfitGreen else WarningAmber)) {
                             Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1114,7 +1115,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     require(derivToken.isNotBlank() && derivAppId.isNotBlank()) { "Enter a Deriv API token and application ID." }
                                     val previousDerivGeneration = secrets.getDerivCredentialGeneration(derivMode)
                                     val previousDerivAccount = derivAccount?.loginId ?: selectedDerivAccountId
-                                    require(secrets.saveDerivApiToken(derivToken, derivMode)) { "Deriv $derivMode PAT could not be saved in encrypted storage." }
+                                    require(secrets.saveDerivApiTokenIfAllowed(derivToken, derivMode, derivSaveToken)) { "Deriv $derivMode PAT could not be processed in encrypted storage." }
                                     require(secrets.saveDerivAppId(derivAppId)) { "Registered Deriv App ID could not be saved." }
                                     val nextDerivGeneration = secrets.getDerivCredentialGeneration(derivMode)
                                     if (previousDerivGeneration.isNotBlank() && previousDerivGeneration != nextDerivGeneration && previousDerivAccount.isNotBlank()) {
@@ -1195,6 +1196,21 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             if (broker == BrokerType.DERIV) DerivDemoBotService.recordStartBlocked(context, detail)
                             message = detail
                         } finally { busy = false; commandPending = false }
+                    }
+                },
+                onPause = {
+                    scope.launch {
+                        commandPending = true
+                        try {
+                            if (broker == BrokerType.DERIV) {
+                                if (derivBotServiceState == "PAUSED") DerivDemoBotService.resume(context) else DerivDemoBotService.pause(context)
+                                message = if (derivBotServiceState == "PAUSED") "DEMO resume requested; the service will continue only after its safety checks." else "DEMO paused; monitoring continues and no new entries will be submitted."
+                            } else {
+                                val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "PAUSE")
+                                message = if (result.queued) "Pause requested; waiting for fresh broker state." else result.detail
+                            }
+                        } catch (e: Exception) { message = e.message?.take(240) ?: "Pause was not confirmed." }
+                        finally { commandPending = false }
                     }
                 },
                 onStop = {
@@ -1388,6 +1404,7 @@ private fun ConnectedBotDashboard(
     selectedOpportunity: com.example.domain.model.TradeSignal?,
     commandPending: Boolean,
     onStart: () -> Unit,
+    onPause: () -> Unit,
     onStop: () -> Unit
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, ProfitGreen.copy(alpha = 0.5f))) {
@@ -1406,9 +1423,10 @@ private fun ConnectedBotDashboard(
             }
             Text(if (running) "Scanning eligible markets" else "Connected and ready", color = if (running) ElectricCyan else ProfitGreen, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             selectedOpportunity?.let { Text("Selected opportunity: ${it.symbol} · ${userFacingSignalLabel(it.signalState, it.direction)}", color = TextPrimary, fontSize = 11.sp) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onStart, enabled = !running && !commandPending, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen, contentColor = DarkBackground)) { Icon(Icons.Default.PlayArrow, contentDescription = null); Text("START BOT", fontWeight = FontWeight.Black) }
-                Button(onClick = onStop, enabled = running && !commandPending, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)) { Icon(Icons.Default.Stop, contentDescription = null); Text("STOP BOT", fontWeight = FontWeight.Black) }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onStart, enabled = !running && !commandPending, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen, contentColor = DarkBackground)) { Icon(Icons.Default.PlayArrow, contentDescription = null); Text("START", fontWeight = FontWeight.Black) }
+                OutlinedButton(onClick = onPause, enabled = running && !commandPending, modifier = Modifier.weight(1f)) { Text("PAUSE / RESUME", fontWeight = FontWeight.Black) }
+                Button(onClick = onStop, enabled = running && !commandPending, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)) { Icon(Icons.Default.Stop, contentDescription = null); Text("STOP", fontWeight = FontWeight.Black) }
             }
             Text("No qualified setup means no order. RiskEngine, account permissions, fresh data, duplicate prevention and broker confirmation remain required.", color = WarningAmber, fontSize = 10.sp, lineHeight = 15.sp)
         }
