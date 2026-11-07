@@ -28,8 +28,15 @@ class UniversalConnectorDispatcherTest {
     }
 
     private fun fixture(kind: ConnectorKind): ConnectorVerification {
+        val broker = when (kind) {
+            ConnectorKind.FBS_MT5 -> "FBS"
+            ConnectorKind.EXNESS_MT5 -> "EXNESS"
+            ConnectorKind.HFM_MT5 -> "HFM"
+            ConnectorKind.DERIV_MT5, ConnectorKind.DERIV_OPTIONS -> "DERIV"
+            ConnectorKind.CTRADER_ACCOUNT -> "FixtureBroker"
+        }
         val identity = ModeAccountIdentity(
-            path(kind), kind.name, "fixture-account-" + kind.name,
+            path(kind), broker, "fixture-account-" + kind.name,
             if (kind.name.endsWith("MT5")) "Fixture-Demo-Server" else "",
             AccountMode.DEMO, "fixture-generation-" + kind.name
         )
