@@ -44,6 +44,12 @@ class SecretsManager internal constructor(
         private const val DERIV_API_TOKEN_REAL = "deriv_api_token_real"
         private const val DERIV_APP_ID = "deriv_app_id"
         private const val DERIV_ACCOUNT_MODE = "deriv_account_mode"
+        private const val DERIV_DEMO_ACCEPTED = "deriv_demo_accepted"
+        private const val DERIV_DEMO_ACCEPTED_ACCOUNT = "deriv_demo_accepted_account"
+        private const val DERIV_DEMO_ACCEPTED_CURRENCY = "deriv_demo_accepted_currency"
+        private const val DERIV_DEMO_ACCEPTED_SESSION = "deriv_demo_accepted_session"
+        private const val DERIV_DEMO_ACCEPTED_CREDENTIAL = "deriv_demo_accepted_credential"
+        private const val DERIV_DEMO_ACCEPTED_AT = "deriv_demo_accepted_at"
         private const val DERIV_REAL_EXECUTION_ENABLED = "deriv_real_execution_enabled"
         private const val TG_STATUS = "telegram_connection_status"
         private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
@@ -188,7 +194,8 @@ class SecretsManager internal constructor(
         if (!isSecureStorageAvailable || v.isBlank() || normalizedMode !in setOf("demo", "real")) return false
         invalidateDerivRealAuthorization()
         val key = if (normalizedMode == "real") DERIV_API_TOKEN_REAL else DERIV_API_TOKEN_DEMO
-        return prefs.edit().putString(key, v.trim()).remove(DERIV_API_TOKEN).commit()
+        return prefs.edit().putString(key, v.trim()).remove(DERIV_API_TOKEN)
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT).commit()
     }
     fun saveDerivAppId(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
@@ -200,7 +207,23 @@ class SecretsManager internal constructor(
         val mode = v.trim().lowercase()
         if (!isSecureStorageAvailable || mode !in setOf("demo", "real")) return false
         invalidateDerivRealAuthorization()
-        return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).commit()
+        return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).remove(DERIV_DEMO_ACCEPTED).commit()
+    }
+
+    fun saveDerivDemoAcceptance(accountId: String, currency: String, sessionId: String, credentialGeneration: String): Boolean {
+        if (!isSecureStorageAvailable || getDerivAccountMode() != "demo" || accountId.isBlank() || currency.isBlank() || sessionId.isBlank() || credentialGeneration.isBlank()) return false
+        return prefs.edit().putBoolean(DERIV_DEMO_ACCEPTED, true)
+            .putString(DERIV_DEMO_ACCEPTED_ACCOUNT, accountId.trim())
+            .putString(DERIV_DEMO_ACCEPTED_CURRENCY, currency.trim())
+            .putString(DERIV_DEMO_ACCEPTED_SESSION, sessionId.trim())
+            .putString(DERIV_DEMO_ACCEPTED_CREDENTIAL, credentialGeneration.trim())
+            .putLong(DERIV_DEMO_ACCEPTED_AT, System.currentTimeMillis()).commit()
+    }
+
+    fun hasCurrentDerivDemoAcceptance(accountId: String? = null, currency: String? = null, sessionId: String? = null, credentialGeneration: String? = null): Boolean {
+        if (!isSecureStorageAvailable || getDerivAccountMode() != "demo" || !prefs.getBoolean(DERIV_DEMO_ACCEPTED, false)) return false
+        return listOf(accountId to DERIV_DEMO_ACCEPTED_ACCOUNT, currency to DERIV_DEMO_ACCEPTED_CURRENCY, sessionId to DERIV_DEMO_ACCEPTED_SESSION, credentialGeneration to DERIV_DEMO_ACCEPTED_CREDENTIAL)
+            .all { (expected, key) -> expected == null || expected.isNotBlank() && expected == prefs.getString(key, "") }
     }
     fun enableDerivRealExecution(
         explicitConfirmation: Boolean,

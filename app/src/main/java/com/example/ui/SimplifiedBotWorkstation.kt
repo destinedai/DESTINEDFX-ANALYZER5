@@ -702,6 +702,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                         checkedAtMs = checkedAt,
                                     )
                                     val failure = if (provisional.state == com.example.data.deriv.DerivDemoVerificationState.PASS) null else "Fresh DEMO evidence was incomplete or did not match the selected account."
+                                    if (failure == null) {
+                                        require(secrets.saveDerivDemoAcceptance(account.loginId, account.currency, account.authenticatedSessionId, account.credentialGeneration)) {
+                                            "DEMO acceptance could not be durably recorded; bot start remains blocked."
+                                        }
+                                    }
                                     derivDemoVerification = provisional.copy(failureMessage = failure)
                                     message = failure ?: "Deriv DEMO verification passed. Read-only evidence only; no order was sent."
                                 } catch (e: Exception) {

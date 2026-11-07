@@ -97,6 +97,13 @@ class DerivDemoBotService : Service() {
                     stopSelf(startId)
                     return START_NOT_STICKY
                 }
+                val startApp = application as? MyApplication
+                if (startApp?.secretsManager?.getDerivAccountMode()?.lowercase() != "demo" ||
+                    startApp.secretsManager.hasCurrentDerivDemoAcceptance().not()) {
+                    update("PAUSED — explicit verified Deriv DEMO acceptance is required before start")
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putString(EXTRA_SYMBOL, symbol).putString(EXTRA_STRATEGY, strategy)
                     .putString(EXTRA_TIMEFRAME, timeframe).putBoolean("enabled", true).apply()
@@ -112,7 +119,7 @@ class DerivDemoBotService : Service() {
                 val symbol = prefs.getString(EXTRA_SYMBOL, null)?.trim().orEmpty()
                 val strategy = prefs.getString(EXTRA_STRATEGY, null)?.trim().orEmpty()
                 val timeframe = prefs.getString(EXTRA_TIMEFRAME, null)?.trim().orEmpty()
-                if (mode == "demo" && prefs.getBoolean("enabled", false) &&
+                if (mode == "demo" && app?.secretsManager?.hasCurrentDerivDemoAcceptance() == true && prefs.getBoolean("enabled", false) &&
                     symbol.isNotBlank() && strategy.isNotBlank() && timeframe.isNotBlank() &&
                     DerivMultiplierRules.isSupportedUnderlying(symbol) &&
                     strategy in StrategyRegistry.managedStrategyIds &&
@@ -148,6 +155,11 @@ class DerivDemoBotService : Service() {
             delay(15_000L)
         }
         if (!currentCoroutineContext().isActive || stopRequested) return
+        val acceptedAccount = gateway.accountInfo.value
+        if (acceptedAccount == null || !app.secretsManager.hasCurrentDerivDemoAcceptance(acceptedAccount.loginId, acceptedAccount.currency, credentialGeneration = acceptedAccount.credentialGeneration)) {
+            stopSafely("PAUSED — current authenticated DEMO account does not match the accepted verification record")
+            return
+        }
         suspend fun verifyDerivDailyRiskAtEntryBoundary(accountId: String, mode: String): Boolean {
             val utcDay = derivUtcDayKey()
             if (app.secretsManager.isDerivDailyRiskLocked(accountId, mode, utcDay)) return false
