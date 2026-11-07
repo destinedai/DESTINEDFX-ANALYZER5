@@ -40,7 +40,9 @@ class MyApplication : Application() {
 
     val storageAvailable = MutableStateFlow(false)
     val cTraderCallback = MutableStateFlow<android.net.Uri?>(null)
-    fun acceptCTraderCallback(uri: android.net.Uri) { cTraderCallback.value = uri }
+    fun acceptCTraderCallback(uri: android.net.Uri) {
+        if (_cTraderOAuthClient?.isCallbackRedirectAllowed(uri) == true) cTraderCallback.value = uri
+    }
     fun clearCTraderCallback() { cTraderCallback.value = null }
     
     private var _secretsManager: SecretsManager? = null

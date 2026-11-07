@@ -58,6 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.broker.BrokerType
 import com.example.data.ctrader.CTraderAccountOption
 import com.example.data.ctrader.CTraderVerifiedAccount
+import com.example.data.ctrader.CTraderSymbolMetadata
 import com.example.data.deriv.DerivConnectionFailureMapper
 import com.example.data.deriv.DerivDemoVerificationResult
 import com.example.data.deriv.verifyFreshDerivPublicTick
@@ -222,20 +223,21 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val cTraderQuote by cTraderGateway.quotes.collectAsStateWithLifecycle()
     var cTraderClientId by remember { mutableStateOf(secrets.getCTraderClientId()) }
     var cTraderClientSecret by remember { mutableStateOf(secrets.getCTraderClientSecret()) }
+    var cTraderRedirectUri by remember { mutableStateOf(secrets.getCTraderRedirectUri().ifBlank { "destinedfx://ctrader-callback" }) }
     var cTraderBroker by remember { mutableStateOf("") }
     var cTraderLive by remember { mutableStateOf(false) }
-    var cTraderSymbolId by remember { mutableStateOf(1L) }
+    var cTraderSymbolId by remember { mutableStateOf(0L) }
+    var cTraderSymbolName by remember { mutableStateOf("") }
+    var cTraderSymbolMetadata by remember { mutableStateOf<CTraderSymbolMetadata?>(null) }
     var cTraderAccounts by remember { mutableStateOf<List<CTraderAccountOption>>(emptyList()) }
     var cTraderSelectedAccountId by remember { mutableStateOf<Long?>(null) }
     var cTraderVerification by remember { mutableStateOf<CTraderVerifiedAccount?>(null) }
     var cTraderFailure by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(cTraderCallback) {
         val callback = cTraderCallback ?: return@LaunchedEffect
-        val code = callback.getQueryParameter("code")
-        val error = callback.getQueryParameter("error")
         viewModel.app.clearCTraderCallback()
-        if (!error.isNullOrBlank()) { cTraderFailure = "cTrader authorization failed: $error"; return@LaunchedEffect }
-        if (code.isNullOrBlank()) { cTraderFailure = "cTrader callback did not contain an authorization code."; return@LaunchedEffect }
+        val code = viewModel.app.cTraderOAuthClient.consumeAuthorizationCallback(callback)
+            .getOrElse { cTraderFailure = it.message ?: "cTrader callback was rejected."; return@LaunchedEffect }
         busy = true
         viewModel.app.cTraderOAuthClient.exchangeAuthorizationCode(code).onSuccess {
             message = "cTrader authorization saved in encrypted device storage. Load the account list before verification."
@@ -408,15 +410,15 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 Text("CTRADER ACCOUNT · READ ONLY", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 LoginField("Client ID", cTraderClientId, { cTraderClientId = it }, KeyboardType.Number)
                 LoginField("Client Secret", cTraderClientSecret, { cTraderClientSecret = it }, KeyboardType.Password, true)
-                Text("Redirect URI: destinedfx://ctrader-callback", color = TextSecondary, fontSize = 10.sp)
-                Text("The official cTrader documentation lists only client_id, redirect_uri, scope and product for authorization. A state parameter is not documented, so this release does not claim state protection; the exact redirect URI and one-minute code expiry remain enforced.", color = WarningAmber, fontSize = 9.sp, lineHeight = 13.sp)
+                LoginField("Exact registered redirect URI", cTraderRedirectUri, { cTraderRedirectUri = it }, KeyboardType.Uri)
+                Text("HTTPS redirect fallback requires an owner-controlled domain and cTrader application registration. The custom-scheme path remains UNVERIFIED until an owner-run test succeeds. cTrader does not document a state parameter; exact redirect matching, one-time codes and code age remain enforced.", color = WarningAmber, fontSize = 9.sp, lineHeight = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(selected = !cTraderLive, onClick = { cTraderLive = false }, label = { Text("DEMO") })
                     FilterChip(selected = cTraderLive, enabled = false, onClick = {}, label = { Text("LIVE LOCKED") })
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = {
-                        if (!secrets.saveCTraderApplication(cTraderClientId.trim(), cTraderClientSecret, "destinedfx://ctrader-callback")) { cTraderFailure = "Secure storage unavailable or application details are incomplete." }
+                        if (!secrets.saveCTraderApplication(cTraderClientId.trim(), cTraderClientSecret, cTraderRedirectUri.trim())) { cTraderFailure = "Secure storage unavailable or application details are incomplete." }
                         else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, viewModel.app.cTraderOAuthClient.authorizationUri(com.example.data.ctrader.CTraderOAuthClient.VIEW_SCOPE))) }.onFailure { cTraderFailure = it.message ?: "Could not open cTrader authorization." }
                     }, enabled = !busy && cTraderClientId.isNotBlank() && cTraderClientSecret.isNotBlank(), modifier = Modifier.weight(1f)) { Text("GRANT ACCESS") }
                     OutlinedButton(onClick = {
@@ -427,21 +429,31 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     FilterChip(selected = cTraderSelectedAccountId == option.accountId, onClick = { cTraderSelectedAccountId = option.accountId; cTraderBroker = option.brokerName }, label = { Text("${option.brokerName.ifBlank { "broker unverified" }} · ${maskAccountId(option.traderLogin.toString())} · ${if (option.isLive) "LIVE" else "DEMO"}", fontSize = 9.sp) })
                 }
                 LoginField("Broker name exactly as cTrader reports", cTraderBroker, { cTraderBroker = it }, KeyboardType.Text)
-                OutlinedTextField(value = cTraderSymbolId.toString(), onValueChange = { cTraderSymbolId = it.filter(Char::isDigit).toLongOrNull() ?: 0L }, label = { Text("Read-only quote symbol ID") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                LoginField("Exact symbol name reported by cTrader", cTraderSymbolName, { cTraderSymbolName = it }, KeyboardType.Text)
+                cTraderSymbolMetadata?.let { metadata ->
+                    Text("Verified symbol: ${metadata.name} · ID ${metadata.symbolId} · ${metadata.digits} price digits", color = TextSecondary, fontSize = 9.sp)
+                }
                 Button(onClick = {
                     scope.launch {
                         busy = true; cTraderFailure = null; cTraderVerification = null
                         val result = cTraderGateway.verify(cTraderBroker.trim(), cTraderLive, cTraderSelectedAccountId)
                         result.onSuccess { verified ->
                             cTraderVerification = verified
-                            cTraderGateway.subscribeReadOnlySpot(cTraderSymbolId).onFailure { cTraderFailure = it.message ?: "Quote subscription failed." }
-                            message = "cTrader account verification completed read-only. No order was sent."
+                            val metadata = cTraderGateway.listSymbols().getOrElse { cTraderFailure = it.message ?: "Symbol metadata failed."; emptyList() }
+                                .firstOrNull { it.name.equals(cTraderSymbolName.trim(), ignoreCase = true) }
+                            if (metadata == null) cTraderFailure = "BLOCKED: the exact symbol name was not returned by this cTrader account. No quote subscription was sent."
+                            else {
+                                cTraderSymbolMetadata = metadata
+                                cTraderSymbolId = metadata.symbolId
+                                cTraderGateway.subscribeReadOnlySpot(metadata.symbolId).onFailure { cTraderFailure = it.message ?: "Quote subscription failed." }
+                                message = "cTrader account and exact symbol verified read-only. No order was sent."
+                            }
                         }.onFailure { cTraderFailure = it.message ?: "cTrader verification failed." }
                         busy = false
                     }
-                }, enabled = !busy && cTraderBroker.isNotBlank() && cTraderSelectedAccountId != null && cTraderSymbolId > 0L, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)) { Text("VERIFY CTRADER, READ ONLY", fontWeight = FontWeight.Black) }
+                }, enabled = !busy && cTraderBroker.isNotBlank() && cTraderSelectedAccountId != null && cTraderSymbolName.isNotBlank(), modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)) { Text("VERIFY CTRADER, READ ONLY", fontWeight = FontWeight.Black) }
                 cTraderVerification?.let { verified ->
-                    val quoteReceived = cTraderQuote?.isFresh() == true && cTraderQuote?.accountId == verified.accountId
+                    val quoteReceived = cTraderQuote?.isFresh(verified.accountId, cTraderSymbolMetadata?.symbolId) == true
                     Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), border = BorderStroke(1.dp, if (quoteReceived) ProfitGreen else LossRed)) {
                         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("cTrader verification ${if (quoteReceived) "PASSED" else "BLOCKED"}", color = if (quoteReceived) ProfitGreen else LossRed, fontWeight = FontWeight.Black, fontSize = 11.sp)

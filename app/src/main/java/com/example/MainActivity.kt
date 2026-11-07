@@ -60,7 +60,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        (application as MyApplication).let { app -> intent?.data?.takeIf { it.scheme == "destinedfx" && it.host == "ctrader-callback" }?.let(app::acceptCTraderCallback) }
+        (application as MyApplication).let { app -> intent?.data?.let(app::acceptCTraderCallback) }
         enableEdgeToEdge()
         ProcessLifecycleOwner.get().lifecycle.addObserver(processLifecycleObserver)
 
@@ -173,7 +173,7 @@ class MainActivity : FragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intent.data?.takeIf { it.scheme == "destinedfx" && it.host == "ctrader-callback" }?.let { (application as MyApplication).acceptCTraderCallback(it) }
+        intent.data?.let { (application as MyApplication).acceptCTraderCallback(it) }
     }
 
     override fun onDestroy() {

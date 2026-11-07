@@ -7,20 +7,20 @@ This path is free and runs on the Android phone. It does not require a PC, VPS, 
 1. Create or sign in to a cTrader ID at the official cTrader site.
 2. Open a **DEMO cTrader account** at the chosen broker. Confirm the account is actually cTrader, not MT4 or MT5.
 3. Open the official cTrader Open API portal and register one Open API application.
-4. Add this exact redirect URI to the application: `destinedfx://ctrader-callback`.
+4. Add the exact redirect URI that will be entered in the app. Prefer an owner-controlled HTTPS URI such as `https://your-owned-domain.example/ctrader/callback`. The custom-scheme fallback `destinedfx://ctrader-callback` is not claimed to work until a genuine owner-run test succeeds.
 5. Copy the application client ID and client secret into the app's cTrader setup screen. The client secret must never leave the phone. Do not paste it into chat, GitHub, a screenshot, a log, or a support message.
 
-The official account-authentication page requires a redirect URI registered in the cTrader application and documents `client_id`, `redirect_uri`, `scope`, and optional `product` authorization parameters. It does not document a `state` parameter or explicitly confirm custom-scheme redirects. This app therefore treats `destinedfx://ctrader-callback` as UNVERIFIED until the owner confirms that cTrader accepts and returns to that registered URI. If it fails, an HTTPS redirect plus an in-app interception flow is required before this connector can be considered usable.
+The official account-authentication page requires a redirect URI registered in the cTrader application and documents `client_id`, `redirect_uri`, `scope`, and optional `product` authorization parameters. It does not document a `state` parameter or explicitly confirm custom-scheme redirects. The app accepts callbacks only when scheme, host, and path exactly match the configured registered URI. An HTTPS callback also requires owner-controlled domain registration and app-link or browser configuration, which are OWNER STEPS. This task does not register or buy a domain and does not claim that an embedded WebView Google login path was tested.
 
 6. Start with the `accounts` scope. This is read-only account access. Do not select `trading` until a separate DEMO acceptance record exists and the owner has explicitly approved the next phase.
-7. Tap **Sign in with cTrader**. Complete the cTrader ID consent page. The app exchanges the short-lived authorization code for encrypted access and refresh tokens.
+7. Tap **Grant access**. Complete the cTrader ID consent page in the external browser. Return through the configured callback. The app rejects callback errors, mismatched redirect hosts or paths, reused codes, and codes older than one minute before exchanging the short-lived authorization code for encrypted access and refresh tokens.
 8. Select the broker and DEMO account, then tap **VERIFY CTRADER DEMO**. The app must receive the account list, authenticate the account session, read trader information, and obtain a fresh quote before showing CONNECTED.
 
 ## What the app stores
 
 The client ID, client secret, redirect URI, access token, refresh token, and access-token expiry are stored only in Android Keystore-backed encrypted preferences. If secure storage is unavailable, the app refuses to save the credentials. Tokens and secrets are not printed in logs or returned in UI error messages.
 
-The access token normally lasts about 30 days. The refresh token is used to renew it. Re-authorisation is required if cTrader invalidates the grant or the refresh token is no longer accepted.
+The access token normally lasts about 30 days. The app refreshes before expiry, uses the documented GET authorization-code exchange and POST refresh request with query parameters, retries HTTP 429 with bounded backoff, and stores rotated tokens atomically through encrypted preferences. Re-authorisation is required if cTrader invalidates the grant or the refresh token is no longer accepted.
 
 ## Safety boundary
 

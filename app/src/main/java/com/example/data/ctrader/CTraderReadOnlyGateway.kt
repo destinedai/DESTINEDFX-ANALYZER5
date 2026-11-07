@@ -7,6 +7,10 @@ import com.xtrader.protocol.openapi.v2.ProtoOAGetAccountListByAccessTokenRes
 import com.xtrader.protocol.openapi.v2.ProtoOAApplicationAuthReq
 import com.xtrader.protocol.openapi.v2.ProtoOASpotEvent
 import com.xtrader.protocol.openapi.v2.ProtoOASubscribeSpotsReq
+import com.xtrader.protocol.openapi.v2.ProtoOASymbolByIdReq
+import com.xtrader.protocol.openapi.v2.ProtoOASymbolByIdRes
+import com.xtrader.protocol.openapi.v2.ProtoOASymbolsListReq
+import com.xtrader.protocol.openapi.v2.ProtoOASymbolsListRes
 import com.xtrader.protocol.openapi.v2.ProtoOATraderReq
 import com.xtrader.protocol.openapi.v2.ProtoOATraderRes
 import com.xtrader.protocol.openapi.v2.model.ProtoOAPayloadType
@@ -23,6 +27,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import okhttp3.OkHttpClient
@@ -54,6 +63,8 @@ data class CTraderAccountOption(
     val isLive: Boolean
 )
 
+data class CTraderSymbolMetadata(val symbolId: Long, val name: String, val digits: Int)
+
 data class CTraderQuote(
     val accountId: Long,
     val symbolId: Long,
@@ -62,9 +73,14 @@ data class CTraderQuote(
     val providerTimestampMs: Long,
     val receivedAtMs: Long
 ) {
-    fun isFresh(nowMs: Long = System.currentTimeMillis()): Boolean =
-        providerTimestampMs > 0L && receivedAtMs <= nowMs && nowMs - receivedAtMs <= 15_000L &&
-            listOfNotNull(bid, ask).all { it.isFinite() && it > 0.0 }
+    fun isFresh(expectedAccountId: Long? = null, expectedSymbolId: Long? = null, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val values = listOfNotNull(bid, ask)
+        return (expectedAccountId == null || accountId == expectedAccountId) &&
+            (expectedSymbolId == null || symbolId == expectedSymbolId) &&
+            providerTimestampMs > 0L && providerTimestampMs <= nowMs && nowMs - providerTimestampMs <= 15_000L &&
+            receivedAtMs > 0L && receivedAtMs <= nowMs && nowMs - receivedAtMs <= 15_000L &&
+            values.isNotEmpty() && values.all { it.isFinite() && it > 0.0 }
+    }
 }
 
 /**
@@ -83,6 +99,8 @@ class CTraderReadOnlyGateway(
     private var connectedAccountId: Long = 0L
     private var selectedBroker: String = ""
     private var selectedLive: Boolean = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var heartbeatJob: Job? = null
 
     suspend fun verify(
         brokerName: String,
@@ -153,11 +171,35 @@ class CTraderReadOnlyGateway(
         }.map { Unit }
     }
 
+    suspend fun listSymbols(): Result<List<CTraderSymbolMetadata>> = withContext(Dispatchers.IO) {
+        if (connectedAccountId <= 0L || socket == null) return@withContext Result.failure(IllegalStateException("cTrader account is not freshly verified"))
+        runCatching {
+            val listReply = sendAndAwait(
+                ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_REQ_VALUE,
+                ProtoOASymbolsListReq.newBuilder().setCtidTraderAccountId(connectedAccountId).build(),
+                ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES_VALUE
+            )
+            val lightSymbols = ProtoOASymbolsListRes.parseFrom(listReply.payload).symbolList.filter { it.enabled }
+            lightSymbols.mapNotNull { light ->
+                val detailReply = sendAndAwait(
+                    ProtoOAPayloadType.PROTO_OA_SYMBOL_BY_ID_REQ_VALUE,
+                    ProtoOASymbolByIdReq.newBuilder().setCtidTraderAccountId(connectedAccountId).addSymbolId(light.symbolId).build(),
+                    ProtoOAPayloadType.PROTO_OA_SYMBOL_BY_ID_RES_VALUE
+                )
+                ProtoOASymbolByIdRes.parseFrom(detailReply.payload).symbolList.firstOrNull()?.let { detail ->
+                    CTraderSymbolMetadata(light.symbolId, light.symbolName, detail.digits)
+                }
+            }
+        }.onFailure { close() }
+    }
+
     fun close() {
         pending.values.forEach { it.cancel() }
         pending.clear()
         socket?.close(1000, "read-only session closed")
         socket?.cancel()
+        heartbeatJob?.cancel()
+        heartbeatJob = null
         socket = null
         connectedAccountId = 0L
         _quotes.value = null
@@ -169,6 +211,13 @@ class CTraderReadOnlyGateway(
         socket = client.newWebSocket(Request.Builder().url(if (live) LIVE_HOST else DEMO_HOST).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 opened.complete(Unit)
+                heartbeatJob?.cancel()
+                heartbeatJob = scope.launch {
+                    while (true) {
+                        delay(8_000L)
+                        if (socket != null) sendHeartbeat()
+                    }
+                }
             }
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 handleFrames(bytes.toByteArray())
