@@ -55,14 +55,14 @@ jobs:
           app = Path("app/src/main/java/com/example/ui/DestinedFXApp.kt").read_text()
           trade = Path("app/src/main/java/com/example/domain/usecase/impl/TradeUseCaseImpl.kt").read_text()
           policy = Path("app/src/main/java/com/example/domain/usecase/impl/ReadOnlyExecutionPolicy.kt").read_text()
-          if re.search(r"<(?:service|receiver)\\b", manifest):
+          if re.search(r"<(?:service|receiver)\b", manifest):
               raise SystemExit("Read-only manifest must not declare Android services or receivers.")
           if "DestinedFXScreen.Bot -> ReadOnlyScopeScreen()" not in app:
               raise SystemExit("Bot route must resolve only to the read-only scope disclosure.")
           if "BotWorkstationTab" in app:
               raise SystemExit("Execution workstation must not be wired into the app shell.")
           method = trade.split("override suspend fun executeTrade(signal: TradeSignal)", 1)
-          if len(method) != 2 or not method[1].lstrip().startswith("{\\n        ReadOnlyExecutionPolicy.requireTradingDisabled()"):
+          if len(method) != 2 or not method[1].lstrip().startswith("{") or "ReadOnlyExecutionPolicy.requireTradingDisabled()" not in method[1].splitlines()[1]:
               raise SystemExit("Trade submission must fail closed before any other operation.")
           if "READ_ONLY_PRODUCT" not in policy:
               raise SystemExit("Read-only execution policy marker is missing.")
@@ -99,13 +99,13 @@ jobs:
               if not match:
                   raise SystemExit(f"Missing Gradle metadata: {pattern}")
               return match.group(1)
-          package = one(r'applicationId\\s*=\\s*"([^"]+)"')
-          code = one(r'versionCode\\s*=\\s*(\\d+)')
-          name = one(r'versionName\\s*=\\s*"([^"]+)"')
+          package = one(r'applicationId\s*=\s*"([^"]+)"')
+          code = one(r'versionCode\s*=\s*(\d+)')
+          name = one(r'versionName\s*=\s*"([^"]+)"')
           metadata, signature = sys.argv[1:]
           if f"package: name='{package}' versionCode='{code}' versionName='{name}'" not in metadata:
               raise SystemExit("APK identity/version does not match Gradle configuration.")
-          if not re.search(r"certificate SHA-256 digest:\\s*[0-9a-fA-F]{64}", signature):
+          if not re.search(r"certificate SHA-256 digest:\s*[0-9a-fA-F]{64}", signature):
               raise SystemExit("APK signature fingerprint was not reported by apksigner.")
           print(f"Verified APK: {package} {name} ({code})")
           PY
