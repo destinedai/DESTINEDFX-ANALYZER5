@@ -52,7 +52,7 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request(riskCaps = false)).isSuccess)
         assertFalse(policy.armLive(request(reauthenticated = false)).isSuccess)
         assertFalse(policy.armLive(request(demoIdentity = identity(account = "999999"))).isSuccess)
-        assertFalse(policy.armLive(request(demoIdentity = identity(), currentDemoGeneration = "rotated")).isSuccess)
+        assertFalse(policy.armLive(request(demoIdentity = identity(), currentDemoCredentialGeneration = "rotated")).isSuccess)
         assertFalse(policy.armLive(request(liveVerified = verified(identity(mode = AccountMode.LIVE).copy(accountId = "999999")))).isSuccess)
     }
 
