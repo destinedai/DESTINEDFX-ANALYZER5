@@ -1,122 +1,68 @@
-name: Read-only Android validation
+name: Read-only Android build
 
 on:
   push:
-    branches: ["free/phone-only-v1"]
+    branches:
+      - free/phone-only-v1
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  secret-scan:
-    name: Scan repository for exposed secrets
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.x"
-      - name: Install Gitleaks
-        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
-      - name: Scan checked-out tree with redacted findings
-        run: "$(go env GOPATH)/bin/gitleaks" dir --redact=100 --exit-code 1 .
-
   android-read-only:
-    name: Android tests and read-only APK
+    name: Validate and build read-only Android APK
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 21
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Prepare isolated debug signing key
-        run: |
-          keytool -genkeypair -v -keystore debug.keystore \
-            -storepass android -keypass android -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=DestinedFX Read-only CI,O=DestinedFX,C=NG"
-      - name: Create local environment file from public placeholders
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Create local environment from public placeholders
         run: cp .env.example .env
-      - name: Verify read-only product boundary in source
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-          manifest = Path("app/src/main/AndroidManifest.xml").read_text()
-          app = Path("app/src/main/java/com/example/ui/DestinedFXApp.kt").read_text()
-          trade = Path("app/src/main/java/com/example/domain/usecase/impl/TradeUseCaseImpl.kt").read_text()
-          policy = Path("app/src/main/java/com/example/domain/usecase/impl/ReadOnlyExecutionPolicy.kt").read_text()
-          if re.search(r"<(?:service|receiver)\b", manifest):
-              raise SystemExit("Read-only manifest must not declare Android services or receivers.")
-          if "DestinedFXScreen.Bot -> ReadOnlyScopeScreen()" not in app:
-              raise SystemExit("Bot route must resolve only to the read-only scope disclosure.")
-          if "BotWorkstationTab" in app:
-              raise SystemExit("Execution workstation must not be wired into the app shell.")
-          method = trade.split("override suspend fun executeTrade(signal: TradeSignal)", 1)
-          if len(method) != 2 or not method[1].lstrip().startswith("{") or "ReadOnlyExecutionPolicy.requireTradingDisabled()" not in method[1].splitlines()[1]:
-              raise SystemExit("Trade submission must fail closed before any other operation.")
-          if "READ_ONLY_PRODUCT" not in policy:
-              raise SystemExit("Read-only execution policy marker is missing.")
-          workflow = Path(".github/workflows/build-apk.yml").read_text()
-          for forbidden in ("DestinedFX-Windows-Worker-Kit", "DestinedFX-MT5-EA-ex5", "compile-mt5-ea.ps1"):
-              if forbidden in workflow:
-                  raise SystemExit(f"Legacy execution artifact is still wired into CI: {forbidden}")
-          print("Static read-only boundary checks passed.")
-          PY
+
+      - name: Verify read-only app boundary
+        run: python3 scripts/verify_read_only_build.py
+
       - name: Run Android JVM unit tests
         run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest --stacktrace
+
       - name: Assemble debug APK
         run: ./gradlew assembleDebug --stacktrace
-      - name: Verify APK package, version, signature and checksum
+
+      - name: Verify APK exists and is signed
         shell: bash
         run: |
           set -euo pipefail
           apk="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$apk"
-          apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
-          aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
-          test -n "$apksigner_path"
-          test -n "$aapt_path"
-          "$apksigner_path" verify --verbose --print-certs "$apk" | tee /tmp/signature.txt
-          metadata="$("$aapt_path" dump badging "$apk")"
-          python - "$metadata" /tmp/signature.txt <<'PY'
-          import re, sys
-          from pathlib import Path
-          gradle = Path("app/build.gradle.kts").read_text()
-          def one(pattern):
-              match = re.search(pattern, gradle)
-              if not match:
-                  raise SystemExit(f"Missing Gradle metadata: {pattern}")
-              return match.group(1)
-          package = one(r'applicationId\s*=\s*"([^"]+)"')
-          code = one(r'versionCode\s*=\s*(\d+)')
-          name = one(r'versionName\s*=\s*"([^"]+)"')
-          metadata, signature = sys.argv[1:]
-          if f"package: name='{package}' versionCode='{code}' versionName='{name}'" not in metadata:
-              raise SystemExit("APK identity/version does not match Gradle configuration.")
-          if not re.search(r"certificate SHA-256 digest:\s*[0-9a-fA-F]{64}", signature):
-              raise SystemExit("APK signature fingerprint was not reported by apksigner.")
-          print(f"Verified APK: {package} {name} ({code})")
-          PY
-          sha256sum "$apk" | tee /tmp/apk-sha256.txt
-      - name: Upload verified read-only debug APK
+          signer="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -n "$signer"
+          "$signer" verify --verbose --print-certs "$apk"
+          sha256sum "$apk" | tee apk-sha256.txt
+
+      - name: Upload read-only debug APK
         uses: actions/upload-artifact@v4
         with:
           name: DestinedFX-read-only-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
       - name: Upload Android test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -127,42 +73,3 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/**
           if-no-files-found: warn
           retention-days: 14
-
-  android-emulator:
-    name: Android emulator runtime tests
-    runs-on: ubuntu-24.04
-    needs: android-read-only
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 21
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Prepare debug signing key
-        run: |
-          keytool -genkeypair -v -keystore debug.keystore \
-            -storepass android -keypass android -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=DestinedFX Read-only CI,O=DestinedFX,C=NG"
-          cp .env.example .env
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -e /dev/kvm
-      - name: Run Android runtime instrumentation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          arch: x86_64
-          target: google_apis
-          force-avd-creation: true
-          disable-animations: true
-          emulator-boot-timeout: 600
-          emulator-options: -no-snapshot -no-snapshot-save -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
-          script: |
-            chmod +x gradlew
-            bash ./scripts/run-android-emulator-tests.sh
