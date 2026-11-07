@@ -13,19 +13,21 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class DestinedFXNavigationTest {
     @Test
-    fun primaryNavigationExposesTheSixCoreWorkspacesInOrder() {
+    fun primaryNavigationExposesTheFiveOwnerPriorityWorkspacesInOrder() {
         assertEquals(
-            listOf("Analyzer", "Strategies", "Calendar", "Bot", "Risk", "Settings"),
+            listOf("Home", "Analyzer", "Bot", "Watchlist", "More"),
             DestinedFXScreen.primaryScreens.map { it.title }
         )
     }
 
     @Test
-    fun secondaryWorkspacesRemainReachableWithoutHidingCoreTabs() {
-        assertTrue(DestinedFXScreen.moreScreens.contains(DestinedFXScreen.Home))
-        assertFalse(DestinedFXScreen.moreScreens.contains(DestinedFXScreen.Bot))
-        assertFalse(DestinedFXScreen.moreScreens.contains(DestinedFXScreen.Risk))
-        assertFalse(DestinedFXScreen.moreScreens.contains(DestinedFXScreen.Settings))
+    fun secondaryWorkspacesRemainReachableWithoutDuplicatingPrimaryTabs() {
+        assertTrue(DestinedFXScreen.moreScreens.contains(DestinedFXScreen.Strategies))
+        assertTrue(DestinedFXScreen.moreScreens.contains(DestinedFXScreen.Calendar))
+        assertTrue(DestinedFXScreen.moreScreens.contains(DestinedFXScreen.Risk))
+        assertTrue(DestinedFXScreen.moreScreens.contains(DestinedFXScreen.Settings))
+        assertFalse(DestinedFXScreen.moreScreens.any { it in DestinedFXScreen.primaryScreens })
+        assertTrue(DestinedFXScreen.allScreens.containsAll(DestinedFXScreen.primaryScreens))
         assertEquals(DestinedFXScreen.allScreens.size, DestinedFXScreen.allScreens.distinctBy { it.tag }.size)
     }
 }

@@ -6,6 +6,8 @@
 **Work branch:** `feat/complete-demo-readiness` (created from that clean baseline)
 **Decision:** **NO-GO** for verified zero-cost PC-off MT5 execution today; current managed MT5 is **NOT VERIFIED** for DEMO acceptance. LIVE trading remains unaccepted and locked.
 
+**Historical note:** This report records findings on its original feature branch as of 2 November 2026. It is not a status report for the current `free/phone-only-v1` head. Current product and execution scope are described in the root README and current deployment guides. No external host, broker, account or trade is verified by this historical report.
+
 ## Scope and safety boundary
 
 The audit traced the native Android/Compose client, Kotlin analyzer/risk and news boundaries, FastAPI bridge, SQLite/credential handling, Windows worker, MQL5 EA, source-level tests, GitHub Actions and deployment/runbook configuration. Work was performed on a feature branch based on `main`. No broker message was sent, no account was created or logged into, no credentials were supplied, no paid resource was provisioned, no service was deployed, and no trade was submitted. The existing `spike/cloudflare-workers-d1` branch was left untouched.
@@ -57,7 +59,7 @@ cTrader Cloud is a different platform, not a drop-in MT5 replacement. The prior 
 
 **No paid trial, subscription, deployment, Cloudflare experiment or account action was performed. Actual spend: $0.** This verifies zero spend on this task; it does not prove an ongoing zero-cost host exists.
 
-### Prepared support inquiry — not sent
+### Prepared support inquiry - not sent
 
 **Subject: Confirmation of free MetaQuotes Virtual Hosting for Deriv MT5 accounts in Nigeria**
 

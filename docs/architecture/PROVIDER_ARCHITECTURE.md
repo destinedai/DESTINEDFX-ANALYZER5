@@ -2,37 +2,36 @@
 
 ## Categories
 
-1. **Public market/event data adapters** (`app/src/main/java/com/example/data/market/`, calendar and news packages) retrieve public or runtime-keyed quotes, candles and event feeds. A public market feed is not a broker account connection.
-2. **Authenticated provider/account gateways** (`data/broker/`, `data/deriv/`, `data/ctrader/`, `data/mt5/`) deal with account/session state under provider-specific conditions. Their code-level presence does not prove successful authentication, entitlement, account acceptance, or operational availability.
-3. **Unavailable gateway** (`UnavailableBrokerGateway`) reports unsupported account operations explicitly and fails closed.
-4. **Preview gateway** (`PreviewBrokerGateway`) is isolated non-account preview functionality. It does not supply genuine account values and refuses account/transaction operations.
-5. **Legacy execution systems** (`bridge/`, `managed-worker/`, `mt5-ea/`, selected broker adapter methods) contain transaction-capable routes and are outside the intended phone-only analysis product. They must not be represented as disabled merely because the Android trade use case rejects requests.
+1. **Market and event feeds** in `app/src/main/java/com/example/data/market/`, calendar and news packages retrieve quotes, candles and event data. Public market data is not proof of a broker account connection.
+2. **Authenticated account gateways** in `data/broker/`, `data/deriv/`, `data/ctrader/`, and `data/mt5/` manage provider-specific sessions and account evidence. Source presence does not prove authentication, entitlement or operational availability.
+3. **Unavailable and preview gateways** report unsupported operations explicitly or isolate non-account preview behavior. Preview data must never be presented as genuine account data.
+4. **Managed MT5 components** in `bridge/`, `managed-worker/`, and `mt5-ea/` support a separate owner-operated terminal path. A repository checkout does not establish that this path is deployed or healthy.
 
 ## Android abstractions
 
-- `BrokerGateway` exposes both data and transaction methods; it is therefore not a read-only-only interface.
-- `BrokerManager` selects an injected gateway; current routing includes DERIV and MT5, while OANDA account operations use an unavailable gateway.
-- `BrokerCapabilityMatrix` is a static capability declaration and should be read alongside implementation status and evidence; a row is not a live connection check.
-- `BrokerDirectory` is primarily a brand-selection directory and does not verify an account/server.
-- `UniversalConnectorDispatcher` checks connector evidence/identity/freshness, but unit fixtures do not verify a real API session.
-- `AccountDataProvenance` models origin, connection state, timestamp, currency, nullable values and displayability. Missing values must remain null and values are displayable only when the predicate passes.
+- `BrokerGateway` exposes account data and order methods. `executeTradeWhenArmed` obtains a mode decision before invoking an order method. The default decision denies. An implementation that allows a request must evaluate the shared `ModeArmingPolicy` using fresh account evidence.
+- `BrokerManager` selects between injected gateways. Current routing includes Deriv and MT5; OANDA account operations are unavailable.
+- `BrokerCapabilityMatrix` is a source-level capability declaration, not a live connection check.
+- `BrokerDirectory` supports brand selection and does not verify an account or server.
+- `UniversalConnectorDispatcher` checks mode and connection evidence for connector operations. Fixtures do not establish a real API session.
+- `AccountDataProvenance` retains origin, connection state, timestamps, currency, nullable values and displayability. Missing values stay null.
 
-## Source-specific observations
+## Source-specific status
 
-- **cTrader:** a separate read-only OAuth/Open API path exists and lacks order methods in the inspected class; no genuine account authorization was verified. It is not automatically equivalent to a BrokerManager gateway.
-- **Deriv:** authenticated account/session paths exist. Generic trade-plan execution is rejected in the adapter, but a contract-close path remains transactional. It is not wholly read-only.
-- **MT5:** direct Android connection/order paths fail closed in the adapter; the managed bridge/worker/EA remains. The inspected MT5 gateway snapshot path does not currently reach a connected/displayable state.
-- **OANDA:** market-data adapters are separate from account access. BrokerManager uses an unavailable OANDA account gateway; do not infer authenticated account/trading support from an OANDA feed.
-- **Other broker brands:** FBS, Exness, HFM, and Deriv MT5 brand selection can route to a shared managed MT5 path; this is not a provider-specific API implementation for each brand.
+- **cTrader:** OAuth and account-data classes exist. The current inspected account gateway does not place orders. Spotware approval and live account verification remain owner steps.
+- **Deriv:** authenticated account/session and Multiplier execution code exists. The Multiplier path checks account mode, fresh evidence, acceptance or LIVE lease, symbol support and product-specific risk before submission. The generic Forex/CFD adapter does not translate plans into Multiplier contracts. No genuine account or fill was verified.
+- **MT5:** direct Android connection and order methods fail closed. The remote bridge, worker and EA form a separate managed route with account-mode checks. Broker-specific behavior and real host operation are unverified.
+- **OANDA:** market-data adapters are separate from account access. The broker manager's account gateway is unavailable; do not infer account or trading support from a feed.
+- **FBS, Exness, HFM and Deriv MT5:** brand selection can route through a shared managed MT5 path. This is not a separate provider API implementation for every brand.
 
-## Rules for change
+## Rules for changes
 
-- Define capabilities explicitly with supported instruments/data types, intervals, authentication mode and implementation evidence.
-- Treat “unsupported” and “unavailable” as distinct from an empty successful response.
-- Keep preview values physically and logically isolated from real provider data.
-- Attribute provider/source, local retrieval time and upstream event time separately whenever available.
-- Do not infer real-time status from a recent local retrieval timestamp.
-- Do not combine providers silently. A fallback needs compatibility checks and a visible source change.
-- Keep every transaction-capable path outside the analysis-only product boundary or remove it; test the reachable call graph and built artifact, not only a policy helper.
+- Define supported instruments, data types, intervals, authentication and implementation evidence explicitly.
+- Distinguish unsupported, unavailable, stale and empty-success states.
+- Keep preview values isolated from genuine provider data.
+- Preserve provider event time and local retrieval time as distinct concepts.
+- Do not infer real-time status from recent local retrieval.
+- Do not silently merge providers. Make source changes visible and validate compatibility.
+- Keep every order request behind account-specific `ModeArmingPolicy` authorization and the existing risk checks. Tests must use fake transports and must never submit real orders.
 
 See the [public market-data capability matrix](../providers/PROVIDER_CAPABILITY_MATRIX.md), [broker capability matrix](../broker-capability-matrix.md), and [data provenance](../security/DATA_PROVENANCE.md).

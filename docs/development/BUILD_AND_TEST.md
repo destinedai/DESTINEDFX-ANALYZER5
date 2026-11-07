@@ -1,48 +1,39 @@
 # Build and test
 
-## Android commands
+## Android
 
 ```sh
-python3 scripts/verify_read_only_build.py
-./gradlew testDebugUnitTest --no-daemon
-./gradlew assembleDebug --no-daemon
-./gradlew connectedDebugAndroidTest --no-daemon  # device/emulator required
+./gradlew testDebugUnitTest --stacktrace
+./gradlew assembleDebug --stacktrace
+./gradlew connectedDebugAndroidTest --stacktrace  # requires a connected device or emulator
 ```
 
-`testDebugUnitTest` is the JVM/Robolectric suite used by CI. Instrumented tests are present under `app/src/androidTest/`, but are not run by the current GitHub Actions workflow. Building requires the configured Android SDK and a full JDK; Chaquopy also expects the Python build interpreter configured in `app/build.gradle.kts`.
+Building requires a full JDK, configured Android SDK/platform/build tools, and the Python interpreter configured for Chaquopy. `testDebugUnitTest` runs JVM/Robolectric tests. The emulator script and test scope are defined in `scripts/run-android-emulator-tests.sh`.
 
-## Python/backend commands
+## Python, bridge, worker and EA source tests
 
-Use a virtual environment and install dependencies from `bridge/requirements.txt` before running the bridge suite:
+Use an isolated environment and install dependencies from `bridge/requirements.txt` before running bridge tests.
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r bridge/requirements.txt pytest
-python -m pytest -q bridge scripts/test_deriv_demo_smoke.py
-python -m unittest discover -s managed-worker -v
+python -m pytest -q scripts/test_deriv_demo_smoke.py bridge
+python -m pytest -q managed-worker mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py
 ```
 
-These are separate from Android build and do not establish that bridge, worker or MT5 paths are read-only. They are not currently part of `.github/workflows/build-apk.yml`.
+The EA source-contract and safety-math tests are not a genuine MetaEditor compile. CI has a separate Windows job for that compile.
 
-## Relevant test coverage
+## Safety and mode tests
 
-- Android read-only guard: `ReadOnlyExecutionPolicyTest`, `TradeUseCaseImpl` boundary and static verifier.
-- Navigation/source intent: `DestinedFXNavigationTest`.
-- Broker routing/provenance: `BrokerManagerRoutingTest`, `BrokerCapabilityMatrixTest`, `BrokerAccountSnapshotTest`, `UniversalConnectorDispatcherTest`.
-- Market safety and parsing: `MarketDataSafetyTest`, calendar and news repository/provider tests.
-- Broader app tests: signal integrity, risk, Deriv, cTrader, MT5, UI state and serialization tests under `app/src/test/`.
-- Device/UI instrumentation: `app/src/androidTest/`.
-- Bridge/worker/EA helper tests: under `bridge/`, `managed-worker/`, `mt5-ea/`, and `scripts/`.
+Relevant Android tests include `ModeArmingPolicyTest`, `ModeArmingGatewayTest`, `DerivTradeRiskBoundaryTest`, `UniversalConnectorDispatcherTest`, and broker/market safety tests. `ModeArmingGatewayTest` uses a fake submission closure to prove that missing DEMO acceptance and an unarmed LIVE decision block before the broker call. It never connects to a broker.
 
-A test existing in source is not the same as a test passing. Fixtures validate local logic; they do not prove live market-provider, broker, deployment or account acceptance. `ReadOnlyExecutionPolicyTest` tests the guard helper; end-to-end transaction-surface removal/reachability still needs proof.
+A fixture passing proves only its local contract. It does not prove account authentication, order acknowledgement, fill execution, reconciliation, host uptime, provider access or deployment readiness. Never send real orders during tests.
 
-## Current environment result
+## Restored CI coverage
 
-In this follow-up audit, `python3 scripts/verify_read_only_build.py` passed. An isolated Python 3.12 environment ran `python -m pytest -q bridge scripts/test_deriv_demo_smoke.py`: **160 passed, one third-party Starlette/AnyIO deprecation warning**. `python -m pytest -q managed-worker mt5-ea`: **72 passed**. These suites exercise source/tests with fixtures and fakes; they do not establish real Windows/MT5, broker, live provider, or deployment behavior.
+The workflow defines Python/bridge/worker/EA tests, Gitleaks, Windows MetaEditor EA compilation, Android JVM tests and APK build, Android emulator instrumentation, and Windows worker-kit packaging. The actual status must be checked for each job on the exact commit. See [CI/CD](CI_CD.md).
 
-The local sandbox has Java 21 runtime but no `javac` and no `ANDROID_HOME`/`ANDROID_SDK_ROOT`; Gradle could not proceed through Android compilation/tests here. This is a local environment blocker, not evidence of a code failure or a pass. See the exact-revision GitHub Actions run only when its `head_sha` matches the commit being assessed.
+## Verification record
 
-## Quality boundaries
-
-Do not disable failing tests. Record test counts from the XML/summary for the exact run. Build success, APK signature validity, artifact upload, and external provider verification are separate facts; report each separately.
+Do not copy test counts from an earlier revision. Record the exact workflow SHA, run URL, per-job status, report XML totals, artifact ID, expiration, signing result and a SHA-256 computed from the downloaded artifact. A missing JDK or SDK means the local Android task could not run; it is not a pass or a code failure.

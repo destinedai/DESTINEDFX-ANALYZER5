@@ -196,7 +196,7 @@ class TradeUseCaseImpl(
             newsStatus = "CLEAR"
         )
 
-        val result = broker.executeTrade(canonicalPlan)
+        val result = broker.executeTradeWhenArmed(canonicalPlan)
         val orderRef = result.getOrNull()
         record(signal, finalSizing.lots, if (result.isSuccess) "OPEN" else "FAILED", result.exceptionOrNull()?.message ?: "broker=${broker.displayName} orderRef=$orderRef", report, now, orderRef)
         if (result.isFailure) { guard.release(key); throw Exception(result.exceptionOrNull()?.message ?: "Execution failed") }

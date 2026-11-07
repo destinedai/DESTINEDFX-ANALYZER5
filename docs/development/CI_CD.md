@@ -1,29 +1,32 @@
-# CI/CD and APK artifact
+# CI/CD and build artifacts
 
-## Workflow
+## Workflow and jobs
 
-`.github/workflows/build-apk.yml` is named **Read-only Android build** and runs for pushes to `free/phone-only-v1`, pull requests targeting `main`, and manual dispatch. The job checks out the triggering source, sets up Temurin Java 21 and Gradle, copies `.env.example` to `.env`, runs `python3 scripts/verify_read_only_build.py`, runs `./gradlew testDebugUnitTest --stacktrace`, assembles with `./gradlew assembleDebug --stacktrace`, verifies the debug APK exists and its APK signature is structurally valid, then uploads the APK and JVM test reports with 14-day retention.
+`.github/workflows/build-apk.yml` is named **Build APK**. It runs on pushes to branches, pull requests targeting `main`, and manual dispatch. It defines these jobs:
 
-The APK path is `app/build/outputs/apk/debug/app-debug.apk`; artifact name is `DestinedFX-read-only-debug-apk`. The test report artifact is `Android-jvm-test-reports-${{ github.run_id }}`. The workflow writes `apk-sha256.txt` to the runner log, but does not upload that checksum as an artifact. A successful debug signature check is not production release signing verification.
+- **Python tests:** Deriv demo smoke harness, bridge, managed-worker, MT5 EA source-contract and safety-math tests, plus Docker configuration/image checks.
+- **Secret scan:** Gitleaks scan of the checked-out tree with redacted findings.
+- **MT5 EA compile:** Windows/MetaEditor compilation and compiler evidence artifact.
+- **Android JVM tests and APK build:** Java 21, Python 3.13, Android build environment, JVM tests, debug APK assembly, metadata/signature/checksum verification, JVM reports and APK upload.
+- **Android emulator instrumentation:** clean API 34 emulator, runtime tests, nonzero test-count check and diagnostic reports.
+- **Windows worker kit:** packages the managed-worker/bridge/EA owner kit.
 
-## What CI does not verify
+The emulator job depends on the Android build job. Other job dependencies and all step details are defined in the workflow file. The workflow restores a signing step that uses the protected `DESTINEDFX_DEBUG_KEYSTORE_B64` secret when configured and falls back to a generated debug keystore otherwise. It does not produce a production release signature.
 
-It does not run device instrumentation tests, Python bridge/worker tests, EA compilation, lint, dependency vulnerability scanning, secret scanning, external provider probes, broker account acceptance, production release signing, deployment checks, or end-to-end read-only proof across the entire repository. Its static boundary script checks only selected files/strings and must not be treated as whole-project enforcement.
+## Artifact names
+
+- Android debug APK: `DestinedFX-debug-apk`, file `app-debug.apk`.
+- Android JVM test reports: `Android-jvm-test-reports-${{ github.run_id }}`.
+- Android emulator reports: `Android-emulator-test-reports`.
+- Compiled MT5 EA and evidence: `DestinedFX-MT5-EA-ex5`.
+- Windows worker kit: `DestinedFX-Windows-Worker-Kit`.
+
+The workflow does not set a custom artifact retention period; use the actual run's artifact metadata to determine expiry. The Android job computes a SHA-256 and includes it in the run summary. A checksum computed from a downloaded APK is the stronger delivered-artifact record.
+
+## Limits of CI evidence
+
+CI does not prove real broker authentication, external provider entitlements, DEMO fill acceptance, LIVE authorization, terminal uptime, bridge deployment, or successful trades. A MetaEditor compile proves compilation only. A green job is evidence only for the exact source SHA and job that completed.
 
 ## Evidence protocol
 
-For a release/revision report, record:
-
-1. Workflow run ID and URL.
-2. Run conclusion and each meaningful job/step result.
-3. Exact `head_sha` and branch association; they must match the claimed source.
-4. JVM test totals from test reports, not an inferred number.
-5. APK artifact name, artifact ID, retention/expiration and download availability from that run.
-6. SHA-256 computed from the actual artifact downloaded/available for inspection; do not present runner log output as a verified download checksum.
-7. APK signing result and signer certificate fingerprint, with debug-vs-release distinction.
-
-A workflow source file does not prove any run happened. A completed prior run for a different commit does not certify later changes. Never say an APK was delivered unless the artifact exists and was verified.
-
-## Repair and extension opportunities
-
-Consider adding instrumentation testing on an emulator, Python/backend suites, artifact checksum upload, release-provenance metadata, dependency/secret scanning and a broader execution-surface boundary test. First ensure those additions are stable and do not falsely certify retained execution code.
+For each release or task report, record the run ID and URL, branch and exact `head_sha`, every requested job's result, JVM/emulator test totals from reports, APK artifact name/ID/expiry, signer and debug-vs-release status, plus SHA-256 calculated from the downloaded APK. A workflow file alone is not evidence a run succeeded.

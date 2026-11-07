@@ -1,33 +1,36 @@
-# Security overview (source review)
+# Security overview
 
-This is a scoped source-level review, not a penetration test, threat model approval, secret scan attestation, or privacy/legal assessment.
+This is a scoped source review, not a penetration test, approved threat model, privacy/legal review, or evidence of a secure deployment.
 
 ## Android
 
-- Main manifest requests Internet/network state, notifications, biometrics and legacy external-storage access; inspect each permission before removing or retaining it. Current manifest does not declare the retained foreground bot/session services or boot receiver.
-- Cleartext traffic is disabled and system trust anchors are used in the network security configuration.
-- App build uses `.env` and `.env.example` through the Secrets Gradle Plugin. The root example is public placeholder configuration; private keys/tokens must not be committed or embedded in APK resources/BuildConfig.
-- `MT5_MANAGED_SERVICE_URL` is non-secret endpoint configuration. Release builds validate its HTTPS-origin shape and reject obvious local/placeholder values; this does not establish DNS safety, certificate endpoint availability or a deployment.
-- Provider credentials require an appropriate protected runtime path. The FMP adapter places its key in a query parameter, which may be recorded by URL-level logs/telemetry; prefer a protected proxy or ensure request URLs are redacted.
-- Release signing configuration expects environment-provided keystore/password values; never commit the keystore. CI builds a debug APK and verifies that APK's signature, not production signing identity.
-- Room stores multiple entity classes including user/trade/Deriv execution records; retention, deletion, encryption and migration policy need a separate complete audit. App backup is disabled in the manifest.
+- The manifest registers foreground services and a boot receiver for bot/account monitoring, plus a cTrader callback route. Exported components and callback inputs require strict validation. Never treat deep-link input as trusted identity or authorization.
+- Cleartext traffic is disabled and the network security configuration uses system trust anchors.
+- `.env.example` contains public placeholders. Never commit provider keys, broker credentials, OAuth secrets, access tokens, private keys or signing keys, or embed them in APK resources or `BuildConfig`.
+- `MT5_MANAGED_SERVICE_URL` is endpoint configuration. HTTPS-origin validation does not prove DNS safety, service ownership or availability.
+- FMP currently supplies a key in a query parameter, which may appear in URL-level telemetry. Protect or redact request URLs.
+- AndroidX encrypted preferences are used when available; callers must fail closed when secure storage is unavailable. Do not report credentials as securely persisted otherwise.
+- Room contains user, trade and Deriv execution data. Retention, deletion, encryption, migration, recovery and access control require continued review. Backup is disabled in the manifest.
+- Debug APK signing is not production signing. Never commit a keystore.
 
-## Legacy bridge and execution components
+## Execution authorization
 
-`bridge/` implements credential/pairing and command-management routes; `managed-worker/` and `mt5-ea/` are separately runnable components. Their presence is incompatible with a blanket claim that the repository is read-only. The bridge requires HTTPS, protected secrets, durable storage for stateful operation and an operator-controlled worker/terminal. Render's Free configuration is ephemeral and not execution-ready. No remote deployment was inspected.
+`ModeArmingPolicy` binds DEMO acceptance and LIVE leases to account identity and credential generation. LIVE authorization is process-local and should expire or disarm on restart, identity change, credential rotation, failed checks or emergency stop. Generic `BrokerGateway` order submission defaults to denied unless an implementation returns a policy-derived decision. Deriv and managed MT5 paths have provider-specific gates. These code controls require further call-graph and runtime verification; they do not imply a verified or safe broker deployment.
 
-## CI security properties and gaps
+Tests and development must use fake transports. Do not submit real orders while building or testing.
 
-The workflow grants `contents: read`, builds a debug APK, and uses the upload-artifact action. It does not run a secret scanner, dependency vulnerability audit, instrumentation suite, Python/backend/worker/EA test suite, or production release-signing attestation. Its static verifier checks a narrow set of expected text/source boundaries and is not whole-repository reachability analysis.
+## Bridge and host
 
-## Retention and incident handling
+`bridge/`, `managed-worker/`, and `mt5-ea/` contain separately runnable account and execution components. They require operator-managed secrets, authenticated TLS, state backup, restricted networking, system hardening, log protection, and tested recovery. The root ephemeral Render profile is not an always-on host. No deployment was inspected.
 
-The repository documents local Room and bridge SQLite persistence, but this review did not establish user-accessible deletion, retention windows for all records, backup restoration, incident response, or legal retention requirements. Document these before claiming comprehensive data governance.
+## CI security controls and gaps
 
-## Required release follow-ups
+The restored GitHub Actions workflow includes a Gitleaks scan of the checked-out tree, Python/worker/EA tests, a Windows MetaEditor compile, Android JVM tests and APK build, emulator instrumentation, and a worker-kit artifact job. A workflow definition does not prove the run or each job succeeded. Secret scanning is not proof that the full Git history is clean, and no dependency vulnerability or independent penetration assessment is established by the workflow.
 
-1. Remove or technically isolate transaction-capable source and prevent packaging/deployment of the worker/EA/bridge execution features.
-2. Audit secrets handling, log redaction, request URLs, persistence, backup/restore and data deletion.
-3. Add reproducible dependency/secret checks and boundary tests spanning all call sites and build variants.
-4. Verify release build/signing independently; identify the release key owner and artifact provenance process.
-5. Perform independent security review before any external deployment.
+## Follow-up
+
+1. Test cTrader callback scheme, host, path, state and one-time code validation. Reject unexpected intent data.
+2. Audit WebView file access, navigation allow-lists and JavaScript bridges for OAuth and chart views.
+3. Review logs, crash reports, URL redaction, local storage and account-data retention.
+4. Validate network security, release signing, secret scanning and artifact provenance on an exact commit.
+5. Complete independent security review before external deployment.

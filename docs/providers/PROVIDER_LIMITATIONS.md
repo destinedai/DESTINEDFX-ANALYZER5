@@ -1,19 +1,25 @@
-# Market-data provider limitations
+# Provider limitations
 
-This document records limitations observed in source; it does not establish live API behavior.
+This is a source-level summary. Provider behavior, regional eligibility, entitlements and current service availability have not been verified against external accounts.
 
-- The TradingView scanner adapter is a polling path. Several fields are unavailable/null if absent upstream. The repository stamps retrieval time locally; this must not be labeled as source event time or guaranteed real-time.
-- Binance source mapping is deliberately limited to BTC/ETH/BNB/SOL/XRP USDT spot symbols. REST quote uses the 24-hour ticker and separately fetches book ticker, so those values are not atomic. A Binance WebSocket implementation exists but is not wired into the repository's live-stream startup in the audited source.
-- OANDA adapters require account ID and bearer token configuration. In quote paths, a local time may be used rather than an upstream event timestamp. Market-data account setup must not be mistaken for broker order connectivity.
-- FMP economic-calendar requests require a runtime API key, currently added to the query string. A plan quota, entitlement, response completeness and event timestamp accuracy are not established in source.
-- Public calendar/news feed parsers and bridge provider clients are separate. A successful parser fixture is not provider acceptance. Cached data after an error must remain labelled stale/uncertain.
-- Provider-specific retries, backoff and rate-limit response behavior are not comprehensive across all adapters. Do not add unbounded retries.
-- Capability fallback should only occur for compatible symbol, instrument type, interval and data semantics; show a provider/source change to the user.
+## Market data
 
-## Recommended follow-up
+- The TradingView scanner is a polling path. Some fields remain null; its local receipt timestamp is not an upstream event timestamp or guaranteed real-time data.
+- Binance mapping is limited to BTC, ETH, BNB, SOL and XRP against USDT. REST quote and book data come from separate calls. The WebSocket class is not wired into repository stream startup.
+- OANDA adapters require account ID and bearer token configuration. Quote paths may use local receipt time. Market-data setup is not broker order connectivity.
+- FMP requires a runtime key in a query parameter. Quota, entitlement, completeness and event-time accuracy are not established in source.
+- Android feed parsers and bridge provider clients are separate. Cached data after failure must remain stale or uncertain.
+- Retry, backoff and rate-limit behavior varies. Do not add unbounded retries.
 
-1. Represent `retrievedAt` separately from provider `eventTime` and prevent event-time claims when the upstream payload lacks a timestamp.
-2. Add deterministic adapter tests for source identity, wrong-symbol payloads, invalid/future/expired timestamps, null values, unsupported intervals and API rate-limit/error mapping.
-3. Wire streaming providers only when explicitly supported and add lifecycle/cancellation/reconnect tests.
-4. Define source-compatible fallback rules and UI source-change labels before adding fallback behavior.
-5. Document quotas, entitlement, geographic access and licensing only from current provider documentation and mark any values as date-stamped; source inspection alone is insufficient.
+## Account and execution
+
+- Deriv Options has authenticated account/session and Multiplier submission code. Its path checks account mode, fresh evidence, acceptance or LIVE lease, symbol/product and risk. No account, purchase or fill was verified.
+- Generic Deriv Forex/CFD trade plans do not map to Multiplier contracts and the adapter fails closed.
+- cTrader OAuth/account data code exists, but cTrader order placement is not implemented. Spotware approval is an owner step.
+- Direct Android MT5 connection and order methods fail closed. Managed MT5 requires the bridge, worker, terminal, EA, exact account/server and fresh identity-matched heartbeat.
+- FBS, Exness, HFM and Deriv MT5 brand selection does not prove broker-specific symbol, company alias, commission, fill mode or terminal support.
+- OANDA account/trading gateway operations are unavailable through the current broker manager.
+
+## Validation
+
+Use authorized DEMO accounts for owner-run checks and fake transports for tests. External verification needs redacted account identity, mode, fresh session/quote/heartbeat, order acknowledgement and reconciliation evidence. Do not call a path verified from source code, an APK build, or an OAuth/API response alone.

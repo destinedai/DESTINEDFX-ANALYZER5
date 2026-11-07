@@ -5,8 +5,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
- * The six core workspaces stay directly accessible in the bottom navigation.
- * Home and secondary utilities remain reachable from the header's More workspaces menu.
+ * The five owner-priority workspaces stay directly accessible in bottom navigation.
+ * Remaining workspaces are reachable from More.
  */
 sealed class DestinedFXScreen(val title: String, val purpose: String, val icon: ImageVector, val tag: String) {
     object Home : DestinedFXScreen("Home", "Terminal overview and latest activity", Icons.Default.Home, "nav_tab_home")
@@ -25,10 +25,10 @@ sealed class DestinedFXScreen(val title: String, val purpose: String, val icon: 
 
     companion object {
         val primaryScreens: List<DestinedFXScreen>
-            get() = listOf(Analyzer, Strategies, Calendar, Bot, Risk, Settings)
+            get() = listOf(Home, Analyzer, Bot, Watchlist, More)
 
         val moreScreens: List<DestinedFXScreen>
-            get() = listOf(Home, ImageAnalyzer, Watchlist, Chat, About, Contact)
+            get() = listOf(ImageAnalyzer, Strategies, Calendar, Risk, Settings, Chat, About, Contact)
 
         val allScreens: List<DestinedFXScreen>
             get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings, About, Contact)

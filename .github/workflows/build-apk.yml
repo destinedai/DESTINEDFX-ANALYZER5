@@ -1,69 +1,196 @@
-name: Read-only Android build
+name: Build APK
 
 on:
   push:
-    branches:
-      - free/phone-only-v1
+    branches: [ "**" ]
   pull_request:
-    branches:
-      - main
+    branches: [ "main" ]
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
-  android-read-only:
-    name: Validate and build read-only Android APK
+  python-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bridge test dependencies
+        run: python -m pip install -r bridge/requirements.txt
+      - name: Run offline Deriv DEMO smoke-harness tests
+        run: python -m pytest -q scripts/test_deriv_demo_smoke.py
+      - name: Run bridge tests
+        run: python -m pytest -q bridge
+      - name: Build and smoke-test the owner Docker bridge image
+        run: |
+          env BRIDGE_BASE_URL=https://bridge.ci.example.ts.net \
+            CREDENTIALS_FERNET_KEY=ci-placeholder WORKER_TOKEN=ci-placeholder \
+            TAILSCALE_IPV4=127.0.0.1 BRIDGE_HOST=bridge.ci.example.ts.net \
+            docker compose -f bridge/compose.owner.yaml config --quiet
+          docker build --file bridge/Dockerfile --tag destinedfx-bridge:ci bridge
+          docker run --rm --entrypoint python destinedfx-bridge:ci -c "import app, quantitative; print('Bridge image imports passed')"
+          docker run --rm -e BRIDGE_HOST=bridge.ci.example.ts.net \
+            -v "$GITHUB_WORKSPACE/bridge/Caddyfile.owner:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+      - name: Run managed-worker tests
+        run: |
+          python -m pytest -q managed-worker --junitxml=/tmp/managed-worker-junit.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = ET.parse('/tmp/managed-worker-junit.xml').getroot()
+          doctor = [case for case in root.iter('testcase') if 'test_doctor' in case.attrib.get('classname', '') or 'test_doctor' in case.attrib.get('file', '')]
+          executed = [case for case in doctor if case.find('skipped') is None]
+          if len(executed) < 9:
+              raise SystemExit(f'Expected at least 9 executed test_doctor.py cases, found {len(executed)}.')
+          print(f'test_doctor.py cases executed: {len(executed)}')
+          PY
+      - name: Run MT5 EA source-contract and safety-math regressions
+        run: python -m pytest -q mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py
 
-      - name: Set up Java
-        uses: actions/setup-java@v5
+  secret-scan:
+    name: Scan current tree for secrets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Install Gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
+      - name: Scan checked-out tree with redacted findings
+        run: |
+          "$(go env GOPATH)/bin/gitleaks" dir --redact=100 --exit-code 1 .
+
+  mt5-ea-windows-compile:
+    name: Compile MT5 EA with genuine MetaEditor
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse Windows owner-stack PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            'managed-worker/windows/install-owner-stack.ps1',
+            'managed-worker/windows/run-owner-stack.ps1',
+            'managed-worker/windows/backup-bridge.ps1',
+            'managed-worker/launch-worker.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error }
+            Write-Host "PowerShell syntax valid: $file"
+          }
+      - name: Install MetaTrader and compile the EA
+        shell: pwsh
+        run: ./scripts/compile-mt5-ea.ps1 -OutputDir "$env:RUNNER_TEMP\destinedfx-ea"
+      - name: Upload compiled EA and compiler evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: DestinedFX-MT5-EA-ex5
+          path: ${{ runner.temp }}/destinedfx-ea/
+          if-no-files-found: error
+
+  android-build-and-unit-tests:
+    name: Android JVM tests and APK build
+    runs-on: ubuntu-24.04
+    # APK assembly and upload are intentionally independent of emulator health.
+    # Set this public URL only after the managed bridge is deployed; never put secrets here.
+    env:
+      MT5_MANAGED_SERVICE_URL: ${{ vars.MT5_MANAGED_SERVICE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Create local environment from public placeholders
+          java-version: 21
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Accept Android licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare stable debug keystore
+        env:
+          DESTINEDFX_DEBUG_KEYSTORE_B64: ${{ secrets.DESTINEDFX_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$DESTINEDFX_DEBUG_KEYSTORE_B64" ]; then
+            printf '%s' "$DESTINEDFX_DEBUG_KEYSTORE_B64" | base64 --decode > debug.keystore
+            chmod 600 debug.keystore
+            echo "Stable protected debug keystore loaded; APK updates retain the same signing certificate." >> "$GITHUB_STEP_SUMMARY"
+          else
+            keytool -genkeypair -v -keystore debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "::warning title=Fresh-install-only APK::DESTINEDFX_DEBUG_KEYSTORE_B64 is not configured; this build uses a new debug certificate and is not guaranteed to update an earlier APK."
+            echo "Fresh debug keystore generated; configure the protected DESTINEDFX_DEBUG_KEYSTORE_B64 secret for upgrade-compatible builds." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          mkdir -p "$HOME/.android"
+          install -m 600 debug.keystore "$HOME/.android/debug.keystore"
+      - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
-
-      - name: Verify read-only app boundary
-        run: python3 scripts/verify_read_only_build.py
-
+      - name: Explain runtime bridge URL setup when no URL is embedded
+        if: env.MT5_MANAGED_SERVICE_URL == ''
+        run: |
+          echo "::warning title=Runtime bridge URL required::Enter the deployed public HTTPS origin in Bot > Remote MT5 EA Bridge > Managed bridge HTTPS URL."
+          echo "The APK supports runtime bridge URL setup. This does not deploy or connect the Windows worker." >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate configured managed-service URL (if supplied)
+        if: env.MT5_MANAGED_SERVICE_URL != ''
+        run: |
+          python - <<'PY'
+          import ipaddress, os
+          from urllib.parse import urlparse
+          raw = os.environ["MT5_MANAGED_SERVICE_URL"].strip()
+          try:
+              u = urlparse(raw)
+              host = (u.hostname or "").lower().rstrip(".")
+              port = u.port
+          except (ValueError, UnicodeError):
+              raise SystemExit("MT5_MANAGED_SERVICE_URL has an invalid hostname or port.")
+          placeholder = (
+              host in {"example.com", "example.org", "example.net", "testserver", "bridge.example",
+                       "localhost", "0.0.0.0"} or "example" in host or
+              host.startswith("your-") or host.startswith("placeholder") or
+              host.endswith(".localhost") or host.endswith(".test") or host.endswith(".invalid")
+          )
+          private = False
+          try:
+              ip = ipaddress.ip_address(host.strip("[]"))
+              private = not ip.is_global
+          except ValueError:
+              private = ":" in host or all(ch in "0123456789." for ch in host)
+          if (u.scheme != "https" or not host or u.username or u.password or u.query or u.fragment
+              or u.path not in ("", "/") or port == 0 or port is not None and not (1 <= port <= 65535)
+              or placeholder or private):
+              raise SystemExit("MT5_MANAGED_SERVICE_URL must be a real public HTTPS origin without a path, credentials, query, or fragment.")
+          print("Managed-service URL format accepted; no connection or deployment is implied.")
+          PY
+      - name: Check managed bridge readiness when configured
+        if: env.MT5_MANAGED_SERVICE_URL != ''
+        run: |
+          set -euo pipefail
+          url="${MT5_MANAGED_SERVICE_URL%/}"
+          body="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "$url/health/ready")"
+          python - "$body" <<'PY'
+          import json, sys
+          try:
+              body = json.loads(sys.argv[1])
+          except Exception as exc:
+              raise SystemExit(f"Managed bridge readiness endpoint returned invalid JSON: {exc}")
+          if body.get("status") != "ready" or body.get("managed_execution") != "configured":
+              raise SystemExit("Managed bridge is reachable but not ready for managed-execution requests.")
+          print("Managed bridge /health/ready responded. This does not prove worker, news provider, or broker-terminal readiness.")
+          PY
+          echo "Managed bridge readiness endpoint responded successfully. This is only a deployment health check; provider, worker, MT5 compile, and DEMO fill acceptance remain separate." >> "$GITHUB_STEP_SUMMARY"
       - name: Run Android JVM unit tests
         run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest --stacktrace
-
-      - name: Assemble debug APK
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Verify APK exists and is signed
-        shell: bash
-        run: |
-          set -euo pipefail
-          apk="app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$apk"
-          signer="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
-          test -n "$signer"
-          "$signer" verify --verbose --print-certs "$apk"
-          sha256sum "$apk" | tee apk-sha256.txt
-
-      - name: Upload read-only debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: DestinedFX-read-only-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload Android test reports
+      - name: Upload Android JVM test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -72,4 +199,211 @@ jobs:
             app/build/test-results/testDebugUnitTest/**
             app/build/reports/tests/testDebugUnitTest/**
           if-no-files-found: warn
-          retention-days: 14
+      - name: Verify nonzero Android JVM test execution
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import xml.etree.ElementTree as ET
+          files = list(Path("app/build/test-results/testDebugUnitTest").rglob("TEST-*.xml"))
+          executed = failed = 0
+          for path in files:
+              root = ET.parse(path).getroot()
+              for case in root.iter("testcase"):
+                  if case.find("skipped") is None:
+                      executed += 1
+                  if case.find("failure") is not None or case.find("error") is not None:
+                      failed += 1
+          if executed == 0:
+              raise SystemExit("Android JVM task produced zero executed tests; refusing to report a pass.")
+          print(f"Android JVM tests executed: {executed}; failed: {failed}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"\nAndroid JVM tests executed: **{executed}**; failed: **{failed}**.\n")
+          PY
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+      - name: Verify APK signature, identity, metadata, ABI, and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$apk"
+          apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
+          test -n "$apksigner_path"
+          test -n "$aapt_path"
+          signature="$({ "$apksigner_path" verify --verbose --print-certs "$apk"; } 2>&1)"
+          printf '%s\n' "$signature"
+          metadata="$("$aapt_path" dump badging "$apk")"
+          python - "$metadata" "$signature" <<'PY'
+          import re, sys
+          from pathlib import Path
+          gradle = Path('app/build.gradle.kts').read_text()
+          def configured(pattern, label):
+              match = re.search(pattern, gradle)
+              if not match:
+                  raise SystemExit(f'Could not derive {label} from app/build.gradle.kts')
+              return match.group(1)
+          package = configured(r'applicationId\s*=\s*"([^"]+)"', 'application ID')
+          version_code = configured(r'versionCode\s*=\s*(\d+)', 'version code')
+          version_name = configured(r'versionName\s*=\s*"([^"]+)"', 'version name')
+          abi_block = re.search(r'abiFilters\s*\+=\s*listOf\(([^)]*)\)', gradle)
+          if not abi_block:
+              raise SystemExit('Could not derive configured ABI filters from app/build.gradle.kts')
+          abis = re.findall(r'"([^"]+)"', abi_block.group(1))
+          metadata, signature = sys.argv[1:]
+          expected = f"package: name='{package}' versionCode='{version_code}' versionName='{version_name}'"
+          if expected not in metadata:
+              raise SystemExit(f'APK metadata mismatch; expected {expected!r}')
+          native_line = next((line for line in metadata.splitlines() if line.startswith('native-code:')), '')
+          actual_abis = re.findall(r"'([^']+)'", native_line)
+          if not set(abis).issubset(actual_abis):
+              raise SystemExit(f'APK ABI mismatch: configured {abis}, package reports {actual_abis}')
+          if not re.search(r'certificate SHA-256 digest:\s*[0-9a-fA-F]{64}', signature):
+              raise SystemExit('apksigner output did not contain a signing-certificate SHA-256 fingerprint')
+          print(f'APK package/version validated against Gradle: {package} {version_name} ({version_code}); ABIs={abis}')
+          PY
+          printf '%s\n' "$metadata" | grep -E "sdkVersion:|targetSdkVersion:|native-code:"
+          zip_listing="$(unzip -l "$apk")"
+          printf '%s\n' "$zip_listing" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
+            echo "Chaquopy native library listing was not found for configured ABIs." >&2
+            exit 1
+          }
+          sha256sum "$apk" | tee /tmp/apk-sha256.txt
+          {
+            echo "### Debug APK verification"
+            echo 'Package: `com.aistudio.destinedfx.qwvzxp`'
+            python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('app/build.gradle.kts').read_text()
+          code=re.search(r'versionCode\s*=\s*(\d+)',text).group(1)
+          name=re.search(r'versionName\s*=\s*"([^"]+)"',text).group(1)
+          print(f'Version: `{name}` (code `{code}`)')
+          PY
+            echo 'Signature verified by apksigner; certificate fingerprint:'
+            printf '%s\n' "$signature" | grep -E 'certificate SHA-256 digest:'
+            echo 'Configured ABI metadata and Chaquopy Python native payload inspected.'
+            echo 'SHA-256:'
+            echo '```text'
+            cat /tmp/apk-sha256.txt
+            echo '```'
+            echo 'This is a debug APK, not a production release. Emulator instrumentation is reported by its separate job.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload verified debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DestinedFX-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  android-emulator-instrumentation:
+    name: Android emulator instrumentation (runtime acceptance)
+    runs-on: ubuntu-24.04
+    needs: android-build-and-unit-tests
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Accept Android licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare test configuration
+        run: |
+          chmod +x gradlew
+          cp .env.example .env
+          keytool -genkeypair -v -keystore debug.keystore \
+            -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+      - name: Enable and verify KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [ ! -e /dev/kvm ]; then
+            echo "KVM device /dev/kvm is unavailable; refusing to start the x86_64 emulator without hardware acceleration." >&2
+            exit 1
+          fi
+          ls -l /dev/kvm
+      - name: Run Android Python runtime instrumentation on clean API 34 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          disable-animations: true
+          emulator-boot-timeout: 600
+          emulator-options: -no-snapshot -no-snapshot-save -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: bash ./scripts/run-android-emulator-tests.sh
+      - name: Verify nonzero Android instrumentation test execution
+        if: success()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import xml.etree.ElementTree as ET
+          files = list(Path("app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml"))
+          executed = failed = 0
+          for path in files:
+              root = ET.parse(path).getroot()
+              for case in root.iter("testcase"):
+                  if case.find("skipped") is None:
+                      executed += 1
+                  if case.find("failure") is not None or case.find("error") is not None:
+                      failed += 1
+          if executed == 0:
+              raise SystemExit("Emulator task produced zero executed instrumentation tests; runtime acceptance is incomplete.")
+          print(f"Android instrumentation tests executed: {executed}; failed: {failed}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"\nAndroid instrumentation tests executed: **{executed}**; failed: **{failed}**. Chaquopy runtime acceptance requires these tests to pass.\n")
+          PY
+      - name: Upload emulator test reports and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-emulator-test-reports
+          path: |
+            app/build/reports/androidTests/connected/**
+            app/build/reports/ui-screenshots/**
+            app/build/outputs/androidTest-results/connected/**
+            ${{ runner.temp }}/emulator-diagnostics/**
+          if-no-files-found: warn
+
+  package-windows-worker-kit:
+    name: Package Windows MT5 worker kit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package Windows MT5 worker kit
+        run: |
+          kit="dist/DestinedFX-Windows-Worker-Kit"
+          mkdir -p "$kit/managed-worker" "$kit/managed-worker/windows" "$kit/bridge" "$kit/mt5-ea"
+          cp managed-worker/worker.py managed-worker/worker.example.toml managed-worker/README.md managed-worker/launch-worker.ps1 "$kit/managed-worker/"
+          cp -R managed-worker/windows/. "$kit/managed-worker/windows/"
+          cp bridge/app.py bridge/quantitative.py bridge/requirements.txt "$kit/bridge/"
+          cp mt5-ea/DestinedFXTraderEA.mq5 "$kit/mt5-ea/"
+          cat > dist/DestinedFX-Windows-Worker-Kit/START-HERE.txt <<'EOF'
+          DestinedFX owner-operated Windows kit
+          1. Read managed-worker/windows/OWNER-SETUP.md completely before setup.
+          2. Requires the owner's Windows PC to remain powered on, awake, connected, and signed in.
+          3. Use an authorized private Tailscale tailnet with Serve only; Android must join that same tailnet.
+          4. Run managed-worker/windows/install-owner-stack.ps1 only after reviewing the exact genuine broker install and account-issued server.
+          5. The bridge binds only to 127.0.0.1:8000. Never use Funnel, a LAN/public listener, or a public unauthenticated endpoint.
+          6. Begin with an authorized DEMO account. Verify account identity, fresh terminal heartbeat, worker READY, fills, SL/TP, history and STOP separately.
+          7. No LIVE order is authorized by this kit. A queued job or launched terminal is not terminal readiness.
+          8. Preserve ProgramData\DestinedFX, DPAPI secrets, SQLite, account directories and verified backups during recovery.
+          Tailscale commercial-use eligibility is the operator's responsibility; do not assume Personal plan rights.
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DestinedFX-Windows-Worker-Kit
+          path: dist/DestinedFX-Windows-Worker-Kit/
+          if-no-files-found: error

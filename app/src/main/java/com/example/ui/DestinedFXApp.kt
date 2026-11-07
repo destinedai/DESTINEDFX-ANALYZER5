@@ -221,7 +221,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                         }
                     }
 
-                    // Workspace context keeps the six tabs understandable without opening a menu.
+                    // Workspace context keeps the primary tabs understandable without opening More.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -297,7 +297,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     .navigationBarsPadding()
                     .border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.8f)))
             ) {
-                // Keep the six daily-use trading workspaces visible without opening More.
+                // Keep the five owner-priority workspaces visible without opening another menu.
                 val bottomSelectedScreen = selectedScreen.takeIf { it in DestinedFXScreen.primaryScreens }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
