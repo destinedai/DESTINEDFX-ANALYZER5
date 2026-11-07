@@ -263,13 +263,13 @@ class TradingViewAndMtfValidationTest {
     }
 
     @Test
-    fun testMobileNavigationMatchesWebsitePrimaryTabsAndSecondaryRoutes() {
+    fun testMobileNavigationHasFivePrimaryTabsAndSecondaryRoutes() {
         assertEquals(
-            listOf("Analyzer", "Strategies", "Calendar", "Bot", "Risk", "Settings"),
+            listOf("Home", "Analyzer", "Bot", "Watchlist", "More"),
             DestinedFXScreen.primaryScreens.map { it.title }
         )
         assertTrue(DestinedFXScreen.moreScreens.map { it.title }.containsAll(
-            listOf("Home", "Image Analyzer", "Watchlist", "Chat", "About & Disclosure", "Contact")
+            listOf("Image Analyzer", "Strategies", "Calendar", "Risk", "Settings", "Chat", "About & Disclosure", "Contact")
         ))
         assertEquals(
             DestinedFXScreen.allScreens.toSet(),
@@ -277,11 +277,12 @@ class TradingViewAndMtfValidationTest {
         )
         assertEquals(DestinedFXScreen.allScreens.size, DestinedFXScreen.allScreens.distinct().size)
         assertTrue(DestinedFXScreen.allScreens.contains(DestinedFXScreen.Watchlist))
-        assertFalse("Watchlist belongs under More, not the primary bottom bar",
-            DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Watchlist))
+        assertTrue(DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Watchlist))
         assertTrue(DestinedFXScreen.primaryScreens.containsAll(
-            listOf(DestinedFXScreen.Bot, DestinedFXScreen.Risk, DestinedFXScreen.Settings)
+            listOf(DestinedFXScreen.Home, DestinedFXScreen.Analyzer, DestinedFXScreen.Bot,
+                DestinedFXScreen.Watchlist, DestinedFXScreen.More)
         ))
+        assertFalse(DestinedFXScreen.moreScreens.any { it in DestinedFXScreen.primaryScreens })
         assertEquals("nav_tab_more", DestinedFXScreen.More.tag)
     }
 
