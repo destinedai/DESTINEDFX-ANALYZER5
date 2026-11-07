@@ -1,57 +1,37 @@
 flowchart TB
-  subgraph MOBILE[Native Android app]
-    direction LR
-    UI[Jetpack Compose workspaces<br/>Analyzer · Strategies · Calendar · Bot · Risk · Settings]
-    CORE[Deterministic Kotlin analyzer<br/>signal · validation · RiskEngine]
-    DATA[Supported market/news sources<br/>timestamped data or WAIT/UNKNOWN]
-    SEC[SecretsManager<br/>encrypted Android preferences when available]
-    DERV[Deriv foreground service<br/>separate on-device execution path]
-    UI --> CORE
-    DATA --> CORE
-    UI --> SEC
+  subgraph ANDROID[Android application — phone-only branch]
+    direction TB
+    ACT[MainActivity / MyApplication initialization]
+    UI[Jetpack Compose screens — Analyzer, Strategies, Calendar, Risk, Settings]
+    VM[ViewModels and screen state]
+    DOMAIN[Domain use cases and analysis models]
+    REPO[Market-data and local repositories]
+    PROVIDERS[Selected feed adapters]
+    PUBLIC[TradingView scanner / Binance REST / configured OANDA / calendar sources]
+    ROOM[(Room local database)]
+    POLICY[ReadOnlyExecutionPolicy — reject before broker access]
+    ACT --> UI --> VM --> DOMAIN --> REPO
+    REPO --> PROVIDERS --> PUBLIC
+    REPO --> ROOM
+    DOMAIN --> POLICY
   end
-
-  subgraph CONTROL[FastAPI bridge — control plane, not a terminal host]
-    direction LR
-    API[Pairing · app/terminal/worker auth<br/>readiness · commands · news · reconciliation]
-    DB[(SQLite state + event ledger<br/>credential fields Fernet-encrypted)]
-    API <--> DB
+  subgraph LEGACY[Separate legacy execution-capable code — not a read-only service]
+    BRIDGE[FastAPI bridge / SQLite]
+    WORKER[Windows managed worker]
+    EA[MT5 Expert Advisor]
+    BROKER[MT5 broker]
+    WORKER <-->|legacy HTTPS protocol| BRIDGE
+    EA <-->|legacy HTTPS protocol| BRIDGE
+    EA <-->|MT5 protocol| BROKER
   end
-
-  subgraph WINDOWS[Managed Windows execution host — required by current MT5 path]
-    direction LR
-    WORKER[Python Windows worker<br/>claims jobs · provisions isolated terminals<br/>supervises process lifecycle]
-    TERM[Broker-specific MT5 terminal<br/>account session · manual WebRequest allowlist]
-    EA[MQL5 DestinedFX EA<br/>5-second monitoring · safety gates<br/>orders · position/fill reconciliation]
-    WORKER -->|launches / supervises| TERM
-    TERM -->|loads| EA
-  end
-
-  BROKER[MT5 broker]
-  NEWS[Calendar / news provider]
-  DERIV[Deriv platform]
-
-  UI -->|HTTPS: app bearer · commands · consented enrollment| API
-  API -->|HTTPS: state · trade events · readiness · outcomes| UI
-  WORKER -->|HTTPS: worker bearer · job claim / lease / status| API
-  API -->|HTTPS: provision job and claim response| WORKER
-  EA -->|HTTPS: terminal bearer · claim · heartbeat · snapshots · ACKs| API
-  API -->|HTTPS: commands · validated news verdict| EA
-  EA <-->|MT5 protocol: account · market data · orders · fills · positions| BROKER
-  API <-->|provider request / cache| NEWS
-  DERV <-->|handset service session| DERIV
-
-  NOTE[Not execution-ready: Render Free storage is ephemeral.<br/>No workerless hosted-EA registration or verified free PC-off MT5 route.<br/>Cloudflare Workers/D1 spike is not deployed and does not host an MT5 terminal.]
-  API -.-> NOTE
-  WORKER -.-> NOTE
-
-  classDef phone fill:#102a3a,stroke:#19d3e3,color:#eaf9ff
-  classDef control fill:#24253b,stroke:#9775fa,color:#f4f1ff
-  classDef execution fill:#342817,stroke:#f3b544,color:#fff8e7
+  APP[Android app] -. optional configured HTTPS; not required for local analysis .-> BRIDGE
+  WARNING[Legacy transaction paths remain in source; no deployment or full read-only proof]
+  WARNING -. applies to .-> LEGACY
+  classDef android fill:#102a3a,stroke:#19d3e3,color:#eaf9ff
   classDef external fill:#152b22,stroke:#55c98a,color:#eefff5
+  classDef legacy fill:#342817,stroke:#f3b544,color:#fff8e7
   classDef warning fill:#3a1d25,stroke:#ef6b79,color:#fff0f1
-  class UI,CORE,DATA,SEC,DERV phone
-  class API,DB control
-  class WORKER,TERM,EA execution
-  class BROKER,NEWS,DERIV external
-  class NOTE warning
+  class ACT,UI,VM,DOMAIN,REPO,PROVIDERS,POLICY android
+  class PUBLIC,ROOM external
+  class BRIDGE,WORKER,EA,BROKER legacy
+  class WARNING warning

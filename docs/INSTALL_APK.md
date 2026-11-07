@@ -1,36 +1,22 @@
-# Install the debug APK on an Android phone
+# Installing a debug APK from GitHub Actions
 
-This project does not publish a public release APK. The installable file is the `DestinedFX-debug-apk` artifact attached to a successful GitHub Actions run. Actions artifacts expire, and GitHub sign-in is required. Keep the repository private.
-
-## Before installing
-
-Use an Android phone with internet access. Do not send the Deriv App ID, PAT, OTP, password, or any token to chat, screenshots, issue comments, or logs. Enter credentials only in the app when the phone verification checklist asks for them.
+The repository workflow produces a **debug** APK, not a store-ready release. It uploads an artifact named `DestinedFX-read-only-debug-apk` containing `app-debug.apk` and retains it for 14 days from the run. Verify that the run's branch and `head_sha` match the source revision you intend to test.
 
 ## Download and verify
 
-1. Open the exact successful GitHub Actions run linked from the pull request.
-2. Confirm the run is for the commit you intend to test and that the Android JVM/APK build and emulator instrumentation jobs are successful.
-3. Download the artifact named `DestinedFX-debug-apk` and unzip it on a computer or Android file manager.
-4. In the run summary, open the `Android JVM tests and APK build` job and find the `Debug APK verification` step summary. Copy the SHA-256 value printed there.
-5. Calculate the SHA-256 of the downloaded `app-debug.apk` on the device or a trusted computer. On a computer, use:
+1. Open the [GitHub Actions workflow runs](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/workflows/build-apk.yml).
+2. Select a completed successful run for the intended branch and commit; check that its `head_sha` matches.
+3. Download `DestinedFX-read-only-debug-apk` from that run's Artifacts section and extract `app-debug.apk`.
+4. Compute a SHA-256 checksum for the downloaded APK on a trusted computer, for example with `sha256sum app-debug.apk`.
 
-   ```text
-   sha256sum app-debug.apk
-   ```
-
-   The calculated value must exactly match the value printed by CI. If it does not match, delete the file and do not install it.
+The workflow prints a SHA-256 value in the runner log but does not upload a separate checksum artifact. Do not assume a runner log checksum is bound to your download unless you compare it with a locally computed checksum from the exact artifact.
 
 ## Install
 
-1. On the phone, open the downloaded APK.
-2. If Android asks for permission to install from this source, allow it for the file manager or browser being used, then return to the installer.
-3. Install the APK. This is a debug build, not a production release.
-4. Open DESTINEDFX and go to the bot workstation and Deriv connection section.
-5. Select `DEMO`, enter the numeric Deriv App ID and DEMO PAT directly into the app, and tap `VERIFY DERIV DEMO · READ ONLY`.
-6. Do not select REAL for this verification. LIVE remains blocked.
+Open the APK on the Android phone and follow Android's package-installer prompts. If Android asks for permission to install from that source, allow it for the browser/file manager being used, then return to the installer. The artifact is debug-signed, not production-signed.
 
-The in-app result card is evidence only when it shows the redacted account prefix, `DEMO`, currency, balance received, portfolio received, public tick received, and the check time. A successful APK installation is not broker acceptance.
+Do not follow outdated instructions to use a Bot/Deriv workstation for account verification. The intended product boundary is analysis-only, but the repository is not yet verified as a fully read-only system; legacy execution-capable code remains. APK installation does not verify provider connectivity, broker acceptance, or production readiness.
 
 ## If the artifact is unavailable
 
-The artifact may have expired. Do not download an APK from an untrusted mirror or public release. Ask the repository owner to use a newer successful Actions artifact and repeat the checksum check.
+Actions artifacts expire after the configured retention period. Use only a newer successful run for the intended branch and exact source SHA. Do not use an untrusted mirror or treat a failed/unrelated workflow run as an artifact source.

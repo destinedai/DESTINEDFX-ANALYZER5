@@ -134,4 +134,4 @@ A genuine DEMO acceptance requires all gates below. No DEMO credentials or suita
 - Official Deriv help reviewed includes [Deriv cTrader activation](https://deriv.com/help-centre-question/how-do-i-activate-a-deriv-ctrader-account) and [account limits](https://deriv.com/help-centre-question/how-many-deriv-ctrader-accounts-can-i-have); those pages do not establish Deriv-sponsored MT5 hosting for Nigerian customers.
 - [cTrader Cloud features](https://help.ctrader.com/ctrader-algo/documentation/cloud-features/), [Cloud requirements](https://help.ctrader.com/ctrader-algo/documentation/cbots/cloud-requirements/), and [Open API scope](https://help.ctrader.com/open-api/).
 - [Cloudflare Workers platform limits](https://developers.cloudflare.com/workers/platform/limits/).
-- The detailed prior source audit and request analysis is available as the [zero-cost PC-off feasibility report](/home/ubuntu/DESTINEDFX-zero-cost-PC-off-feasibility.md).
+- The detailed prior source audit and request analysis was maintained as a separate local report and is not included in this repository snapshot.
