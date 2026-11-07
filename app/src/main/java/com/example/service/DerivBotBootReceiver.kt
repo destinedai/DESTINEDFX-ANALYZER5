@@ -3,6 +3,7 @@ package com.example.service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.example.MyApplication
 import com.example.security.SecretsManager
 
 /**
@@ -32,7 +33,9 @@ class DerivBotBootReceiver : BroadcastReceiver() {
         if (!enabled) return
         val mode = secure.getDerivAccountMode()
         val hasCredentials = secure.isSecureStorageAvailable &&
-            secure.getDerivApiToken("demo").isNotBlank() && secure.getDerivAppId().isNotBlank()
+            secure.getDerivApiToken("demo").isNotBlank() && secure.getDerivAppId().isNotBlank() &&
+            secure.getDerivCredentialGeneration("demo").isNotBlank() &&
+            (context.applicationContext as? MyApplication)?.let { runCatching { it.modeArmingPolicy }.isSuccess } == true
         if (!DerivDemoBotService.hasNotificationPermission(context)) {
             DerivDemoBotService.recordStartBlocked(context, "Notification permission is denied. Open DestinedFX, allow notifications, then tap Start again.")
             return

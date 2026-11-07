@@ -131,7 +131,10 @@ class DerivDemoBotService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> stopSafely()
+            ACTION_STOP -> {
+                stopSafely()
+                return START_NOT_STICKY
+            }
             ACTION_START -> {
                 stopRequested = false
                 loopJob?.cancel()
@@ -153,7 +156,11 @@ class DerivDemoBotService : Service() {
                 val startApp = application as? MyApplication
                 val currentMode = startApp?.secretsManager?.getDerivAccountMode().orEmpty()
                 val accepted = startApp?.secretsManager?.hasCurrentDerivDemoAcceptance() == true
-                if (!DerivBotRecoveryPolicy.canStartExplicitDemo(currentMode, accepted, hasNotificationPermission(this))) {
+                val policyReady = runCatching { startApp?.modeArmingPolicy }.getOrNull() != null
+                val currentGeneration = runCatching { startApp?.secretsManager?.getDerivCredentialGeneration("demo") }.getOrNull().orEmpty()
+                val hasCredentials = currentGeneration.isNotBlank() &&
+                    startApp?.secretsManager?.getDerivAppId()?.isNotBlank() == true
+                if (!policyReady || !hasCredentials || !DerivBotRecoveryPolicy.canStartExplicitDemo(currentMode, accepted, hasNotificationPermission(this))) {
                     stopSafely("BOT NOT RUNNING — select DEMO and complete current account verification and explicit acceptance first")
                     return START_NOT_STICKY
                 }
@@ -173,7 +180,9 @@ class DerivDemoBotService : Service() {
                 val strategy = prefs.getString(EXTRA_STRATEGY, null)?.trim().orEmpty()
                 val timeframe = prefs.getString(EXTRA_TIMEFRAME, null)?.trim().orEmpty()
                 val hasCredentials = app?.secretsManager?.getDerivApiToken("demo")?.isNotBlank() == true &&
-                    app?.secretsManager?.getDerivAppId()?.isNotBlank() == true
+                    app?.secretsManager?.getDerivAppId()?.isNotBlank() == true &&
+                    app?.secretsManager?.getDerivCredentialGeneration("demo")?.isNotBlank() == true &&
+                    app?.let { runCatching { it.modeArmingPolicy }.isSuccess } == true
                 val accepted = app?.secretsManager?.hasCurrentDerivDemoAcceptance() == true
                 if (DerivBotRecoveryPolicy.canRecoverAfterProcessDeath(
                         mode.orEmpty(), prefs.getBoolean("enabled", false), hasCredentials, accepted,
@@ -187,8 +196,12 @@ class DerivDemoBotService : Service() {
                     return START_NOT_STICKY
                 }
             }
+            else -> {
+                stopSafely("BOT NOT RUNNING — unsupported or missing service action; explicit DEMO start is required")
+                return START_NOT_STICKY
+            }
         }
-        return START_STICKY
+        return if (intent?.action == ACTION_START || intent == null) START_STICKY else START_NOT_STICKY
     }
 
     private suspend fun runBot(symbol: String, strategyId: String, timeframe: String) {
@@ -215,6 +228,8 @@ class DerivDemoBotService : Service() {
         if (!currentCoroutineContext().isActive || stopRequested) return
         val acceptedAccount = gateway.accountInfo.value
         if (acceptedAccount == null || !DerivBotRecoveryPolicy.isDemoAccount(acceptedAccount.mode, acceptedAccount.accountType) ||
+            acceptedAccount.credentialGeneration.isBlank() ||
+            acceptedAccount.credentialGeneration != app.secretsManager.getDerivCredentialGeneration("demo") ||
             !app.secretsManager.hasCurrentDerivDemoAcceptance(acceptedAccount.loginId, acceptedAccount.currency, credentialGeneration = acceptedAccount.credentialGeneration)) {
             stopSafely("PAUSED — current authenticated DEMO account does not match the accepted verification record")
             return
@@ -288,6 +303,7 @@ class DerivDemoBotService : Service() {
                     val accountMatches = account != null && DerivBotRecoveryPolicy.isDemoAccount(account.mode, account.accountType) &&
                         account.loginId == acceptedAccount.loginId && account.currency == acceptedAccount.currency &&
                         account.credentialGeneration == acceptedAccount.credentialGeneration &&
+                        account.credentialGeneration == app.secretsManager.getDerivCredentialGeneration("demo") &&
                         app.secretsManager.getDerivAccountMode().equals("demo", true) &&
                         app.secretsManager.hasCurrentDerivDemoAcceptance(account.loginId, account.currency, credentialGeneration = account.credentialGeneration)
                     val balanceFresh = metrics != null && metrics.balance.isFinite() && metrics.balance > 0.0 &&

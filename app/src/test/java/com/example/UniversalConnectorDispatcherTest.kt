@@ -92,6 +92,23 @@ class UniversalConnectorDispatcherTest {
     }
 
     @Test
+    fun connectedRequiresFreshReadOnlyEvidenceForTheExactIdentity() {
+        val dispatcher = UniversalConnectorDispatcher(emptyMap(), ModeArmingPolicy())
+        val good = fixture(ConnectorKind.FBS_MT5)
+        assertTrue(dispatcher.validateVerification(ConnectorKind.FBS_MT5, good).isSuccess)
+        assertFalse(dispatcher.validateVerification(
+            ConnectorKind.FBS_MT5,
+            good.copy(readOnlyVerification = good.readOnlyVerification!!.copy(
+                identity = good.identity!!.copy(accountId = "another-account")
+            ))
+        ).isSuccess)
+        assertFalse(dispatcher.validateVerification(
+            ConnectorKind.FBS_MT5,
+            good.copy(readOnlyVerification = good.readOnlyVerification!!.copy(checkedAtMs = 1L))
+        ).isSuccess)
+    }
+
+    @Test
     fun liveConnectorIsBlockedUntilAProcessLocalLeaseExists() {
         val dispatcher = UniversalConnectorDispatcher(emptyMap(), ModeArmingPolicy())
         val demo = fixture(ConnectorKind.FBS_MT5)

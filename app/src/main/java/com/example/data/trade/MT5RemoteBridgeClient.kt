@@ -249,6 +249,11 @@ class MT5RemoteBridgeClient(
                 val policy = modeArmingPolicy
                     ?: return CommandResult(requestId, false, "MODE_POLICY_NOT_CONFIGURED: trading start is blocked", rejected = true)
                 val identity = modeIdentity(fresh)
+                if (!identity.isValid() || identity.mode.name != accountMode || identity.broker != brokerBrand ||
+                    identity.accountId != secrets.getManagedMT5AccountLogin(profile) ||
+                    identity.server != secrets.getManagedMT5AccountServer(profile)) {
+                    return CommandResult(requestId, false, "MODE_ARMING_BLOCKED: selected MT5 mode/account identity does not match fresh terminal evidence", rejected = true)
+                }
                 val evidence = ModeReadOnlyVerification(
                     identity = identity,
                     checkedAtMs = System.currentTimeMillis(),

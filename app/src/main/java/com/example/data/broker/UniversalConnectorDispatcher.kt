@@ -85,6 +85,15 @@ class UniversalConnectorDispatcher(
             ?: return Result.failure(IllegalStateException("BLOCKED: exact account identity is missing"))
         val readOnly = verification.readOnlyVerification
             ?: return Result.failure(IllegalStateException("BLOCKED: read-only verification evidence is missing"))
+        if (readOnly.identity != identity) return Result.failure(IllegalStateException("BLOCKED: verification evidence belongs to another account identity"))
+        val now = System.currentTimeMillis()
+        if (readOnly.checkedAtMs <= 0L || readOnly.checkedAtMs > now || now - readOnly.checkedAtMs > 15_000L) {
+            return Result.failure(IllegalStateException("BLOCKED: read-only verification evidence is stale"))
+        }
+        if (!readOnly.authenticatedSession || !readOnly.freshAccountData ||
+            !(readOnly.freshQuote || readOnly.freshHeartbeat) || !readOnly.accountIdentityMatched) {
+            return Result.failure(IllegalStateException("BLOCKED: fresh matching read-only evidence is incomplete"))
+        }
         val expectedPath = when (kind) {
             ConnectorKind.DERIV_OPTIONS -> ModePath.DERIV_OPTIONS
             ConnectorKind.CTRADER_ACCOUNT -> ModePath.CTRADER_ACCOUNT
@@ -94,6 +103,16 @@ class UniversalConnectorDispatcher(
             ConnectorKind.DERIV_MT5 -> ModePath.DERIV_MT5
         }
         if (identity.path != expectedPath) return Result.failure(IllegalStateException("BLOCKED: connector returned another path identity"))
+        val expectedBroker = when (kind) {
+            ConnectorKind.FBS_MT5 -> "FBS"
+            ConnectorKind.EXNESS_MT5 -> "EXNESS"
+            ConnectorKind.HFM_MT5 -> "HFM"
+            ConnectorKind.DERIV_MT5 -> "DERIV"
+            else -> null
+        }
+        if (!identity.isValid() || (expectedBroker != null && !identity.broker.equals(expectedBroker, true))) {
+            return Result.failure(IllegalStateException("BLOCKED: broker or account identity does not match the selected connector"))
+        }
         val decision = if (identity.mode == AccountMode.DEMO) {
             modeArmingPolicy.demoDecision(identity, readOnly, verification.demoAcceptance,
                 verification.currentDemoCredentialGeneration)

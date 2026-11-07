@@ -229,6 +229,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var selectedOpportunity by remember { mutableStateOf<com.example.domain.model.TradeSignal?>(null) }
     var commandPending by remember { mutableStateOf(false) }
     var demoPassDigests by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var pendingMt5DemoPassDigest by remember { mutableStateOf<String?>(null) }
+    var pendingMt5DemoPassIdentity by remember { mutableStateOf<com.example.data.broker.ModeAccountIdentity?>(null) }
     val secrets = viewModel.app.secretsManager
     val cTraderGateway = viewModel.app.cTraderGateway
     val cTraderCallback by viewModel.app.cTraderCallback.collectAsStateWithLifecycle()
@@ -275,6 +277,60 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             batteryOptimizationExempt = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M ||
                 context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
             delay(5_000L)
+        }
+    }
+    LaunchedEffect(context, selectedMt5Broker, derivAccount?.loginId, derivAccount?.credentialGeneration) {
+        val manager = context.getSystemService(android.app.NotificationManager::class.java)
+        val channelId = "live_lease_renewal"
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            manager?.createNotificationChannel(android.app.NotificationChannel(
+                channelId, "LIVE lease renewal reminders", android.app.NotificationManager.IMPORTANCE_HIGH
+            ))
+        }
+        val prefs = context.getSharedPreferences("mode_renewal_reminders", android.content.Context.MODE_PRIVATE)
+        while (true) {
+            val now = System.currentTimeMillis()
+            val activeLeases = buildList {
+                listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
+                    val generation = secrets.getManagedMT5CredentialGeneration("${brand}_LIVE")
+                    val identity = com.example.data.broker.ModeAccountIdentity(
+                        com.example.data.broker.ModePath.valueOf("${brand}_MT5"), brand,
+                        secrets.getManagedMT5AccountLogin("${brand}_LIVE"),
+                        secrets.getManagedMT5AccountServer("${brand}_LIVE"),
+                        com.example.data.broker.AccountMode.LIVE, generation
+                    )
+                    viewModel.app.modeArmingPolicy.liveLease(identity, now)?.let(::add)
+                }
+                val account = derivAccount?.takeIf { it.mode.equals("real", true) && it.accountType.equals("real", true) }
+                if (account != null) {
+                    val identity = com.example.data.broker.ModeAccountIdentity(
+                        com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", account.loginId, "",
+                        com.example.data.broker.AccountMode.LIVE, secrets.getDerivCredentialGeneration("real")
+                    )
+                    viewModel.app.modeArmingPolicy.liveLease(identity, now)?.let(::add)
+                }
+            }
+            activeLeases.filter { it.expiresAtMs - now in 1..120_000L }.forEach { lease ->
+                val reminderKey = lease.identity.fingerprint() + ":" + lease.expiresAtMs
+                val preferenceKey = "notified_" + reminderKey
+                if (!prefs.getBoolean(preferenceKey, false) && DerivDemoBotService.hasNotificationPermission(context)) {
+                    val openApp = android.app.PendingIntent.getActivity(
+                        context, reminderKey.hashCode(),
+                        Intent(context, com.example.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                    )
+                    val minutes = ((lease.expiresAtMs - now + 59_999L) / 60_000L).coerceAtLeast(1L)
+                    manager?.notify(reminderKey.hashCode(), androidx.core.app.NotificationCompat.Builder(context, channelId)
+                        .setSmallIcon(com.example.R.drawable.ic_launcher_foreground)
+                        .setContentTitle("DestinedFX · LIVE lease renewal required")
+                        .setContentText("${lease.identity.broker}: $minutes min remain. Reverify and renew; no silent extension.")
+                        .setContentIntent(openApp).setAutoCancel(true)
+                        .addAction(0, "Review renewal", openApp)
+                        .setCategory(androidx.core.app.NotificationCompat.CATEGORY_STATUS).build())
+                    prefs.edit().putBoolean(preferenceKey, true).apply()
+                }
+            }
+            delay(10_000L)
         }
     }
     val bridge = remember(mt5Profile) { if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) MT5RemoteBridgeClient(secrets, mt5Profile, { AppSecurityGuard.authorizeSensitiveAction() }, accountMode = mt5Mode, brokerBrand = selectedMt5Broker, modeArmingPolicy = viewModel.app.modeArmingPolicy) else null }
@@ -337,12 +393,12 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     broker = broker, accountId = demoLogin, server = demoServer,
                     mode = com.example.data.broker.AccountMode.DEMO, credentialGeneration = generation
                 )
-                require(secrets.savePathDemoAcceptance(modeIdentity, digest)) { "Encrypted DEMO acceptance could not be saved for this exact account generation." }
-                digest
+                modeIdentity to digest
             }
-            result.onSuccess { digest ->
-                demoPassDigests = demoPassDigests + (selectedMt5Broker to digest)
-                message = "DEMO PASS file accepted for $selectedMt5Broker. SHA-256 $digest. LIVE still requires exact LIVE identity, short lease, owner approval, and all other gates."
+            result.onSuccess { (identity, digest) ->
+                pendingMt5DemoPassIdentity = identity
+                pendingMt5DemoPassDigest = digest
+                message = "DEMO PASS evidence validated read-only for $selectedMt5Broker. Explicit owner acceptance is still required; no execution was enabled."
             }.onFailure {
                 message = "DEMO PASS file rejected: ${it.message?.take(180) ?: "invalid evidence"}. LIVE remains locked."
             }
@@ -513,7 +569,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     val liveReason = if (!liveIdentity.isValid()) "LIVE ACCOUNT NOT CONFIGURED" else viewModel.app.modeArmingPolicy.liveDecision(liveIdentity).reason
                     Text("$brand MT5 · DEMO: " + (if (demoAccepted) "ACCEPTED · fresh heartbeat required at Start" else "BLOCKED · verify DEMO and import owner PASS") + " · LIVE: " + liveReason, color = if (demoAccepted) ProfitGreen else WarningAmber, fontSize = 9.sp)
                 }
-                Text("Owner steps: Spotware application approval; Deriv App ID and DEMO acceptance; broker-issued DEMO credentials, exact MT5 servers and broker PASS; fresh LIVE verification and typed confirmation. cTrader execution and real broker operation remain unverified until owner testing.", color = TextSecondary, fontSize = 9.sp)
+                Text("Next owner actions: Deriv Options—verify/accept the exact DEMO account; cTrader—obtain Spotware approval and complete read-only owner testing (trading is not implemented); FBS, Exness, HFM, Deriv MT5—configure broker-issued DEMO identity, verify fresh terminal evidence and import/accept broker PASS. LIVE remains subject to exact LIVE verification, typed confirmation, minimum stake/lot and short lease.", color = TextSecondary, fontSize = 9.sp)
             }
         }
         val setupStep = when {
@@ -658,31 +714,34 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 Text("LIVE remains subject to a broker-specific DEMO PASS and a separate short lease. No LIVE order is authorized by this screen.", color = WarningAmber, fontSize = 9.sp)
             }
         }
-        if ((broker == BrokerType.MT5 && bridge?.hasPairing() == true) || running) {
-            Button(
+        Button(
                 onClick = {
                     scope.launch {
                         commandPending = true
                         try {
-                            viewModel.app.modeArmingPolicy.emergencyStop()
-                            if (broker == BrokerType.MT5) {
-                                val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "EMERGENCY_STOP")
-                                message = if (result.queued) "EMERGENCY STOP acknowledged by bridge request; verify fresh EA acknowledgement and stop state. Open positions are not liquidated." else result.detail
-                            } else {
+                            val disarmed = runCatching { viewModel.app.modeArmingPolicy.emergencyStop() }.getOrDefault(0)
+                            val derivResult = runCatching {
                                 DerivDemoBotService.stop(context)
                                 secrets.invalidateDerivRealAuthorization()
                                 viewModel.setBotStatus(false)
-                                message = "Emergency stop requested locally. Verify broker state; existing positions are not liquidated."
-                            }
-                        } catch (e: Exception) { message = e.message?.take(240) ?: "Emergency stop was not confirmed; stop manually in the terminal." }
+                                "Deriv service stop requested"
+                            }.getOrElse { "Deriv service stop failed: ${it.message?.take(120) ?: "verify and stop manually"}" }
+                            val mt5Result = if (bridge?.hasPairing() == true) {
+                                runCatching { requireNotNull(bridge).command(UUID.randomUUID().toString(), "EMERGENCY_STOP") }
+                                    .fold(
+                                        { if (it.queued) "MT5 bridge stop acknowledged; verify fresh EA stop state" else "MT5 bridge stop not acknowledged: ${it.detail.take(160)}" },
+                                        { "MT5 bridge stop failed: ${it.message?.take(120) ?: "verify and stop at the host"}" }
+                                    )
+                            } else "MT5 bridge not paired; stop at the owner host if active"
+                            message = "Emergency stop requested; $disarmed LIVE lease(s) disarmed. $derivResult. $mt5Result. Verify broker state; existing positions are not liquidated."
+                        } catch (e: Exception) { message = e.message?.take(240) ?: "Emergency stop was not confirmed; stop manually at the broker/host." }
                         finally { commandPending = false }
                     }
                 },
                 enabled = !commandPending,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)
-            ) { Icon(Icons.Default.Stop, contentDescription = null); Text("EMERGENCY STOP · STOP NEW ENTRIES", fontWeight = FontWeight.Black) }
-        }
+        ) { Icon(Icons.Default.Stop, contentDescription = null); Text("EMERGENCY STOP · STOP NEW ENTRIES", fontWeight = FontWeight.Black) }
         Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CardBorder)) {
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("BOT STATE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Black)
@@ -752,7 +811,27 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         OutlinedButton(onClick = { demoPassLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }, enabled = mt5Mode == "DEMO" && secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_DEMO").isNotBlank() && secrets.getManagedMT5AccountServer("${selectedMt5Broker}_DEMO").isNotBlank()) {
                             Text("IMPORT DEMO PASS FILE")
                         }
-                        Text(if (selectedMt5Broker in demoPassDigests) "PASS · ${demoPassDigests[selectedMt5Broker]?.take(12)}" else "LIVE LOCKED", color = if (selectedMt5Broker in demoPassDigests) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                        Text(if (selectedMt5Broker in demoPassDigests) "OWNER ACCEPTED · ${demoPassDigests[selectedMt5Broker]?.take(12)}" else "LIVE LOCKED", color = if (selectedMt5Broker in demoPassDigests) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                    }
+                    if (pendingMt5DemoPassDigest != null && mt5Mode == "DEMO") {
+                        Text("Read-only PASS evidence validated for the current saved DEMO identity/generation. Confirming records that this owner accepts this exact account; it does not authorize LIVE.", color = WarningAmber, fontSize = 9.sp)
+                        OutlinedButton(onClick = {
+                            runCatching {
+                                val expectedLogin = secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_DEMO")
+                                val expectedServer = secrets.getManagedMT5AccountServer("${selectedMt5Broker}_DEMO")
+                                val fresh = mt5Snapshot ?: error("Current DEMO terminal snapshot is unavailable; reconnect and verify again.")
+                                require(isVerifiedMt5Connection(fresh.connected, fresh.workerStatus == "READY", fresh.terminalOnline, fresh.heartbeatFresh, fresh.accountVerified, fresh.brokerIdentityVerified, fresh.actualAccountMode, "DEMO", fresh.actualLogin, expectedLogin, fresh.actualServer, expectedServer) && fresh.snapshotsValid) { "Current read-only DEMO identity/heartbeat/snapshot check no longer passes; verify again." }
+                                val generation = secrets.getManagedMT5CredentialGeneration("${selectedMt5Broker}_DEMO")
+                                require(generation.isNotBlank()) { "Current credential generation unavailable; reconnect DEMO." }
+                                val identity = com.example.data.broker.ModeAccountIdentity(com.example.data.broker.ModePath.valueOf("${selectedMt5Broker}_MT5"), selectedMt5Broker, expectedLogin, expectedServer, com.example.data.broker.AccountMode.DEMO, generation)
+                                require(identity == pendingMt5DemoPassIdentity) { "Account identity or credential generation changed after PASS validation; import and verify again." }
+                                require(secrets.savePathDemoAcceptance(identity, requireNotNull(pendingMt5DemoPassDigest))) { "Encrypted owner acceptance could not be saved for this exact identity and generation." }
+                                demoPassDigests = demoPassDigests + (selectedMt5Broker to requireNotNull(pendingMt5DemoPassDigest))
+                                pendingMt5DemoPassDigest = null
+                                pendingMt5DemoPassIdentity = null
+                                message = "Owner DEMO acceptance saved for the exact verified identity and credential generation. LIVE remains separately blocked."
+                            }.onFailure { message = "Owner DEMO acceptance blocked: ${it.message ?: "verification unavailable"}. LIVE remains locked." }
+                        }, enabled = !busy && mt5Snapshot != null) { Text("OWNER ACCEPT VERIFIED DEMO PASS") }
                     }
                     listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
@@ -819,7 +898,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         Text("Selected LIVE account: ${secrets.getManagedMT5AccountLogin(mt5Profile).ifBlank { "not registered" }} @ ${secrets.getManagedMT5AccountServer(mt5Profile).ifBlank { "server not configured" }}", color = TextPrimary, fontSize = 10.sp)
                         Text("Terminal identity: ${snapshot?.actualLogin ?: "unverified"} @ ${snapshot?.actualServer ?: "unverified"} · mode ${snapshot?.actualAccountMode ?: "unverified"}", color = TextSecondary, fontSize = 10.sp)
                         Text("${liveLeaseStatusLabel(snapshot?.liveAuthorized == true)} · fresh terminal heartbeat: ${snapshot?.heartbeatFresh == true} · broker identity: ${snapshot?.brokerIdentityVerified == true} · service state: ${snapshot?.managedState ?: "unknown"}", color = if (snapshot?.liveAuthorized == true) WarningAmber else TextSecondary, fontSize = 10.sp)
-                        if (snapshot?.liveAuthorized == true) Text("Authorization expiry: ${serverLiveExpiry.ifBlank { liveAuthorizationExpiry.ifBlank { "server confirms active; expiry not returned" } }}", color = WarningAmber, fontSize = 10.sp)
+                        if (snapshot?.liveAuthorized == true) Text("Authorization expiry: ${serverLiveExpiry.ifBlank { liveAuthorizationExpiry.ifBlank { "server confirms active; expiry not returned" } }} · renew/re-authorize before expiry; lease is never silently extended.", color = WarningAmber, fontSize = 10.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                             OutlinedButton(onClick = {
                                 scope.launch { try { mt5Snapshot = bridge?.state() } catch (e: Exception) { message = e.message ?: "Could not refresh LIVE account state." } }
