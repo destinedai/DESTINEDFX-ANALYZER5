@@ -12,6 +12,8 @@ import com.example.domain.engine.impl.CoreMarketStructureAnalyzer
 import com.example.domain.engine.MTFAlignmentEngine
 import com.example.domain.usecase.impl.*
 import com.example.security.SecretsManager
+import com.example.data.broker.ModeArmingPolicy
+import com.example.data.broker.UniversalConnectorDispatcher
 import com.example.security.AppSecurityGuard
 import com.example.domain.risk.TradingSafetyLimits
 import com.squareup.moshi.Moshi
@@ -47,6 +49,10 @@ class MyApplication : Application() {
     
     private var _secretsManager: SecretsManager? = null
     val secretsManager: SecretsManager get() = _secretsManager ?: throw IllegalStateException("SecretsManager not initialized")
+    private var _modeArmingPolicy: ModeArmingPolicy? = null
+    val modeArmingPolicy: ModeArmingPolicy get() = _modeArmingPolicy ?: throw IllegalStateException("ModeArmingPolicy not initialized")
+    private var _universalConnectorDispatcher: UniversalConnectorDispatcher? = null
+    val universalConnectorDispatcher: UniversalConnectorDispatcher get() = _universalConnectorDispatcher ?: throw IllegalStateException("UniversalConnectorDispatcher not initialized")
 
     private var _marketDataRepository: MarketDataRepositoryImpl? = null
     val marketDataRepository: MarketDataRepositoryImpl get() = _marketDataRepository ?: throw IllegalStateException("MarketDataRepository not initialized")
@@ -136,6 +142,8 @@ class MyApplication : Application() {
             _db = dbInstance
             val secrets = SecretsManager(this@MyApplication)
             _secretsManager = secrets
+            _modeArmingPolicy = ModeArmingPolicy(auditSink = secrets::appendModeArmingAudit)
+            _universalConnectorDispatcher = UniversalConnectorDispatcher(emptyMap(), modeArmingPolicy)
             storageAvailable.value = secrets.isSecureStorageAvailable
             _riskRepository = RiskRepositoryImpl(this@MyApplication)
             
@@ -168,7 +176,7 @@ class MyApplication : Application() {
             
             _cTraderOAuthClient = com.example.data.ctrader.CTraderOAuthClient(secrets)
             _cTraderGateway = com.example.data.ctrader.CTraderReadOnlyGateway(secrets, cTraderOAuthClient)
-            _derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secrets)
+            _derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secrets, modeArmingPolicy = modeArmingPolicy)
             _derivGatewayAdapter = com.example.data.broker.DerivBrokerGatewayAdapter(derivBrokerGateway)
             _mt5GatewayAdapter = com.example.data.broker.MT5BrokerGatewayAdapter(mt5GatewayRepository)
             _brokerManager = com.example.data.broker.BrokerManager(derivGatewayAdapter, mt5GatewayAdapter)

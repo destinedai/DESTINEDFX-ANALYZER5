@@ -219,6 +219,64 @@ class DerivDemoBotService : Service() {
             stopSafely("PAUSED — current authenticated DEMO account does not match the accepted verification record")
             return
         }
+        val modeIdentity = com.example.data.broker.ModeAccountIdentity(
+            path = com.example.data.broker.ModePath.DERIV_OPTIONS,
+            broker = "DERIV",
+            accountId = acceptedAccount.loginId,
+            server = "",
+            mode = com.example.data.broker.AccountMode.DEMO,
+            credentialGeneration = acceptedAccount.credentialGeneration
+        )
+        val checkedAtMs = System.currentTimeMillis()
+        val currentMetrics = gateway.accountMetrics.value
+        val currentPortfolio = gateway.portfolioSnapshot.value
+        val balanceFresh = gateway.accountMetricsUpdatedAtMs.value > 0L &&
+            checkedAtMs - gateway.accountMetricsUpdatedAtMs.value in 0..8_000L &&
+            currentMetrics?.currency.equals(acceptedAccount.currency, ignoreCase = true) &&
+            currentMetrics?.balance?.let { it.isFinite() && it >= 0.0 } == true
+        val portfolioFresh = currentPortfolio?.let {
+            it.successful && it.accountId == acceptedAccount.loginId &&
+                it.accountMode == "DEMO" && it.currency.equals(acceptedAccount.currency, true) &&
+                checkedAtMs - it.retrievedAtMs in 0..8_000L
+        } == true
+        val quote = gateway.getQuote(symbol).getOrNull()
+        val quoteFresh = quote?.timestampMs?.let {
+            it > 0L && it <= checkedAtMs && checkedAtMs - it <= 15_000L
+        } == true
+        val readOnlyVerification = com.example.data.broker.ModeReadOnlyVerification(
+            identity = modeIdentity,
+            checkedAtMs = checkedAtMs,
+            authenticatedSession = gateway.connectionState.value == com.example.data.deriv.DerivConnectionState.READY,
+            freshAccountData = balanceFresh && portfolioFresh,
+            freshQuote = quoteFresh,
+            freshHeartbeat = false,
+            accountIdentityMatched = gateway.accountInfo.value?.let {
+                it.loginId == acceptedAccount.loginId && it.mode.equals("demo", true) &&
+                    it.accountType.equals("demo", true) && it.currency.equals(acceptedAccount.currency, true)
+            } == true
+        )
+        val pathAcceptance = app.secretsManager.getPathDemoAcceptance(modeIdentity)
+        val connectorValidation = app.universalConnectorDispatcher.validateVerification(
+            com.example.data.broker.ConnectorKind.DERIV_OPTIONS,
+            com.example.data.broker.ConnectorVerification(
+                kind = com.example.data.broker.ConnectorKind.DERIV_OPTIONS,
+                evidence = com.example.data.broker.ConnectorEvidence(
+                    authenticatedSession = readOnlyVerification.authenticatedSession,
+                    freshAccountData = readOnlyVerification.freshAccountData,
+                    accountIdentityMatched = readOnlyVerification.accountIdentityMatched,
+                    freshQuote = readOnlyVerification.freshQuote
+                ),
+                detail = "Deriv Options account, balance, portfolio and quote evidence",
+                identity = modeIdentity,
+                readOnlyVerification = readOnlyVerification,
+                demoAcceptance = pathAcceptance,
+                currentDemoCredentialGeneration = app.secretsManager.getDerivCredentialGeneration("demo")
+            )
+        )
+        if (connectorValidation.isFailure) {
+            stopSafely("BOT NOT RUNNING - DEMO arming blocked: " + (connectorValidation.exceptionOrNull()?.message ?: "MODE_POLICY_BLOCKED"))
+            return
+        }
         healthJob?.cancel()
         healthJob = serviceScope.launch {
             while (currentCoroutineContext().isActive && !stopRequested) {

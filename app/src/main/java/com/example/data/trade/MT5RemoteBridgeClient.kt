@@ -1,6 +1,11 @@
 package com.example.data.trade
 
 import com.example.security.SecretsManager
+import com.example.data.broker.ModeArmingPolicy
+import com.example.data.broker.ModeAccountIdentity
+import com.example.data.broker.ModePath
+import com.example.data.broker.AccountMode
+import com.example.data.broker.ModeReadOnlyVerification
 import com.destinedfx.core.strategy.StrategyRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -24,7 +29,8 @@ class MT5RemoteBridgeClient(
     profile: String,
     private val sensitiveActionAuthorized: () -> Boolean = { false },
     accountMode: String,
-    brokerBrand: String
+    brokerBrand: String,
+    private val modeArmingPolicy: ModeArmingPolicy? = null
 ) {
     /** Local secure-storage namespace, e.g. FBS_DEMO or EXNESS_LIVE. */
     val profile: String = profile.trim().uppercase().also {
@@ -120,8 +126,30 @@ class MT5RemoteBridgeClient(
             "ZERO_COMMISSION_SPREAD_ONLY" -> require(commissionPerLot == 0.0 && evidence.length >= 8) { "Zero-commission mode requires a broker pricing reference; the EA will calculate spread and slippage costs live." }
         else -> require(commissionPerLot > 0.0 && evidence.length >= 8) { "Configured commission requires a positive account-currency amount per standard lot and a broker pricing reference." }
         }
+        val previousLogin = secrets.getManagedMT5AccountLogin(profile)
+        val previousServer = secrets.getManagedMT5AccountServer(profile)
+        val previousGeneration = secrets.getManagedMT5CredentialGeneration(profile)
         check(secrets.saveManagedMT5AccountProfile(profile, login.trim(), server, accessType, password, savePasswordLocally)) {
             "Managed MT5 profile could not be durably saved in encrypted storage; no credentials were submitted."
+        }
+        val nextGeneration = secrets.getManagedMT5CredentialGeneration(profile)
+        val modePath = when (brokerBrand) {
+            "FBS" -> ModePath.FBS_MT5
+            "EXNESS" -> ModePath.EXNESS_MT5
+            "HFM" -> ModePath.HFM_MT5
+            "DERIV" -> ModePath.DERIV_MT5
+            else -> throw IllegalStateException("Unsupported MT5 broker brand")
+        }
+        if (previousGeneration.isNotBlank() && previousGeneration != nextGeneration) {
+            if (accountMode == "DEMO" && previousLogin.isNotBlank() && previousServer.isNotBlank()) {
+                secrets.clearPathDemoAcceptance(
+                    ModeAccountIdentity(modePath, brokerBrand, previousLogin, previousServer, AccountMode.DEMO, previousGeneration)
+                )
+            }
+            modeArmingPolicy?.onCredentialChanged(modePath, brokerBrand, previousLogin.ifBlank { login.trim() })
+        }
+        if (previousLogin.isNotBlank() && previousLogin != login.trim()) {
+            modeArmingPolicy?.onAccountSwitch(modePath, brokerBrand, login.trim())
         }
         if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) pair()
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
@@ -200,6 +228,11 @@ class MT5RemoteBridgeClient(
         if (action in TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
             return CommandResult(requestId, false, "REAUTHENTICATION_REQUIRED: authenticate again before this trading action", rejected = true)
         }
+        if (action == "EMERGENCY_STOP") {
+            val policy = modeArmingPolicy
+                ?: return CommandResult(requestId, false, "MODE_POLICY_NOT_CONFIGURED: cannot confirm local disarming", rejected = true)
+            policy.emergencyStop()
+        }
         if (action in TRADE_ACTIONS) {
             val fresh = try { state() } catch (e: Exception) {
                 return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
@@ -212,6 +245,30 @@ class MT5RemoteBridgeClient(
             }
             val reason = gateFailure(fresh, requireLiveAuthorization = action != "PAUSE")
             if (reason != null) return CommandResult(requestId, false, reason, rejected = true)
+            if (action == "START" || action == "RESUME") {
+                val policy = modeArmingPolicy
+                    ?: return CommandResult(requestId, false, "MODE_POLICY_NOT_CONFIGURED: trading start is blocked", rejected = true)
+                val identity = modeIdentity(fresh)
+                val evidence = ModeReadOnlyVerification(
+                    identity = identity,
+                    checkedAtMs = System.currentTimeMillis(),
+                    authenticatedSession = fresh.connected && fresh.terminalConnected,
+                    freshAccountData = fresh.snapshotsValid,
+                    freshQuote = false,
+                    freshHeartbeat = fresh.heartbeatFresh,
+                    accountIdentityMatched = fresh.accountVerified && fresh.brokerIdentityVerified &&
+                        fresh.actualLogin == secrets.getManagedMT5AccountLogin(profile) &&
+                        fresh.actualServer == secrets.getManagedMT5AccountServer(profile) &&
+                        fresh.actualAccountMode == accountMode
+                )
+                val decision = if (accountMode == "DEMO") {
+                    policy.demoDecision(identity, evidence, secrets.getPathDemoAcceptance(identity),
+                        secrets.getManagedMT5CredentialGeneration(profile))
+                } else policy.liveDecision(identity)
+                if (!decision.allowed) {
+                    return CommandResult(requestId, false, "MODE_ARMING_BLOCKED: " + decision.reason, rejected = true)
+                }
+            }
         }
         if (action == "START") {
             if (config.optString("strategy") !in StrategyRegistry.managedStrategyIds) return CommandResult(requestId, false, "START requires a registered managed strategy.", rejected = true)
@@ -312,10 +369,28 @@ class MT5RemoteBridgeClient(
         }
     }
 
+    private fun modeIdentity(snapshot: Snapshot): ModeAccountIdentity {
+        val path = when (brokerBrand) {
+            "FBS" -> ModePath.FBS_MT5
+            "EXNESS" -> ModePath.EXNESS_MT5
+            "HFM" -> ModePath.HFM_MT5
+            "DERIV" -> ModePath.DERIV_MT5
+            else -> throw IllegalStateException("Unsupported MT5 broker brand")
+        }
+        return ModeAccountIdentity(
+            path = path, broker = brokerBrand, accountId = snapshot.actualLogin, server = snapshot.actualServer,
+            mode = if (accountMode == "DEMO") AccountMode.DEMO else AccountMode.LIVE,
+            credentialGeneration = secrets.getManagedMT5CredentialGeneration(profile)
+        )
+    }
+
     suspend fun authorizeLiveSession(): String {
         require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
         require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
         val fresh = state()
+        val policy = modeArmingPolicy ?: throw IllegalStateException("MODE_POLICY_NOT_CONFIGURED: LIVE is blocked.")
+        val decision = policy.liveDecision(modeIdentity(fresh))
+        require(decision.allowed) { "MODE_ARMING_BLOCKED: " + decision.reason }
         val reason = gateFailure(fresh, requireLiveAuthorization = false)
         require(reason == null) { reason ?: "LIVE profile is not ready." }
         val result = request("POST", "/v1/app/live-authorization", JSONObject().put("confirm_live_trading", true))

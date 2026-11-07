@@ -82,7 +82,8 @@ class DerivBrokerGateway(
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val modeArmingPolicy: com.example.data.broker.ModeArmingPolicy? = null
 ) : DerivMultiplierGateway {
     companion object {
         private const val TAG = "DerivBrokerGW"
@@ -672,6 +673,51 @@ class DerivBrokerGateway(
         }
         if (!isFreshDerivQuoteTimestamp(currentQuote.getOrThrow().timestampMs, System.currentTimeMillis())) {
             return@withContext Result.failure(Exception("DATA_STALE: Deriv quote did not contain a valid broker timestamp"))
+        }
+
+        val policy = modeArmingPolicy
+            ?: return@withContext Result.failure(DerivExecutionFailure(
+                DerivExecutionFailureKind.VALIDATION_REJECTED,
+                "MODE_ARMING_POLICY_UNAVAILABLE: new Deriv purchases are blocked until the shared account policy is initialized."
+            ))
+        val modeIdentity = com.example.data.broker.ModeAccountIdentity(
+            path = com.example.data.broker.ModePath.DERIV_OPTIONS,
+            broker = "DERIV",
+            accountId = account.loginId,
+            server = "",
+            mode = if (mode == "demo") com.example.data.broker.AccountMode.DEMO else com.example.data.broker.AccountMode.LIVE,
+            credentialGeneration = secrets.getDerivCredentialGeneration(mode)
+        )
+        val checkedAt = System.currentTimeMillis()
+        val modeEvidence = com.example.data.broker.ModeReadOnlyVerification(
+            identity = modeIdentity,
+            checkedAtMs = checkedAt,
+            authenticatedSession = _connectionState.value == DerivConnectionState.READY &&
+                !sessionId.isNullOrBlank() && authenticatedSessionId == sessionId,
+            freshAccountData = isCurrentAccountSynchronized(account, checkedAt),
+            freshQuote = isFreshDerivQuoteTimestamp(currentQuote.getOrThrow().timestampMs, checkedAt),
+            freshHeartbeat = false,
+            accountIdentityMatched = _accountInfo.value?.let {
+                it.loginId == account.loginId && it.mode == mode && it.accountType == mode &&
+                    it.currency.equals(account.currency, true) && it.credentialGeneration == modeIdentity.credentialGeneration
+            } == true
+        )
+        val modeDecision = if (mode == "demo") {
+            policy.demoDecision(
+                modeIdentity,
+                modeEvidence,
+                secrets.getPathDemoAcceptance(modeIdentity),
+                secrets.getDerivCredentialGeneration("demo"),
+                checkedAt
+            )
+        } else {
+            policy.liveDecision(modeIdentity, checkedAt)
+        }
+        if (!modeDecision.allowed) {
+            return@withContext Result.failure(DerivExecutionFailure(
+                DerivExecutionFailureKind.VALIDATION_REJECTED,
+                "MODE_ARMING_BLOCKED: ${modeDecision.reason}"
+            ))
         }
 
         // 1. Request a proposal using the current API schema and cash-based protective limits.

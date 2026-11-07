@@ -221,6 +221,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var mt5Snapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
     var showPairingRevokeDialog by remember(mt5Profile) { mutableStateOf(false) }
     var showLiveAuthorizationDialog by remember(mt5Profile) { mutableStateOf(false) }
+    var liveTypedConfirmation by remember(mt5Profile) { mutableStateOf("") }
+    var liveMinimumLot by remember(mt5Profile) { mutableStateOf("") }
+    var derivLiveTypedConfirmation by remember { mutableStateOf("") }
+    var derivMinimumStake by remember { mutableStateOf("") }
     var liveAuthorizationExpiry by remember(mt5Profile) { mutableStateOf("") }
     var selectedOpportunity by remember { mutableStateOf<com.example.domain.model.TradeSignal?>(null) }
     var commandPending by remember { mutableStateOf(false) }
@@ -273,7 +277,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             delay(5_000L)
         }
     }
-    val bridge = remember(mt5Profile) { if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) MT5RemoteBridgeClient(secrets, mt5Profile, { AppSecurityGuard.authorizeSensitiveAction() }, accountMode = mt5Mode, brokerBrand = selectedMt5Broker) else null }
+    val bridge = remember(mt5Profile) { if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) MT5RemoteBridgeClient(secrets, mt5Profile, { AppSecurityGuard.authorizeSensitiveAction() }, accountMode = mt5Mode, brokerBrand = selectedMt5Broker, modeArmingPolicy = viewModel.app.modeArmingPolicy) else null }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val reason = if (granted) "BOT NOT RUNNING — notifications are enabled. Tap Start again to begin the foreground service."
         else "BOT NOT RUNNING — notification permission was denied. Allow DestinedFX notifications in Android Settings, then tap Start again."
@@ -309,7 +313,31 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     evidencePathCount = paths?.length() ?: 0,
                 )
                 require(valid) { "DEMO PASS evidence is incomplete or does not match the selected broker's saved DEMO account." }
+                require(mt5Mode == "DEMO") { "Select and verify the DEMO slot before importing a DEMO PASS." }
+                val fresh = mt5Snapshot ?: throw IllegalStateException("A current MT5 account snapshot is required before DEMO acceptance.")
+                require(isVerifiedMt5Connection(
+                    snapshotConnected = fresh.connected,
+                    workerReady = fresh.workerStatus == "READY",
+                    terminalOnline = fresh.terminalOnline,
+                    heartbeatFresh = fresh.heartbeatFresh,
+                    accountVerified = fresh.accountVerified,
+                    brokerIdentityVerified = fresh.brokerIdentityVerified,
+                    actualMode = fresh.actualAccountMode,
+                    expectedMode = "DEMO",
+                    actualLogin = fresh.actualLogin,
+                    expectedLogin = demoLogin,
+                    actualServer = fresh.actualServer,
+                    expectedServer = demoServer
+                ) && fresh.snapshotsValid) { "Fresh terminal identity, heartbeat or account snapshots do not match the selected DEMO account." }
+                val generation = secrets.getManagedMT5CredentialGeneration("${broker}_DEMO")
+                require(generation.isNotBlank()) { "Current MT5 credential generation is unavailable; reconnect the DEMO account." }
                 val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+                val modeIdentity = com.example.data.broker.ModeAccountIdentity(
+                    path = com.example.data.broker.ModePath.valueOf("${broker}_MT5"),
+                    broker = broker, accountId = demoLogin, server = demoServer,
+                    mode = com.example.data.broker.AccountMode.DEMO, credentialGeneration = generation
+                )
+                require(secrets.savePathDemoAcceptance(modeIdentity, digest)) { "Encrypted DEMO acceptance could not be saved for this exact account generation." }
                 digest
             }
             result.onSuccess { digest ->
@@ -321,8 +349,16 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         }
     }
     val selectMt5Slot: (String, String) -> Unit = { brand, mode ->
-        if (!canSelectMt5Mode(mode, brand, demoPassDigests)) {
-            message = "LIVE is locked. Import a matching broker-specific DEMO PASS file after the required soak and evidence gates."
+        val storedDemoIdentity = com.example.data.broker.ModeAccountIdentity(
+            com.example.data.broker.ModePath.valueOf(brand + "_MT5"), brand,
+            secrets.getManagedMT5AccountLogin(brand + "_DEMO"),
+            secrets.getManagedMT5AccountServer(brand + "_DEMO"),
+            com.example.data.broker.AccountMode.DEMO,
+            secrets.getManagedMT5CredentialGeneration(brand + "_DEMO")
+        )
+        val storedDemoPass = secrets.getPathDemoAcceptance(storedDemoIdentity) != null
+        if (mode == "LIVE" && !storedDemoPass && !canSelectMt5Mode(mode, brand, demoPassDigests)) {
+            message = "LIVE is locked. Import and accept a matching broker-specific DEMO PASS from the verified DEMO slot first."
         } else {
         val changed = selectedMt5Broker != brand || mt5Mode != mode
         val previousBridge = bridge
@@ -430,6 +466,56 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     Column(modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("DESTINEDFX BOT", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
         Text("Connect an account, then let the engine scan eligible markets automatically.", color = TextSecondary, fontSize = 11.sp)
+        Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CardBorder)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("MODE ARMING · ALL CONNECTOR PATHS", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text("LIVE leases exist only in this app process and are cleared on restart, account change, credential change or emergency stop. A saved credential is never a connection.", color = TextSecondary, fontSize = 9.sp)
+                val derivDemoIdentity = derivAccount?.let {
+                    com.example.data.broker.ModeAccountIdentity(
+                        com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", it.loginId, "",
+                        com.example.data.broker.AccountMode.DEMO, secrets.getDerivCredentialGeneration("demo")
+                    )
+                }
+                val derivDemoAcceptedNow = derivDemoIdentity?.let { secrets.getPathDemoAcceptance(it) != null } == true
+                val derivLiveIdentity = derivAccount?.let {
+                    com.example.data.broker.ModeAccountIdentity(
+                        com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", it.loginId, "",
+                        com.example.data.broker.AccountMode.LIVE, secrets.getDerivCredentialGeneration("real")
+                    )
+                }
+                val derivLiveState = derivLiveIdentity?.let { viewModel.app.modeArmingPolicy.liveDecision(it).reason } ?: "LIVE_ACCOUNT_NOT_VERIFIED"
+                Text("Deriv Options / Multipliers · DEMO: " + (if (derivDemoAcceptedNow) "ACCEPTED FOR CURRENT ACCOUNT" else "BLOCKED · verify and accept exact DEMO account") + " · LIVE: " + derivLiveState, color = if (derivDemoAcceptedNow) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                val cTraderIdentity = cTraderVerification?.takeIf { !it.isLive }?.let {
+                    com.example.data.broker.ModeAccountIdentity(
+                        com.example.data.broker.ModePath.CTRADER_ACCOUNT, it.brokerName, it.accountId.toString(), "",
+                        com.example.data.broker.AccountMode.DEMO, secrets.getCTraderCredentialGeneration()
+                    )
+                }
+                val cTraderAccepted = cTraderIdentity?.let { secrets.getPathDemoAcceptance(it) != null } == true
+                Text("cTrader · DEMO: " + when {
+                    !cTraderSpotwareApproved -> "BLOCKED · Spotware approval required"
+                    cTraderAccepted -> "ACCEPTED FOR CURRENT ACCOUNT"
+                    else -> "BLOCKED · read-only verify and accept a fresh matching quote"
+                } + " · LIVE: TRADING NOT IMPLEMENTED", color = if (cTraderAccepted) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
+                    val path = com.example.data.broker.ModePath.valueOf(brand + "_MT5")
+                    val demoIdentity = com.example.data.broker.ModeAccountIdentity(
+                        path, brand, secrets.getManagedMT5AccountLogin(brand + "_DEMO"),
+                        secrets.getManagedMT5AccountServer(brand + "_DEMO"),
+                        com.example.data.broker.AccountMode.DEMO, secrets.getManagedMT5CredentialGeneration(brand + "_DEMO")
+                    )
+                    val demoAccepted = secrets.getPathDemoAcceptance(demoIdentity) != null
+                    val liveIdentity = com.example.data.broker.ModeAccountIdentity(
+                        path, brand, secrets.getManagedMT5AccountLogin(brand + "_LIVE"),
+                        secrets.getManagedMT5AccountServer(brand + "_LIVE"),
+                        com.example.data.broker.AccountMode.LIVE, secrets.getManagedMT5CredentialGeneration(brand + "_LIVE")
+                    )
+                    val liveReason = if (!liveIdentity.isValid()) "LIVE ACCOUNT NOT CONFIGURED" else viewModel.app.modeArmingPolicy.liveDecision(liveIdentity).reason
+                    Text("$brand MT5 · DEMO: " + (if (demoAccepted) "ACCEPTED · fresh heartbeat required at Start" else "BLOCKED · verify DEMO and import owner PASS") + " · LIVE: " + liveReason, color = if (demoAccepted) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                }
+                Text("Owner steps: Spotware application approval; Deriv App ID and DEMO acceptance; broker-issued DEMO credentials, exact MT5 servers and broker PASS; fresh LIVE verification and typed confirmation. cTrader execution and real broker operation remain unverified until owner testing.", color = TextSecondary, fontSize = 9.sp)
+            }
+        }
         val setupStep = when {
             !connected && login.isBlank() -> 1
             !connected -> 2
@@ -455,15 +541,30 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = {
+                        val previousAccountId = cTraderSelectedAccountId?.toString().orEmpty()
+                        val previousGeneration = secrets.getCTraderCredentialGeneration()
                         if (!secrets.saveCTraderApplication(cTraderClientId.trim(), cTraderClientSecret, cTraderRedirectUri.trim())) { cTraderFailure = "Secure storage unavailable or application details are incomplete." }
-                        else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, viewModel.app.cTraderOAuthClient.authorizationUri(com.example.data.ctrader.CTraderOAuthClient.VIEW_SCOPE))) }.onFailure { cTraderFailure = it.message ?: "Could not open cTrader authorization." }
+                        else {
+                            val nextGeneration = secrets.getCTraderCredentialGeneration()
+                            if (previousGeneration.isNotBlank() && previousGeneration != nextGeneration && previousAccountId.isNotBlank()) {
+                                secrets.clearPathDemoAcceptance(com.example.data.broker.ModeAccountIdentity(
+                                    com.example.data.broker.ModePath.CTRADER_ACCOUNT, cTraderBroker, previousAccountId, "",
+                                    com.example.data.broker.AccountMode.DEMO, previousGeneration
+                                ))
+                                viewModel.app.modeArmingPolicy.onCredentialChanged(
+                                    com.example.data.broker.ModePath.CTRADER_ACCOUNT, cTraderBroker, previousAccountId
+                                )
+                            }
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, viewModel.app.cTraderOAuthClient.authorizationUri(com.example.data.ctrader.CTraderOAuthClient.VIEW_SCOPE))) }
+                                .onFailure { cTraderFailure = it.message ?: "Could not open cTrader authorization." }
+                        }
                     }, enabled = !busy && cTraderSpotwareApproved && cTraderClientId.isNotBlank() && cTraderClientSecret.isNotBlank(), modifier = Modifier.weight(1f)) { Text("GRANT ACCESS") }
                     OutlinedButton(onClick = {
                         scope.launch { busy = true; cTraderFailure = null; cTraderAccounts = cTraderGateway.listAccounts(cTraderLive).getOrElse { cTraderFailure = it.message ?: "Account list failed."; emptyList() }; busy = false }
                     }, enabled = !busy && cTraderSpotwareApproved && secrets.getCTraderAccessToken().isNotBlank(), modifier = Modifier.weight(1f)) { Text("LOAD ACCOUNTS") }
                 }
                 cTraderAccounts.filter { it.isLive == cTraderLive }.forEach { option ->
-                    FilterChip(selected = cTraderSelectedAccountId == option.accountId, onClick = { cTraderSelectedAccountId = option.accountId; cTraderBroker = option.brokerName }, label = { Text("${option.brokerName.ifBlank { "broker unverified" }} · ${maskAccountId(option.traderLogin.toString())} · ${if (option.isLive) "LIVE" else "DEMO"}", fontSize = 9.sp) })
+                    FilterChip(selected = cTraderSelectedAccountId == option.accountId, onClick = { cTraderSelectedAccountId?.takeIf { it != option.accountId }?.let { viewModel.app.modeArmingPolicy.onAccountSwitch(com.example.data.broker.ModePath.CTRADER_ACCOUNT, option.brokerName, option.accountId.toString()) }; cTraderSelectedAccountId = option.accountId; cTraderBroker = option.brokerName }, label = { Text("${option.brokerName.ifBlank { "broker unverified" }} · ${maskAccountId(option.traderLogin.toString())} · ${if (option.isLive) "LIVE" else "DEMO"}", fontSize = 9.sp) })
                 }
                 LoginField("Broker name exactly as cTrader reports", cTraderBroker, { cTraderBroker = it }, KeyboardType.Text)
                 LoginField("Exact symbol name reported by cTrader", cTraderSymbolName, { cTraderSymbolName = it }, KeyboardType.Text)
@@ -498,6 +599,52 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             Text("Balance received: YES · One quote received: ${if (quoteReceived) "YES" else "NO"}", color = TextSecondary, fontSize = 10.sp)
                             Text("Checked: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss z", java.util.Locale.US).format(java.util.Date(verified.receivedAtMs))}", color = TextSecondary, fontSize = 9.sp)
                             if (!quoteReceived) Text("Reason: a fresh account-matched quote was not received. CONNECTED remains blocked.", color = LossRed, fontSize = 9.sp)
+                            val modeIdentity = com.example.data.broker.ModeAccountIdentity(
+                                com.example.data.broker.ModePath.CTRADER_ACCOUNT,
+                                verified.brokerName, verified.accountId.toString(), "",
+                                com.example.data.broker.AccountMode.DEMO, secrets.getCTraderCredentialGeneration()
+                            )
+                            val quoteAt = cTraderQuote?.receivedAtMs ?: 0L
+                            val checkedAt = System.currentTimeMillis()
+                            val readOnly = com.example.data.broker.ModeReadOnlyVerification(
+                                modeIdentity, checkedAt,
+                                authenticatedSession = quoteReceived,
+                                freshAccountData = verified.receivedAtMs > 0L && checkedAt - verified.receivedAtMs in 0..15_000L,
+                                freshQuote = quoteReceived && quoteAt > 0L,
+                                freshHeartbeat = false,
+                                accountIdentityMatched = verified.accountId == cTraderSelectedAccountId && !verified.isLive
+                            )
+                            val acceptance = secrets.getPathDemoAcceptance(modeIdentity)
+                            val dispatcherResult = viewModel.app.universalConnectorDispatcher.validateVerification(
+                                com.example.data.broker.ConnectorKind.CTRADER_ACCOUNT,
+                                com.example.data.broker.ConnectorVerification(
+                                    kind = com.example.data.broker.ConnectorKind.CTRADER_ACCOUNT,
+                                    evidence = com.example.data.broker.ConnectorEvidence(
+                                        authenticatedSession = readOnly.authenticatedSession,
+                                        freshAccountData = readOnly.freshAccountData,
+                                        accountIdentityMatched = readOnly.accountIdentityMatched,
+                                        freshQuote = readOnly.freshQuote
+                                    ),
+                                    detail = "cTrader read-only account and identity-matched fresh quote",
+                                    identity = modeIdentity,
+                                    readOnlyVerification = readOnly,
+                                    demoAcceptance = acceptance,
+                                    currentDemoCredentialGeneration = secrets.getCTraderCredentialGeneration()
+                                )
+                            )
+                            val dispatcherReason = dispatcherResult.exceptionOrNull()?.message.orEmpty()
+                            val modePassed = dispatcherResult.isSuccess
+                            Text("DEMO acceptance: " + if (modePassed) "SAVED AND READ-ONLY EVIDENCE PASSED" else dispatcherReason + " · LIVE: trading not implemented", color = if (modePassed) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                            if (!verified.isLive && quoteReceived && acceptance == null && dispatcherReason.contains("OWNER_DEMO_ACCEPTANCE_REQUIRED")) {
+                                OutlinedButton(onClick = {
+                                    val digest = java.security.MessageDigest.getInstance("SHA-256")
+                                        .digest((modeIdentity.fingerprint() + verified.receivedAtMs + quoteAt).toByteArray())
+                                        .joinToString("") { "%02x".format(it) }
+                                    val saved = secrets.savePathDemoAcceptance(modeIdentity, digest)
+                                    cTraderFailure = if (saved) null else "Secure cTrader DEMO acceptance could not be saved."
+                                    message = if (saved) "cTrader DEMO accepted for this exact account and app credential generation." else "cTrader DEMO acceptance failed closed."
+                                }, modifier = Modifier.fillMaxWidth()) { Text("ACCEPT VERIFIED CTRADER DEMO") }
+                            }
                         }
                     }
                 }
@@ -517,6 +664,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     scope.launch {
                         commandPending = true
                         try {
+                            viewModel.app.modeArmingPolicy.emergencyStop()
                             if (broker == BrokerType.MT5) {
                                 val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "EMERGENCY_STOP")
                                 message = if (result.queued) "EMERGENCY STOP acknowledged by bridge request; verify fresh EA acknowledgement and stop state. Open positions are not liquidated." else result.detail
@@ -727,9 +875,22 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     require(derivMode == "demo") { "Verify Deriv DEMO is available only while DEMO mode is selected. LIVE remains blocked." }
                                     require(derivToken.isNotBlank() && derivAppId.isNotBlank()) { "Enter a Deriv DEMO PAT and registered numeric App ID." }
                                     require(derivStorageConsent) { "Confirm encrypted device storage before saving the DEMO PAT and App ID." }
+                                    val previousGeneration = secrets.getDerivCredentialGeneration("demo")
+                                    val previousAccountId = derivAccount?.loginId ?: selectedDerivAccountId
                                     require(secrets.saveDerivApiToken(derivToken, "demo")) { "Deriv DEMO PAT could not be saved in encrypted storage." }
                                     require(secrets.saveDerivAppId(derivAppId)) { "Registered Deriv App ID could not be saved." }
+                                    val nextGeneration = secrets.getDerivCredentialGeneration("demo")
+                                    if (previousGeneration.isNotBlank() && previousGeneration != nextGeneration && previousAccountId.isNotBlank()) {
+                                        secrets.clearPathDemoAcceptance(com.example.data.broker.ModeAccountIdentity(
+                                            com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", previousAccountId, "",
+                                            com.example.data.broker.AccountMode.DEMO, previousGeneration
+                                        ))
+                                        viewModel.app.modeArmingPolicy.onCredentialChanged(com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", previousAccountId)
+                                    }
                                     val account = viewModel.app.derivBrokerGateway.connectAndAuthorize(derivToken, selectedDerivAccountId.takeIf { it.isNotBlank() }).getOrThrow()
+                                    if (previousAccountId.isNotBlank() && previousAccountId != account.loginId) {
+                                        viewModel.app.modeArmingPolicy.onAccountSwitch(com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", account.loginId)
+                                    }
                                     val expectedAccountId = selectedDerivAccountId
                                     val metrics = viewModel.app.derivBrokerGateway.accountMetrics.value
                                     val checkedBeforeTickMs = System.currentTimeMillis()
@@ -794,8 +955,17 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                         val saved = current != null && current.mode.equals("demo", true) &&
                                             current.loginId == verification.accountId && current.loginId == verification.selectedAccountId &&
                                             current.currency == verification.currency &&
-                                            secrets.saveDerivDemoAcceptance(current.loginId, current.currency, current.authenticatedSessionId, current.credentialGeneration)
-                                        message = if (saved) "DEMO acceptance recorded for ${current?.loginId}. No order was sent." else "DEMO acceptance blocked because the verified account identity or secure storage changed. Verify again."
+                                            secrets.saveDerivDemoAcceptance(current.loginId, current.currency, current.authenticatedSessionId, current.credentialGeneration) &&
+                                            secrets.savePathDemoAcceptance(
+                                                com.example.data.broker.ModeAccountIdentity(
+                                                    com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", current.loginId, "",
+                                                    com.example.data.broker.AccountMode.DEMO, current.credentialGeneration
+                                                ),
+                                                java.security.MessageDigest.getInstance("SHA-256").digest(
+                                                    (current.loginId + "|" + current.currency + "|" + verification.checkedAtMs + "|" + current.credentialGeneration).toByteArray()
+                                                ).joinToString("") { "%02x".format(it) }
+                                            )
+                                        message = if (saved) "DEMO acceptance recorded for " + current?.loginId + ". No order was sent." else "DEMO acceptance blocked because the verified account identity or secure storage changed. Verify again."
                                     }, enabled = !busy && identityMatches && !accepted, modifier = Modifier.fillMaxWidth().testTag("deriv_accept_demo")) {
                                         Text(if (accepted) "DEMO ACCEPTED" else "ACCEPT VERIFIED DEMO ACCOUNT")
                                     }
@@ -863,10 +1033,28 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     }
                                 } else {
                                     require(derivToken.isNotBlank() && derivAppId.isNotBlank()) { "Enter a Deriv API token and application ID." }
+                                    val previousDerivGeneration = secrets.getDerivCredentialGeneration(derivMode)
+                                    val previousDerivAccount = derivAccount?.loginId ?: selectedDerivAccountId
                                     require(secrets.saveDerivApiToken(derivToken, derivMode)) { "Deriv $derivMode PAT could not be saved in encrypted storage." }
                                     require(secrets.saveDerivAppId(derivAppId)) { "Registered Deriv App ID could not be saved." }
+                                    val nextDerivGeneration = secrets.getDerivCredentialGeneration(derivMode)
+                                    if (previousDerivGeneration.isNotBlank() && previousDerivGeneration != nextDerivGeneration && previousDerivAccount.isNotBlank()) {
+                                        if (derivMode == "demo") secrets.clearPathDemoAcceptance(com.example.data.broker.ModeAccountIdentity(
+                                            com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", previousDerivAccount, "",
+                                            com.example.data.broker.AccountMode.DEMO, previousDerivGeneration
+                                        ))
+                                        viewModel.app.modeArmingPolicy.onCredentialChanged(
+                                            com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", previousDerivAccount
+                                        )
+                                    }
+                                    val previousAccountId = derivAccount?.loginId.orEmpty()
                                     val result = viewModel.app.derivBrokerGateway.connectAndAuthorize(derivToken, selectedDerivAccountId.takeIf { it.isNotBlank() })
-                                    result.onSuccess { message = "Connected to Deriv account ${it.loginId}." }.onFailure { throw it }
+                                    result.onSuccess {
+                                        if (previousAccountId.isNotBlank() && previousAccountId != it.loginId) {
+                                            viewModel.app.modeArmingPolicy.onAccountSwitch(com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", it.loginId)
+                                        }
+                                        message = "Connected to Deriv account " + it.loginId + "."
+                                    }.onFailure { throw it }
                                 }
                             } catch (e: Exception) { message = e.message?.take(220) ?: "Connection failed." } finally { busy = false }
                         }
@@ -945,22 +1133,73 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         }
         if (showDerivRealArmDialog) AlertDialog(
             onDismissRequest = { showDerivRealArmDialog = false },
-            title = { Text("Arm Deriv REAL for this session?") },
-            text = { Text("This authorizes only the currently authenticated account ${derivAccount?.loginId ?: "unknown"} (${derivAccount?.currency ?: "unknown"}) in the current process session. The lease expires after 60 minutes and is not restored after process death. No REAL order is sent by arming.") },
-            confirmButton = { TextButton(onClick = {
-                showDerivRealArmDialog = false
-                scope.launch {
-                    val account = derivAccount
-                    try {
-                        require(account != null && account.mode.equals("real", true) && account.accountType.equals("real", true)) { "Authenticated Deriv REAL account required." }
-                        require(selectedDerivAccountId.isBlank() || selectedDerivAccountId == account.loginId) { "Selected account does not match the authenticated account." }
-                        val unresolved = viewModel.app.db.derivExecutionDao().unresolved(account.loginId, "REAL").size
-                        require(viewModel.app.derivBrokerGateway.isAccountReadyForTrading(account, unresolved)) { "Fresh balance, account-matched portfolio and clear reconciliation are required." }
-                        require(secrets.enableDerivRealExecution(true, account.loginId, account.accountType, account.currency, account.authenticatedSessionId, account.credentialGeneration)) { "Session-bound REAL authorization could not be armed." }
-                        message = "Deriv REAL authorization armed for the current account session only."
-                    } catch (e: Exception) { message = e.message ?: "Deriv REAL arm failed closed." }
+            title = { Text("Arm Deriv REAL for this account?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Requires a DEMO PASS for the same Deriv account ID, a fresh authenticated REAL session and quote, a clear daily-risk baseline, explicit re-authentication and the broker minimum stake. Lease: 60 minutes. No order is sent by arming.")
+                    OutlinedTextField(value = derivLiveTypedConfirmation, onValueChange = { derivLiveTypedConfirmation = it }, label = { Text("Type ARM LIVE DERIV " + (derivAccount?.loginId ?: "")) }, singleLine = true)
+                    OutlinedTextField(value = derivMinimumStake, onValueChange = { derivMinimumStake = it }, label = { Text("Broker minimum stake from contract details") }, singleLine = true)
                 }
-            }) { Text("ARM REAL SESSION") } },
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDerivRealArmDialog = false
+                    scope.launch {
+                        val account = derivAccount
+                        try {
+                            require(account != null && account.mode.equals("real", true) && account.accountType.equals("real", true)) { "Authenticated Deriv REAL account required." }
+                            require(selectedDerivAccountId.isBlank() || selectedDerivAccountId == account.loginId) { "Selected account does not match the authenticated account." }
+                            val unresolved = viewModel.app.db.derivExecutionDao().unresolved(account.loginId, "REAL").size
+                            val ready = viewModel.app.derivBrokerGateway.isAccountReadyForTrading(account, unresolved)
+                            val quote = viewModel.app.derivBrokerGateway.getQuote("R_100").getOrNull()
+                            val now = System.currentTimeMillis()
+                            val quoteFresh = quote?.timestampMs?.let { it > 0L && it <= now && now - it <= 15_000L } == true
+                            val demoGeneration = secrets.getDerivCredentialGeneration("demo")
+                            val demoIdentity = com.example.data.broker.ModeAccountIdentity(
+                                com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", account.loginId, "",
+                                com.example.data.broker.AccountMode.DEMO, demoGeneration
+                            )
+                            val liveIdentity = com.example.data.broker.ModeAccountIdentity(
+                                com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", account.loginId, "",
+                                com.example.data.broker.AccountMode.LIVE, account.credentialGeneration
+                            )
+                            val demoPass = secrets.getPathDemoAcceptance(demoIdentity)
+                            val verification = com.example.data.broker.ModeReadOnlyVerification(
+                                liveIdentity, now,
+                                authenticatedSession = derivState == com.example.data.deriv.DerivConnectionState.READY,
+                                freshAccountData = ready,
+                                freshQuote = quoteFresh,
+                                freshHeartbeat = false,
+                                accountIdentityMatched = account.loginId.isNotBlank() && account.mode.equals("real", true) &&
+                                    account.accountType.equals("real", true) && secrets.getDerivCredentialGeneration("real") == account.credentialGeneration
+                            )
+                            val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                                .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date(now))
+                            val dailyBaseline = secrets.getDerivDailyRiskStartingEquity(account.loginId, "REAL", day)
+                            val minimumStake = derivMinimumStake.toDoubleOrNull()
+                            val lease = viewModel.app.modeArmingPolicy.armLive(com.example.data.broker.LiveArmRequest(
+                                identity = liveIdentity,
+                                demoAcceptance = demoPass,
+                                currentDemoCredentialGeneration = demoGeneration,
+                                liveVerification = verification,
+                                typedConfirmation = derivLiveTypedConfirmation,
+                                ownerReauthenticated = AppSecurityGuard.authorizeSensitiveAction(),
+                                firstMinimumSizeVerified = minimumStake != null && minimumStake.isFinite() && minimumStake > 0.0,
+                                dailyRiskClear = ready && dailyBaseline != null && !secrets.isDerivDailyRiskLocked(account.loginId, "REAL", day),
+                                riskCapsClear = com.example.domain.risk.TradingSafetyLimits.MAX_TRADE_RISK_PERCENT <= 1.0 &&
+                                    com.example.domain.risk.TradingSafetyLimits.MIN_REWARD_TO_RISK >= 2.0
+                            )).getOrElse { throw it }
+                            if (!secrets.enableDerivRealExecution(true, account.loginId, account.accountType, account.currency, account.authenticatedSessionId, account.credentialGeneration)) {
+                                viewModel.app.modeArmingPolicy.disarm(liveIdentity, "DERIV_SESSION_LEASE_FAILED")
+                                throw IllegalStateException("Deriv's authenticated-session REAL lease could not be armed.")
+                            }
+                            derivLiveTypedConfirmation = ""
+                            derivMinimumStake = ""
+                            message = "Deriv REAL lease armed until " + java.text.SimpleDateFormat("HH:mm:ss z", java.util.Locale.US).format(java.util.Date(lease.expiresAtMs)) + ". No order was sent."
+                        } catch (e: Exception) { message = e.message ?: "Deriv LIVE arming failed closed." }
+                    }
+                }) { Text("ARM REAL SESSION") }
+            },
             dismissButton = { TextButton(onClick = { showDerivRealArmDialog = false }) { Text("CANCEL") } }
         )
         if (showPairingRevokeDialog) AlertDialog(
@@ -980,12 +1219,74 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         )
         if (showLiveAuthorizationDialog) AlertDialog(
             onDismissRequest = { showLiveAuthorizationDialog = false },
-            title = { Text("Authorize LIVE trading?") },
-            text = { Text("Authorize only ${secrets.getManagedMT5AccountLogin(mt5Profile)} @ ${secrets.getManagedMT5AccountServer(mt5Profile)} for broker $selectedMt5Broker. The server validates the actual terminal identity and issues a lease for up to 15 minutes. No order is sent by authorizing.") },
-            confirmButton = { TextButton(onClick = {
-                showLiveAuthorizationDialog = false
-                scope.launch { busy = true; try { val expiry = requireNotNull(bridge).authorizeLiveSession(); liveAuthorizationExpiry = expiry; mt5Snapshot = bridge.state(); message = "LIVE authorization confirmed until $expiry." } catch (e: Exception) { message = e.message ?: "LIVE authorization failed closed." } finally { busy = false } }
-            }) { Text("AUTHORIZE LIVE") } },
+            title = { Text("Arm MT5 LIVE for this account?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Requires a DEMO PASS for the same broker and login, a fresh LIVE EA heartbeat, explicit re-authentication, typed confirmation and clear daily-risk and risk-cap evidence from the bridge. Lease: 15 minutes. The first minimum lot must be read from the broker's contract specification.")
+                    OutlinedTextField(value = liveTypedConfirmation, onValueChange = { liveTypedConfirmation = it }, label = { Text("Type ARM LIVE " + selectedMt5Broker + " " + secrets.getManagedMT5AccountLogin(mt5Profile)) }, singleLine = true)
+                    OutlinedTextField(value = liveMinimumLot, onValueChange = { liveMinimumLot = it }, label = { Text("Broker minimum lot from symbol specification") }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLiveAuthorizationDialog = false
+                    scope.launch {
+                        busy = true
+                        try {
+                            val snapshot = requireNotNull(bridge).state()
+                            val livePath = com.example.data.broker.ModePath.valueOf(selectedMt5Broker + "_MT5")
+                            val liveIdentity = com.example.data.broker.ModeAccountIdentity(
+                                livePath, selectedMt5Broker, snapshot.actualLogin, snapshot.actualServer,
+                                com.example.data.broker.AccountMode.LIVE, secrets.getManagedMT5CredentialGeneration(mt5Profile)
+                            )
+                            val demoIdentity = com.example.data.broker.ModeAccountIdentity(
+                                livePath, selectedMt5Broker,
+                                secrets.getManagedMT5AccountLogin(selectedMt5Broker + "_DEMO"),
+                                secrets.getManagedMT5AccountServer(selectedMt5Broker + "_DEMO"),
+                                com.example.data.broker.AccountMode.DEMO,
+                                secrets.getManagedMT5CredentialGeneration(selectedMt5Broker + "_DEMO")
+                            )
+                            val demoPass = secrets.getPathDemoAcceptance(demoIdentity)
+                            val risk = snapshot.raw.optJSONObject("risk_controls")
+                            val firstLot = liveMinimumLot.toDoubleOrNull()
+                            val verification = com.example.data.broker.ModeReadOnlyVerification(
+                                liveIdentity, System.currentTimeMillis(),
+                                authenticatedSession = snapshot.connected && snapshot.terminalConnected,
+                                freshAccountData = snapshot.snapshotsValid,
+                                freshQuote = false,
+                                freshHeartbeat = snapshot.heartbeatFresh,
+                                accountIdentityMatched = snapshot.accountVerified && snapshot.brokerIdentityVerified &&
+                                    snapshot.actualLogin == secrets.getManagedMT5AccountLogin(mt5Profile) &&
+                                    snapshot.actualServer == secrets.getManagedMT5AccountServer(mt5Profile) &&
+                                    snapshot.actualAccountMode == "LIVE" && snapshot.accessType == "MASTER"
+                            )
+                            val lease = viewModel.app.modeArmingPolicy.armLive(com.example.data.broker.LiveArmRequest(
+                                identity = liveIdentity,
+                                demoAcceptance = demoPass,
+                                currentDemoCredentialGeneration = demoIdentity.credentialGeneration,
+                                liveVerification = verification,
+                                typedConfirmation = liveTypedConfirmation,
+                                ownerReauthenticated = AppSecurityGuard.authorizeSensitiveAction(),
+                                firstMinimumSizeVerified = firstLot != null && firstLot.isFinite() && firstLot > 0.0,
+                                dailyRiskClear = risk?.optBoolean("daily_loss_clear", false) == true,
+                                riskCapsClear = risk?.optBoolean("risk_caps_clear", false) == true
+                            )).getOrElse { throw it }
+                            try {
+                                val expiry = requireNotNull(bridge).authorizeLiveSession()
+                                liveAuthorizationExpiry = expiry
+                                mt5Snapshot = bridge.state()
+                                liveTypedConfirmation = ""
+                                liveMinimumLot = ""
+                                message = "MT5 LIVE local lease armed until " + lease.expiresAtMs + " and the bridge lease until " + expiry + "."
+                            } catch (error: Exception) {
+                                viewModel.app.modeArmingPolicy.disarm(liveIdentity, "BRIDGE_LIVE_AUTH_FAILED")
+                                throw error
+                            }
+                        } catch (e: Exception) { message = e.message ?: "LIVE authorization failed closed." }
+                        finally { busy = false }
+                    }
+                }) { Text("ARM LIVE · 15 MIN") }
+            },
             dismissButton = { TextButton(onClick = { showLiveAuthorizationDialog = false }) { Text("CANCEL") } }
         )
         message?.let { Text(it, color = if (it.contains("failed", true) || it.contains("blocked", true)) LossRed else WarningAmber, fontSize = 11.sp, lineHeight = 16.sp) }

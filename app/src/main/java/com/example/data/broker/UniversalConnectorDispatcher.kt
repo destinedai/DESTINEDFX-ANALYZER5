@@ -33,6 +33,10 @@ data class ConnectorVerification(
     val kind: ConnectorKind,
     val evidence: ConnectorEvidence,
     val detail: String,
+    val identity: ModeAccountIdentity? = null,
+    val readOnlyVerification: ModeReadOnlyVerification? = null,
+    val demoAcceptance: ModeDemoAcceptance? = null,
+    val currentDemoCredentialGeneration: String = ""
 )
 
 data class ConnectorCapabilityRow(
@@ -61,17 +65,40 @@ object UniversalConnectorCapabilities {
  */
 class UniversalConnectorDispatcher(
     private val connectors: Map<ConnectorKind, suspend () -> ConnectorVerification>,
+    private val modeArmingPolicy: ModeArmingPolicy
 ) {
     suspend fun connectAndVerify(kind: ConnectorKind): Result<ConnectorVerification> {
         val connector = connectors[kind]
             ?: return Result.failure(IllegalStateException("SETUP REQUIRED: no connector configured for ${kind.name}"))
-        return runCatching { connector() }.fold(
-            onSuccess = { verification ->
-                if (verification.kind != kind) Result.failure(IllegalStateException("BLOCKED: connector identity did not match the selected provider"))
-                else if (!verification.evidence.permitsConnected(kind)) Result.failure(IllegalStateException("BLOCKED: ${verification.detail}"))
-                else Result.success(verification)
-            },
-            onFailure = { Result.failure(IllegalStateException("CONNECT FAILED: connector result was not verified")) },
-        )
+        val result = runCatching { connector() }
+            .getOrElse { return Result.failure(IllegalStateException("CONNECT FAILED: provider verification did not complete")) }
+        return validateVerification(kind, result)
+    }
+
+    /** Shared validation entry used by each provider UI after its fresh read-only exchange. */
+    fun validateVerification(kind: ConnectorKind, verification: ConnectorVerification): Result<ConnectorVerification> {
+        if (verification.kind != kind) return Result.failure(IllegalStateException("BLOCKED: connector identity did not match the selected provider"))
+        if (!verification.evidence.permitsConnected(kind)) {
+            return Result.failure(IllegalStateException("BLOCKED: ${verification.detail}"))
+        }
+        val identity = verification.identity
+            ?: return Result.failure(IllegalStateException("BLOCKED: exact account identity is missing"))
+        val readOnly = verification.readOnlyVerification
+            ?: return Result.failure(IllegalStateException("BLOCKED: read-only verification evidence is missing"))
+        val expectedPath = when (kind) {
+            ConnectorKind.DERIV_OPTIONS -> ModePath.DERIV_OPTIONS
+            ConnectorKind.CTRADER_ACCOUNT -> ModePath.CTRADER_ACCOUNT
+            ConnectorKind.FBS_MT5 -> ModePath.FBS_MT5
+            ConnectorKind.EXNESS_MT5 -> ModePath.EXNESS_MT5
+            ConnectorKind.HFM_MT5 -> ModePath.HFM_MT5
+            ConnectorKind.DERIV_MT5 -> ModePath.DERIV_MT5
+        }
+        if (identity.path != expectedPath) return Result.failure(IllegalStateException("BLOCKED: connector returned another path identity"))
+        val decision = if (identity.mode == AccountMode.DEMO) {
+            modeArmingPolicy.demoDecision(identity, readOnly, verification.demoAcceptance,
+                verification.currentDemoCredentialGeneration)
+        } else modeArmingPolicy.liveDecision(identity)
+        return if (decision.allowed) Result.success(verification)
+        else Result.failure(IllegalStateException("MODE_ARMING_BLOCKED: " + decision.reason))
     }
 }
