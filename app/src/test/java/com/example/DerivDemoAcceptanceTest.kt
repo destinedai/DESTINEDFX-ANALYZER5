@@ -38,4 +38,18 @@ class DerivDemoAcceptanceTest {
         assertTrue(secrets.saveDerivApiToken("new-token", "demo"))
         assertFalse(secrets.hasCurrentDerivDemoAcceptance())
     }
+
+    @Test
+    fun changingRegisteredAppIdInvalidatesPriorAcceptance() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val secrets = SecretsManager(context) { context.getSharedPreferences("deriv_acceptance_app_id_test", Context.MODE_PRIVATE) }
+        assertTrue(secrets.saveDerivAccountMode("demo"))
+        assertTrue(secrets.saveDerivAppId("123456"))
+        assertTrue(secrets.saveDerivDemoAcceptance("CR123", "USD", "session-1", "credential-1"))
+        assertTrue(secrets.hasCurrentDerivDemoAcceptance())
+
+        assertTrue(secrets.saveDerivAppId("654321"))
+
+        assertFalse(secrets.hasCurrentDerivDemoAcceptance())
+    }
 }

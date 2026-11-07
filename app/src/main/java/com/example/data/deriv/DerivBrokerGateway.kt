@@ -170,13 +170,21 @@ class DerivBrokerGateway(
      * Personal Access Tokens. If the token is legacy or missing the trade scope, the REST error
      * is surfaced so the user can create the correct token.
      */
-    suspend fun connectAndAuthorize(apiToken: String? = null, selectedAccountId: String? = null): Result<DerivAccountInfo> = withContext(Dispatchers.IO) {
+    suspend fun connectAndAuthorize(
+        apiToken: String? = null,
+        selectedAccountId: String? = null,
+        expectedMode: String? = null
+    ): Result<DerivAccountInfo> = withContext(Dispatchers.IO) {
         if (!secrets.isSecureStorageAvailable) {
             _connectionState.value = DerivConnectionState.AUTH_FAILED
             return@withContext Result.failure(Exception("Secure Android Keystore storage is unavailable; Deriv connection is blocked."))
         }
-        val requestedMode = secrets.getDerivAccountMode().lowercase()
-        val token = (apiToken ?: secrets.getDerivApiToken()).trim()
+        val requestedMode = (expectedMode ?: secrets.getDerivAccountMode()).lowercase()
+        if (requestedMode !in setOf("demo", "real")) {
+            _connectionState.value = DerivConnectionState.AUTH_FAILED
+            return@withContext Result.failure(Exception("Deriv account mode is invalid; connection is blocked."))
+        }
+        val token = (apiToken ?: secrets.getDerivApiToken(requestedMode)).trim()
         if (token.isBlank()) {
             _connectionState.value = DerivConnectionState.AUTH_FAILED
             return@withContext Result.failure(Exception("Enter a current Deriv Personal Access Token with Trade scope."))
@@ -541,7 +549,8 @@ class DerivBrokerGateway(
         }
 
         cachedQuotes[symbol]?.let { cached ->
-            if (System.currentTimeMillis() - cached.receivedAtMs <= 10_000L) {
+            val cacheNow = System.currentTimeMillis()
+            if (cacheNow - cached.receivedAtMs in 0..10_000L && isFreshDerivQuoteTimestamp(cached.timestampMs, cacheNow)) {
                 return@withContext Result.success(cached)
             }
         }
@@ -579,7 +588,7 @@ class DerivBrokerGateway(
             val timeMs = epoch * 1000L
             val now = System.currentTimeMillis()
             val ageMs = now - timeMs
-            if (ageMs < -2_000L || ageMs > 15_000L) {
+            if (!isFreshDerivQuoteTimestamp(timeMs, now)) {
                 return@withContext Result.failure(Exception("DATA_STALE: Deriv broker quote for $symbol is not current (age: ${ageMs / 1000}s)"))
             }
 
@@ -661,7 +670,7 @@ class DerivBrokerGateway(
         if (currentQuote.isFailure) {
             return@withContext Result.failure(currentQuote.exceptionOrNull() ?: Exception("DATA_UNAVAILABLE: current Deriv quote is required"))
         }
-        if (currentQuote.getOrThrow().timestampMs <= 0L) {
+        if (!isFreshDerivQuoteTimestamp(currentQuote.getOrThrow().timestampMs, System.currentTimeMillis())) {
             return@withContext Result.failure(Exception("DATA_STALE: Deriv quote did not contain a valid broker timestamp"))
         }
 
@@ -790,6 +799,35 @@ class DerivBrokerGateway(
                     DerivSubmissionStage.PROPOSAL_CONFIRMED
                 )
             )
+        }
+        val purchaseQuote = getQuote(intent.symbol)
+        val finalPurchaseNow = System.currentTimeMillis()
+        val finalQuoteFresh = purchaseQuote.isSuccess &&
+            isFreshDerivQuoteTimestamp(purchaseQuote.getOrThrow().timestampMs, finalPurchaseNow)
+        val finalMetrics = _accountMetrics.value
+        val finalBalanceAge = finalPurchaseNow - _accountMetricsUpdatedAtMs.value
+        val finalPortfolio = _portfolioSnapshot.value
+        val finalPortfolioAge = finalPortfolio?.let { finalPurchaseNow - it.retrievedAtMs } ?: Long.MAX_VALUE
+        val finalRiskSnapshotFresh = finalMetrics != null && finalMetrics.balance.isFinite() && finalMetrics.balance > 0.0 &&
+            finalMetrics.currency.equals(account.currency, true) && finalBalanceAge in 0..8_000L &&
+            finalPortfolio != null && finalPortfolio.successful && finalPortfolio.accountId == account.loginId &&
+            finalPortfolio.accountMode == account.mode.uppercase() && finalPortfolio.currency.equals(account.currency, true) &&
+            finalPortfolioAge in 0..8_000L && finalPortfolio.exposure.isFinite() &&
+            finalPortfolio.contracts.all { it.profit.isFinite() }
+        val finalSessionStillCurrent = sessionId != null && authenticatedSessionId == sessionId &&
+            secrets.getDerivCredentialGeneration() == credentialGeneration && isCurrentAccountSynchronized(account, finalPurchaseNow)
+        if (!maySendDerivPurchase(finalQuoteFresh, finalRiskSnapshotFresh, finalSessionStillCurrent)) {
+            pendingRequests.remove(buyReqId)
+            onStage(propReqId, proposalId, DerivSubmissionStage.PROPOSAL_CONFIRMED)
+            val reason = when {
+                !finalQuoteFresh -> "DATA_STALE: a fresh provider-timestamped quote is required at the purchase boundary; no purchase was sent."
+                !finalRiskSnapshotFresh -> "RISK_DATA_STALE: balance or account-matched portfolio became stale before purchase; no purchase was sent."
+                else -> "PURCHASE_NOT_SENT: authenticated account session changed before purchase."
+            }
+            return@withContext Result.failure(DerivExecutionFailure(
+                DerivExecutionFailureKind.PURCHASE_NOT_SENT, reason, buyReqId, proposalId,
+                DerivSubmissionStage.PROPOSAL_CONFIRMED
+            ))
         }
         onStage(buyReqId, proposalId, DerivSubmissionStage.PURCHASE_SENT)
         if (webSocket?.send(buyPayload.toString()) != true) {

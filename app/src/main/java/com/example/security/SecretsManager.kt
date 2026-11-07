@@ -200,7 +200,10 @@ class SecretsManager internal constructor(
     fun saveDerivAppId(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
         invalidateDerivRealAuthorization()
-        return prefs.edit().putString(DERIV_APP_ID, v.trim()).commit()
+        return prefs.edit().putString(DERIV_APP_ID, v.trim())
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT)
+            .remove(DERIV_DEMO_ACCEPTED_CURRENCY).remove(DERIV_DEMO_ACCEPTED_SESSION)
+            .remove(DERIV_DEMO_ACCEPTED_CREDENTIAL).remove(DERIV_DEMO_ACCEPTED_AT).commit()
     }
     /** Mode is explicit; selecting REAL is separate from arming live trading. */
     fun saveDerivAccountMode(v: String): Boolean {

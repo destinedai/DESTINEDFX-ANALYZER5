@@ -3,6 +3,9 @@ package com.example.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -48,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -187,6 +191,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val derivPortfolio by viewModel.app.derivBrokerGateway.portfolioSnapshot.collectAsStateWithLifecycle()
     val derivBalanceUpdatedAt by viewModel.app.derivBrokerGateway.accountMetricsUpdatedAtMs.collectAsStateWithLifecycle()
     val derivExecutionRecords by viewModel.app.db.derivExecutionDao().observeAll().collectAsStateWithLifecycle(emptyList<com.example.data.deriv.DerivExecutionEntity>())
+    val derivBotServiceState by DerivDemoBotService.state.collectAsStateWithLifecycle()
+    val derivBotServiceReason by DerivDemoBotService.statusReason.collectAsStateWithLifecycle()
+    var batteryOptimizationExempt by remember { mutableStateOf(false) }
     var broker by remember(activeBroker) { mutableStateOf(activeBroker) }
     var mt5Mode by remember { mutableStateOf("DEMO") }
     var selectedMt5Broker by remember { mutableStateOf(viewModel.app.secretsManager.getSelectedMT5BrokerBrand()) }
@@ -196,6 +203,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var server by remember { mutableStateOf("") }
     var accessType by remember { mutableStateOf("MASTER") }
     var derivToken by remember { mutableStateOf("") }
+    var derivStorageConsent by remember { mutableStateOf(false) }
     var derivAppId by remember { mutableStateOf("") }
     var derivMode by remember { mutableStateOf("demo") }
     var selectedDerivAccountId by remember { mutableStateOf("") }
@@ -223,6 +231,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val cTraderQuote by cTraderGateway.quotes.collectAsStateWithLifecycle()
     var cTraderClientId by remember { mutableStateOf(secrets.getCTraderClientId()) }
     var cTraderClientSecret by remember { mutableStateOf(secrets.getCTraderClientSecret()) }
+    var cTraderSpotwareApproved by remember { mutableStateOf(false) }
     var cTraderRedirectUri by remember { mutableStateOf(secrets.getCTraderRedirectUri().ifBlank { "destinedfx://ctrader-callback" }) }
     var cTraderBroker by remember { mutableStateOf("") }
     var cTraderLive by remember { mutableStateOf(false) }
@@ -236,6 +245,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     LaunchedEffect(cTraderCallback) {
         val callback = cTraderCallback ?: return@LaunchedEffect
         viewModel.app.clearCTraderCallback()
+        if (!cTraderSpotwareApproved) {
+            cTraderFailure = "WAITING FOR SPOTWARE APPROVAL. Confirm the approval email before authorizing this application."
+            return@LaunchedEffect
+        }
         val code = viewModel.app.cTraderOAuthClient.consumeAuthorizationCallback(callback)
             .getOrElse { cTraderFailure = it.message ?: "cTrader callback was rejected."; return@LaunchedEffect }
         busy = true
@@ -252,8 +265,21 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         derivToken = secrets.getDerivApiToken(derivMode)
         derivAppId = secrets.getDerivAppId()
     }
+    LaunchedEffect(context) {
+        DerivDemoBotService.restorePersistedStatus(context)
+        while (true) {
+            batteryOptimizationExempt = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M ||
+                context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
+            delay(5_000L)
+        }
+    }
     val bridge = remember(mt5Profile) { if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) MT5RemoteBridgeClient(secrets, mt5Profile, { AppSecurityGuard.authorizeSensitiveAction() }, accountMode = mt5Mode, brokerBrand = selectedMt5Broker) else null }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val reason = if (granted) "BOT NOT RUNNING — notifications are enabled. Tap Start again to begin the foreground service."
+        else "BOT NOT RUNNING — notification permission was denied. Allow DestinedFX notifications in Android Settings, then tap Start again."
+        DerivDemoBotService.recordStartBlocked(context, reason)
+        message = reason
+    }
     val demoPassLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) {
             message = "No DEMO evidence file was selected. LIVE remains locked."
@@ -332,6 +358,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         derivExecutionRecords.count { it.accountId == account.loginId && it.accountMode.equals(account.mode, true) && it.status in setOf("ORDER_SUBMITTING", "ORDER_PENDING", "EXECUTION_UNKNOWN", "RECONCILIATION_REQUIRED") }
     } ?: 0
     val derivAccountReady = derivAccount?.let { viewModel.app.derivBrokerGateway.isAccountReadyForTrading(it, derivUnresolvedCount) } == true
+    val derivDemoAccepted = derivAccount?.let { account ->
+        account.mode.equals("demo", true) && secrets.hasCurrentDerivDemoAcceptance(
+            account.loginId, account.currency, account.authenticatedSessionId, account.credentialGeneration
+        )
+    } == true
     val derivLifecycleLabel = when {
         derivState == com.example.data.deriv.DerivConnectionState.AUTH_FAILED -> "AUTH FAILED"
         derivState in setOf(com.example.data.deriv.DerivConnectionState.CONNECTING, com.example.data.deriv.DerivConnectionState.AUTHENTICATING, com.example.data.deriv.DerivConnectionState.ACCOUNT_VERIFICATION, com.example.data.deriv.DerivConnectionState.SYNCHRONIZING, com.example.data.deriv.DerivConnectionState.RECONNECTING) -> "SYNCHRONIZING"
@@ -382,7 +413,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     }
     val running = when (broker) {
         BrokerType.MT5 -> mt5Snapshot?.state in setOf("RUNNING", "PAUSED")
-        BrokerType.DERIV -> botActive || DerivDemoBotService.state.value == "RUNNING"
+        BrokerType.DERIV -> derivBotServiceState == "RUNNING"
         else -> botActive
     }
     val botUiState = deriveBotUiState(
@@ -408,10 +439,16 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, CardBorder)) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("CTRADER ACCOUNT · READ ONLY", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text(if (cTraderSpotwareApproved) "OWNER CONFIRMED SPOTWARE APPROVAL EMAIL" else "WAITING FOR SPOTWARE APPROVAL", color = if (cTraderSpotwareApproved) ProfitGreen else WarningAmber, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                Text("Spotware reviews each new Open API application. A new app remains submitted until Spotware emails approval or requests details. Add redirect URIs only after approval; Spotware's default URI is for the playground only. Provide a detailed app description to support review.", color = TextSecondary, fontSize = 9.sp, lineHeight = 13.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Switch(checked = cTraderSpotwareApproved, onCheckedChange = { cTraderSpotwareApproved = it })
+                    Text("I received Spotware's approval email for this app", color = TextSecondary, fontSize = 9.sp)
+                }
                 LoginField("Client ID", cTraderClientId, { cTraderClientId = it }, KeyboardType.Number)
                 LoginField("Client Secret", cTraderClientSecret, { cTraderClientSecret = it }, KeyboardType.Password, true)
                 LoginField("Exact registered redirect URI", cTraderRedirectUri, { cTraderRedirectUri = it }, KeyboardType.Uri)
-                Text("HTTPS redirect fallback requires an owner-controlled domain and cTrader application registration. The custom-scheme path remains UNVERIFIED until an owner-run test succeeds. cTrader does not document a state parameter; exact redirect matching, one-time codes and code age remain enforced.", color = WarningAmber, fontSize = 9.sp, lineHeight = 13.sp)
+                Text("This app's custom redirect is not Spotware's default playground URI. Register this exact URI after approval. HTTPS redirect fallback requires an owner-controlled domain. The custom-scheme path remains UNVERIFIED until an owner-run test succeeds. cTrader does not document a state parameter; exact redirect matching, one-time codes and code age remain enforced.", color = WarningAmber, fontSize = 9.sp, lineHeight = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(selected = !cTraderLive, onClick = { cTraderLive = false }, label = { Text("DEMO") })
                     FilterChip(selected = cTraderLive, enabled = false, onClick = {}, label = { Text("LIVE LOCKED") })
@@ -420,10 +457,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     OutlinedButton(onClick = {
                         if (!secrets.saveCTraderApplication(cTraderClientId.trim(), cTraderClientSecret, cTraderRedirectUri.trim())) { cTraderFailure = "Secure storage unavailable or application details are incomplete." }
                         else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, viewModel.app.cTraderOAuthClient.authorizationUri(com.example.data.ctrader.CTraderOAuthClient.VIEW_SCOPE))) }.onFailure { cTraderFailure = it.message ?: "Could not open cTrader authorization." }
-                    }, enabled = !busy && cTraderClientId.isNotBlank() && cTraderClientSecret.isNotBlank(), modifier = Modifier.weight(1f)) { Text("GRANT ACCESS") }
+                    }, enabled = !busy && cTraderSpotwareApproved && cTraderClientId.isNotBlank() && cTraderClientSecret.isNotBlank(), modifier = Modifier.weight(1f)) { Text("GRANT ACCESS") }
                     OutlinedButton(onClick = {
                         scope.launch { busy = true; cTraderFailure = null; cTraderAccounts = cTraderGateway.listAccounts(cTraderLive).getOrElse { cTraderFailure = it.message ?: "Account list failed."; emptyList() }; busy = false }
-                    }, enabled = !busy && secrets.getCTraderAccessToken().isNotBlank(), modifier = Modifier.weight(1f)) { Text("LOAD ACCOUNTS") }
+                    }, enabled = !busy && cTraderSpotwareApproved && secrets.getCTraderAccessToken().isNotBlank(), modifier = Modifier.weight(1f)) { Text("LOAD ACCOUNTS") }
                 }
                 cTraderAccounts.filter { it.isLive == cTraderLive }.forEach { option ->
                     FilterChip(selected = cTraderSelectedAccountId == option.accountId, onClick = { cTraderSelectedAccountId = option.accountId; cTraderBroker = option.brokerName }, label = { Text("${option.brokerName.ifBlank { "broker unverified" }} · ${maskAccountId(option.traderLogin.toString())} · ${if (option.isLive) "LIVE" else "DEMO"}", fontSize = 9.sp) })
@@ -451,7 +488,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         }.onFailure { cTraderFailure = it.message ?: "cTrader verification failed." }
                         busy = false
                     }
-                }, enabled = !busy && cTraderBroker.isNotBlank() && cTraderSelectedAccountId != null && cTraderSymbolName.isNotBlank(), modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)) { Text("VERIFY CTRADER, READ ONLY", fontWeight = FontWeight.Black) }
+                }, enabled = !busy && cTraderSpotwareApproved && cTraderBroker.isNotBlank() && cTraderSelectedAccountId != null && cTraderSymbolName.isNotBlank(), modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)) { Text("VERIFY CTRADER, READ ONLY", fontWeight = FontWeight.Black) }
                 cTraderVerification?.let { verified ->
                     val quoteReceived = cTraderQuote?.isFresh(verified.accountId, cTraderSymbolMetadata?.symbolId) == true
                     Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), border = BorderStroke(1.dp, if (quoteReceived) ProfitGreen else LossRed)) {
@@ -652,18 +689,33 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf("demo", "real").forEach { mode ->
                             FilterChip(selected = derivMode == mode, onClick = {
-                                if (secrets.saveDerivAccountMode(mode)) {
+                                if (derivMode != mode) {
+                                    if (DerivDemoBotService.state.value in setOf("STARTING", "CONNECTING", "RECONCILING", "RUNNING")) {
+                                        DerivDemoBotService.stop(context)
+                                    }
                                     viewModel.app.derivBrokerGateway.disconnect()
+                                }
+                                if (secrets.saveDerivAccountMode(mode)) {
                                     derivMode = mode
                                     derivToken = secrets.getDerivApiToken(mode)
+                                    derivStorageConsent = false
+                                    derivDemoVerification = null
                                     selectedDerivAccountId = ""
                                     message = "Deriv $mode selected. Existing authorization invalidated; connect and verify this mode explicitly."
                                 } else message = "Could not securely select Deriv account mode."
                             }, label = { Text(mode.uppercase()) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "real") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
                         }
                     }
-                    LoginField("Deriv ${derivMode.uppercase()} API token", derivToken, { derivToken = it }, KeyboardType.Password, true)
+                    LoginField("Deriv ${derivMode.uppercase()} API token", derivToken, { derivToken = it; derivStorageConsent = false }, KeyboardType.Password, true)
                     LoginField("Registered numeric App ID", derivAppId, { derivAppId = it.filter(Char::isDigit) }, KeyboardType.Number)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Switch(checked = derivStorageConsent, onCheckedChange = { derivStorageConsent = it })
+                        Text("I confirm the PAT and App ID may be stored only in Android encrypted storage on this device.", color = TextSecondary, fontSize = 9.sp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://doc-deriv.readme.io/docs/account-setup"))) }.onFailure { message = "Could not open Deriv account setup help." } }, modifier = Modifier.weight(1f)) { Text("App ID and PAT help", fontSize = 9.sp) }
+                        TextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://developers.deriv.com/docs/options/"))) }.onFailure { message = "Could not open Deriv API documentation." } }, modifier = Modifier.weight(1f)) { Text("Options API docs", fontSize = 9.sp) }
+                    }
                     Text("Options account listing and OTP require the PAT trade scope. This verifier does not trade, but a trade-scoped PAT is not inherently read-only; keep it private and enter it only here. Options and Deriv MT5 credentials/readiness are separate. PATs are encrypted and stored separately by account mode. REAL selection alone does not authorize trading; no REAL session restarts automatically after process death.", color = WarningAmber, fontSize = 10.sp)
                     Button(
                         onClick = {
@@ -674,6 +726,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 try {
                                     require(derivMode == "demo") { "Verify Deriv DEMO is available only while DEMO mode is selected. LIVE remains blocked." }
                                     require(derivToken.isNotBlank() && derivAppId.isNotBlank()) { "Enter a Deriv DEMO PAT and registered numeric App ID." }
+                                    require(derivStorageConsent) { "Confirm encrypted device storage before saving the DEMO PAT and App ID." }
                                     require(secrets.saveDerivApiToken(derivToken, "demo")) { "Deriv DEMO PAT could not be saved in encrypted storage." }
                                     require(secrets.saveDerivAppId(derivAppId)) { "Registered Deriv App ID could not be saved." }
                                     val account = viewModel.app.derivBrokerGateway.connectAndAuthorize(derivToken, selectedDerivAccountId.takeIf { it.isNotBlank() }).getOrThrow()
@@ -702,13 +755,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                         checkedAtMs = checkedAt,
                                     )
                                     val failure = if (provisional.state == com.example.data.deriv.DerivDemoVerificationState.PASS) null else "Fresh DEMO evidence was incomplete or did not match the selected account."
-                                    if (failure == null) {
-                                        require(secrets.saveDerivDemoAcceptance(account.loginId, account.currency, account.authenticatedSessionId, account.credentialGeneration)) {
-                                            "DEMO acceptance could not be durably recorded; bot start remains blocked."
-                                        }
-                                    }
                                     derivDemoVerification = provisional.copy(failureMessage = failure)
-                                    message = failure ?: "Deriv DEMO verification passed. Read-only evidence only; no order was sent."
+                                    message = failure ?: "Deriv DEMO verification passed. Read-only evidence only; no order was sent. Review and explicitly accept this exact account to enable DEMO."
                                 } catch (e: Exception) {
                                     if (e is CancellationException) throw e
                                     val mapped = DerivConnectionFailureMapper.from(e)
@@ -717,7 +765,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 } finally { busy = false }
                             }
                         },
-                        enabled = !busy && derivMode == "demo",
+                        enabled = !busy && derivMode == "demo" && derivStorageConsent && secrets.isSecureStorageAvailable,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
                     ) { Text("VERIFY DERIV DEMO · READ ONLY", fontWeight = FontWeight.Black) }
@@ -731,6 +779,27 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 verification.tickEvidence?.let { tick -> Text("Tick ${tick.symbol} · quote ${tick.quote} · provider ${tick.providerTimestampMs} · received ${tick.receivedAtMs} · started ${tick.verificationStartedAtMs}", color = TextSecondary, fontSize = 9.sp) }
                                 Text("Checked: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss z", java.util.Locale.US).format(java.util.Date(verification.checkedAtMs))}", color = TextSecondary, fontSize = 9.sp)
                                 verification.failureMessage?.let { Text("Reason: $it", color = LossRed, fontSize = 9.sp) }
+                                if (verification.state == com.example.data.deriv.DerivDemoVerificationState.PASS) {
+                                    val verifiedAccount = derivAccount
+                                    val identityMatches = verifiedAccount != null &&
+                                        verifiedAccount.mode.equals("demo", true) && verifiedAccount.accountType.equals("demo", true) &&
+                                        verifiedAccount.loginId == verification.accountId && verifiedAccount.loginId == verification.selectedAccountId &&
+                                        verifiedAccount.currency == verification.currency
+                                    val accepted = verifiedAccount?.let { secrets.hasCurrentDerivDemoAcceptance(
+                                        it.loginId, it.currency, it.authenticatedSessionId, it.credentialGeneration
+                                    ) } == true
+                                    Text(if (accepted) "Owner acceptance: SAVED for this verified account and credential generation." else "Owner acceptance is separate from verification. No bot start is allowed until you accept this exact DEMO account.", color = if (accepted) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                                    Button(onClick = {
+                                        val current = derivAccount
+                                        val saved = current != null && current.mode.equals("demo", true) &&
+                                            current.loginId == verification.accountId && current.loginId == verification.selectedAccountId &&
+                                            current.currency == verification.currency &&
+                                            secrets.saveDerivDemoAcceptance(current.loginId, current.currency, current.authenticatedSessionId, current.credentialGeneration)
+                                        message = if (saved) "DEMO acceptance recorded for ${current?.loginId}. No order was sent." else "DEMO acceptance blocked because the verified account identity or secure storage changed. Verify again."
+                                    }, enabled = !busy && identityMatches && !accepted, modifier = Modifier.fillMaxWidth().testTag("deriv_accept_demo")) {
+                                        Text(if (accepted) "DEMO ACCEPTED" else "ACCEPT VERIFIED DEMO ACCOUNT")
+                                    }
+                                }
                             }
                         }
                     }
@@ -743,12 +812,26 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     secrets.invalidateDerivRealAuthorization()
                                     viewModel.app.derivBrokerGateway.disconnect()
                                     selectedDerivAccountId = option.accountId
+                                    derivDemoVerification = null
                                     message = "Account selection changed; previous Deriv session and REAL authorization cleared. Connect to verify the selected ID."
                                 }
                             }, label = { Text("${option.accountId} · ${option.accountType.uppercase()} · ${option.currency} · ${option.balance}", fontSize = 9.sp) })
                         }
                     }
                     Text("Deriv lifecycle: $derivLifecycleLabel · connection ${derivState.name}", color = if (derivLifecycleLabel == "READY") ProfitGreen else WarningAmber, fontSize = 10.sp)
+                    Text("DEMO owner acceptance: ${if (derivDemoAccepted) "SAVED for this authenticated account and credential generation" else "NOT ACCEPTED; service start remains blocked"}", color = if (derivDemoAccepted) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                    Text("DEMO bot service: ${if (derivBotServiceState == "RUNNING") "RUNNING" else "BOT NOT RUNNING"} · $derivBotServiceState", color = if (derivBotServiceState == "RUNNING") ProfitGreen else WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text(derivBotServiceReason, color = if (derivBotServiceState == "RUNNING") TextSecondary else WarningAmber, fontSize = 9.sp)
+                    Text("Notifications: ${if (DerivDemoBotService.hasNotificationPermission(context)) "ALLOWED" else "DENIED, bot start blocked"} · Battery optimization: ${if (batteryOptimizationExempt) "not restricting this app" else "active; service may be delayed"}", color = if (DerivDemoBotService.hasNotificationPermission(context) && batteryOptimizationExempt) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && !batteryOptimizationExempt) {
+                        OutlinedButton(onClick = {
+                            val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                            runCatching { context.startActivity(request) }.onFailure {
+                                runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                                    .onFailure { message = "Android battery-optimization settings could not be opened; no setting was changed." }
+                            }
+                        }, modifier = Modifier.fillMaxWidth()) { Text("REQUEST BATTERY-OPTIMIZATION EXEMPTION") }
+                    }
                     derivAccount?.let { account ->
                         Text("Selected: ${account.loginId} · ${account.accountType.uppercase()} · ${account.currency} · balance ${account.balance}", color = TextPrimary, fontSize = 10.sp)
                         val readyPortfolio = derivPortfolio?.let { snap -> snap.successful && snap.accountId == account.loginId && snap.accountMode.equals(account.mode, true) && snap.currency.equals(account.currency, true) && System.currentTimeMillis() - snap.retrievedAtMs in 0..8_000L } == true
@@ -822,19 +905,29 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 message = if (result.queued) "Scanning started for ${opportunity.symbol}; waiting for broker acknowledgement." else result.detail
                             } else {
                                 val account = requireNotNull(derivAccount) { "Deriv account is not authenticated." }
-                                require(account.mode.equals(derivMode, true) && account.accountType.equals(derivMode, true)) { "Deriv account mode does not match the selected mode." }
-                                if (derivMode == "real") {
-                                    val unresolved = viewModel.app.db.derivExecutionDao().unresolved(account.loginId, "REAL").size
-                                    require(viewModel.app.derivBrokerGateway.isAccountReadyForTrading(account, unresolved) && secrets.isDerivRealExecutionAuthorized(account.loginId, "real", account.currency, account.authenticatedSessionId, account.credentialGeneration)) { "Deriv REAL is blocked: explicit active account/session authorization and fresh balance/portfolio reconciliation are required." }
-                                } else {
-                                    val unresolved = viewModel.app.db.derivExecutionDao().unresolved(account.loginId, "DEMO").size
-                                    require(viewModel.app.derivBrokerGateway.isAccountReadyForTrading(account, unresolved)) { "Deriv DEMO is not READY: fresh account and portfolio synchronization required." }
+                                require(derivMode.equals("demo", true) && account.mode.equals("demo", true) && account.accountType.equals("demo", true)) {
+                                    "BOT NOT RUNNING — this foreground service accepts DEMO accounts only. REAL remains blocked here."
                                 }
-                                if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                require(derivDemoAccepted) { "BOT NOT RUNNING — complete fresh DEMO verification and explicitly accept this exact account before Start." }
+                                val unresolved = viewModel.app.db.derivExecutionDao().unresolved(account.loginId, "DEMO").size
+                                require(viewModel.app.derivBrokerGateway.isAccountReadyForTrading(account, unresolved)) { "BOT NOT RUNNING — Deriv DEMO needs fresh authenticated balance, account-matched portfolio, and clear reconciliation." }
+                                if (!DerivDemoBotService.hasNotificationPermission(context)) {
+                                    val reason = "BOT NOT RUNNING — notification permission is required for the persistent foreground-service status."
+                                    DerivDemoBotService.recordStartBlocked(context, reason)
+                                    message = reason
+                                    if (android.os.Build.VERSION.SDK_INT >= 33) permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    return@launch
+                                }
                                 DerivDemoBotService.start(context, opportunity.symbol, viewModel.selectedStrategyId.value, "H1")
-                                message = "Scanning started for ${opportunity.symbol}; the worker will verify broker state before any entry."
+                                message = "DEMO start requested for ${opportunity.symbol}. The foreground service will re-verify the session, fresh risk data, and reconciliation before any entry."
                             }
-                        } catch (e: Exception) { message = e.message?.take(240) ?: "Start blocked." } finally { busy = false; commandPending = false }
+                        } catch (e: Exception) {
+                            val detail = listOf(derivToken, cTraderClientSecret).filter { it.isNotBlank() }
+                                .fold(e.message ?: "Start blocked.") { safe, secret -> safe.replace(secret, "[redacted]") }
+                                .take(240)
+                            if (broker == BrokerType.DERIV) DerivDemoBotService.recordStartBlocked(context, detail)
+                            message = detail
+                        } finally { busy = false; commandPending = false }
                     }
                 },
                 onStop = {

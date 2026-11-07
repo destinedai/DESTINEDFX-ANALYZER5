@@ -3,7 +3,6 @@ package com.example.service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import androidx.core.content.ContextCompat
 import com.example.security.SecretsManager
 
 /**
@@ -29,24 +28,40 @@ class DerivBotBootReceiver : BroadcastReceiver() {
         val symbol = prefs.getString(DerivDemoBotService.EXTRA_SYMBOL, null)?.trim().orEmpty()
         val strategy = prefs.getString(DerivDemoBotService.EXTRA_STRATEGY, null)?.trim().orEmpty()
         val timeframe = prefs.getString(DerivDemoBotService.EXTRA_TIMEFRAME, null)?.trim().orEmpty()
+        val enabled = prefs.getBoolean("enabled", false)
+        if (!enabled) return
+        val mode = secure.getDerivAccountMode()
         val hasCredentials = secure.isSecureStorageAvailable &&
-            secure.getDerivApiToken().isNotBlank() && secure.getDerivAppId().isNotBlank()
+            secure.getDerivApiToken("demo").isNotBlank() && secure.getDerivAppId().isNotBlank()
+        if (!DerivDemoBotService.hasNotificationPermission(context)) {
+            DerivDemoBotService.recordStartBlocked(context, "Notification permission is denied. Open DestinedFX, allow notifications, then tap Start again.")
+            return
+        }
+        if (!mode.equals("demo", true)) {
+            DerivDemoBotService.recordStartBlocked(context, "Persisted REAL mode is never restarted automatically. Select DEMO and explicitly start after verification.")
+            return
+        }
+        if (!hasCredentials) {
+            DerivDemoBotService.recordStartBlocked(context, "Secure storage, DEMO PAT, or registered App ID is unavailable after reboot. Re-enter and verify the DEMO account.")
+            return
+        }
+        if (!secure.hasCurrentDerivDemoAcceptance()) {
+            DerivDemoBotService.recordStartBlocked(context, "Current DEMO acceptance is missing or stale after reboot. Verify and explicitly accept the account again.")
+            return
+        }
         if (!DerivBotRecoveryPolicy.shouldRecover(
                 intent?.action,
-                secure.getDerivAccountMode(),
-                prefs.getBoolean("enabled", false),
+                mode,
+                enabled,
                 hasCredentials,
                 symbol,
                 strategy,
-                timeframe
-            )) return
-
-        val serviceIntent = Intent(context, DerivDemoBotService::class.java).apply {
-            action = DerivDemoBotService.ACTION_START
-            putExtra(DerivDemoBotService.EXTRA_SYMBOL, symbol)
-            putExtra(DerivDemoBotService.EXTRA_STRATEGY, strategy)
-            putExtra(DerivDemoBotService.EXTRA_TIMEFRAME, timeframe)
+                timeframe,
+                notificationsAllowed = true
+            )) {
+            DerivDemoBotService.recordStartBlocked(context, "Saved DEMO recovery configuration is incomplete or unsupported. Open DestinedFX and start again after checking the symbol, strategy, and timeframe.")
+            return
         }
-        ContextCompat.startForegroundService(context, serviceIntent)
+        DerivDemoBotService.start(context, symbol, strategy, timeframe)
     }
 }

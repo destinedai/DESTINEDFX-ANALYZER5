@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.Context
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -45,6 +46,8 @@ class DerivDemoBotService : Service() {
         private const val CHANNEL_ID = "deriv_demo_bot"
         private const val NOTIFICATION_ID = 1701
         private const val PREFS = "deriv_bot_config"
+        private const val STATUS_STATE = "service_status_state"
+        private const val STATUS_REASON = "service_status_reason"
         private const val MAX_RECONNECT_ATTEMPTS = 5
         private fun derivUtcDayKey(nowMs: Long = System.currentTimeMillis()): String {
             val formatter = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
@@ -53,15 +56,60 @@ class DerivDemoBotService : Service() {
         }
         private val _state = MutableStateFlow("STOPPED")
         val state: StateFlow<String> = _state.asStateFlow()
+        private val _statusReason = MutableStateFlow("BOT NOT RUNNING — not started")
+        val statusReason: StateFlow<String> = _statusReason.asStateFlow()
+
+        fun hasNotificationPermission(context: Context): Boolean = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        fun recordStartBlocked(context: Context, reason: String) {
+            val exact = reason.trim().take(240).let {
+                if (it.startsWith("BOT NOT RUNNING")) it else "BOT NOT RUNNING — $it"
+            }
+            publishStatus(context, "STOPPED", exact, disableRecovery = true)
+        }
+
+        fun restorePersistedStatus(context: Context) {
+            if (_state.value in setOf("STARTING", "CONNECTING", "RECONCILING", "RUNNING")) return
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val savedState = prefs.getString(STATUS_STATE, "STOPPED").orEmpty()
+            val savedReason = prefs.getString(STATUS_REASON, "BOT NOT RUNNING — not started").orEmpty()
+            if (savedState in setOf("STARTING", "CONNECTING", "RECONCILING", "RUNNING")) {
+                publishStatus(context, "STOPPED", "BOT NOT RUNNING — previous service state was not re-verified after process restart. Tap Start to reconnect.")
+            } else {
+                _state.value = savedState
+                _statusReason.value = savedReason.ifBlank { "BOT NOT RUNNING — no active service status" }
+            }
+        }
+
+        private fun publishStatus(context: Context, state: String, reason: String, disableRecovery: Boolean = false) {
+            _state.value = state
+            _statusReason.value = reason
+            val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(STATUS_STATE, state).putString(STATUS_REASON, reason)
+            if (disableRecovery) editor.putBoolean("enabled", false)
+            editor.apply()
+        }
 
         fun start(context: android.content.Context, symbol: String, strategy: String, timeframe: String) {
+            if (!hasNotificationPermission(context)) {
+                val reason = "BOT NOT RUNNING — enable DestinedFX notifications, then tap Start again."
+                recordStartBlocked(context, reason)
+                throw SecurityException(reason)
+            }
             val intent = Intent(context, DerivDemoBotService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_SYMBOL, symbol)
                 putExtra(EXTRA_STRATEGY, strategy)
                 putExtra(EXTRA_TIMEFRAME, timeframe)
             }
-            ContextCompat.startForegroundService(context, intent)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (error: RuntimeException) {
+                val reason = "Android restricted foreground-service startup. Open DestinedFX, allow notifications, and start again."
+                recordStartBlocked(context, reason)
+                throw IllegalStateException(reason, error)
+            }
         }
 
         fun stop(context: android.content.Context) {
@@ -71,11 +119,13 @@ class DerivDemoBotService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var loopJob: Job? = null
+    private var healthJob: Job? = null
     @Volatile private var stopRequested = false
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        publishStatus(this, "STARTING", "BOT NOT RUNNING — service is starting and has not verified broker readiness")
         startForeground(NOTIFICATION_ID, notification("Starting — verifying selected Deriv account"))
     }
 
@@ -93,15 +143,18 @@ class DerivDemoBotService : Service() {
                     strategy !in StrategyRegistry.managedStrategyIds ||
                     Timeframe.parse(timeframe) == null) {
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
-                    update("ERROR — incomplete or unsupported start intent; trading remains stopped")
-                    stopSelf(startId)
+                    stopSafely("BOT NOT RUNNING — incomplete or unsupported start intent; trading remains stopped")
+                    return START_NOT_STICKY
+                }
+                if (!hasNotificationPermission(this)) {
+                    stopSafely("BOT NOT RUNNING — notification permission is denied; allow notifications and tap Start again")
                     return START_NOT_STICKY
                 }
                 val startApp = application as? MyApplication
-                if (startApp?.secretsManager?.getDerivAccountMode()?.lowercase() != "demo" ||
-                    startApp.secretsManager.hasCurrentDerivDemoAcceptance().not()) {
-                    update("PAUSED — explicit verified Deriv DEMO acceptance is required before start")
-                    stopSelf(startId)
+                val currentMode = startApp?.secretsManager?.getDerivAccountMode().orEmpty()
+                val accepted = startApp?.secretsManager?.hasCurrentDerivDemoAcceptance() == true
+                if (!DerivBotRecoveryPolicy.canStartExplicitDemo(currentMode, accepted, hasNotificationPermission(this))) {
+                    stopSafely("BOT NOT RUNNING — select DEMO and complete current account verification and explicit acceptance first")
                     return START_NOT_STICKY
                 }
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
@@ -119,17 +172,18 @@ class DerivDemoBotService : Service() {
                 val symbol = prefs.getString(EXTRA_SYMBOL, null)?.trim().orEmpty()
                 val strategy = prefs.getString(EXTRA_STRATEGY, null)?.trim().orEmpty()
                 val timeframe = prefs.getString(EXTRA_TIMEFRAME, null)?.trim().orEmpty()
-                if (mode == "demo" && app?.secretsManager?.hasCurrentDerivDemoAcceptance() == true && prefs.getBoolean("enabled", false) &&
-                    symbol.isNotBlank() && strategy.isNotBlank() && timeframe.isNotBlank() &&
-                    DerivMultiplierRules.isSupportedUnderlying(symbol) &&
-                    strategy in StrategyRegistry.managedStrategyIds &&
-                    Timeframe.parse(timeframe) != null) {
+                val hasCredentials = app?.secretsManager?.getDerivApiToken("demo")?.isNotBlank() == true &&
+                    app?.secretsManager?.getDerivAppId()?.isNotBlank() == true
+                val accepted = app?.secretsManager?.hasCurrentDerivDemoAcceptance() == true
+                if (DerivBotRecoveryPolicy.canRecoverAfterProcessDeath(
+                        mode.orEmpty(), prefs.getBoolean("enabled", false), hasCredentials, accepted,
+                        symbol, strategy, timeframe, hasNotificationPermission(this)
+                    )) {
                     stopRequested = false
                     loopJob?.cancel()
                     loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
                 } else {
-                    update(if (mode == "real") "PAUSED — REAL trading requires an explicit user start and authorization" else "STOPPED")
-                    stopSelf(startId)
+                    stopSafely(if (mode == "real") "BOT NOT RUNNING — persisted REAL configuration is never restarted automatically" else "BOT NOT RUNNING — saved DEMO configuration, current acceptance, credentials, or notifications are unavailable")
                     return START_NOT_STICKY
                 }
             }
@@ -150,15 +204,47 @@ class DerivDemoBotService : Service() {
         while (currentCoroutineContext().isActive && !stopRequested &&
             gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY
         ) {
+            if (!app.secretsManager.getDerivAccountMode().equals("demo", true)) {
+                stopSafely("BOT NOT RUNNING — Deriv mode changed from DEMO; this service will not open a REAL session")
+                return
+            }
             if (connectWithBoundedRetry(gateway)) break
             update("RECONNECTING — Deriv connection retries continue; no new purchases are permitted")
             delay(15_000L)
         }
         if (!currentCoroutineContext().isActive || stopRequested) return
         val acceptedAccount = gateway.accountInfo.value
-        if (acceptedAccount == null || !app.secretsManager.hasCurrentDerivDemoAcceptance(acceptedAccount.loginId, acceptedAccount.currency, credentialGeneration = acceptedAccount.credentialGeneration)) {
+        if (acceptedAccount == null || !DerivBotRecoveryPolicy.isDemoAccount(acceptedAccount.mode, acceptedAccount.accountType) ||
+            !app.secretsManager.hasCurrentDerivDemoAcceptance(acceptedAccount.loginId, acceptedAccount.currency, credentialGeneration = acceptedAccount.credentialGeneration)) {
             stopSafely("PAUSED — current authenticated DEMO account does not match the accepted verification record")
             return
+        }
+        healthJob?.cancel()
+        healthJob = serviceScope.launch {
+            while (currentCoroutineContext().isActive && !stopRequested) {
+                if (_state.value == "RUNNING") {
+                    val account = gateway.accountInfo.value
+                    val metrics = gateway.accountMetrics.value
+                    val portfolio = gateway.portfolioSnapshot.value
+                    val now = System.currentTimeMillis()
+                    val accountMatches = account != null && DerivBotRecoveryPolicy.isDemoAccount(account.mode, account.accountType) &&
+                        account.loginId == acceptedAccount.loginId && account.currency == acceptedAccount.currency &&
+                        account.credentialGeneration == acceptedAccount.credentialGeneration &&
+                        app.secretsManager.getDerivAccountMode().equals("demo", true) &&
+                        app.secretsManager.hasCurrentDerivDemoAcceptance(account.loginId, account.currency, credentialGeneration = account.credentialGeneration)
+                    val balanceFresh = metrics != null && metrics.balance.isFinite() && metrics.balance > 0.0 &&
+                        account != null && metrics.currency.equals(account.currency, true) &&
+                        now - gateway.accountMetricsUpdatedAtMs.value in 0..8_000L
+                    val portfolioFresh = portfolio?.successful == true && account != null &&
+                        portfolio.accountId == acceptedAccount.loginId && portfolio.accountId == account.loginId &&
+                        portfolio.accountMode == "DEMO" && portfolio.currency.equals(account.currency, true) &&
+                        now - portfolio.retrievedAtMs in 0..8_000L
+                    if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY ||
+                        !accountMatches || !balanceFresh || !portfolioFresh
+                    ) update("RECONNECTING — authenticated accepted DEMO session or fresh matched risk data is unavailable; purchases paused")
+                }
+                delay(1_000L)
+            }
         }
         suspend fun verifyDerivDailyRiskAtEntryBoundary(accountId: String, mode: String): Boolean {
             val utcDay = derivUtcDayKey()
@@ -213,12 +299,22 @@ class DerivDemoBotService : Service() {
             gateway,
             app.db.derivExecutionDao(),
             sensitiveActionAuthorized = { com.example.security.AppSecurityGuard.authorizeSensitiveAction() },
-            dailyRiskEntryAllowed = ::verifyDerivDailyRiskAtEntryBoundary
+            dailyRiskEntryAllowed = { accountId, mode ->
+                mode.equals("demo", ignoreCase = true) && accountId == acceptedAccount.loginId &&
+                    app.secretsManager.hasCurrentDerivDemoAcceptance(
+                        acceptedAccount.loginId, acceptedAccount.currency, credentialGeneration = acceptedAccount.credentialGeneration
+                    ) &&
+                    verifyDerivDailyRiskAtEntryBoundary(accountId, mode)
+            }
         )
         if (!reconcileWithRecovery(executor, gateway)) return
         update("Running — scanning $symbol; no order is assumed confirmed")
         while (currentCoroutineContext().isActive && !stopRequested) {
             try {
+                if (!app.secretsManager.getDerivAccountMode().equals("demo", true)) {
+                    stopSafely("BOT NOT RUNNING — Deriv mode changed from DEMO; this service will not reconnect or trade REAL")
+                    return
+                }
                 // Reconcile the portfolio and all prior intents before every new scan.
                 // Retryable transport failures reconnect; ambiguous execution outcomes
                 // stop the bot for explicit manual review.
@@ -228,12 +324,17 @@ class DerivDemoBotService : Service() {
                     stopSafely("Safety blocked — verified Deriv account snapshot is unavailable")
                     return
                 }
-                if (!DerivMultiplierRules.isVerifiedAccount(account)) {
-                    stopSafely("Safety blocked — broker account identity/type is not verified; execution is disabled")
+                if (account.loginId != acceptedAccount.loginId || account.currency != acceptedAccount.currency ||
+                    account.credentialGeneration != acceptedAccount.credentialGeneration ||
+                    !app.secretsManager.hasCurrentDerivDemoAcceptance(
+                        acceptedAccount.loginId, acceptedAccount.currency, credentialGeneration = acceptedAccount.credentialGeneration
+                    )
+                ) {
+                    stopSafely("Safety blocked — authenticated account or accepted credential generation changed; no new purchase is permitted")
                     return
                 }
-                if (account.mode == "real" && !app.secretsManager.isDerivRealExecutionEnabled()) {
-                    stopSafely("Safety blocked — explicitly ARM LIVE TRADING for ${account.loginId} before starting")
+                if (!DerivBotRecoveryPolicy.isDemoAccount(account.mode, account.accountType) || !DerivMultiplierRules.isVerifiedAccount(account)) {
+                    stopSafely("Safety blocked — broker account identity/type is not verified; execution is disabled")
                     return
                 }
                 val metrics = gateway.accountMetrics.value
@@ -422,6 +523,10 @@ class DerivDemoBotService : Service() {
         // foreground monitor alive, preserve the account/mode daily lock, and retry until the
         // broker is reachable. A manual reconciliation requirement remains a hard stop.
         while (currentCoroutineContext().isActive && !stopRequested) {
+            if ((application as? MyApplication)?.secretsManager?.getDerivAccountMode()?.equals("demo", true) != true) {
+                stopSafely("BOT NOT RUNNING — Deriv mode changed from DEMO; reconciliation and REAL login are blocked")
+                return false
+            }
             val result = executor.reconcileBeforeNewEntriesResult()
             when (result.status) {
                 DerivReconciliationStatus.READY -> {
@@ -449,18 +554,24 @@ class DerivDemoBotService : Service() {
     }
 
     private suspend fun connectWithBoundedRetry(gateway: com.example.data.deriv.DerivBrokerGateway): Boolean {
-        var delayMs = 2_000L
-        repeat(MAX_RECONNECT_ATTEMPTS) { attempt ->
-            if (stopRequested || !currentCoroutineContext().isActive) return false
-            update(if (attempt == 0) "CONNECTING — verifying selected Deriv account" else "RECONNECTING — attempt ${attempt + 1}/$MAX_RECONNECT_ATTEMPTS")
-            if (gateway.connectAndAuthorize().isSuccess) {
-                update("RECONCILING — fresh authenticated broker session established")
-                return true
+        val job = currentCoroutineContext()[Job]
+        val connected = retryFreshDerivAuthorization(
+            maxAttempts = MAX_RECONNECT_ATTEMPTS,
+            shouldContinue = {
+                !stopRequested && job?.isActive != false &&
+                    (application as? MyApplication)?.secretsManager?.getDerivAccountMode()?.equals("demo", true) == true
+            },
+            onAttempt = { attempt ->
+                update(if (attempt == 0) "CONNECTING — verifying selected Deriv account" else "RECONNECTING — attempt ${attempt + 1}/$MAX_RECONNECT_ATTEMPTS")
+            },
+            pause = { delay(it) },
+            reconnect = {
+                // Each call repeats account listing and OTP retrieval; never reuse an earlier one-time OTP.
+                gateway.connectAndAuthorize(expectedMode = "demo")
             }
-            delay(delayMs)
-            delayMs = (delayMs * 2).coerceAtMost(30_000L)
-        }
-        return false
+        )
+        if (connected) update("RECONCILING — fresh authenticated broker session established")
+        return connected
     }
 
     private fun stopSafely(message: String = "Stopped — no new entry requests") {
@@ -468,30 +579,40 @@ class DerivDemoBotService : Service() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
         loopJob?.cancel()
         loopJob = null
+        healthJob?.cancel()
+        healthJob = null
         update(message)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     private fun update(text: String) {
-        _state.value = when {
+        val nextState = when {
             text.startsWith("Running") || text.startsWith("Submitting") || text.startsWith("Contract") -> "RUNNING"
             text.startsWith("STARTING") -> "STARTING"
             text.startsWith("CONNECTING") || text.startsWith("Connecting") || text.startsWith("RECONNECTING") -> "CONNECTING"
             text.startsWith("RECONCILING") -> "RECONCILING"
             text.startsWith("ERROR") -> "ERROR"
+            text.startsWith("BOT NOT RUNNING") -> "STOPPED"
             text.startsWith("Stopped") -> "STOPPED"
             text.startsWith("Safety blocked") -> "PAUSED"
             else -> "PAUSED"
         }
+        val reason = when {
+            nextState == "RUNNING" -> text
+            text.startsWith("BOT NOT RUNNING") -> text
+            else -> "BOT NOT RUNNING — $text"
+        }
+        publishStatus(this, nextState, reason)
         runCatching { getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification(text)) }
     }
 
     private fun notification(text: String): Notification = NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_launcher_foreground)
-        .setContentTitle("DestinedFX · Deriv ${applicationContext.getSharedPreferences("destinedfx_service", 0).getString("account_mode", "selected")?.uppercase()} Multiplier")
+        .setContentTitle("DestinedFX · Deriv DEMO bot · ${_state.value}")
         .setContentText(text)
         .setOngoing(true)
+        .setOnlyAlertOnce(true)
         .setCategory(NotificationCompat.CATEGORY_SERVICE)
         .build()
 
@@ -506,6 +627,7 @@ class DerivDemoBotService : Service() {
     override fun onDestroy() {
         stopRequested = true
         loopJob?.cancel()
+        healthJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
     }
