@@ -29,6 +29,8 @@ interface BrokerGateway {
     val displayName: String
     val connectionStatus: StateFlow<BrokerConnectionStatus>
     val accountMetrics: StateFlow<AccountMetrics?>
+    /** Account values with explicit provenance and freshness evidence. */
+    val accountSnapshot: StateFlow<BrokerAccountSnapshot?>
     val openPositions: StateFlow<List<Position>>
 
     suspend fun connect(): Result<Boolean>
