@@ -23,7 +23,10 @@ class CTraderReadOnlySafetyTest {
 
     @Test
     fun authorizationUriRequiresConfiguredSupportedScope() {
-        val secrets = SecretsManager(ApplicationProvider.getApplicationContext())
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) {
+            context.getSharedPreferences("ctrader_uri_test", android.content.Context.MODE_PRIVATE)
+        }
         val redirect = "https://owner.example/ctrader/callback"
         assertTrue(secrets.saveCTraderOAuth("client", "secret", redirect, "access", "refresh", System.currentTimeMillis() + 60_000L))
         val client = CTraderOAuthClient(secrets)
