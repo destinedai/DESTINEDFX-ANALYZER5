@@ -226,18 +226,14 @@ class CTraderReadOnlyGateway(
     }
 
     private fun handleFrames(bytes: ByteArray) {
-        var offset = 0
-        while (offset + 4 <= bytes.size) {
-            val length = ByteBuffer.wrap(bytes, offset, 4).order(ByteOrder.BIG_ENDIAN).int
-            if (length <= 0 || length > MAX_FRAME_BYTES || offset + 4 + length > bytes.size) return
-            val message = runCatching { ProtoMessage.parseFrom(bytes, offset + 4, length) }.getOrNull() ?: return
-            offset += 4 + length
+        val messages = parseCTraderFrames(bytes) ?: return
+        messages.forEach { message ->
             if (message.payloadType == ProtoPayloadType.HEARTBEAT_EVENT_VALUE) {
                 sendHeartbeat()
-                continue
+                return@forEach
             }
             if (message.payloadType == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT_VALUE) {
-                val spot = runCatching { ProtoOASpotEvent.parseFrom(message.payload) }.getOrNull() ?: continue
+                val spot = runCatching { ProtoOASpotEvent.parseFrom(message.payload) }.getOrNull() ?: return@forEach
                 val scale = 100_000.0
                 _quotes.value = CTraderQuote(
                     accountId = spot.ctidTraderAccountId,
@@ -261,6 +257,24 @@ class CTraderReadOnlyGateway(
         val frame = ByteBuffer.allocate(4 + heartbeat.size).order(ByteOrder.BIG_ENDIAN).putInt(heartbeat.size).put(heartbeat).array()
         socket?.send(ByteString.of(*frame))
     }
+}
+
+internal fun parseCTraderFrames(bytes: ByteArray): List<ProtoMessage>? {
+    if (bytes.isEmpty()) return emptyList()
+    val messages = mutableListOf<ProtoMessage>()
+    var offset = 0
+    while (offset < bytes.size) {
+        if (bytes.size - offset < 4) return null
+        val length = ByteBuffer.wrap(bytes, offset, 4).order(ByteOrder.BIG_ENDIAN).int
+        if (length <= 0 || length > MAX_FRAME_BYTES || length > bytes.size - offset - 4) return null
+        val end = offset + 4 + length
+        val message = runCatching {
+            ProtoMessage.parseFrom(ByteString.copyFrom(bytes, offset + 4, length))
+        }.getOrNull() ?: return null
+        messages += message
+        offset = end
+    }
+    return messages
 }
 
 private fun ProtoOATrader.toVerifiedAccount(isLive: Boolean, nowMs: Long): CTraderVerifiedAccount {

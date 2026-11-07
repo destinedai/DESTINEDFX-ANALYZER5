@@ -34,12 +34,13 @@ class CTraderOAuthClient(
         val clientId = secrets.getCTraderClientId().trim()
         val redirectUri = secrets.getCTraderRedirectUri().trim()
         require(clientId.isNotBlank() && redirectUri.isNotBlank()) { "cTrader application details are not configured" }
-        return AUTHORIZATION_ENDPOINT.toHttpUrl().newBuilder()
+        val finalUrl = AUTHORIZATION_ENDPOINT.toHttpUrl().newBuilder()
             .addQueryParameter("client_id", clientId)
             .addQueryParameter("redirect_uri", redirectUri)
             .addQueryParameter("scope", scope)
             .addQueryParameter("product", "web")
-            .build().toUri()
+            .build()
+        return Uri.parse(finalUrl.toString())
     }
 
     suspend fun exchangeAuthorizationCode(code: String, receivedAtMs: Long = System.currentTimeMillis()): Result<CTraderOAuthTokens> =
