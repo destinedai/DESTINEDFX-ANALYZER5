@@ -14,7 +14,7 @@ sealed class DestinedFXScreen(val title: String, val purpose: String, val icon: 
     object ImageAnalyzer : DestinedFXScreen("Image Analyzer", "Inspect chart screenshots with on-device evidence", Icons.Default.Image, "nav_tab_image_analyzer")
     object Strategies : DestinedFXScreen("Strategies", "Review deterministic strategy rules and coverage", Icons.Default.Architecture, "nav_tab_strategies")
     object Calendar : DestinedFXScreen("Calendar", "Verify sessions and economic event risk", Icons.Default.CalendarMonth, "nav_tab_calendar")
-    object Bot : DestinedFXScreen("Bot", "Manage broker connectivity and execution gates", Icons.Default.SmartToy, "nav_tab_bot")
+    object Bot : DestinedFXScreen("Read-only scope", "Broker connectivity and order execution are not available", Icons.Default.Info, "nav_tab_read_only_scope")
     object Watchlist : DestinedFXScreen("Watchlist", "Track instruments that matter to you", Icons.Default.BookmarkBorder, "nav_tab_watchlist")
     object Chat : DestinedFXScreen("Chat", "Review assistant conversations and context", Icons.Default.Chat, "nav_tab_chat")
     object More : DestinedFXScreen("More", "Additional workspaces and disclosures", Icons.Default.MoreHoriz, "nav_tab_more")
@@ -25,10 +25,10 @@ sealed class DestinedFXScreen(val title: String, val purpose: String, val icon: 
 
     companion object {
         val primaryScreens: List<DestinedFXScreen>
-            get() = listOf(Analyzer, Strategies, Calendar, Bot, Risk, Settings)
+            get() = listOf(Analyzer, Strategies, Calendar, Watchlist, Risk, Settings)
 
         val moreScreens: List<DestinedFXScreen>
-            get() = listOf(Home, ImageAnalyzer, Watchlist, Chat, About, Contact)
+            get() = listOf(Home, ImageAnalyzer, Chat, About, Contact)
 
         val allScreens: List<DestinedFXScreen>
             get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings, About, Contact)

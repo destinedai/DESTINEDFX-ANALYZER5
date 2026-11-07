@@ -83,6 +83,7 @@ class TradeUseCaseImpl(
     )
 
     override suspend fun executeTrade(signal: TradeSignal) {
+        ReadOnlyExecutionPolicy.requireTradingDisabled()
         if (!sensitiveActionAuthorized()) {
             throw IllegalStateException("REAUTHENTICATION_REQUIRED: authenticate again before submitting a trading action")
         }
