@@ -26,8 +26,9 @@ class ModeArmingPolicyTest {
     private fun request(liveIdentity: ModeAccountIdentity = identity(mode = AccountMode.LIVE, generation = "cred-live", server = "Broker-Live"),
         demoIdentity: ModeAccountIdentity = identity(), liveVerified: ModeReadOnlyVerification = verified(liveIdentity),
         confirmation: String = "ARM LIVE " + liveIdentity.broker + " " + liveIdentity.accountId, minSize: Boolean = true,
-        dailyRisk: Boolean = true, riskCaps: Boolean = true, reauthenticated: Boolean = true) =
-        LiveArmRequest(liveIdentity, accepted(demoIdentity), demoIdentity.credentialGeneration, liveVerified,
+        dailyRisk: Boolean = true, riskCaps: Boolean = true, reauthenticated: Boolean = true,
+        currentDemoGeneration: String = demoIdentity.credentialGeneration) =
+        LiveArmRequest(liveIdentity, accepted(demoIdentity), currentDemoGeneration, liveVerified,
             confirmation, reauthenticated, minSize, dailyRisk, riskCaps)
 
     @Test fun demoRequiresMatchingAcceptanceCredentialGenerationAndFreshEvidence() {
@@ -52,7 +53,7 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request(riskCaps = false)).isSuccess)
         assertFalse(policy.armLive(request(reauthenticated = false)).isSuccess)
         assertFalse(policy.armLive(request(demoIdentity = identity(account = "999999"))).isSuccess)
-        assertFalse(policy.armLive(request(demoIdentity = identity(), currentDemoCredentialGeneration = "rotated")).isSuccess)
+        assertFalse(policy.armLive(request(currentDemoGeneration = "rotated")).isSuccess)
         assertFalse(policy.armLive(request(liveVerified = verified(identity(mode = AccountMode.LIVE).copy(accountId = "999999")))).isSuccess)
     }
 
