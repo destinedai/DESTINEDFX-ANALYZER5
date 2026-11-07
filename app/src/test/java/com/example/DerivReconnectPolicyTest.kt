@@ -35,7 +35,7 @@ class DerivReconnectPolicyTest {
     fun retryStopsWhenOwnerStopsServiceAndNeverExceedsConfiguredAttempts() = runBlocking {
         var calls = 0
         var continueRecovery = true
-        val connected = retryFreshDerivAuthorization(
+        val connected = retryFreshDerivAuthorization<String>(
             maxAttempts = 5,
             shouldContinue = { continueRecovery },
             onAttempt = { if (it == 0) continueRecovery = false },
