@@ -93,16 +93,8 @@ class CTraderOAuthClient(
         val request = if (grantType == "refresh_token") requestBuilder.post(okhttp3.RequestBody.create(null, ByteArray(0))).build()
         else requestBuilder.get().build()
         return try {
-            var attempt = 0
-            while (true) {
-                val response = http.newCall(request).execute()
-                if (response.code == 429 && attempt++ < MAX_RETRIES) {
-                    response.close()
-                    Thread.sleep(250L shl (attempt - 1))
-                    continue
-                }
-                response.use {
-                val body = it.body?.string().orEmpty()
+            executeWithBackoff(request).use { response ->
+                val body = response.body?.string().orEmpty()
                 val json = runCatching { JSONObject(body) }.getOrNull()
                     ?: return Result.failure(IOException("cTrader token response was not valid JSON"))
                 val error = json.optString("errorCode").takeIf { it.isNotBlank() }
@@ -121,10 +113,20 @@ class CTraderOAuthClient(
                     secrets.saveCTraderRefreshedToken(tokens.accessToken, tokens.refreshToken, tokens.accessExpiresAtMs)
                 }
                 if (!saved) Result.failure(IllegalStateException("Secure storage unavailable; cTrader credentials were not saved")) else Result.success(tokens)
-                }
             }
         } catch (_: Exception) {
             Result.failure(IOException("cTrader token exchange failed"))
+        }
+    }
+
+    private fun executeWithBackoff(request: Request): okhttp3.Response {
+        var attempt = 0
+        while (true) {
+            val response = http.newCall(request).execute()
+            if (response.code != 429 || attempt >= MAX_RETRIES) return response
+            response.close()
+            Thread.sleep(250L shl attempt)
+            attempt++
         }
     }
 
