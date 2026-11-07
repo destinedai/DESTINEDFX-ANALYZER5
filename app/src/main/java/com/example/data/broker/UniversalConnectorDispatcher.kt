@@ -10,6 +10,16 @@ enum class ConnectorKind {
     DERIV_MT5,
 }
 
+private fun BrokerLoginSpec.connectorKind(): ConnectorKind = when (id) {
+    "DERIV_OPTIONS" -> ConnectorKind.DERIV_OPTIONS
+    "DERIV_CTRADER", "CTRADER" -> ConnectorKind.CTRADER_ACCOUNT
+    "FBS_MT5" -> ConnectorKind.FBS_MT5
+    "EXNESS_MT5" -> ConnectorKind.EXNESS_MT5
+    "HFM_MT5" -> ConnectorKind.HFM_MT5
+    "DERIV_MT5" -> ConnectorKind.DERIV_MT5
+    else -> error("Unknown BrokerLoginSpec id: $id")
+}
+
 data class ConnectorEvidence(
     val authenticatedSession: Boolean,
     val freshAccountData: Boolean,
@@ -49,14 +59,25 @@ data class ConnectorCapabilityRow(
 )
 
 object UniversalConnectorCapabilities {
-    val rows = listOf(
-        ConnectorCapabilityRow(ConnectorKind.DERIV_OPTIONS, "Deriv Options / Multipliers", automatedOnPhone = true, automatedOnOwnerHost = false, manualSignalsAvailable = false, missingSetup = "Owner DEMO App ID, masked DEMO PAT, accepted account and fresh verification"),
-        ConnectorCapabilityRow(ConnectorKind.CTRADER_ACCOUNT, "cTrader account", automatedOnPhone = true, automatedOnOwnerHost = false, manualSignalsAvailable = false, missingSetup = "Owner-registered redirect, approved cTrader app, DEMO account and fresh account-matched quote"),
-        ConnectorCapabilityRow(ConnectorKind.FBS_MT5, "FBS MT5", automatedOnPhone = false, automatedOnOwnerHost = true, manualSignalsAvailable = true, missingSetup = "Verified owner MT5 host, exact login/server/company/mode and fresh EA heartbeat"),
-        ConnectorCapabilityRow(ConnectorKind.EXNESS_MT5, "Exness MT5", automatedOnPhone = false, automatedOnOwnerHost = true, manualSignalsAvailable = true, missingSetup = "Verified owner MT5 host, exact login/server/company/mode and fresh EA heartbeat"),
-        ConnectorCapabilityRow(ConnectorKind.HFM_MT5, "HFM MT5", automatedOnPhone = false, automatedOnOwnerHost = true, manualSignalsAvailable = true, missingSetup = "Verified owner MT5 host, exact login/server/company/mode and fresh EA heartbeat"),
-        ConnectorCapabilityRow(ConnectorKind.DERIV_MT5, "Deriv MT5", automatedOnPhone = false, automatedOnOwnerHost = true, manualSignalsAvailable = true, missingSetup = "Verified owner MT5 host, exact login/server/company/mode and fresh EA heartbeat"),
-    )
+    val rows: List<ConnectorCapabilityRow> = ConnectorKind.values().map { kind ->
+        val specId = when (kind) {
+            ConnectorKind.DERIV_OPTIONS -> "DERIV_OPTIONS"
+            ConnectorKind.CTRADER_ACCOUNT -> "DERIV_CTRADER"
+            ConnectorKind.FBS_MT5 -> "FBS_MT5"
+            ConnectorKind.EXNESS_MT5 -> "EXNESS_MT5"
+            ConnectorKind.HFM_MT5 -> "HFM_MT5"
+            ConnectorKind.DERIV_MT5 -> "DERIV_MT5"
+        }
+        val spec = requireNotNull(BrokerLoginSpecs.byId(specId))
+        ConnectorCapabilityRow(
+            kind = kind,
+            label = spec.displayName,
+            automatedOnPhone = spec.connector != LoginConnector.MT5_TERMINAL,
+            automatedOnOwnerHost = spec.connector == LoginConnector.MT5_TERMINAL,
+            manualSignalsAvailable = spec.connector == LoginConnector.MT5_TERMINAL,
+            missingSetup = spec.capabilityRow,
+        )
+    }
 }
 
 /**

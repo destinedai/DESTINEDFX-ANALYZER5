@@ -834,9 +834,12 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             }.onFailure { message = "Owner DEMO acceptance blocked: ${it.message ?: "verification unavailable"}. LIVE remains locked." }
                         }, enabled = !busy && mt5Snapshot != null) { Text("OWNER ACCEPT VERIFIED DEMO PASS") }
                     }
-                    listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
+                    com.example.data.broker.BrokerLoginSpecs.all
+                        .filter { it.connector == com.example.data.broker.LoginConnector.MT5_TERMINAL }
+                        .forEach { brokerSpec ->
+                        val brand = brokerSpec.id.removeSuffix("_MT5")
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                            Text(brand, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            Text(brokerSpec.displayName, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                             listOf("DEMO", "LIVE").forEach { mode ->
                                 val slot = "${brand}_${mode}"
                                 val selected = selectedMt5Broker == brand && mt5Mode == mode

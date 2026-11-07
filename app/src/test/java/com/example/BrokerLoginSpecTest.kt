@@ -3,6 +3,7 @@ package com.example
 import com.example.data.broker.BrokerLoginSpecs
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginField
+import com.example.data.broker.ServerSuggestionSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -25,6 +26,10 @@ class BrokerLoginSpecTest {
             assertFalse(spec.fields.isEmpty())
             assertTrue(spec.fields.all { spec.fieldLabels[it].orEmpty().isNotBlank() })
             assertTrue(spec.connectedEvidence.isNotEmpty())
+            assertTrue(spec.sourceUrls.isNotEmpty())
+            assertTrue(spec.demoSignupUrl.startsWith("https://"))
+            assertTrue(spec.passwordRecoveryUrl.startsWith("https://"))
+            assertTrue(spec.companyAliases.isNotEmpty())
             assertTrue(spec.capabilityRow.isNotBlank())
             assertTrue(spec.sourceUrls.all { it.startsWith("https://") })
         }
@@ -52,5 +57,14 @@ class BrokerLoginSpecTest {
         }
         assertEquals(4, BrokerLoginSpecs.forConnector(LoginConnector.MT5_TERMINAL).size)
         assertEquals(2, BrokerLoginSpecs.forConnector(LoginConnector.CTRADER).size)
+    }
+
+    @Test
+    fun mt5ServerSuggestionsAreNeverInventedAndCarryProvenance() {
+        BrokerLoginSpecs.all.filter { it.connector == LoginConnector.MT5_TERMINAL }.forEach { spec ->
+            assertTrue(spec.serverSuggestions.any { it.source == ServerSuggestionSource.OWNER_HISTORY })
+            assertTrue(spec.serverSuggestions.any { it.source == ServerSuggestionSource.HOST_REPORTED })
+            assertTrue(spec.companyAliases.any { it.isNotBlank() })
+        }
     }
 }
