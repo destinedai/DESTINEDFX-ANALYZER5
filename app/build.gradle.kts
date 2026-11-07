@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
   id("com.chaquo.python")
+  id("com.google.protobuf") version "0.10.1"
 }
 
 val mt5ManagedServiceUrlFromGradle = providers.gradleProperty("mt5ManagedServiceUrl").orNull.orEmpty().trim()
@@ -164,6 +165,7 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation("com.google.protobuf:protobuf-kotlin-lite:4.28.3")
   implementation(libs.retrofit)
   // Bundled, offline on-device OCR for chart labels; no screenshots are sent to a service.
   implementation("com.google.mlkit:text-recognition:16.0.1")
@@ -183,4 +185,15 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+protobuf {
+  protoc { artifact = "com.google.protobuf:protoc:4.28.3" }
+  generateProtoTasks {
+    all().configureEach {
+      builtins {
+        create("java") { option("lite") }
+      }
+    }
+  }
 }

@@ -56,6 +56,12 @@ class SecretsManager internal constructor(
         private const val MT5_BRIDGE_SAFETY_ORIGINAL_ID = "mt5_remote_bridge_safety_original_id"
         private const val MT5_BRIDGE_SAFETY_ORIGINAL_ACTION = "mt5_remote_bridge_safety_original_action"
         private const val MT5_BRIDGE_SAFETY_STOP_ID = "mt5_remote_bridge_safety_stop_id"
+        private const val CTRADER_CLIENT_ID = "ctrader_client_id"
+        private const val CTRADER_CLIENT_SECRET = "ctrader_client_secret"
+        private const val CTRADER_REDIRECT_URI = "ctrader_redirect_uri"
+        private const val CTRADER_ACCESS_TOKEN = "ctrader_access_token"
+        private const val CTRADER_REFRESH_TOKEN = "ctrader_refresh_token"
+        private const val CTRADER_ACCESS_EXPIRES_AT_MS = "ctrader_access_expires_at_ms"
     }
 
     val isSecureStorageAvailable: Boolean
@@ -81,6 +87,44 @@ class SecretsManager internal constructor(
         }
         isSecureStorageAvailable = prefs !== UnavailableSharedPreferences
     }
+
+    fun saveCTraderOAuth(
+        clientId: String,
+        clientSecret: String,
+        redirectUri: String,
+        accessToken: String,
+        refreshToken: String,
+        accessExpiresAtMs: Long
+    ): Boolean {
+        if (!isSecureStorageAvailable || listOf(clientId, clientSecret, redirectUri, accessToken, refreshToken).any { it.isBlank() } || accessExpiresAtMs <= 0L) return false
+        return prefs.edit()
+            .putString(CTRADER_CLIENT_ID, clientId)
+            .putString(CTRADER_CLIENT_SECRET, clientSecret)
+            .putString(CTRADER_REDIRECT_URI, redirectUri)
+            .putString(CTRADER_ACCESS_TOKEN, accessToken)
+            .putString(CTRADER_REFRESH_TOKEN, refreshToken)
+            .putLong(CTRADER_ACCESS_EXPIRES_AT_MS, accessExpiresAtMs)
+            .commit()
+    }
+
+    fun getCTraderClientId(): String = prefs.getString(CTRADER_CLIENT_ID, "").orEmpty()
+    fun getCTraderClientSecret(): String = prefs.getString(CTRADER_CLIENT_SECRET, "").orEmpty()
+    fun getCTraderRedirectUri(): String = prefs.getString(CTRADER_REDIRECT_URI, "").orEmpty()
+    fun getCTraderAccessToken(): String = prefs.getString(CTRADER_ACCESS_TOKEN, "").orEmpty()
+    fun getCTraderRefreshToken(): String = prefs.getString(CTRADER_REFRESH_TOKEN, "").orEmpty()
+    fun getCTraderAccessExpiresAtMs(): Long = prefs.getLong(CTRADER_ACCESS_EXPIRES_AT_MS, 0L)
+
+    fun saveCTraderRefreshedToken(accessToken: String, refreshToken: String, accessExpiresAtMs: Long): Boolean {
+        if (!isSecureStorageAvailable || accessToken.isBlank() || refreshToken.isBlank() || accessExpiresAtMs <= 0L) return false
+        return prefs.edit().putString(CTRADER_ACCESS_TOKEN, accessToken)
+            .putString(CTRADER_REFRESH_TOKEN, refreshToken)
+            .putLong(CTRADER_ACCESS_EXPIRES_AT_MS, accessExpiresAtMs).commit()
+    }
+
+    fun clearCTraderOAuth(): Boolean = isSecureStorageAvailable && prefs.edit()
+        .remove(CTRADER_CLIENT_ID).remove(CTRADER_CLIENT_SECRET).remove(CTRADER_REDIRECT_URI)
+        .remove(CTRADER_ACCESS_TOKEN).remove(CTRADER_REFRESH_TOKEN).remove(CTRADER_ACCESS_EXPIRES_AT_MS)
+        .commit()
 
 
     fun saveTelegramToken(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(TG_TOK, v).commit()
