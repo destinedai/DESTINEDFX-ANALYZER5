@@ -177,7 +177,7 @@ def test_source_has_no_trade_endpoint_actions():
 def test_verification_does_not_change_selected_chart_source():
     ui = (MODULE_PATH.parent.parent / "app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt").read_text(encoding="utf-8")
     market = (MODULE_PATH.parent.parent / "app/src/main/java/com/example/data/market/MarketDataRepositoryImpl.kt").read_text(encoding="utf-8")
-    start = ui.index("VERIFY DERIV DEMO · READ ONLY")
+    start = ui.index("LOGIN · VERIFY DEMO READ ONLY")
     verification_region = ui[ui.rfind("Button(", 0, start):ui.index("val matchingDerivAccounts", start)]
     assert "marketDataRepository.refreshSymbol" not in verification_region
     assert "selectedApiSource" not in verification_region
