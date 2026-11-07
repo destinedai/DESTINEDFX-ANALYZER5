@@ -269,7 +269,7 @@ internal fun parseCTraderFrames(bytes: ByteArray): List<ProtoMessage>? {
         if (length <= 0 || length > MAX_FRAME_BYTES || length > bytes.size - offset - 4) return null
         val end = offset + 4 + length
         val message = runCatching {
-            ProtoMessage.parseFrom(ByteString.copyFrom(bytes, offset + 4, length))
+            ProtoMessage.parseFrom(com.google.protobuf.ByteString.copyFrom(bytes, offset + 4, length))
         }.getOrNull() ?: return null
         messages += message
         offset = end
