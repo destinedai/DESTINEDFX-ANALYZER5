@@ -107,6 +107,13 @@ class SecretsManager internal constructor(
             .commit()
     }
 
+    fun saveCTraderApplication(clientId: String, clientSecret: String, redirectUri: String): Boolean {
+        if (!isSecureStorageAvailable || listOf(clientId, clientSecret, redirectUri).any { it.isBlank() }) return false
+        return prefs.edit().putString(CTRADER_CLIENT_ID, clientId)
+            .putString(CTRADER_CLIENT_SECRET, clientSecret)
+            .putString(CTRADER_REDIRECT_URI, redirectUri).commit()
+    }
+
     fun getCTraderClientId(): String = prefs.getString(CTRADER_CLIENT_ID, "").orEmpty()
     fun getCTraderClientSecret(): String = prefs.getString(CTRADER_CLIENT_SECRET, "").orEmpty()
     fun getCTraderRedirectUri(): String = prefs.getString(CTRADER_REDIRECT_URI, "").orEmpty()

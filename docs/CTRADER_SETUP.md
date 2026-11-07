@@ -9,6 +9,9 @@ This path is free and runs on the Android phone. It does not require a PC, VPS, 
 3. Open the official cTrader Open API portal and register one Open API application.
 4. Add this exact redirect URI to the application: `destinedfx://ctrader-callback`.
 5. Copy the application client ID and client secret into the app's cTrader setup screen. The client secret must never leave the phone. Do not paste it into chat, GitHub, a screenshot, a log, or a support message.
+
+The official account-authentication page requires a redirect URI registered in the cTrader application and documents `client_id`, `redirect_uri`, `scope`, and optional `product` authorization parameters. It does not document a `state` parameter or explicitly confirm custom-scheme redirects. This app therefore treats `destinedfx://ctrader-callback` as UNVERIFIED until the owner confirms that cTrader accepts and returns to that registered URI. If it fails, an HTTPS redirect plus an in-app interception flow is required before this connector can be considered usable.
+
 6. Start with the `accounts` scope. This is read-only account access. Do not select `trading` until a separate DEMO acceptance record exists and the owner has explicitly approved the next phase.
 7. Tap **Sign in with cTrader**. Complete the cTrader ID consent page. The app exchanges the short-lived authorization code for encrypted access and refresh tokens.
 8. Select the broker and DEMO account, then tap **VERIFY CTRADER DEMO**. The app must receive the account list, authenticate the account session, read trader information, and obtain a fresh quote before showing CONNECTED.

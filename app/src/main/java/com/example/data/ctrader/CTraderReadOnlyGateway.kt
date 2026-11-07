@@ -47,6 +47,13 @@ data class CTraderVerifiedAccount(
     val receivedAtMs: Long
 )
 
+data class CTraderAccountOption(
+    val accountId: Long,
+    val traderLogin: Long,
+    val brokerName: String,
+    val isLive: Boolean
+)
+
 data class CTraderQuote(
     val accountId: Long,
     val symbolId: Long,
@@ -80,6 +87,7 @@ class CTraderReadOnlyGateway(
     suspend fun verify(
         brokerName: String,
         live: Boolean,
+        accountId: Long? = null,
         nowMs: () -> Long = System::currentTimeMillis
     ): Result<CTraderVerifiedAccount> = withContext(Dispatchers.IO) {
         selectedBroker = brokerName.trim()
@@ -90,29 +98,13 @@ class CTraderReadOnlyGateway(
             if (refreshed.accessToken.isBlank()) return@withContext Result.failure(IllegalStateException("cTrader authorization did not produce an access token"))
         }
         try {
-            openSocket(live)
-            sendAndAwait(
-                ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_REQ_VALUE,
-                ProtoOAApplicationAuthReq.newBuilder()
-                    .setClientId(secrets.getCTraderClientId())
-                    .setClientSecret(secrets.getCTraderClientSecret())
-                    .build(),
-                ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES_VALUE
-            )
-            val accountsReply = sendAndAwait(
-                ProtoOAPayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ_VALUE,
-                ProtoOAGetAccountListByAccessTokenReq.newBuilder()
-                    .setAccessToken(secrets.getCTraderAccessToken())
-                    .build(),
-                ProtoOAPayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES_VALUE
-            )
-            val accounts = ProtoOAGetAccountListByAccessTokenRes.parseFrom(accountsReply.payload)
-            val selected = accounts.ctidTraderAccountList.firstOrNull { it.isLive == selectedLive }
+            val accounts = listAccountsInternal(live)
+            val selected = accounts.firstOrNull { it.isLive == selectedLive && (accountId == null || it.accountId == accountId) }
                 ?: throw IllegalStateException("No ${if (selectedLive) "LIVE" else "DEMO"} cTrader account was authorised")
-            if (selected.brokerTitleShort.isBlank() || !selected.brokerTitleShort.equals(selectedBroker, ignoreCase = true)) {
+            if (selected.brokerName.isBlank() || !selected.brokerName.equals(selectedBroker, ignoreCase = true)) {
                 throw IllegalStateException("BLOCKED: cTrader broker identity did not match the selected broker")
             }
-            connectedAccountId = selected.ctidTraderAccountId
+            connectedAccountId = selected.accountId
             sendAndAwait(
                 ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_REQ_VALUE,
                 ProtoOAAccountAuthReq.newBuilder()
@@ -137,6 +129,13 @@ class CTraderReadOnlyGateway(
             close()
             Result.failure(e.safeCTraderFailure())
         }
+    }
+
+    suspend fun listAccounts(live: Boolean): Result<List<CTraderAccountOption>> = withContext(Dispatchers.IO) {
+        if (!oauth.accessTokenIsFresh()) {
+            oauth.refresh().getOrElse { return@withContext Result.failure(IllegalStateException("cTrader authorization is expired; re-authorize the app")) }
+        }
+        runCatching { listAccountsInternal(live) }.onFailure { close() }
     }
 
     suspend fun subscribeReadOnlySpot(symbolId: Long): Result<Unit> = withContext(Dispatchers.IO) {
@@ -183,6 +182,26 @@ class CTraderReadOnlyGateway(
             }
         })
         withTimeout(CONNECT_TIMEOUT_MS) { opened.await() }
+    }
+
+    private suspend fun listAccountsInternal(live: Boolean): List<CTraderAccountOption> {
+        openSocket(live)
+        sendAndAwait(
+            ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_REQ_VALUE,
+            ProtoOAApplicationAuthReq.newBuilder()
+                .setClientId(secrets.getCTraderClientId())
+                .setClientSecret(secrets.getCTraderClientSecret())
+                .build(),
+            ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES_VALUE
+        )
+        val reply = sendAndAwait(
+            ProtoOAPayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ_VALUE,
+            ProtoOAGetAccountListByAccessTokenReq.newBuilder().setAccessToken(secrets.getCTraderAccessToken()).build(),
+            ProtoOAPayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES_VALUE
+        )
+        return ProtoOAGetAccountListByAccessTokenRes.parseFrom(reply.payload).ctidTraderAccountList.map {
+            CTraderAccountOption(it.ctidTraderAccountId, it.traderLogin, it.brokerTitleShort, it.isLive)
+        }
     }
 
     private suspend fun sendAndAwait(payloadType: Int, payload: com.google.protobuf.MessageLite, expectedType: Int): ProtoMessage {

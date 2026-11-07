@@ -20,10 +20,10 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
 
 
 class MyApplication : Application() {
@@ -39,6 +39,9 @@ class MyApplication : Application() {
     val db: AppDatabase get() = _db ?: throw IllegalStateException("AppDatabase not initialized")
 
     val storageAvailable = MutableStateFlow(false)
+    val cTraderCallback = MutableStateFlow<android.net.Uri?>(null)
+    fun acceptCTraderCallback(uri: android.net.Uri) { cTraderCallback.value = uri }
+    fun clearCTraderCallback() { cTraderCallback.value = null }
     
     private var _secretsManager: SecretsManager? = null
     val secretsManager: SecretsManager get() = _secretsManager ?: throw IllegalStateException("SecretsManager not initialized")
@@ -90,6 +93,12 @@ class MyApplication : Application() {
 
     private var _mtfAlignmentEngine: MTFAlignmentEngine? = null
     val mtfAlignmentEngine: MTFAlignmentEngine get() = _mtfAlignmentEngine ?: throw IllegalStateException("MTFAlignmentEngine not initialized")
+
+    private var _cTraderOAuthClient: com.example.data.ctrader.CTraderOAuthClient? = null
+    val cTraderOAuthClient: com.example.data.ctrader.CTraderOAuthClient get() = _cTraderOAuthClient ?: throw IllegalStateException("CTraderOAuthClient not initialized")
+
+    private var _cTraderGateway: com.example.data.ctrader.CTraderReadOnlyGateway? = null
+    val cTraderGateway: com.example.data.ctrader.CTraderReadOnlyGateway get() = _cTraderGateway ?: throw IllegalStateException("CTraderReadOnlyGateway not initialized")
 
     private var _derivBrokerGateway: com.example.data.deriv.DerivBrokerGateway? = null
     val derivBrokerGateway: com.example.data.deriv.DerivBrokerGateway get() = _derivBrokerGateway ?: throw IllegalStateException("DerivBrokerGateway not initialized")
@@ -155,6 +164,8 @@ class MyApplication : Application() {
                 pythonAnalyzer = ChaquopyPythonAnalyzer(this@MyApplication)
             )
             
+            _cTraderOAuthClient = com.example.data.ctrader.CTraderOAuthClient(secrets)
+            _cTraderGateway = com.example.data.ctrader.CTraderReadOnlyGateway(secrets, cTraderOAuthClient)
             _derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secrets)
             _derivGatewayAdapter = com.example.data.broker.DerivBrokerGatewayAdapter(derivBrokerGateway)
             _mt5GatewayAdapter = com.example.data.broker.MT5BrokerGatewayAdapter(mt5GatewayRepository)
