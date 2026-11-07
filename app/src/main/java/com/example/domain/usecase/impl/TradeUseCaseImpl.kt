@@ -131,7 +131,7 @@ class TradeUseCaseImpl(
         // Recalculate from broker quote if available
         val bq = brokerQuote ?: quote
         val executionPrice = if (isLong) bq?.ask ?: bq?.mid else bq?.bid ?: bq?.mid
-        val brokerPlan = if (executionPrice != null && executionPrice > 0.0 && spec != null) {
+        val brokerPlan = if (executionPrice != null && executionPrice > 0.0 && spec != null && effPlan != null) {
             val p = effPlan
             val diff = executionPrice - p.entry
             val newSl = spec.roundToTick(p.stopLoss + diff)
