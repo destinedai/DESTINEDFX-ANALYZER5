@@ -65,7 +65,7 @@ write_files:
 
       # D1 host-agent.py is the required runtime contract for a real MT5 host.
       # This checkout currently predates D1, so do not invent a substitute service.
-      if [[ ! -f "$repo_dir/host-agent.py" && ! -f "$repo_dir/managed-worker/host-agent.py" ]]; then
+      if [[ ! -f "$repo_dir/host-agent.py" && ! -f "$repo_dir/managed-worker/host-agent.py" && ! -f "$repo_dir/scripts/linux-host/host-agent.py" ]]; then
         {
           echo "status=BLOCKED"
           echo "reason=D1 host-agent.py is absent from the selected repository head."
