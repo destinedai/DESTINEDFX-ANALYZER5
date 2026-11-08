@@ -409,3 +409,21 @@ jobs:
           name: DestinedFX-Windows-Worker-Kit
           path: dist/DestinedFX-Windows-Worker-Kit/
           if-no-files-found: error
+
+  iac-validate:
+    name: Validate Azure for Students IaC
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Bicep without Azure credentials
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az bicep build --file deploy/azure-students/main.bicep --outfile /tmp/azuredeploy.json
+            cmp --silent /tmp/azuredeploy.json deploy/azure-students/azuredeploy.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run Azure free-tier guard tests
+        run: python -m pytest -q deploy/azure-students/test_azure_students.py

@@ -1,0 +1,367 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.49.2.45890",
+      "templateHash": "2306452539689085173"
+    }
+  },
+  "parameters": {
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "destinedfx-students",
+      "metadata": {
+        "description": "Resource group created by this subscription-scope deployment."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "metadata": {
+        "description": "Azure region selected by the owner. Pick a region that offers the selected VM size."
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_B1s",
+      "allowedValues": [
+        "Standard_B1s",
+        "Standard_B2ats_v2",
+        "Standard_B2pts_v2"
+      ],
+      "metadata": {
+        "description": "One Linux VM only. These are the sizes listed on the Azure for Students page."
+      }
+    },
+    "osDiskSizeGb": {
+      "type": "int",
+      "defaultValue": 30,
+      "allowedValues": [
+        30
+      ],
+      "metadata": {
+        "description": "30 GB is the conservative student-free disk guard for this kit. Larger disks are rejected."
+      }
+    },
+    "vmName": {
+      "type": "string",
+      "defaultValue": "destinedfxvm",
+      "minLength": 3,
+      "maxLength": 15,
+      "metadata": {
+        "description": "Azure VM name."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "destinedfx",
+      "minLength": 1,
+      "maxLength": 32,
+      "metadata": {
+        "description": "Linux administrator username. Password authentication is disabled."
+      }
+    },
+    "sshPublicKey": {
+      "type": "string",
+      "metadata": {
+        "description": "SSH public key pasted by the owner in Cloud Shell. Never put a private key here."
+      }
+    },
+    "budgetEmail": {
+      "type": "string",
+      "metadata": {
+        "description": "Email for the USD 1 monthly budget alert. Budget alerts do not cap usage."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Consumption/budgets",
+      "apiVersion": "2023-11-01",
+      "name": "[format('destinedfx-{0}', uniqueString(subscription().id, parameters('resourceGroupName')))]",
+      "properties": {
+        "category": "Cost",
+        "amount": 1,
+        "timeGrain": "Monthly",
+        "timePeriod": {
+          "startDate": "2026-01-01"
+        },
+        "notifications": {
+          "eightyPercent": {
+            "enabled": true,
+            "operator": "GreaterThan",
+            "threshold": 80,
+            "contactEmails": [
+              "[parameters('budgetEmail')]"
+            ],
+            "contactRoles": [],
+            "contactGroups": []
+          },
+          "hundredPercent": {
+            "enabled": true,
+            "operator": "GreaterThan",
+            "threshold": 100,
+            "contactEmails": [
+              "[parameters('budgetEmail')]"
+            ],
+            "contactRoles": [],
+            "contactGroups": []
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "destinedfx-runtime",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "vmSize": {
+            "value": "[parameters('vmSize')]"
+          },
+          "osDiskSizeGb": {
+            "value": "[parameters('osDiskSizeGb')]"
+          },
+          "vmName": {
+            "value": "[parameters('vmName')]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "sshPublicKey": {
+            "value": "[parameters('sshPublicKey')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.49.2.45890",
+              "templateHash": "7081900650246220508"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "vmSize": {
+              "type": "string",
+              "allowedValues": [
+                "Standard_B1s",
+                "Standard_B2ats_v2",
+                "Standard_B2pts_v2"
+              ]
+            },
+            "osDiskSizeGb": {
+              "type": "int",
+              "allowedValues": [
+                30
+              ]
+            },
+            "vmName": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 15
+            },
+            "adminUsername": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "sshPublicKey": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "$fxv#0": "#cloud-config\npackage_update: true\npackage_upgrade: false\npackages:\n  - ca-certificates\n  - curl\n  - git\n  - openssl\n  - python3\n  - python3-venv\n  - python3-pip\n\nwrite_files:\n  - path: /usr/local/sbin/destinedfx-azure-first-boot\n    owner: root:root\n    permissions: '0700'\n    content: |\n      #!/usr/bin/env bash\n      set -Eeuo pipefail\n      readonly root_dir=/var/lib/destinedfx\n      readonly repo_dir=/opt/destinedfx/repo\n      readonly first_run=\"$root_dir/first-run.txt\"\n      readonly state=\"$root_dir/bootstrap-state\"\n      mkdir -p \"$root_dir\" /opt/destinedfx /etc/destinedfx\n      chmod 0700 \"$root_dir\" /etc/destinedfx\n      exec 9>\"$root_dir/bootstrap.lock\"\n      flock -n 9 || exit 0\n      if [[ -f \"$state\" && \"$(cat \"$state\")\" == READY ]]; then\n        exit 0\n      fi\n      printf 'RUNNING\\n' > \"$state\"\n      chmod 0600 \"$state\"\n      {\n        echo \"DestinedFX Azure for Students first-run record\"\n        echo \"generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n        echo \"vm_architecture=$(uname -m)\"\n        echo \"private_access=NO_PUBLIC_IP; Tailscale login is owner-interactive\"\n      } > \"$first_run\"\n      chmod 0600 \"$first_run\"\n\n      if ! command -v tailscale >/dev/null 2>&1; then\n        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://tailscale.com/install.sh | sh\n      fi\n      tailscale_up_log=/run/destinedfx-tailscale-up.log\n      if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; then\n        (tailscale up --ssh --accept-dns=false >\"$tailscale_up_log\" 2>&1 || true)\n      fi\n      if [[ -s \"$tailscale_up_log\" ]]; then\n        {\n          echo \"\"\n          echo \"tailscale_output_begin\"\n          sed -n '1,40p' \"$tailscale_up_log\"\n          echo \"tailscale_output_end\"\n        } >> \"$first_run\"\n      fi\n\n      repo_url=https://github.com/destinedai/DESTINEDFX-ANALYZER5.git\n      repo_ref=free/phone-only-v1\n      if [[ ! -d \"$repo_dir/.git\" ]]; then\n        git clone --depth 1 --branch \"$repo_ref\" \"$repo_url\" \"$repo_dir\"\n      else\n        git -C \"$repo_dir\" fetch --depth 1 origin \"$repo_ref\"\n        git -C \"$repo_dir\" reset --hard FETCH_HEAD\n      fi\n\n      # D1 host-agent.py is the required runtime contract for a real MT5 host.\n      # This checkout currently predates D1, so do not invent a substitute service.\n      if [[ ! -f \"$repo_dir/host-agent.py\" && ! -f \"$repo_dir/managed-worker/host-agent.py\" ]]; then\n        {\n          echo \"status=BLOCKED\"\n          echo \"reason=D1 host-agent.py is absent from the selected repository head.\"\n          echo \"fix=Merge the reviewed D1 Linux host runtime into free/phone-only-v1, then rerun: sudo systemctl restart destinedfx-azure-first-boot.service\"\n          echo \"trading=REFUSED\"\n        } >> \"$first_run\"\n        printf 'BLOCKED\\n' > \"$state\"\n      chmod 0600 \"$state\"\n      exit 0\n      fi\n\n      {\n        echo \"status=READY_FOR_OWNER_PAIRING_ONLY\"\n        echo \"trading=REFUSED until D1 doctor, fresh EA heartbeat, DEMO acceptance, and rollout gates pass\"\n      } >> \"$first_run\"\n      printf 'READY\\n' > \"$state\"\n      chmod 0600 \"$state\"\n\n  - path: /etc/systemd/system/destinedfx-azure-first-boot.service\n    owner: root:root\n    permissions: '0644'\n    content: |\n      [Unit]\n      Description=DestinedFX Azure first boot and runtime contract check\n      Wants=network-online.target\n      After=network-online.target\n      ConditionPathExists=/usr/local/sbin/destinedfx-azure-first-boot\n\n      [Service]\n      Type=oneshot\n      ExecStart=/usr/local/sbin/destinedfx-azure-first-boot\n      RemainAfterExit=yes\n\n      [Install]\n      WantedBy=multi-user.target\n\nruncmd:\n  - [bash, -lc, /usr/local/sbin/destinedfx-azure-first-boot]\n  - [systemctl, daemon-reload]\n  - [systemctl, enable, --now, destinedfx-azure-first-boot.service]\n\nfinal_message: \"DestinedFX Azure bootstrap finished. Read /var/lib/destinedfx/first-run.txt with Azure Run Command; do not treat reachability as broker or trading readiness.\"\n",
+            "vnetName": "[format('{0}-vnet', parameters('vmName'))]",
+            "subnetName": "private",
+            "nsgName": "[format('{0}-nsg', parameters('vmName'))]",
+            "nicName": "[format('{0}-nic', parameters('vmName'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkSecurityGroups",
+              "apiVersion": "2023-11-01",
+              "name": "[variables('nsgName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "securityRules": []
+              }
+            },
+            {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2023-11-01",
+              "name": "[variables('vnetName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "10.42.0.0/24"
+                  ]
+                },
+                "subnets": [
+                  {
+                    "name": "[variables('subnetName')]",
+                    "properties": {
+                      "addressPrefix": "10.42.0.0/24",
+                      "networkSecurityGroup": {
+                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+                      }
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2023-11-01",
+              "name": "[variables('nicName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "privateIp",
+                    "properties": {
+                      "privateIPAllocationMethod": "Dynamic",
+                      "subnet": {
+                        "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('subnetName'))]"
+                      }
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2024-07-01",
+              "name": "[parameters('vmName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "osProfile": {
+                  "computerName": "[parameters('vmName')]",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "linuxConfiguration": {
+                    "disablePasswordAuthentication": true,
+                    "ssh": {
+                      "publicKeys": [
+                        {
+                          "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUsername'))]",
+                          "keyData": "[parameters('sshPublicKey')]"
+                        }
+                      ]
+                    }
+                  },
+                  "customData": "[base64(variables('$fxv#0'))]"
+                },
+                "storageProfile": {
+                  "imageReference": {
+                    "publisher": "Canonical",
+                    "offer": "ubuntu-22_04-lts",
+                    "sku": "server-gen2",
+                    "version": "latest"
+                  },
+                  "osDisk": {
+                    "createOption": "FromImage",
+                    "diskSizeGB": "[parameters('osDiskSizeGb')]",
+                    "managedDisk": {
+                      "storageAccountType": "Standard_LRS"
+                    }
+                  }
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]",
+                      "properties": {
+                        "primary": true
+                      }
+                    }
+                  ]
+                },
+                "diagnosticsProfile": {
+                  "bootDiagnostics": {
+                    "enabled": true
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "vmName": {
+              "type": "string",
+              "value": "[parameters('vmName')]"
+            },
+            "privateIp": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', variables('nicName')), '2023-11-01').ipConfigurations[0].properties.privateIPAddress]"
+            },
+            "runCommand": {
+              "type": "string",
+              "value": "[format('az vm run-command invoke --resource-group {0} --name {1} --command-id RunShellScript --scripts \"sudo cat /var/lib/destinedfx/first-run.txt\"', resourceGroup().name, parameters('vmName'))]"
+            },
+            "architectureNote": {
+              "type": "string",
+              "value": "[if(equals(parameters('vmSize'), 'Standard_B2pts_v2'), 'ARM: MT5 and EA operation is UNVERIFIED.', 'AMD/x86: one MT5 terminal only, performance remains UNVERIFIED until measured.')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[parameters('resourceGroupName')]"
+    },
+    "vmName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'destinedfx-runtime'), '2025-04-01').outputs.vmName.value]"
+    },
+    "privateIp": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'destinedfx-runtime'), '2025-04-01').outputs.privateIp.value]"
+    },
+    "runCommand": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'destinedfx-runtime'), '2025-04-01').outputs.runCommand.value]"
+    },
+    "architectureNote": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'destinedfx-runtime'), '2025-04-01').outputs.architectureNote.value]"
+    }
+  }
+}
