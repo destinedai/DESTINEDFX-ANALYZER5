@@ -966,7 +966,7 @@ def test_showmytrades_adapter_clears_only_with_fresh_complete_coverage(monkeypat
 
 def test_showmytrades_adapter_fails_closed_on_stale_calendar_snapshot(monkeypatch):
     monkeypatch.setattr(app,'NEWS_PROVIDER_URL','https://showmytrades.com/api/public/calendar/v1')
-    payload=_showmytrades_payload([],generated_offset_seconds=1200)
+    payload=_showmytrades_payload([],generated_offset_seconds=max(app.NEWS_MAX_AGE,960)+1)
     monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: _MockCalendarResponse(payload))
     verdict=app.provider_news('EURUSD')
     assert verdict['status']=='UNKNOWN'
