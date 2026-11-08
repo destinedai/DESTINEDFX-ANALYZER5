@@ -27,6 +27,8 @@ NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
 NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
+LINUX_HOST_MODE=os.getenv('BRIDGE_HOST_MODE','').strip().lower()=='linux-host'
+HOST_AGENT_URL=os.getenv('HOST_AGENT_URL','http://127.0.0.1:8787/health/ready').strip()
 ANALYSIS_CLOCK_SKEW_MS=max(0,int(os.getenv('ANALYSIS_CLOCK_SKEW_SECONDS','120')))*1000
 ANALYSIS_QUOTE_MAX_AGE_MS=max(1,int(os.getenv('ANALYSIS_QUOTE_MAX_AGE_SECONDS','15')))*1000
 ANALYSIS_TIMEFRAME_POLICY={
@@ -72,6 +74,16 @@ def validate_cloudflare_assertion(assertion):
 def now(): return datetime.now(timezone.utc)
 def iso(dt=None): return (dt or now()).isoformat().replace('+00:00','Z')
 def digest(s): return hashlib.sha256(s.encode()).hexdigest()
+def linux_host_report():
+    if not LINUX_HOST_MODE: return {'healthy': True, 'mode': 'windows-or-managed-host'}
+    try:
+        with urllib.request.urlopen(HOST_AGENT_URL, timeout=2) as response:
+            payload=json.loads(response.read(128000).decode('utf-8'))
+        if not isinstance(payload,dict): raise ValueError('host-agent response is not an object')
+        if not payload.get('healthy'): raise ValueError('host-agent reports BLOCKED')
+        return payload
+    except Exception as exc:
+        raise HTTPException(503, detail={'code':'LINUX_HOST_AGENT_UNHEALTHY','message':'Linux host agent is unavailable or reports blocked readiness'}) from exc
 def broker_company_matches(brand, company):
     """Bind an MT5 profile to the broker identity actually reported by its terminal."""
     key=str(brand or 'UNKNOWN').strip().upper()
@@ -702,6 +714,7 @@ def snapshot_ticket(value):
     return str(number) if 1<=number<=UINT64_MAX else None
 
 def destructive_context(p):
+    linux_host_report()
     with tx() as c:
         managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
@@ -880,6 +893,7 @@ def readiness():
         managed_config()
         with tx() as c:
             c.execute('SELECT 1').fetchone()
+        linux_host_report()
     except HTTPException:
         raise
     except Exception:
@@ -1245,6 +1259,7 @@ def issue_destructive_command(x,p):
 @app.post('/v1/app/commands',status_code=202)
 def command(x:Command,authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); check_json(x.config)
+    linux_host_report()
     # A non-durable diagnostic deployment may still deliver a narrowly scoped
     # safety stop to a terminal already paired in the current process. It must
     # never create a new START/RESUME or a destructive trading command.
