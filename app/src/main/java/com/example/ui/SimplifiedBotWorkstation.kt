@@ -474,7 +474,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         if (broker == BrokerType.MT5 && bridge?.managedConfigured() == true && bridge.hasPairing()) {
             mt5Snapshot = null
             while (true) {
-                mt5Snapshot = runCatching { bridge.state() }.getOrNull()
+                mt5Snapshot = runCatching { bridge.state() }.getOrNull() ?: mt5Snapshot?.copy(managedState = "OFFLINE", workerStatus = "OFFLINE", connected = false, terminalOnline = false, heartbeatFresh = false, state = "OFFLINE", liveAuthorized = false)
                 delay(5_000L)
             }
         } else {
@@ -794,7 +794,14 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 Text("Service: ${serviceReadiness?.serviceStatus ?: if (MT5RemoteBridgeClient.validServiceOrigin(serviceUrl).isNullOrBlank()) "CONFIGURATION_REQUIRED" else "not checked"} · HTTP ${serviceReadiness?.httpStatus ?: "-"}", color = WarningAmber, fontSize = 10.sp)
                 Text("Durable storage: ${serviceReadiness?.database ?: "not checked"} · Execution config: ${serviceReadiness?.managedExecution ?: "not checked"}", color = TextSecondary, fontSize = 10.sp)
                 serviceReadiness?.errorCode?.takeIf { it.isNotBlank() }?.let { Text("Readiness blocker: $it", color = LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                if (broker == BrokerType.MT5 && mt5Snapshot?.connected != true) Text("HOST OFFLINE", color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("Worker job: ${mt5Snapshot?.workerStatus ?: "not checked"} · Managed readiness: ${mt5Snapshot?.managedState ?: "not checked"} · Terminal: ${mt5Snapshot?.state ?: "not checked"} · Fresh heartbeat: ${mt5Snapshot?.heartbeatFresh ?: false}", color = TextSecondary, fontSize = 10.sp)
+                val idleTimeoutSeconds = mt5Snapshot?.raw?.optInt("idle_timeout_seconds")?.takeIf { it > 0 } ?: 0
+                val hostStartedAt = mt5Snapshot?.raw?.optLong("host_started_at_epoch_seconds")?.takeIf { it > 0 } ?: 0
+                val idleCountdownEstimate = if (idleTimeoutSeconds > 0 && hostStartedAt > 0) {
+                    (idleTimeoutSeconds - (System.currentTimeMillis() / 1000 - hostStartedAt).coerceAtLeast(0)).coerceAtLeast(0)
+                } else idleTimeoutSeconds
+                Text("Test host, DEMO only, stops when idle" + idleCountdownEstimate.takeIf { it > 0 }?.let { " · estimated idle countdown ${it / 60}m ${it % 60}s; user activity resets GitHub's timer" }.orEmpty(), color = WarningAmber, fontSize = 10.sp)
                 Text("A successful HTTP probe is not proof of broker authentication or trading readiness. Do not enter credentials until /health/ready confirms durable storage and configured execution.", color = WarningAmber, fontSize = 9.sp)
             }
         }
@@ -1367,7 +1374,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 ownerReauthenticated = AppSecurityGuard.authorizeSensitiveAction(),
                                 firstMinimumSizeVerified = firstLot != null && firstLot.isFinite() && firstLot > 0.0,
                                 dailyRiskClear = risk?.optBoolean("daily_loss_clear", false) == true,
-                                riskCapsClear = risk?.optBoolean("risk_caps_clear", false) == true
+                                riskCapsClear = risk?.optBoolean("risk_caps_clear", false) == true,
+                                hostProfile = snapshot.hostProfile
                             )).getOrElse { throw it }
                             try {
                                 val expiry = requireNotNull(bridge).authorizeLiveSession()

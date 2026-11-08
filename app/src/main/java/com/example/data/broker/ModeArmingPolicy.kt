@@ -15,6 +15,7 @@ enum class ModePath {
 }
 
 enum class AccountMode { DEMO, LIVE }
+enum class HostProfile { PERSISTENT, EPHEMERAL }
 
 /** Account identity only. Never put passwords, PATs or OAuth tokens in this model. */
 data class ModeAccountIdentity(
@@ -80,7 +81,8 @@ data class LiveArmRequest(
     val ownerReauthenticated: Boolean,
     val firstMinimumSizeVerified: Boolean,
     val dailyRiskClear: Boolean,
-    val riskCapsClear: Boolean
+    val riskCapsClear: Boolean,
+    val hostProfile: HostProfile = HostProfile.PERSISTENT
 )
 
 /**
@@ -125,6 +127,7 @@ class ModeArmingPolicy(
         val identity = request.identity
         val now = nowMs()
         val reason = when {
+            request.hostProfile != HostProfile.PERSISTENT -> "EPHEMERAL_HOST_LIVE_BLOCKED"
             identity.mode != AccountMode.LIVE -> "LIVE_PROFILE_REQUIRED"
             identity.path == ModePath.CTRADER_ACCOUNT -> "CTRADER_TRADING_NOT_IMPLEMENTED"
             identity.path.leaseDurationMs <= 0L -> "LIVE_PATH_NOT_SUPPORTED"
@@ -161,7 +164,8 @@ class ModeArmingPolicy(
         return Result.success(lease)
     }
 
-    fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs()): ModeDecision {
+    fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs(), hostProfile: HostProfile = HostProfile.PERSISTENT): ModeDecision {
+        if (hostProfile != HostProfile.PERSISTENT) return ModeDecision(false, "LIVE_LOCKED", "EPHEMERAL_HOST_LIVE_BLOCKED")
         if (identity.mode != AccountMode.LIVE) return ModeDecision(false, "BLOCKED", "LIVE_PROFILE_REQUIRED")
         val lease = liveLeases[identity.fingerprint()]
             ?: return ModeDecision(false, "LIVE_LOCKED", "LIVE_LEASE_MISSING_OR_PROCESS_RESTARTED")

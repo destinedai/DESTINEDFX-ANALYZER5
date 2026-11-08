@@ -365,3 +365,30 @@ def test_real_terminal_fixes_are_fail_closed_and_telemetry_is_authoritative():
     place = source[source.index("bool Place("):source.index("\nvoid SetWait", source.index("bool Place("))]
     assert place.index("if(!NewsClear(sym))") < place.index("if(!Remember(key))")
     assert "g_sigEntry=entry;g_sigSL=sl;g_sigTP=tp;" in place
+
+def test_new_broker_orders_require_positive_valid_sl_and_tp():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    place = source[source.index("bool Place(") : source.index("void Heartbeat()")]
+    assert "sl<=0||tp<=0" in place
+    assert "Finite(sl)||!Finite(tp)" in place
+    assert "trade.Buy(vol,sym,0,sl,tp" in place
+    assert "trade.Sell(vol,sym,0,sl,tp" in place
+
+
+def test_restart_recovery_precedes_start_resume_and_scanning():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    startup = source[source.index("bool StartupBrokerSnapshotReady()") : source.index("void OnTimer()") ]
+    commands = source[source.index("void ProcessCommands()") : source.index("void ReconcileOrder()") ]
+    scan = source[source.index("void Scan()") : source.index("void Ack(")]
+    assert "g_journalsLoaded" in startup
+    assert "TERMINAL_CONNECTED" in startup and "HistorySelect(" in startup
+    assert "PositionGetTicket(i)" in startup and "PositionSelectByTicket(ticket)" in startup
+    assert "OrderGetTicket(i)" in startup and "OrderSelect(ticket)" in startup
+    assert "ReconcileOrder();" in startup and "ReconcileOperations();" in startup
+    assert "PersistOrderState()||!PersistOperations()" in startup
+    assert "g_ackOutcomes[k]==\"IN_PROGRESS\"" in startup
+    assert "g_startupRecoveryReady" in commands and "START withheld" in commands
+    assert "RESUME withheld" in commands
+    assert "if(!g_startupRecoveryReady)" in scan
+    timer = source[source.index("void OnTimer()") : source.index("void OnTick()")]
+    assert timer.index("StartupBrokerSnapshotReady()") < timer.index("ProcessCommands()")

@@ -213,7 +213,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
+    assert set(state)=={'host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 
@@ -1260,3 +1260,61 @@ def test_non_durable_mode_blocks_new_execution_but_preserves_emergency_stop_and_
     assert client.delete('/v1/app/live-authorization',headers=ah).status_code == 200
     assert client.delete('/v1/app/pairing',headers=ah).status_code == 200
     monkeypatch.setenv('EXECUTION_STORAGE_DURABLE', 'true')
+
+
+def test_host_profile_health_and_state_contract(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','PERSISTENT')
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    health=client.get('/health').json()
+    assert health['host_profile']=='PERSISTENT'
+    assert health['idle_timeout_seconds']>0 and health['host_started_at_epoch_seconds']>0
+    state=client.get('/v1/app/state',headers=headers).json()
+    assert state['host_profile']=='PERSISTENT'
+    assert state['idle_timeout_seconds']==health['idle_timeout_seconds']
+    assert state['host_started_at_epoch_seconds']==health['host_started_at_epoch_seconds']
+
+
+def test_ephemeral_blocks_live_auth_and_start_with_stable_reason(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
+    p,ah,wh,job,th,actual=live_ready(monkeypatch)
+    auth_response=client.post('/v1/app/live-authorization',headers=ah,json={'confirm_live_trading':True})
+    assert auth_response.status_code==409
+    assert auth_response.json()['detail']['code']=='EPHEMERAL_HOST_LIVE_BLOCKED'
+    for action in ('START','RESUME'):
+        response=client.post('/v1/app/commands',headers=ah,json=command_req(action))
+        assert response.status_code==409
+        assert response.json()['detail']['code']=='EPHEMERAL_HOST_LIVE_BLOCKED'
+    assert client.get('/v1/app/state',headers=ah).json()['host_profile']=='EPHEMERAL'
+
+
+def test_ephemeral_allows_demo_start(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
+    managed_env(monkeypatch); p,ah=managed_pair()
+    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==202
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'ephemeral-demo'}).json()
+    client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'ephemeral-demo','status':'AUTHENTICATING'})
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'ephemeral-demo','account':fbs_terminal_account()}).json()
+    th={'Authorization':'Bearer '+terminal['terminal_token']}
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
+    status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=ephemeral-demo',headers=wh)
+    assert status.json()['status']=='READY'
+    response=client.post('/v1/app/commands',headers=ah,json=command_req('START'))
+    assert response.status_code==202, response.text
+    delivered=client.get('/v1/terminal/commands?cursor=0',headers=th)
+    assert [item['action'] for item in delivered.json()['commands']]==['START']
+
+
+def test_ephemeral_withholds_and_acknowledges_stale_queued_start_resume(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
+    p=pair(); t=claimed(p); th={'Authorization':'Bearer '+t['terminal_token']}
+    ids=[]
+    with app.tx(True) as c:
+        for action in ('START','RESUME','STOP'):
+            cur=c.execute('INSERT INTO commands(pairing_id,request_id,action,config) VALUES(?,?,?,?)',(p['pairing_id'],str(uuid.uuid4()),action,'{}'))
+            ids.append(cur.lastrowid)
+    response=client.get('/v1/terminal/commands?cursor=0',headers=th)
+    assert [x['action'] for x in response.json()['commands']]==['STOP']
+    with app.tx() as c:
+        blocked=c.execute('SELECT ack FROM commands WHERE id IN (?,?) ORDER BY id',ids[:2]).fetchall()
+    assert all(app.json.loads(row['ack'])['code']=='EPHEMERAL_HOST_RESTART_RECONCILE_REQUIRED' for row in blocked)

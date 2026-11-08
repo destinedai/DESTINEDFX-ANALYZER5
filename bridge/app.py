@@ -15,6 +15,14 @@ from quantitative import STRATEGY_RULESETS, analyze_json
 
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
+HOST_PROFILE=os.getenv('BRIDGE_HOST_PROFILE','PERSISTENT').strip().upper()
+if HOST_PROFILE not in ('PERSISTENT','EPHEMERAL'):
+    raise ValueError('BRIDGE_HOST_PROFILE must be PERSISTENT or EPHEMERAL')
+HOST_GENERATION=os.getenv('HOST_GENERATION','persistent-default').strip()
+if not HOST_GENERATION or len(HOST_GENERATION)>128:
+    raise ValueError('HOST_GENERATION must be a bounded non-empty identifier')
+HOST_IDLE_TIMEOUT_SECONDS=max(300,min(14400,int(os.getenv('HOST_IDLE_TIMEOUT_SECONDS','14400'))))
+HOST_STARTED_AT_EPOCH_SECONDS=max(0,int(os.getenv('HOST_STARTED_AT_EPOCH_SECONDS',str(int(time.time())))))
 ALLOW_LOOPBACK=os.getenv('ALLOW_LOOPBACK_HTTP','false').lower()=='true'
 MAX_BODY=int(os.getenv('MAX_BODY_BYTES','65536'))
 PAIR_RATE=int(os.getenv('PAIR_RATE_LIMIT','10'))
@@ -114,7 +122,7 @@ def db():
     c.row_factory=sqlite3.Row
     c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA foreign_keys=ON'); c.execute('PRAGMA busy_timeout=10000')
     c.executescript('''CREATE TABLE IF NOT EXISTS pairings(id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, app_hash TEXT NOT NULL, terminal_hash TEXT, expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, terminal_id TEXT, instance_id TEXT, account TEXT, heartbeat TEXT, created REAL NOT NULL, live_authorized_until REAL, live_authorized_login TEXT, live_authorized_server TEXT, heartbeat_seq INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id), request_id TEXT NOT NULL, action TEXT NOT NULL, config TEXT NOT NULL, ack TEXT, expires_at REAL, request_config TEXT, UNIQUE(pairing_id,request_id));
+    CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id), request_id TEXT NOT NULL, action TEXT NOT NULL, config TEXT NOT NULL, ack TEXT, expires_at REAL, request_config TEXT, host_generation TEXT, UNIQUE(pairing_id,request_id));
     CREATE TABLE IF NOT EXISTS close_all_confirmations(token_hash TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, account_mode TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS command_items(command_id INTEGER NOT NULL REFERENCES commands(id) ON DELETE CASCADE, ticket TEXT NOT NULL, target_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_volume REAL NOT NULL DEFAULT 0.0, remaining_volume REAL, ack_status TEXT, message TEXT NOT NULL DEFAULT '', operational_status TEXT NOT NULL DEFAULT 'PENDING', ack_heartbeat_seq INTEGER, PRIMARY KEY(command_id,ticket));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
@@ -131,7 +139,7 @@ def db():
     for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT'),('heartbeat_seq','INTEGER NOT NULL DEFAULT 0')):
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
     command_columns={r['name'] for r in c.execute('PRAGMA table_info(commands)').fetchall()}
-    for name, definition in (('expires_at','REAL'),('request_config','TEXT')):
+    for name, definition in (('expires_at','REAL'),('request_config','TEXT'),('host_generation','TEXT')):
         if name not in command_columns: c.execute(f'ALTER TABLE commands ADD COLUMN {name} {definition}')
     item_columns={r['name'] for r in c.execute('PRAGMA table_info(command_items)').fetchall()}
     for name, definition in (('target_volume','REAL NOT NULL DEFAULT 0.0'),('remaining_volume','REAL')):
@@ -884,7 +892,7 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
 @app.get('/health/live')
 def live_health(): return {'status':'ok'}
 @app.get('/health')
-def health(): return {'status':'ok'}
+def health(): return {'status':'ok','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
 @app.get('/health/ready')
 def readiness():
     """Report whether the bridge can safely accept managed-execution work."""
@@ -901,7 +909,7 @@ def readiness():
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
     if not verified_terminal_pairing_exists():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
-    return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy'}
+    return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
 @app.post('/v1/pairings',status_code=201)
 def create_pair(request:Request):
     require_durable_execution()
@@ -1048,7 +1056,7 @@ def state(authorization:str|None=Header(default=None)):
         managed={'status':app_status,'worker_status':job['status'] if job else 'NOT_CONFIGURED','access_type':m['access_type'],'account_mode':m['account_mode'],'broker_brand':m['broker_brand'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
         if actual:
             with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
-    result={'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+    result={'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
 
@@ -1134,6 +1142,7 @@ def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=
 
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
+    if HOST_PROFILE=='EPHEMERAL': raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE authorization is unavailable on ephemeral hosts'})
     require_durable_execution()
     p=auth(authorization,'app')
     if not x.confirm_live_trading: raise HTTPException(422,'Explicit LIVE trading confirmation is required')
@@ -1274,6 +1283,8 @@ def command(x:Command,authorization:str|None=Header(default=None)):
     with tx() as c:
         m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
     if x.action in ('START','RESUME'):
+        if HOST_PROFILE=='EPHEMERAL' and m and m['account_mode']=='LIVE':
+            raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE START and RESUME are unavailable on ephemeral hosts'})
         if not m: raise HTTPException(409,'Managed account provisioning is required before trading can be enabled')
         beat=fresh_heartbeat(p)
         with tx() as c: job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
@@ -1283,7 +1294,7 @@ def command(x:Command,authorization:str|None=Header(default=None)):
         if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or not heartbeat_news_clear(beat,symbols) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, eligible EA state, verified identity/mode, fresh CLEAR news verdict, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
     serialized=json.dumps(x.config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
-        c.execute('INSERT OR IGNORE INTO commands(pairing_id,request_id,action,config) VALUES(?,?,?,?)',(p['id'],x.request_id,x.action,serialized))
+        c.execute('INSERT OR IGNORE INTO commands(pairing_id,request_id,action,config,host_generation) VALUES(?,?,?,?,?)',(p['id'],x.request_id,x.action,serialized,HOST_GENERATION))
         r=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
         if r['action']!=x.action or r['config']!=serialized: raise HTTPException(409,'request_id was already used for a different command payload')
     return {'id':r['id'],'request_id':r['request_id'],'action':r['action'],'config':json.loads(r['config']),'status':'acknowledged' if r['ack'] else 'queued'}
@@ -1291,12 +1302,22 @@ def command(x:Command,authorization:str|None=Header(default=None)):
 def poll(cursor:int=Query(default=0,ge=0),authorization:str|None=Header(default=None)):
     p=auth(authorization,'terminal')
     with tx() as c:
+        if HOST_PROFILE=='EPHEMERAL':
+            account=c.execute('SELECT account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+            mode=account['account_mode'] if account else 'UNVERIFIED'
+            blocked=c.execute("SELECT id FROM commands WHERE pairing_id=? AND action IN ('START','RESUME') AND ack IS NULL AND (host_generation IS NULL OR host_generation!=?)",(p['id'],HOST_GENERATION)).fetchall()
+            for row in blocked:
+                c.execute('UPDATE commands SET ack=? WHERE id=? AND ack IS NULL',
+                          (json.dumps({'outcome':'REJECTED','state':'STOPPED','message':'EPHEMERAL_HOST_RESTART_RECONCILE_REQUIRED','code':'EPHEMERAL_HOST_RESTART_RECONCILE_REQUIRED'},separators=(',',':')),row['id']))
         if durable_execution_enabled():
             rows=c.execute('SELECT * FROM commands WHERE pairing_id=? AND (id>? OR ack IS NULL) AND (expires_at IS NULL OR expires_at>?) ORDER BY id',(p['id'],cursor,time.time())).fetchall()
         else:
             # Never deliver a previously queued START/RESUME from an ephemeral
             # database. Keep emergency stop controls available as a safe fallback.
             rows=c.execute("SELECT * FROM commands WHERE pairing_id=? AND action IN ('STOP','PAUSE','EMERGENCY_STOP') AND (id>? OR ack IS NULL) AND (expires_at IS NULL OR expires_at>?) ORDER BY id",(p['id'],cursor,time.time())).fetchall()
+        if HOST_PROFILE=='EPHEMERAL':
+            rows=[r for r in rows if r['action'] not in ('START','RESUME') or
+                  (r['host_generation']==HOST_GENERATION and mode=='DEMO')]
     commands=[{'id':r['id'],'request_id':r['request_id'],'action':r['action'],'config':json.loads(r['config']),**({'expires_at':r['config'] and json.loads(r['config']).get('expires_at')} if r['expires_at'] is not None else {})} for r in rows]
     return {'cursor':max([cursor]+[r['id'] for r in rows]),'commands':commands}
 @app.post('/v1/terminal/commands/{command_id}/ack')

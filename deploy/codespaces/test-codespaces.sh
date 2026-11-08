@@ -21,6 +21,11 @@ grep -Fq -- '--host 127.0.0.1' "$ROOT/deploy/codespaces/start.sh" || fail 'bridg
 grep -Fq 'public-code-ready' "$ROOT/deploy/codespaces/start.sh" || fail 'missing public K3 readiness guard'
 if grep -Eq '^[[:space:]]*gh codespace ports visibility .*public' "$ROOT/deploy/codespaces/start.sh"; then fail 'start must not run public visibility command before K3'; fi
 pass 'public exposure remains blocked and bridge binds loopback'
+grep -Fq 'export BRIDGE_HOST_PROFILE=EPHEMERAL' "$ROOT/deploy/codespaces/start.sh" || fail 'Codespaces bridge must announce EPHEMERAL'
+grep -Fq 'HOST_IDLE_TIMEOUT_SECONDS' "$ROOT/deploy/codespaces/start.sh" || fail 'configured idle timeout must reach bridge'
+grep -Fq 'HOST_STARTED_AT_EPOCH_SECONDS' "$ROOT/deploy/codespaces/start.sh" || fail 'host start epoch must reach bridge for countdown estimate'
+grep -Fq 'HOST_GENERATION' "$ROOT/deploy/codespaces/start.sh" || fail 'fresh host generation must reject stale queued commands'
+pass 'Codespaces launcher wires EPHEMERAL profile and idle countdown metadata'
 grep -Fq 'chmod 700 "$STATE" "$RUNTIME"' "$ROOT/deploy/codespaces/start.sh" || fail 'private state dir mode missing'
 grep -Fq 'chmod 600 "$STATE/bridge.env"' "$ROOT/deploy/codespaces/start.sh" || fail 'private credentials file mode missing'
 pass 'generated credentials are constrained to private state modes'

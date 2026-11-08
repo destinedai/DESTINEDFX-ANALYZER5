@@ -46,7 +46,8 @@ data class ConnectorVerification(
     val identity: ModeAccountIdentity? = null,
     val readOnlyVerification: ModeReadOnlyVerification? = null,
     val demoAcceptance: ModeDemoAcceptance? = null,
-    val currentDemoCredentialGeneration: String = ""
+    val currentDemoCredentialGeneration: String = "",
+    val hostProfile: HostProfile = HostProfile.PERSISTENT
 )
 
 data class ConnectorCapabilityRow(
@@ -134,10 +135,13 @@ class UniversalConnectorDispatcher(
         if (!identity.isValid() || (expectedBroker != null && !identity.broker.equals(expectedBroker, true))) {
             return Result.failure(IllegalStateException("BLOCKED: broker or account identity does not match the selected connector"))
         }
+        if (verification.hostProfile != HostProfile.PERSISTENT && identity.mode == AccountMode.LIVE) {
+            return Result.failure(IllegalStateException("MODE_ARMING_BLOCKED: EPHEMERAL_HOST_LIVE_BLOCKED"))
+        }
         val decision = if (identity.mode == AccountMode.DEMO) {
             modeArmingPolicy.demoDecision(identity, readOnly, verification.demoAcceptance,
                 verification.currentDemoCredentialGeneration)
-        } else modeArmingPolicy.liveDecision(identity)
+        } else modeArmingPolicy.liveDecision(identity, hostProfile = verification.hostProfile)
         return if (decision.allowed) Result.success(verification)
         else Result.failure(IllegalStateException("MODE_ARMING_BLOCKED: " + decision.reason))
     }

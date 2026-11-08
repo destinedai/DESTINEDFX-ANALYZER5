@@ -11,6 +11,11 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; }
 
 if [[ "$(uname -m)" != x86_64 ]]; then fail 'Expected x86_64 Codespaces host.'; exit 1; fi
 if [[ -z "${CODESPACE_NAME:-}" ]]; then fail 'CODESPACE_NAME is unavailable; this script expects GitHub Codespaces.'; exit 1; fi
+IDLE_TIMEOUT_MINUTES="${DESTINEDFX_IDLE_TIMEOUT_MINUTES:-240}"
+if [[ ! "$IDLE_TIMEOUT_MINUTES" =~ ^[0-9]+$ ]] || (( IDLE_TIMEOUT_MINUTES < 5 || IDLE_TIMEOUT_MINUTES > 240 )); then
+  fail 'DESTINEDFX_IDLE_TIMEOUT_MINUTES must be an integer from 5 to 240.'; exit 1
+fi
+HOST_GENERATION="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 
 # All generated bridge credentials live only in this 0700 Codespaces-private directory.
 if [[ ! -s "$STATE/bridge.env" ]]; then
@@ -50,7 +55,9 @@ set -a
 # shellcheck disable=SC1090
 source "$STATE/bridge.env"
 set +a
+HOST_STARTED_AT_EPOCH_SECONDS="$(date +%s)"
 export BRIDGE_DB_PATH="$STATE/bridge.sqlite3" ALLOW_LOOPBACK_HTTP=true BRIDGE_HOST_MODE=linux-host HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
+export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="$((IDLE_TIMEOUT_MINUTES * 60))" HOST_STARTED_AT_EPOCH_SECONDS
 (
   cd "$ROOT/bridge"
   "$STATE/venv/bin/python" -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers

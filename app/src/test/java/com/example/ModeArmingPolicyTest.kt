@@ -7,6 +7,7 @@ import com.example.data.broker.ModeArmingPolicy
 import com.example.data.broker.ModeDemoAcceptance
 import com.example.data.broker.ModePath
 import com.example.data.broker.ModeReadOnlyVerification
+import com.example.data.broker.HostProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -57,6 +58,14 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request(liveVerified = verified(identity(mode = AccountMode.LIVE).copy(accountId = "999999")))).isSuccess)
     }
 
+    @Test fun ephemeralHostCannotArmOrDecideLiveButDemoPolicyRemainsAvailable() {
+        val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
+        val req = request()
+        assertFalse(policy.armLive(req.copy(hostProfile = HostProfile.EPHEMERAL)).isSuccess)
+        assertEquals("EPHEMERAL_HOST_LIVE_BLOCKED", policy.liveDecision(req.identity, hostProfile = HostProfile.EPHEMERAL).reason)
+        val demo = identity()
+        assertTrue(policy.demoDecision(demo, verified(demo), accepted(demo), "cred-demo").allowed)
+    }
     @Test fun derivLeaseIsSixtyMinutesAndCtraderCannotArm() {
         val policy = ModeArmingPolicy(nowMs = { 2_000_000L })
         val demo = identity(ModePath.DERIV_OPTIONS, AccountMode.DEMO, "CR123", "deriv-gen", "")

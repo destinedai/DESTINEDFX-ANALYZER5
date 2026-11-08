@@ -5,6 +5,7 @@ import com.example.data.broker.ModeArmingPolicy
 import com.example.data.broker.ModeAccountIdentity
 import com.example.data.broker.ModePath
 import com.example.data.broker.AccountMode
+import com.example.data.broker.HostProfile
 import com.example.data.broker.ModeReadOnlyVerification
 import com.destinedfx.core.strategy.StrategyRegistry
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +62,7 @@ class MT5RemoteBridgeClient(
     )
     data class CloseAllConfirmation(val token: String, val expiresAt: String, val tickets: List<String>)
     data class Snapshot(
+        val hostProfile: HostProfile = HostProfile.EPHEMERAL,
         val managedState: String, val workerStatus: String = "UNKNOWN", val accessType: String, val profileMode: String,
         val connected: Boolean, val terminalOnline: Boolean, val heartbeatFresh: Boolean,
         val state: String, val account: String, val actualLogin: String, val actualServer: String,
@@ -196,8 +198,13 @@ class MT5RemoteBridgeClient(
         val workerStatus = managed?.optString("worker_status", "UNKNOWN").orEmpty().uppercase()
         val access = managed?.optString("access_type", "").orEmpty().uppercase()
         val mode = managed?.optString("account_mode", "").orEmpty().uppercase()
+        val hostProfile = when (obj.optString("BRIDGE_HOST_PROFILE", obj.optString("host_profile")).uppercase()) {
+            "PERSISTENT" -> HostProfile.PERSISTENT
+            "EPHEMERAL" -> HostProfile.EPHEMERAL
+            else -> HostProfile.EPHEMERAL
+        }
         return Snapshot(
-            managedState, workerStatus, access, mode, online && terminalConnected && verified && actualMode == accountMode, online, freshness,
+            hostProfile, managedState, workerStatus, access, mode, online && terminalConnected && verified && actualMode == accountMode, online, freshness,
             when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
             actualMode, managed?.optBoolean("live_authorized", false) == true,
@@ -269,7 +276,7 @@ class MT5RemoteBridgeClient(
                 val decision = if (accountMode == "DEMO") {
                     policy.demoDecision(identity, evidence, secrets.getPathDemoAcceptance(identity),
                         secrets.getManagedMT5CredentialGeneration(profile))
-                } else policy.liveDecision(identity)
+                } else policy.liveDecision(identity, hostProfile = fresh.hostProfile)
                 if (!decision.allowed) {
                     return CommandResult(requestId, false, "MODE_ARMING_BLOCKED: " + decision.reason, rejected = true)
                 }
@@ -394,7 +401,8 @@ class MT5RemoteBridgeClient(
         require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
         val fresh = state()
         val policy = modeArmingPolicy ?: throw IllegalStateException("MODE_POLICY_NOT_CONFIGURED: LIVE is blocked.")
-        val decision = policy.liveDecision(modeIdentity(fresh))
+        require(fresh.hostProfile == HostProfile.PERSISTENT) { "MODE_ARMING_BLOCKED: EPHEMERAL_HOST_LIVE_BLOCKED" }
+        val decision = policy.liveDecision(modeIdentity(fresh), hostProfile = fresh.hostProfile)
         require(decision.allowed) { "MODE_ARMING_BLOCKED: " + decision.reason }
         val reason = gateFailure(fresh, requireLiveAuthorization = false)
         require(reason == null) { reason ?: "LIVE profile is not ready." }
@@ -417,6 +425,7 @@ class MT5RemoteBridgeClient(
         val expectedLogin = secrets.getManagedMT5AccountLogin(profile)
         val expectedServer = secrets.getManagedMT5AccountServer(profile)
         return when {
+            snapshot.hostProfile != HostProfile.PERSISTENT && accountMode == "LIVE" -> "EPHEMERAL_HOST_LIVE_BLOCKED"
             accountMode !in setOf("DEMO", "LIVE") -> "Selected account mode is not DEMO or LIVE."
             snapshot.profileMode != accountMode -> "Selected $brokerBrand $accountMode profile does not match the server-managed account mode."
             snapshot.accessType != "MASTER" -> "INVESTOR access is read-only and cannot execute trading commands."
