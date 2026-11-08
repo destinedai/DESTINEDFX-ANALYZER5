@@ -11,13 +11,12 @@ spec.loader.exec_module(worker)
 
 def test_journal_failure_classes_are_bounded_and_secret_free():
     cases = {
-        "invalid password for account": "WRONG_CREDENTIALS",
-        "account or server mismatch": "ACCOUNT_OR_SERVER_MISMATCH",
-        "no connection to trade server": "NO_CONNECTION",
-        "server not found": "SERVER_NOT_FOUND",
-        "expert advisor stopped": "EA_OFFLINE",
-        "algo trading disabled": "ALGO_TRADING_DISABLED",
-        "WebRequest is not allowed": "WEBREQUEST_NOT_ALLOWED",
+        "2026.11.08 07:00:00.000 Network '00000000': authorization on Fixture-Demo failed (Invalid account)": "WRONG_CREDENTIALS",
+        "2026.11.08 07:01:00.000 Network '00000000': authorization on Fixture-Demo failed (Invalid password)": "WRONG_CREDENTIALS",
+        "2026.11.08 07:02:00.000 Network '00000000': authorization on Fixture-Demo failed (No connection)": "NO_CONNECTION",
+        "2026.11.08 07:03:00.000 Network '00000000': authorization on Fixture-Demo failed (Server not found)": "SERVER_NOT_FOUND",
+        "2026.11.08 07:04:00.000 Network '00000000': authorization on Fixture-Demo failed (Synthetic reason)": "LOGIN_FAILED_UNCLASSIFIED",
+        "2026.11.08 07:05:00.000 Network status: network not allowed": "LOGIN_FAILED_UNCLASSIFIED",
     }
     for text, expected in cases.items():
         assert worker.classify_terminal_journal(text) == expected

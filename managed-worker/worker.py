@@ -27,6 +27,7 @@ import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from mt5_journal import classify_mt5_journal, latest_journal_file, read_recent_mt5_journal
 
 LOG = logging.getLogger("destinedfx.worker")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -36,24 +37,10 @@ SAFE_SERVER = re.compile(r"^[A-Za-z0-9 ._:-]{1,128}$")
 SAFE_SYMBOL = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 VALID_ACCESS = {"MASTER", "INVESTOR"}
 SUPPORTED_BROKER_BRANDS = {"FBS", "EXNESS", "HFM", "DERIV"}
-JOURNAL_FAILURE_PATTERNS = (
-    ("WRONG_CREDENTIALS", ("invalid account", "invalid password", "wrong password", "authorization failed")),
-    ("ACCOUNT_OR_SERVER_MISMATCH", ("account or server", "account mismatch")),
-    ("NO_CONNECTION", ("no connection", "connection failed", "network")),
-    ("SERVER_NOT_FOUND", ("server not found", "unknown server")),
-    ("TERMINAL_OFFLINE", ("terminal offline", "terminal stopped")),
-    ("EA_OFFLINE", ("expert removed", "expert advisor stopped", "ea offline")),
-    ("ALGO_TRADING_DISABLED", ("algo trading disabled", "autotrading disabled")),
-    ("WEBREQUEST_NOT_ALLOWED", ("webrequest", "not allowed")),
-)
 
-def classify_terminal_journal(text: str) -> str:
-    """Map terminal journal text to a bounded public failure code; never return text."""
-    lowered = (text or "").lower()
-    for code, needles in JOURNAL_FAILURE_PATTERNS:
-        if any(needle in lowered for needle in needles):
-            return code
-    return "TERMINAL_AUTH_FAILED"
+def classify_terminal_journal(text: str, since_epoch: float | None = None) -> str:
+    """Return a bounded code for a real MT5 authorization-failure line only."""
+    return classify_mt5_journal(text, since_epoch)
 
 def login_password(account: dict[str, Any]) -> str:
     """Prefer an explicitly supplied investor password for read-only login attempts."""
@@ -508,14 +495,19 @@ def validate_job(job: Any) -> dict[str, Any]:
     result["bridge_url"] = normalized
     return result
 
-def journal_failure_code(settings: dict) -> str:
+def journal_failure_code(settings: dict, connect_started_at: float | None = None) -> str:
     path = settings.get("journal_path")
     if not isinstance(path, str) or not path:
-        return "TERMINAL_AUTH_FAILED"
+        return "LOGIN_FAILED_UNCLASSIFIED"
     try:
-        return classify_terminal_journal(Path(path).read_text(encoding="utf-8", errors="ignore")[-65536:])
+        journal = Path(path)
+        if journal.is_dir():
+            journal = latest_journal_file(journal)
+        if journal is None or not journal.is_file():
+            return "LOGIN_FAILED_UNCLASSIFIED"
+        return classify_terminal_journal(read_recent_mt5_journal(journal), connect_started_at)
     except OSError:
-        return "TERMINAL_AUTH_FAILED"
+        return "LOGIN_FAILED_UNCLASSIFIED"
 
 
 def request_json(url: str, token: str, method: str, payload: dict | None = None, timeout: int = 20) -> dict:
@@ -923,6 +915,7 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
     try:
         job = validate_job(job)
         broker_settings = settings_for_broker(settings, job["account"]["broker_brand"])
+        attempt_started_at = time.time()
         post_state(base, operator_token, job_id, worker_id, "PROVISIONING")
         provision(job, broker_settings)
         # A process launch/authentication attempt is not evidence of a fresh EA
@@ -936,7 +929,7 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
             remove_terminal_configs(safe_child(Path(settings["data_root"]), job_id))
             LOG.info("Terminal authenticated and fresh for job %s", job_id)
         elif terminal_status == "FAILED":
-            code = journal_failure_code(settings)
+            code = journal_failure_code(settings, attempt_started_at)
             try:
                 post_state(base, operator_token, job_id, worker_id, "FAILED", code, "Terminal authentication failed")
             except ProvisionError:
@@ -944,7 +937,7 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
             quarantine_terminal(settings, job_id)
             LOG.error("Terminal authentication failed for job %s", job_id)
         elif terminal_status == "TIMEOUT":
-            post_state(base, operator_token, job_id, worker_id, "FAILED", journal_failure_code(settings), "Terminal did not authenticate in time")
+            post_state(base, operator_token, job_id, worker_id, "FAILED", journal_failure_code(settings, attempt_started_at), "Terminal did not authenticate in time")
             stop_terminal_for_timeout(settings, job_id)
             LOG.error("Terminal authentication timed out for job %s", job_id)
     except ProvisionError as exc:

@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule DestinedFX Linux MT5 job polling
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=15s
+AccuracySec=2s
+Unit=destinedfx-linux-worker.service
+
+[Install]
+WantedBy=timers.target

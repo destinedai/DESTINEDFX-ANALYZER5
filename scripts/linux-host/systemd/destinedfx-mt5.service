@@ -11,13 +11,15 @@ Group=destinedfx
 WorkingDirectory=/var/lib/destinedfx/terminal
 Environment=DISPLAY=:99
 EnvironmentFile=-/etc/destinedfx/mt5.env
-ExecStart=/usr/bin/wine /var/lib/destinedfx/terminal/drive_c/Program\ Files/MetaTrader\ 5/terminal64.exe /portable
+Environment=DESTINEDFX_TERMINAL_STARTUP_CONFIG=/var/lib/destinedfx/terminal/startup.ini
+ExecStart=/opt/destinedfx/scripts/linux-host/launch-mt5.sh
 Restart=always
 RestartSec=10
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
+UMask=0077
 ReadWritePaths=/var/lib/destinedfx
 
 [Install]
