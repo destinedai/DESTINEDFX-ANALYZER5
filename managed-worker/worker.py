@@ -36,6 +36,31 @@ SAFE_SERVER = re.compile(r"^[A-Za-z0-9 ._:-]{1,128}$")
 SAFE_SYMBOL = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 VALID_ACCESS = {"MASTER", "INVESTOR"}
 SUPPORTED_BROKER_BRANDS = {"FBS", "EXNESS", "HFM", "DERIV"}
+JOURNAL_FAILURE_PATTERNS = (
+    ("WRONG_CREDENTIALS", ("invalid account", "invalid password", "wrong password", "authorization failed")),
+    ("ACCOUNT_OR_SERVER_MISMATCH", ("account or server", "account mismatch")),
+    ("NO_CONNECTION", ("no connection", "connection failed", "network")),
+    ("SERVER_NOT_FOUND", ("server not found", "unknown server")),
+    ("TERMINAL_OFFLINE", ("terminal offline", "terminal stopped")),
+    ("EA_OFFLINE", ("expert removed", "expert advisor stopped", "ea offline")),
+    ("ALGO_TRADING_DISABLED", ("algo trading disabled", "autotrading disabled")),
+    ("WEBREQUEST_NOT_ALLOWED", ("webrequest", "not allowed")),
+)
+
+def classify_terminal_journal(text: str) -> str:
+    """Map terminal journal text to a bounded public failure code; never return text."""
+    lowered = (text or "").lower()
+    for code, needles in JOURNAL_FAILURE_PATTERNS:
+        if any(needle in lowered for needle in needles):
+            return code
+    return "TERMINAL_AUTH_FAILED"
+
+def login_password(account: dict[str, Any]) -> str:
+    """Prefer an explicitly supplied investor password for read-only login attempts."""
+    investor = account.get("investor_password")
+    if isinstance(investor, str) and investor and "\r" not in investor and "\n" not in investor:
+        return investor
+    return str(account.get("password", ""))
 
 
 class ProcessState(str, Enum):
@@ -462,6 +487,9 @@ def validate_job(job: Any) -> dict[str, Any]:
         raise ProvisionError("INVALID_ACCOUNT")
     if not isinstance(password, str) or not password or "\r" in password or "\n" in password:
         raise ProvisionError("INVALID_ACCOUNT")
+    investor_password = account.get("investor_password")
+    if investor_password is not None and (not isinstance(investor_password, str) or not investor_password or "\r" in investor_password or "\n" in investor_password):
+        raise ProvisionError("INVALID_ACCOUNT")
     if access not in VALID_ACCESS:
         raise ProvisionError("INVALID_ACCESS_TYPE")
     if mode not in {"DEMO", "LIVE"}:
@@ -479,6 +507,15 @@ def validate_job(job: Any) -> dict[str, Any]:
     result["account"] = dict(account, broker_brand=brand)
     result["bridge_url"] = normalized
     return result
+
+def journal_failure_code(settings: dict) -> str:
+    path = settings.get("journal_path")
+    if not isinstance(path, str) or not path:
+        return "TERMINAL_AUTH_FAILED"
+    try:
+        return classify_terminal_journal(Path(path).read_text(encoding="utf-8", errors="ignore")[-65536:])
+    except OSError:
+        return "TERMINAL_AUTH_FAILED"
 
 
 def request_json(url: str, token: str, method: str, payload: dict | None = None, timeout: int = 20) -> dict:
@@ -672,7 +709,7 @@ def ini_text(job: dict, access_type: str, symbol: str) -> str:
     account = job["account"]
     allow_trade = "1" if access_type == "MASTER" else "0"
     return ("[Common]\n"
-            f"Login={account['login']}\nServer={account['server']}\nPassword={account['password']}\n"
+            f"Login={account['login']}\nServer={account['server']}\nPassword={login_password(account)}\n"
             "KeepPrivate=1\nNewsEnable=0\nProxyEnable=0\n"
             "\n[Experts]\n"
             f"AllowLiveTrading={allow_trade}\nAllowDllImport=0\nEnabled=1\nAccount=1\nProfile=1\n"
@@ -899,10 +936,15 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
             remove_terminal_configs(safe_child(Path(settings["data_root"]), job_id))
             LOG.info("Terminal authenticated and fresh for job %s", job_id)
         elif terminal_status == "FAILED":
+            code = journal_failure_code(settings)
+            try:
+                post_state(base, operator_token, job_id, worker_id, "FAILED", code, "Terminal authentication failed")
+            except ProvisionError:
+                pass
             quarantine_terminal(settings, job_id)
             LOG.error("Terminal authentication failed for job %s", job_id)
         elif terminal_status == "TIMEOUT":
-            post_state(base, operator_token, job_id, worker_id, "FAILED", "TERMINAL_AUTH_TIMEOUT", "Terminal did not authenticate in time")
+            post_state(base, operator_token, job_id, worker_id, "FAILED", journal_failure_code(settings), "Terminal did not authenticate in time")
             stop_terminal_for_timeout(settings, job_id)
             LOG.error("Terminal authentication timed out for job %s", job_id)
     except ProvisionError as exc:
