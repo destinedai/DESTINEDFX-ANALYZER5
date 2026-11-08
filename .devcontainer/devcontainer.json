@@ -1,0 +1,23 @@
+{
+  "name": "DestinedFX Linux host (Ubuntu 24.04 x86_64)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "hostRequirements": {
+    "cpus": 2
+  },
+  "postCreateCommand": "bash deploy/codespaces/post-create.sh",
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "DestinedFX bridge (private; K3 public guard required)",
+      "onAutoForward": "notify",
+      "visibility": "private"
+    }
+  },
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "DISPLAY": ":99"
+  }
+}
