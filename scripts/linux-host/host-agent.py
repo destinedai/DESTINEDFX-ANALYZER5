@@ -22,7 +22,7 @@ MAX_HEARTBEAT_AGE = int(os.getenv("EA_HEARTBEAT_MAX_AGE_SECONDS", "15"))
 TERMINAL_PATTERN = os.getenv("MT5_TERMINAL_PATTERN", r"(?i)(terminal64|terminal\.exe)")
 HEARTBEAT_PATH = os.getenv("EA_HEARTBEAT_JSON", "")
 JOURNAL_PATH = os.getenv("MT5_JOURNAL_PATH", "")
-JOURNAL_DIR = os.getenv("MT5_JOURNAL_DIR", "/var/lib/destinedfx/terminal/MQL5/Logs")
+JOURNAL_DIR = os.getenv("MT5_JOURNAL_DIR", "/var/lib/destinedfx/terminal/Logs")
 CONNECT_JOB_START_FILE = os.getenv(
     "CONNECT_JOB_START_FILE", "/var/lib/destinedfx/connect-job-start.epoch"
 )

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_MT5_SHA256=f9418ed388beba4aa9e28cc552da5e1627a6812734887c89f284d0b76c101698
+# shellcheck disable=SC1091
+source "$ROOT/deploy/codespaces/installer-pins.env"
 
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; }
@@ -17,12 +18,14 @@ python3 -m venv "$HOME/.local/share/destinedfx-codespaces/venv"
 "$HOME/.local/share/destinedfx-codespaces/venv/bin/pip" install --disable-pip-version-check -r "$ROOT/bridge/requirements.txt"
 pass 'Bridge Python dependencies installed.'
 
-# The existing installer downloads to a temporary file and compares this reviewed digest
-# before chmod/exec. Its official installer output may not contain secrets.
-if "$ROOT/scripts/linux-host/install-mt5.sh" --expected-sha256 "$EXPECTED_MT5_SHA256"; then
-  pass 'Official MetaQuotes Linux installer completed after SHA-256 verification.'
+if "$ROOT/scripts/linux-host/install-mt5.sh" \
+    --headless \
+    --expected-sha256 "$MT5_LINUX_SCRIPT_SHA256" \
+    --expected-setup-sha256 "$MT5_SETUP_SHA256"; then
+  pass 'Official MetaQuotes setup.exe completed headlessly after both SHA-256 checks.'
 else
-  fail 'Official MetaQuotes installer failed or its checksum did not match; inspect the non-secret installer diagnostic.'
+  fail 'Headless MetaQuotes setup failed or a checksum did not match.'
+  fail 'OWNER STEP: run deploy/codespaces/gui.sh for the private installer wizard fallback.'
   exit 1
 fi
 

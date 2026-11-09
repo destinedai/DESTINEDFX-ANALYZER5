@@ -38,6 +38,32 @@ if [[ ! -f "$ROOT/deploy/codespaces/public-code-ready" ]]; then
   printf 'INFO: After K3 guard review, the exact visibility command is: gh codespace ports visibility 8000:public -c %s\n' "$CODESPACE_NAME"
 fi
 
+
+# ---- One path scheme for every component (T1): derived once from the real terminal location. ----
+find_terminal() {
+  local c
+  for c in "${MT5_TERMINAL_EXE:-}" \
+           "$HOME/.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
+           "$HOME/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"; do
+    [[ -n "$c" && -f "$c" ]] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+TERMINAL_EXE=""
+if TERMINAL_EXE="$(find_terminal)"; then
+  TERMINAL_ROOT="$(dirname "$TERMINAL_EXE")"
+  # In /portable mode the data folder is the terminal folder: the terminal Journal is the Logs folder (Experts logs live elsewhere).
+  export MT5_TERMINAL_EXE="$TERMINAL_EXE" MT5_JOURNAL_DIR="$TERMINAL_ROOT/Logs"
+  export DESTINEDFX_EA_SET_PATH="$TERMINAL_ROOT/MQL5/Presets/DestinedFXTraderEA.set"
+  if [[ "$TERMINAL_EXE" == "$HOME/.mt5/"* ]]; then export WINEPREFIX="$HOME/.mt5"; fi
+fi
+export DESTINEDFX_TERMINAL_STARTUP_CONFIG="$STATE/startup.ini"
+export DESTINEDFX_ACTIVE_JOB_PATH="$STATE/active-job.json" CONNECT_JOB_START_FILE="$STATE/connect-job-start.epoch"
+export DESTINEDFX_TERMINAL_CONTROL=process DESTINEDFX_TERMINAL_PIDFILE="$RUNTIME/terminal.pid"
+export DESTINEDFX_TERMINAL_LAUNCHER="$ROOT/scripts/linux-host/launch-mt5.sh" DESTINEDFX_TERMINAL_LOG="$RUNTIME/terminal.log"
+export DESTINEDFX_CONTROL_PLANE_URL="http://127.0.0.1:8000" DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true
+export DESTINEDFX_WORKER_ID="${DESTINEDFX_WORKER_ID:-codespaces-host-01}"
+
 if [[ -f "$RUNTIME/pids" ]]; then
   while read -r pid; do [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && { pass 'Existing managed Codespaces processes are already running.'; exit 0; }; done < "$RUNTIME/pids"
   rm -f "$RUNTIME/pids"
@@ -63,12 +89,25 @@ export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="
   "$STATE/venv/bin/python" -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 ) >>"$RUNTIME/bridge.log" 2>&1 & echo $! >>"$RUNTIME/pids"
 
-TERMINAL="$HOME/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
-if [[ -f "$TERMINAL" ]]; then
-  "$ROOT/scripts/linux-host/launch-mt5.sh" >>"$RUNTIME/terminal.log" 2>&1 & echo $! >>"$RUNTIME/pids"
-  pass 'MT5 terminal process started.'
+# Connect-job runner: claims jobs from the loopback bridge, writes the private startup config, restarts the terminal.
+(
+  set -a
+  # shellcheck disable=SC1090
+  source "$STATE/bridge.env"
+  set +a
+  export DESTINEDFX_WORKER_TOKEN="$WORKER_TOKEN"
+  exec python3 "$ROOT/scripts/linux-host/linux-worker.py" --loop --interval 3
+) >>"$RUNTIME/linux-worker.log" 2>&1 & echo $! >>"$RUNTIME/pids"
+pass 'Linux connect-job runner started (process control, loopback control plane).'
+
+if [[ -n "$TERMINAL_EXE" ]]; then
+  if python3 "$ROOT/scripts/linux-host/linux-worker.py" --terminal start >>"$RUNTIME/terminal-control.log" 2>&1; then
+    pass 'MT5 terminal process started under the process controller.'
+  else
+    fail 'MT5 terminal could not be started; see terminal-control.log (no secrets are written there).'
+  fi
 else
-  fail 'MT5 terminal is not installed at the default Wine path; host runtime is diagnostic-only.'
+  fail 'MT5 terminal is not installed (checked ~/.mt5 and ~/.wine); host runtime is diagnostic-only until it is.'
 fi
 
 printf 'PASS: local bridge URL https://%s-8000.app.github.dev (Codespaces private port; no token in URL).\n' "$CODESPACE_NAME"

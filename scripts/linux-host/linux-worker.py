@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -155,6 +156,111 @@ def _run_systemctl(action: str, unit: str) -> None:
         raise LinuxRunnerError("SYSTEMD_CONTROL_FAILED") from None
     if result.returncode != 0:
         raise LinuxRunnerError("SYSTEMD_CONTROL_FAILED")
+
+
+_LOOPBACK_CONTROL_PLANE = re.compile(r"^http://(127\.0\.0\.1|\[::1\]):([0-9]{2,5})$")
+
+
+def validate_control_plane(raw: str, env: dict[str, str]) -> str | None:
+    """HTTPS global origins as before; plain-HTTP loopback only on explicit opt-in.
+
+    A same-host bridge (single Linux VM or a Codespaces container) listens on loopback.
+    The opt-in is a separate variable so a mistyped URL can never downgrade a remote origin.
+    """
+    value = (raw or "").strip().rstrip("/")
+    if env.get("DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE", "").strip().lower() == "true":
+        match = _LOOPBACK_CONTROL_PLANE.fullmatch(value)
+        if match and 1 <= int(match.group(2)) <= 65535:
+            return value
+    return worker.validate_origin(raw)
+
+
+def _read_pid(pidfile: Path) -> int | None:
+    try:
+        pid = int(pidfile.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if pid > 1 else None
+
+
+def make_process_control(pidfile: Path, launcher: Path, log_path: Path | None = None,
+                         stop_grace_seconds: float = 15.0) -> Callable[[str, str], None]:
+    """Terminal controller for hosts without systemd (GitHub Codespaces).
+
+    Same signature as _run_systemctl. The launcher runs in its own session so stopping it
+    terminates Wine and its children together. Nothing here receives or logs a secret.
+    """
+    def _alive(pid: int) -> bool:
+        # A terminal launched by this process becomes a zombie after it exits; reap it so a
+        # killed terminal is not reported as alive. Non-children fall through to a signal probe.
+        try:
+            reaped, _status = os.waitpid(pid, os.WNOHANG)
+            if reaped == pid:
+                return False
+        except ChildProcessError:
+            pass
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _stop() -> None:
+        pid = _read_pid(pidfile)
+        if pid is None:
+            return
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            raise LinuxRunnerError("PROCESS_CONTROL_FAILED") from None
+        deadline = time.monotonic() + stop_grace_seconds
+        while time.monotonic() < deadline and _alive(pid):
+            time.sleep(0.2)
+        if _alive(pid):
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                raise LinuxRunnerError("PROCESS_CONTROL_FAILED") from None
+            time.sleep(0.2)
+            if _alive(pid):
+                raise LinuxRunnerError("PROCESS_CONTROL_FAILED")
+        try:
+            pidfile.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _start() -> None:
+        existing = _read_pid(pidfile)
+        if existing is not None and _alive(existing):
+            return
+        if not launcher.is_file() or not os.access(launcher, os.X_OK):
+            raise LinuxRunnerError("PROCESS_CONTROL_FAILED")
+        sink = open(log_path, "ab") if log_path else subprocess.DEVNULL
+        try:
+            proc = subprocess.Popen([str(launcher)], stdin=subprocess.DEVNULL, stdout=sink,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError:
+            raise LinuxRunnerError("PROCESS_CONTROL_FAILED") from None
+        finally:
+            if sink is not subprocess.DEVNULL:
+                sink.close()
+        write_private_file(pidfile, str(proc.pid), exclusive=False)
+
+    def control(action: str, unit: str) -> None:
+        if action not in {"start", "stop", "restart"}:
+            raise LinuxRunnerError("SYSTEMD_ACTION_INVALID")
+        if action in {"stop", "restart"}:
+            _stop()
+        if action in {"start", "restart"}:
+            _start()
+
+    return control
 
 
 def _post_state(settings: dict, job_id: str, state: str, code: str = "") -> None:
@@ -407,7 +513,7 @@ def run_once(settings: dict, *,
 
 def load_settings(env: dict[str, str] | None = None) -> dict:
     env = os.environ if env is None else env
-    base = worker.validate_origin(env.get("DESTINEDFX_CONTROL_PLANE_URL", ""))
+    base = validate_control_plane(env.get("DESTINEDFX_CONTROL_PLANE_URL", ""), env)
     token = env.get("DESTINEDFX_WORKER_TOKEN", "")
     if not token:
         token_file = env.get("DESTINEDFX_WORKER_TOKEN_FILE", "")
@@ -438,29 +544,63 @@ def load_settings(env: dict[str, str] | None = None) -> dict:
         "ea_set_path": env.get("DESTINEDFX_EA_SET_PATH", "/var/lib/destinedfx/terminal/MQL5/Presets/DestinedFXTraderEA.set"),
         "active_job_path": env.get("DESTINEDFX_ACTIVE_JOB_PATH", "/var/lib/destinedfx/active-job.json"),
         "connect_start_file": env.get("CONNECT_JOB_START_FILE", "/var/lib/destinedfx/connect-job-start.epoch"),
-        "journal_path": env.get("MT5_JOURNAL_PATH", env.get("MT5_JOURNAL_DIR", "/var/lib/destinedfx/terminal/MQL5/Logs")),
+        "journal_path": env.get("MT5_JOURNAL_PATH", env.get("MT5_JOURNAL_DIR", "/var/lib/destinedfx/terminal/Logs")),
         "mt5_unit": unit,
         "auth_timeout_seconds": timeout,
         "symbol": env.get("DESTINEDFX_SYMBOL", "EURUSD"),
     }
 
 
+def build_controller(env: dict[str, str] | None = None) -> Callable[[str, str], None]:
+    env = os.environ if env is None else env
+    mode = env.get("DESTINEDFX_TERMINAL_CONTROL", "systemd").strip().lower()
+    if mode == "systemd":
+        return _run_systemctl
+    if mode == "process":
+        pidfile = env.get("DESTINEDFX_TERMINAL_PIDFILE", "")
+        launcher = env.get("DESTINEDFX_TERMINAL_LAUNCHER", "")
+        if not pidfile or not launcher:
+            raise LinuxRunnerError("INVALID_WORKER_CONFIG")
+        log = env.get("DESTINEDFX_TERMINAL_LOG", "")
+        return make_process_control(Path(pidfile), Path(launcher), Path(log) if log else None)
+    raise LinuxRunnerError("INVALID_WORKER_CONFIG")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true", help="claim at most one job and exit")
+    parser.add_argument("--loop", action="store_true", help="repeat cycles until stopped (no systemd timer)")
+    parser.add_argument("--interval", type=float, default=3.0, help="seconds between cycles with --loop")
+    parser.add_argument("--terminal", choices=("start", "stop", "restart"),
+                        help="control the MT5 terminal through the configured controller and exit")
     args = parser.parse_args()
     if os.name != "posix":
         LOG.error("Linux host runner requires a POSIX host")
         return 2
-    try:
-        settings = load_settings()
-        result = run_once(settings)
-        LOG.info("Linux worker cycle finished (%s)", result)
-        return 0
-    except (LinuxRunnerError, worker.ProvisionError) as exc:
-        code = exc.code if isinstance(exc, LinuxRunnerError) else exc.code
-        LOG.error("Linux worker cycle failed safely (%s)", code)
+    if args.terminal:
+        try:
+            build_controller()(args.terminal, os.environ.get("DESTINEDFX_MT5_SERVICE", "destinedfx-mt5.service"))
+            LOG.info("Terminal %s finished", args.terminal)
+            return 0
+        except LinuxRunnerError as exc:
+            LOG.error("Terminal %s failed safely (%s)", args.terminal, exc.code)
+            return 2
+    if args.loop and args.once:
+        LOG.error("Use either --once or --loop")
         return 2
+    interval = max(1.0, min(60.0, args.interval))
+    while True:
+        try:
+            settings = load_settings()
+            result = run_once(settings, systemctl=build_controller())
+            LOG.info("Linux worker cycle finished (%s)", result)
+            code = 0
+        except (LinuxRunnerError, worker.ProvisionError) as exc:
+            LOG.error("Linux worker cycle failed safely (%s)", exc.code)
+            code = 2
+        if not args.loop:
+            return code
+        time.sleep(interval)
 
 
 if __name__ == "__main__":

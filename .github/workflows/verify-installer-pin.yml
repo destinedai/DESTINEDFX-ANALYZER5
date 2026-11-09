@@ -1,0 +1,46 @@
+name: Verify MT5 installer pins
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+  push:
+    paths:
+      - 'deploy/codespaces/installer-pins.env'
+      - 'scripts/linux-host/install-mt5.sh'
+      - '.devcontainer/postCreate.sh'
+      - '.github/workflows/verify-installer-pin.yml'
+  pull_request:
+    paths:
+      - 'deploy/codespaces/installer-pins.env'
+      - 'scripts/linux-host/install-mt5.sh'
+      - '.devcontainer/postCreate.sh'
+      - '.github/workflows/verify-installer-pin.yml'
+
+jobs:
+  verify-installer-pin:
+    name: Verify official MetaQuotes artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and compare both official artifact pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          source deploy/codespaces/installer-pins.env
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$MT5_LINUX_SCRIPT_URL" --output "$RUNNER_TEMP/mt5linux.sh"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$MT5_SETUP_URL" --output "$RUNNER_TEMP/mt5setup.exe"
+          actual_linux="$(sha256sum "$RUNNER_TEMP/mt5linux.sh" | awk '{print $1}')"
+          actual_setup="$(sha256sum "$RUNNER_TEMP/mt5setup.exe" | awk '{print $1}')"
+          if [[ "$actual_linux" != "$MT5_LINUX_SCRIPT_SHA256" ]]; then
+            echo "PIN_MISMATCH linux-wrapper expected=$MT5_LINUX_SCRIPT_SHA256 new=$actual_linux" >&2
+            exit 1
+          fi
+          if [[ "$actual_setup" != "$MT5_SETUP_SHA256" ]]; then
+            echo "PIN_MISMATCH setup-exe expected=$MT5_SETUP_SHA256 new=$actual_setup" >&2
+            exit 1
+          fi
+          echo "Verified Linux wrapper SHA-256: $actual_linux"
+          echo "Verified setup.exe SHA-256: $actual_setup"
+      - name: Run Codespaces shell contract
+        run: bash deploy/codespaces/test-codespaces.sh

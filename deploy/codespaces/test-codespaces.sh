@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
+for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/scripts/linux-host/install-mt5.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
 pass 'all Codespaces shell scripts pass bash -n'
 python3 - "$ROOT/.devcontainer/devcontainer.json" <<'PY'
 import json,sys
@@ -14,9 +14,14 @@ assert x['portsAttributes']['8000']['visibility']=='private'
 assert x['build']['dockerfile']=='Dockerfile'
 PY
 pass 'devcontainer requests two cores, no prebuild, and private forwarding'
-grep -Fq 'f9418ed388beba4aa9e28cc552da5e1627a6812734887c89f284d0b76c101698' "$ROOT/.devcontainer/postCreate.sh" || fail 'reviewed installer hash missing'
-grep -Fq -- '--expected-sha256 "$EXPECTED_MT5_SHA256"' "$ROOT/.devcontainer/postCreate.sh" || fail 'installer check not delegated to existing guarded script'
-pass 'official installer uses reviewed SHA-256 via existing pre-execution verifier'
+grep -Fq 'f9418ed388beba4aa9e28cc552da5e1627a6812734887c89f284d0b76c101698' "$ROOT/deploy/codespaces/installer-pins.env" || fail 'reviewed Linux-wrapper hash missing'
+grep -Fq 'a879492dd9d7b168d0538edd1c0dc5604ca43dc0951825b3501818e8b18f4c93' "$ROOT/deploy/codespaces/installer-pins.env" || fail 'reviewed setup.exe hash missing'
+grep -Fq -- '--expected-sha256 "$MT5_LINUX_SCRIPT_SHA256"' "$ROOT/.devcontainer/postCreate.sh" || fail 'Linux-wrapper pin not wired'
+grep -Fq -- '--expected-setup-sha256 "$MT5_SETUP_SHA256"' "$ROOT/.devcontainer/postCreate.sh" || fail 'setup.exe pin not wired'
+grep -Fq -- 'wine "$setup" /auto /path:' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'documented setup.exe /auto route missing'
+grep -Fq -- 'OWNER STEP: run deploy/codespaces/gui.sh' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'GUI fallback fix missing'
+grep -Fq -- 'gh codespace ports visibility 6080:private' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI forwarding missing'
+pass 'official Linux wrapper and setup.exe pins are verified and the headless route is guarded'
 grep -Fq -- '--host 127.0.0.1' "$ROOT/deploy/codespaces/start.sh" || fail 'bridge bind must be loopback-only'
 grep -Fq 'public-code-ready' "$ROOT/deploy/codespaces/start.sh" || fail 'missing public K3 readiness guard'
 if grep -Eq '^[[:space:]]*gh codespace ports visibility .*public' "$ROOT/deploy/codespaces/start.sh"; then fail 'start must not run public visibility command before K3'; fi
@@ -29,6 +34,12 @@ pass 'Codespaces launcher wires EPHEMERAL profile and idle countdown metadata'
 grep -Fq 'chmod 700 "$STATE" "$RUNTIME"' "$ROOT/deploy/codespaces/start.sh" || fail 'private state dir mode missing'
 grep -Fq 'chmod 600 "$STATE/bridge.env"' "$ROOT/deploy/codespaces/start.sh" || fail 'private credentials file mode missing'
 pass 'generated credentials are constrained to private state modes'
+grep -Fq 'linux-worker.py" --loop' "$ROOT/deploy/codespaces/start.sh" || fail 'start.sh must run the Linux connect-job runner'
+grep -Fq 'DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true' "$ROOT/deploy/codespaces/start.sh" || fail 'loopback control plane opt-in missing'
+grep -Fq 'MT5_JOURNAL_DIR="$TERMINAL_ROOT/Logs"' "$ROOT/deploy/codespaces/start.sh" || fail 'journal must be the platform Logs folder, not MQL5/Logs'
+grep -Fq '.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe' "$ROOT/deploy/codespaces/start.sh" || fail 'MetaQuotes default terminal path missing'
+if grep -Fq 'MQL5/Logs' "$ROOT/deploy/codespaces/start.sh"; then fail 'start.sh must not point the journal at MQL5/Logs'; fi
+pass 'T1 path scheme: one terminal location, platform Logs journal, runner and process control wired'
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 DESTINEDFX_CODESPACES_STATE_DIR="$TMP/state" "$ROOT/deploy/codespaces/stop.sh" | grep -q '^PASS:' || fail 'stop without state failed'
