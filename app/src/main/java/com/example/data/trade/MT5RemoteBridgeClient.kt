@@ -47,7 +47,8 @@ class MT5RemoteBridgeClient(
     init { require(this.profile == "${this.brokerBrand}_${this.accountMode}") { "MT5 profile must be the explicit broker/mode slot." } }
     private val http = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS)
-        .writeTimeout(5, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
+        .writeTimeout(5, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS)
+        .addInterceptor(BridgeGateway.interceptor).build()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     data class Pairing(val code: String, val expiresAt: String)
@@ -97,6 +98,8 @@ class MT5RemoteBridgeClient(
                     errorCode = detail?.optString("code").orEmpty()
                 )
             }
+        } catch (e: BridgeGatewayException) {
+            ServiceReadiness(false, null, e.failure.name, "unknown", "unknown", e.failure.name)
         } catch (_: Exception) { ServiceReadiness(false, null, "unreachable", "unknown", "unknown") }
     }
 
