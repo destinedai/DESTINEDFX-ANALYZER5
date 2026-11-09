@@ -421,7 +421,16 @@ jobs:
           azcliversion: latest
           inlineScript: |
             az bicep build --file deploy/azure-students/main.bicep --outfile /tmp/azuredeploy.json
-            cmp --silent /tmp/azuredeploy.json deploy/azure-students/azuredeploy.json
+            python3 - <<'PY'
+            from pathlib import Path
+            import sys
+
+            generated = Path('/tmp/azuredeploy.json').read_bytes()
+            checked_in = Path('deploy/azure-students/azuredeploy.json').read_bytes()
+            if generated != checked_in:
+                print('Generated Bicep template differs from deploy/azure-students/azuredeploy.json', file=sys.stderr)
+                sys.exit(1)
+            PY
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

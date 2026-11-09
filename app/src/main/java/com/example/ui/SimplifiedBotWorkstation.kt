@@ -801,7 +801,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 val idleCountdownEstimate = if (idleTimeoutSeconds > 0 && hostStartedAt > 0) {
                     (idleTimeoutSeconds - (System.currentTimeMillis() / 1000 - hostStartedAt).coerceAtLeast(0)).coerceAtLeast(0)
                 } else idleTimeoutSeconds
-                Text("Test host, DEMO only, stops when idle" + idleCountdownEstimate.takeIf { it > 0 }?.let { " · estimated idle countdown ${it / 60}m ${it % 60}s; user activity resets GitHub's timer" }.orEmpty(), color = WarningAmber, fontSize = 10.sp)
+                val idleCountdownLabel: String = if (idleCountdownEstimate > 0) {
+                    " · estimated idle countdown ${idleCountdownEstimate / 60}m ${idleCountdownEstimate % 60}s; user activity resets GitHub's timer"
+                } else ""
+                Text("Test host, DEMO only, stops when idle$idleCountdownLabel", color = WarningAmber, fontSize = 10.sp)
                 Text("A successful HTTP probe is not proof of broker authentication or trading readiness. Do not enter credentials until /health/ready confirms durable storage and configured execution.", color = WarningAmber, fontSize = 9.sp)
             }
         }
