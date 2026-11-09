@@ -355,6 +355,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     DestinedFXScreen.Bot -> SimplifiedBotWorkstation(viewModel)
                     DestinedFXScreen.Watchlist -> WatchlistTab(viewModel)
                     DestinedFXScreen.More -> MoreTab(viewModel)
+                    DestinedFXScreen.Simulator -> DisconnectedSimulatorTab()
                     DestinedFXScreen.Chat -> ChatWorkstationTab(viewModel)
                     DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
                     DestinedFXScreen.Settings -> SettingsTab(viewModel)
@@ -1241,6 +1242,7 @@ private fun MoreTab(viewModel: DestinedFXViewModel) {
                 DestinedFXScreen.Bot -> "Configure a broker connection, risk gates and automated scanning."
                 DestinedFXScreen.Watchlist -> "Follow available market quotes and jump into analysis."
                 DestinedFXScreen.Risk -> "Review account sizing, stop-loss and exposure constraints."
+                DestinedFXScreen.Simulator -> "Run fictional, disconnected DEMO/LIVE-labelled scenarios without broker or network access."
                 DestinedFXScreen.Settings -> "Manage account, broker and notification preferences."
                 DestinedFXScreen.About -> "Learn how analysis works and review the full risk disclosure."
                 DestinedFXScreen.Contact -> "Contact the support address published on the website."

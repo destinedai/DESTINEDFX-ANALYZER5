@@ -22,15 +22,16 @@ sealed class DestinedFXScreen(val title: String, val purpose: String, val icon: 
     object Settings : DestinedFXScreen("Settings", "Configure preferences, connections, and security", Icons.Default.Settings, "nav_tab_settings")
     object About : DestinedFXScreen("About & Disclosure", "Understand data, safety, and product boundaries", Icons.Default.Info, "nav_tab_about")
     object Contact : DestinedFXScreen("Contact", "Get help and send product feedback", Icons.Default.Email, "nav_tab_contact")
+    object Simulator : DestinedFXScreen("Simulator", "Run disconnected visual-only execution scenarios", Icons.Default.Science, "nav_tab_simulator")
 
     companion object {
         val primaryScreens: List<DestinedFXScreen>
             get() = listOf(Home, Analyzer, Bot, Watchlist, More)
 
         val moreScreens: List<DestinedFXScreen>
-            get() = listOf(ImageAnalyzer, Strategies, Calendar, Risk, Settings, Chat, About, Contact)
+            get() = listOf(ImageAnalyzer, Strategies, Calendar, Risk, Simulator, Settings, Chat, About, Contact)
 
         val allScreens: List<DestinedFXScreen>
-            get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings, About, Contact)
+            get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Simulator, Settings, About, Contact)
     }
 }
