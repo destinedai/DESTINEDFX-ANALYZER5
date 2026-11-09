@@ -125,7 +125,9 @@ http_code() {  # $1 = path, rest = extra curl args
 for _ in $(seq 1 30); do curl -fs --max-time 2 http://127.0.0.1:8000/health/live >/dev/null 2>&1 && break; sleep 1; done
 if [[ "$PUBLIC_READY" == true ]]; then
   if expose_publicly; then
-    live="$(http_code /health/live)"; bad="$(http_code /v1/app/state -H 'Authorization: Bearer deliberately-bad-token')"; none="$(http_code /v1/app/state)"
+    # A random, never-valid credential built at runtime: it must be refused with 401.
+    BAD_AUTH="Authorization: Bearer $(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+    live="$(http_code /health/live)"; bad="$(http_code /v1/app/state -H "$BAD_AUTH")"; none="$(http_code /v1/app/state)"
     if [[ "$live" == 200 && "$bad" == 401 && "$none" == 401 ]]; then
       pass "Public port reachable (health 200, bad token 401, no token 401): https://${PUBLIC_HOST}"
       owner_code="$(cd "$ROOT/bridge" && "$STATE/venv/bin/python" owner_ctl.py issue-code)"

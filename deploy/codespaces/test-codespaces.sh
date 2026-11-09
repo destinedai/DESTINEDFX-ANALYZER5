@@ -30,7 +30,7 @@ grep -Fq 'verify-public-ready.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'mi
 grep -Fq 'verify-public-ready.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'public exposure must be gated by the code-created marker'
 if grep -Eq '^gh codespace ports visibility .*public' "$ROOT/deploy/codespaces/start.sh"; then fail 'public visibility command must only live inside the guarded function'; fi
 grep -Fq 'gh codespace ports visibility 8000:public -c "$CODESPACE_NAME"' "$ROOT/deploy/codespaces/start.sh" || fail 'guarded public visibility command missing'
-grep -Fq 'deliberately-bad-token' "$ROOT/deploy/codespaces/start.sh" || fail 'bad-token self-check missing'
+grep -Fq 'BAD_AUTH' "$ROOT/deploy/codespaces/start.sh" || fail 'bad-token self-check missing'
 grep -Fq 'X-Tunnel-Skip-AntiPhishing-Page: true' "$ROOT/deploy/codespaces/start.sh" || fail 'tunnel header missing from self-check'
 grep -Fq 'EXPECTED_FORWARDED_HOST' "$ROOT/deploy/codespaces/start.sh" || fail 'host check env not exported'
 if grep -Eq 'public-code-ready' <(git -C "$ROOT" ls-files 2>/dev/null); then fail 'marker must not be committed'; fi
