@@ -796,12 +796,15 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 serviceReadiness?.errorCode?.takeIf { it.isNotBlank() }?.let { Text("Readiness blocker: $it", color = LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                 if (broker.usesManagedMt5Terminal && mt5Snapshot?.connected != true) Text("HOST OFFLINE", color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("Worker job: ${mt5Snapshot?.workerStatus ?: "not checked"} · Managed readiness: ${mt5Snapshot?.managedState ?: "not checked"} · Terminal: ${mt5Snapshot?.state ?: "not checked"} · Fresh heartbeat: ${mt5Snapshot?.heartbeatFresh ?: false}", color = TextSecondary, fontSize = 10.sp)
-                val idleTimeoutSeconds = mt5Snapshot?.raw?.optInt("idle_timeout_seconds")?.takeIf { it > 0 } ?: 0
-                val hostStartedAt = mt5Snapshot?.raw?.optLong("host_started_at_epoch_seconds")?.takeIf { it > 0 } ?: 0
-                val idleCountdownEstimate = if (idleTimeoutSeconds > 0 && hostStartedAt > 0) {
-                    (idleTimeoutSeconds - (System.currentTimeMillis() / 1000 - hostStartedAt).coerceAtLeast(0)).coerceAtLeast(0)
+                val idleTimeoutSeconds: Long = mt5Snapshot?.raw?.optInt("idle_timeout_seconds")
+                    ?.takeIf { it > 0 }
+                    ?.toLong() ?: 0L
+                val hostStartedAt: Long = mt5Snapshot?.raw?.optLong("host_started_at_epoch_seconds")
+                    ?.takeIf { it > 0L } ?: 0L
+                val idleCountdownEstimate: Long = if (idleTimeoutSeconds > 0L && hostStartedAt > 0L) {
+                    (idleTimeoutSeconds - (System.currentTimeMillis() / 1000L - hostStartedAt).coerceAtLeast(0L)).coerceAtLeast(0L)
                 } else idleTimeoutSeconds
-                val idleCountdownLabel: String = if (idleCountdownEstimate > 0) {
+                val idleCountdownLabel: String = if (idleCountdownEstimate > 0L) {
                     " · estimated idle countdown ${idleCountdownEstimate / 60}m ${idleCountdownEstimate % 60}s; user activity resets GitHub's timer"
                 } else ""
                 Text("Test host, DEMO only, stops when idle$idleCountdownLabel", color = WarningAmber, fontSize = 10.sp)
