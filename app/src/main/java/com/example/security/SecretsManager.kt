@@ -72,6 +72,8 @@ class SecretsManager internal constructor(
         private const val CTRADER_ACCESS_TOKEN = "ctrader_access_token"
         private const val CTRADER_REFRESH_TOKEN = "ctrader_refresh_token"
         private const val CTRADER_ACCESS_EXPIRES_AT_MS = "ctrader_access_expires_at_ms"
+        private const val MANAGEMENT_ACCESS_TOKEN = "management_access_token"
+        private const val MANAGEMENT_ACCESS_EXPIRES_AT_MS = "management_access_expires_at_ms"
         private const val MODE_DEMO_ACCEPTANCE_PREFIX = "mode_demo_acceptance_"
         private const val MODE_ARMING_AUDIT = "mode_arming_audit_v1"
         private val MODE_ARMING_AUDIT_LOCK = Any()
@@ -272,6 +274,24 @@ class SecretsManager internal constructor(
         ?.takeIf { it in setOf("System", "Light", "Dark") } ?: "System"
     fun saveThemeMode(mode: String): Boolean = mode in setOf("System", "Light", "Dark") &&
         botConfigPrefs.edit().putString("theme_mode", mode).commit()
+
+    /** Management API bearer token is opaque and isolated from trading/broker credentials. */
+    fun saveManagementAccessToken(token: String, expiresAtMs: Long): Boolean =
+        isSecureStorageAvailable && token.length in 32..256 && expiresAtMs > System.currentTimeMillis() &&
+            prefs.edit().putString(MANAGEMENT_ACCESS_TOKEN, token)
+                .putLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, expiresAtMs).commit()
+
+    fun getValidManagementAccessToken(nowMs: Long = System.currentTimeMillis()): String? {
+        if (!isSecureStorageAvailable) return null
+        val expiry = runCatching { prefs.getLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, 0L) }.getOrDefault(0L)
+        if (expiry <= nowMs) { clearManagementAccessToken(); return null }
+        return runCatching { prefs.getString(MANAGEMENT_ACCESS_TOKEN, null) }
+            .getOrNull()?.takeIf { it.length in 32..256 }
+    }
+
+    fun clearManagementAccessToken(): Boolean = isSecureStorageAvailable && prefs.edit()
+        .remove(MANAGEMENT_ACCESS_TOKEN).remove(MANAGEMENT_ACCESS_EXPIRES_AT_MS).commit()
+
     /** Deriv credentials are persisted only after encrypted Keystore storage is initialized. */
     fun saveDerivApiToken(v: String, mode: String = getDerivAccountMode()): Boolean {
         val normalizedMode = mode.trim().lowercase()

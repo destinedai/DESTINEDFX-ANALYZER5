@@ -27,6 +27,15 @@ val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromGradle.takeIf { it.isNotBlank
 val mt5ManagedServiceUrlBuildValue = mt5ManagedServiceUrl.ifBlank { "__CONFIGURATION_REQUIRED__" }
   .replace("\\", "\\\\")
   .replace("\"", "\\\"")
+val managementApiOrigin = providers.gradleProperty("managementApiOrigin").orNull?.trim()
+  ?.takeIf { it.isNotBlank() }
+  ?: System.getenv("MANAGEMENT_API_ORIGIN")?.trim()?.takeIf { it.isNotBlank() }
+  ?: rootProject.file(".env").takeIf { it.isFile }?.readLines()
+    ?.firstOrNull { it.trim().startsWith("MANAGEMENT_API_ORIGIN=") }
+    ?.substringAfter("=")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'")
+    ?.takeIf { it.isNotBlank() }
+  ?: "__CONFIGURATION_REQUIRED__"
+val managementApiOriginBuildValue = managementApiOrigin.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
   namespace = "com.example"
@@ -41,6 +50,7 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
+    buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
     ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
@@ -57,6 +67,7 @@ android {
   buildTypes {
     release {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
+      buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -64,6 +75,7 @@ android {
     }
     debug {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
+      buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
     }
   }
 
