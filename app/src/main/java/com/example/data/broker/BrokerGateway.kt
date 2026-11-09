@@ -8,9 +8,16 @@ import com.example.domain.repository.AccountMetrics
 import kotlinx.coroutines.flow.StateFlow
 
 enum class BrokerType {
+    /** Native Deriv API route. */
     DERIV,
+    /** Internal managed-terminal transport retained for existing MT5 UI state. */
     MT5,
-    OANDA
+    FBS,
+    EXNESS,
+    HFM;
+
+    val usesManagedMt5Terminal: Boolean
+        get() = this == MT5 || this == FBS || this == EXNESS || this == HFM
 }
 
 enum class BrokerConnectionStatus {

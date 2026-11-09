@@ -26,15 +26,15 @@ class BrokerCapabilityMatrixTest {
 
     @Test
     fun everyBrokerHasExplicitExecutionVerdicts() {
-        assertEquals(setOf(BrokerType.DERIV, BrokerType.MT5, BrokerType.OANDA),
+        assertEquals(setOf(BrokerType.DERIV, BrokerType.MT5, BrokerType.FBS, BrokerType.EXNESS, BrokerType.HFM),
             BrokerCapabilityMatrix.profiles.map { it.broker }.toSet())
         BrokerCapabilityMatrix.profiles.forEach { profile ->
             assertTrue(profile.capability("demo_orders")?.evidence.orEmpty().isNotBlank())
             assertTrue(profile.capability("live_orders")?.status in
                 setOf(CapabilityStatus.BLOCKED, CapabilityStatus.NOT_VERIFIED, CapabilityStatus.NOT_IMPLEMENTED))
         }
-        assertEquals(CapabilityStatus.NOT_IMPLEMENTED,
-            BrokerCapabilityMatrix.forBroker(BrokerType.OANDA).capability("demo_orders")?.status)
+        assertEquals(CapabilityStatus.NOT_VERIFIED,
+            BrokerCapabilityMatrix.forBroker(BrokerType.FBS).capability("demo_orders")?.status)
         assertEquals(CapabilityStatus.BLOCKED,
             BrokerCapabilityMatrix.forBroker(BrokerType.MT5).capability("live_orders")?.status)
     }
