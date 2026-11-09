@@ -1,4 +1,4 @@
-import os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error
+import asyncio, os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error
 import re
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
@@ -27,6 +27,18 @@ ALLOW_LOOPBACK=os.getenv('ALLOW_LOOPBACK_HTTP','false').lower()=='true'
 MAX_BODY=int(os.getenv('MAX_BODY_BYTES','65536'))
 PAIR_RATE=int(os.getenv('PAIR_RATE_LIMIT','10'))
 TOKEN_RATE=int(os.getenv('TOKEN_RATE_LIMIT','180'))
+# K3 public-exposure hardening. All of it is inert unless BRIDGE_PUBLIC_EXPOSURE=true.
+PUBLIC_EXPOSURE=os.getenv('BRIDGE_PUBLIC_EXPOSURE','false').strip().lower()=='true'
+EXPECTED_PUBLIC_HOST=os.getenv('EXPECTED_FORWARDED_HOST','').strip().lower().rstrip('.')
+if PUBLIC_EXPOSURE and not EXPECTED_PUBLIC_HOST:
+    raise ValueError('BRIDGE_PUBLIC_EXPOSURE requires EXPECTED_FORWARDED_HOST')
+IP_RATE=int(os.getenv('IP_RATE_LIMIT','600'))
+AUTH_FAIL_LIMIT=int(os.getenv('AUTH_FAIL_LIMIT','10'))
+AUTH_FAIL_WINDOW_SECONDS=int(os.getenv('AUTH_FAIL_WINDOW_SECONDS','300'))
+LOCKOUT_SECONDS=int(os.getenv('AUTH_LOCKOUT_SECONDS','900'))
+BODY_READ_TIMEOUT_SECONDS=float(os.getenv('BODY_READ_TIMEOUT_SECONDS','10'))
+BOOTSTRAP_TTL_SECONDS=600
+LOOPBACK_HOSTS=('127.0.0.1','::1','localhost')
 STALE=int(os.getenv('HEARTBEAT_STALE_SECONDS','15'))
 RECOVERY_GRACE=int(os.getenv('HEARTBEAT_RECOVERY_GRACE_SECONDS','120'))
 CONNECT_JOB_TTL_SECONDS=600
@@ -132,7 +144,9 @@ def db():
     CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
     CREATE TABLE IF NOT EXISTS trade_ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, created REAL NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);
-    CREATE TABLE IF NOT EXISTS analysis_requests(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, response TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(pairing_id,request_id));''')
+    CREATE TABLE IF NOT EXISTS analysis_requests(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, response TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(pairing_id,request_id));
+    CREATE TABLE IF NOT EXISTS ip_guard(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL, fails INTEGER NOT NULL, fail_window REAL NOT NULL, locked_until REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS owner_bootstrap(code_hash TEXT PRIMARY KEY, expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_app_hash ON pairings(app_hash)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_terminal_hash ON pairings(terminal_hash)')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
@@ -174,9 +188,74 @@ def secure(request):
     peer=request.client.host if request.client else ''
     if ALLOW_LOOPBACK and peer in ('127.0.0.1','::1','localhost'): return
     raise HTTPException(400,'HTTPS is required')
+def client_ip(request):
+    peer=request.client.host if request.client else 'unknown'
+    # The Codespaces gateway reaches us over loopback and appends the real caller as the LAST
+    # X-Forwarded-For entry. Earlier entries are caller-supplied and are never trusted.
+    forwarded=request.headers.get('x-forwarded-for','')
+    if peer in LOOPBACK_HOSTS and forwarded:
+        last=forwarded.split(',')[-1].strip()
+        if last and len(last)<=64: return last
+    return peer
+def public_host_guard(request):
+    if not PUBLIC_EXPOSURE: return None
+    host=request.headers.get('host','').split(':')[0].strip('[]').lower().rstrip('.')
+    if host==EXPECTED_PUBLIC_HOST or host in LOOPBACK_HOSTS: return None
+    return JSONResponse({'detail':{'code':'HOST_NOT_ALLOWED'}},421)
+def ip_guard_precheck(request):
+    if not PUBLIC_EXPOSURE or request.url.path=='/health/live': return None
+    ip=client_ip(request); t=time.time()
+    with tx(immediate=True) as c:
+        row=c.execute('SELECT * FROM ip_guard WHERE ip=?',(ip,)).fetchone()
+        if row and row['locked_until']>t:
+            return JSONResponse({'detail':{'code':'TEMPORARILY_LOCKED'}},429,headers={'Retry-After':str(int(row['locked_until']-t)+1)})
+        if row and t-row['window']<60:
+            if row['count']>=IP_RATE:
+                return JSONResponse({'detail':'Per-IP request rate limit exceeded'},429,headers={'Retry-After':'60'})
+            c.execute('UPDATE ip_guard SET count=count+1 WHERE ip=?',(ip,))
+        elif row:
+            c.execute('UPDATE ip_guard SET window=?,count=1 WHERE ip=?',(t,ip))
+        else:
+            c.execute('INSERT INTO ip_guard(ip,window,count,fails,fail_window,locked_until) VALUES(?,?,1,0,?,0)',(ip,t,t))
+    return None
+def record_auth_failure(request):
+    if not PUBLIC_EXPOSURE or request.url.path.startswith('/health/'): return
+    ip=client_ip(request); t=time.time()
+    with tx(immediate=True) as c:
+        row=c.execute('SELECT fails,fail_window FROM ip_guard WHERE ip=?',(ip,)).fetchone()
+        if row is None: return
+        fails=row['fails']+1 if t-row['fail_window']<AUTH_FAIL_WINDOW_SECONDS else 1
+        window_start=row['fail_window'] if fails>1 else t
+        locked=t+LOCKOUT_SECONDS if fails>=AUTH_FAIL_LIMIT else 0
+        c.execute('UPDATE ip_guard SET fails=?,fail_window=?,locked_until=? WHERE ip=?',(0 if locked else fails,window_start,locked,ip))
+def issue_owner_bootstrap_code():
+    code=secrets.token_urlsafe(16); t=time.time()
+    with tx(immediate=True) as c:
+        c.execute('DELETE FROM owner_bootstrap WHERE expires<? OR used=1',(t,))
+        c.execute('INSERT INTO owner_bootstrap(code_hash,expires,used) VALUES(?,?,0)',(digest(code),t+BOOTSTRAP_TTL_SECONDS))
+    return code,int(BOOTSTRAP_TTL_SECONDS)
+def consume_owner_bootstrap_code(code):
+    if not code or len(code)>200: return False
+    t=time.time()
+    with tx(immediate=True) as c:
+        rows=c.execute('SELECT code_hash FROM owner_bootstrap WHERE used=0 AND expires>?',(t,)).fetchall()
+        wanted=digest(code)
+        found=next((r for r in rows if hmac.compare_digest(r['code_hash'],wanted)),None)
+        if found is None: return False
+        c.execute('UPDATE owner_bootstrap SET used=1 WHERE code_hash=? AND used=0',(wanted,))
+        return c.total_changes>=1
+def rotate_all_app_tokens():
+    # Existing app tokens stop working; the app shows its re-pair state. Ledgers are kept.
+    with tx(immediate=True) as c:
+        c.execute("UPDATE pairings SET app_hash='revoked:'||id")
+        return c.total_changes
 @app.middleware('http')
 async def limits(request:Request, call_next):
     secure(request)
+    blocked=public_host_guard(request)
+    if blocked is not None: return blocked
+    blocked=ip_guard_precheck(request)
+    if blocked is not None: return blocked
     try:
         access_settings=cloudflare_access_settings()
     except ValueError:
@@ -204,11 +283,18 @@ async def limits(request:Request, call_next):
         except ValueError: return JSONResponse({'detail':'Invalid content length'},400)
         if length>MAX_BODY: return JSONResponse({'detail':'Request body too large'},413)
         body=bytearray()
-        async for chunk in request.stream():
-            if len(body)+len(chunk)>MAX_BODY: return JSONResponse({'detail':'Request body too large'},413)
-            body.extend(chunk)
+        async def read_body():
+            async for chunk in request.stream():
+                if len(body)+len(chunk)>MAX_BODY: return False
+                body.extend(chunk)
+            return True
+        try: within_limit=await asyncio.wait_for(read_body(),BODY_READ_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError: return JSONResponse({'detail':'Request body timed out'},408)
+        if not within_limit: return JSONResponse({'detail':'Request body too large'},413)
         request._body=bytes(body)
-    return await call_next(request)
+    response=await call_next(request)
+    if response.status_code==401: record_auth_failure(request)
+    return response
 class Pair(BaseModel): model_config=ConfigDict(extra='forbid')
 class ManagedAccount(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -911,9 +997,12 @@ def readiness():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
     return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
 @app.post('/v1/pairings',status_code=201)
-def create_pair(request:Request):
+def create_pair(request:Request, x_owner_bootstrap:str|None=Header(default=None)):
     require_durable_execution()
-    ip=request.client.host if request.client else 'unknown'; t=time.time()
+    # On a public port pairing creation is gated by the owner's one-time 10-minute code.
+    if PUBLIC_EXPOSURE and not consume_owner_bootstrap_code(x_owner_bootstrap or ''):
+        raise HTTPException(401,'Owner bootstrap code required')
+    ip=client_ip(request); t=time.time()
     with tx(True) as c:
         row=c.execute('SELECT * FROM rate WHERE ip=?',(ip,)).fetchone()
         if row and t-row['window']<60 and row['count']>=PAIR_RATE: raise HTTPException(429,'Pairing rate limit exceeded')

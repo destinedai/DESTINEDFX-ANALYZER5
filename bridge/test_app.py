@@ -1318,3 +1318,81 @@ def test_ephemeral_withholds_and_acknowledges_stale_queued_start_resume(monkeypa
     with app.tx() as c:
         blocked=c.execute('SELECT ack FROM commands WHERE id IN (?,?) ORDER BY id',ids[:2]).fetchall()
     assert all(app.json.loads(row['ack'])['code']=='EPHEMERAL_HOST_RESTART_RECONCILE_REQUIRED' for row in blocked)
+
+
+pub=TestClient(app.app, base_url='https://testserver', client=('127.0.0.1',50000))  # peer is loopback, like the tunnel
+# ---- K3 public-exposure hardening (fixtures only; no real host or broker involved) ----
+def public_mode(monkeypatch, host='fixture-codespace-8000.app.github.dev'):
+    monkeypatch.setattr(app,'PUBLIC_EXPOSURE',True)
+    monkeypatch.setattr(app,'EXPECTED_PUBLIC_HOST',host)
+    with app.tx(immediate=True) as c:
+        c.execute('DELETE FROM ip_guard'); c.execute('DELETE FROM owner_bootstrap')
+
+def test_public_mode_rejects_unexpected_host(monkeypatch):
+    public_mode(monkeypatch)
+    assert pub.get('/v1/app/state',headers={'Host':'evil.example'}).status_code==421
+    assert pub.get('/health/live',headers={'Host':'fixture-codespace-8000.app.github.dev'}).status_code==200
+
+def test_public_pairing_needs_one_time_owner_code(monkeypatch):
+    public_mode(monkeypatch)
+    host={'Host':'fixture-codespace-8000.app.github.dev'}
+    assert pub.post('/v1/pairings',headers=host).status_code==401
+    code,ttl=app.issue_owner_bootstrap_code()
+    assert ttl==600
+    ok=pub.post('/v1/pairings',headers={**host,'X-Owner-Bootstrap':code})
+    assert ok.status_code==201
+    assert pub.post('/v1/pairings',headers={**host,'X-Owner-Bootstrap':code}).status_code==401
+
+def test_owner_code_expires_after_ten_minutes(monkeypatch):
+    public_mode(monkeypatch)
+    code,_=app.issue_owner_bootstrap_code()
+    real=time.time
+    monkeypatch.setattr(app.time,'time',lambda: real()+601)
+    assert app.consume_owner_bootstrap_code(code) is False
+
+def test_owner_code_is_stored_only_as_a_hash(monkeypatch):
+    public_mode(monkeypatch)
+    code,_=app.issue_owner_bootstrap_code()
+    with app.tx() as c:
+        stored=[r['code_hash'] for r in c.execute('SELECT code_hash FROM owner_bootstrap').fetchall()]
+    assert code not in stored and app.digest(code) in stored
+
+def test_bad_and_missing_tokens_return_401_then_lockout(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',3)
+    host={'Host':'fixture-codespace-8000.app.github.dev','X-Forwarded-For':'203.0.113.9'}
+    assert pub.get('/v1/app/state',headers=host).status_code==401
+    for _ in range(2):
+        assert pub.get('/v1/app/state',headers={**host,'Authorization':'Bearer wrong'}).status_code==401
+    locked=pub.get('/v1/app/state',headers=host)
+    assert locked.status_code==429 and locked.json()['detail']['code']=='TEMPORARILY_LOCKED'
+    other={'Host':'fixture-codespace-8000.app.github.dev','X-Forwarded-For':'203.0.113.10'}
+    assert pub.get('/v1/app/state',headers=other).status_code==401
+
+def test_forwarded_for_uses_last_entry_so_spoofed_prefix_does_not_evade_lockout(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',2)
+    base={'Host':'fixture-codespace-8000.app.github.dev'}
+    pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'1.1.1.1, 203.0.113.50'})
+    pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'2.2.2.2, 203.0.113.50'})
+    assert pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'3.3.3.3, 203.0.113.50'}).status_code==429
+
+def test_per_ip_rate_limit_in_public_mode(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'IP_RATE',3)
+    h={'Host':'fixture-codespace-8000.app.github.dev','X-Forwarded-For':'203.0.113.77'}
+    codes=[pub.get('/health/ready',headers=h).status_code for _ in range(5)]
+    assert 429 in codes
+
+def test_token_rotation_revokes_existing_app_tokens(monkeypatch):
+    p=pair()
+    h={'Authorization':'Bearer '+p['app_token']}
+    assert pub.get('/v1/app/state',headers=h).status_code!=401
+    assert app.rotate_all_app_tokens()>=1
+    assert pub.get('/v1/app/state',headers=h).status_code==401
+
+def test_oversized_body_is_refused_in_public_mode(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'MAX_BODY',10)
+    r=pub.post('/v1/pairings',content=b'x'*50,headers={'Host':'fixture-codespace-8000.app.github.dev'})
+    assert r.status_code==413

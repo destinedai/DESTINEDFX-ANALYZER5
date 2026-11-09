@@ -30,14 +30,16 @@ PY
 fi
 chmod 600 "$STATE/bridge.env"
 
-# Local-only startup is safe for current K1. K3 must supply an explicit readiness guard
-# before any public forwarding/visibility command is permitted.
-if [[ ! -f "$ROOT/deploy/codespaces/public-code-ready" ]]; then
-  fail 'K3 blocker: public bridge exposure is disabled until the code-ready hardening guard exists.'
-  printf 'PASS: bridge binding remains restricted to 127.0.0.1.\n'
-  printf 'INFO: After K3 guard review, the exact visibility command is: gh codespace ports visibility 8000:public -c %s\n' "$CODESPACE_NAME"
+# Public reach (K3). The marker is created only by verify-public-ready.sh after the hardening tests pass
+# for the exact bridge code; without it the port stays private and the bridge stays loopback-only.
+PUBLIC_READY=false
+if "$ROOT/deploy/codespaces/verify-public-ready.sh" --check 2>/dev/null \
+   || "$ROOT/deploy/codespaces/verify-public-ready.sh" generate; then
+  PUBLIC_READY=true
 fi
-
+FORWARD_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
+PUBLIC_HOST="${CODESPACE_NAME}-8000.${FORWARD_DOMAIN}"
+printf 'PASS: bridge binding remains restricted to 127.0.0.1.\n'
 
 # ---- One path scheme for every component (T1): derived once from the real terminal location. ----
 find_terminal() {
@@ -83,10 +85,11 @@ source "$STATE/bridge.env"
 set +a
 HOST_STARTED_AT_EPOCH_SECONDS="$(date +%s)"
 export BRIDGE_DB_PATH="$STATE/bridge.sqlite3" ALLOW_LOOPBACK_HTTP=true BRIDGE_HOST_MODE=linux-host HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
+if [[ "$PUBLIC_READY" == true ]]; then export BRIDGE_PUBLIC_EXPOSURE=true EXPECTED_FORWARDED_HOST="$PUBLIC_HOST"; fi
 export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="$((IDLE_TIMEOUT_MINUTES * 60))" HOST_STARTED_AT_EPOCH_SECONDS
 (
   cd "$ROOT/bridge"
-  "$STATE/venv/bin/python" -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers
+  "$STATE/venv/bin/python" -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers --timeout-keep-alive 5 --limit-concurrency 50
 ) >>"$RUNTIME/bridge.log" 2>&1 & echo $! >>"$RUNTIME/pids"
 
 # Connect-job runner: claims jobs from the loopback bridge, writes the private startup config, restarts the terminal.
@@ -110,7 +113,34 @@ else
   fail 'MT5 terminal is not installed (checked ~/.mt5 and ~/.wine); host runtime is diagnostic-only until it is.'
 fi
 
-printf 'PASS: local bridge URL https://%s-8000.app.github.dev (Codespaces private port; no token in URL).\n' "$CODESPACE_NAME"
-printf 'FAIL: public URL is intentionally unavailable until K3 hardening is reviewed.\n'
+expose_publicly() {
+  # Leave the port protocol as HTTP: switching a public port to HTTPS makes it private again.
+  gh codespace ports visibility 8000:public -c "$CODESPACE_NAME" >/dev/null 2>&1
+}
+http_code() {  # $1 = path, rest = extra curl args
+  local path="$1"; shift
+  curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H 'Accept: application/json' \
+    -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "$@" "https://${PUBLIC_HOST}${path}" || true
+}
+for _ in $(seq 1 30); do curl -fs --max-time 2 http://127.0.0.1:8000/health/live >/dev/null 2>&1 && break; sleep 1; done
+if [[ "$PUBLIC_READY" == true ]]; then
+  if expose_publicly; then
+    live="$(http_code /health/live)"; bad="$(http_code /v1/app/state -H 'Authorization: Bearer deliberately-bad-token')"; none="$(http_code /v1/app/state)"
+    if [[ "$live" == 200 && "$bad" == 401 && "$none" == 401 ]]; then
+      pass "Public port reachable (health 200, bad token 401, no token 401): https://${PUBLIC_HOST}"
+      owner_code="$(cd "$ROOT/bridge" && "$STATE/venv/bin/python" owner_ctl.py issue-code)"
+      printf 'BRIDGE URL:   https://%s\n' "$PUBLIC_HOST"
+      printf 'PAIRING CODE: %s\n' "$owner_code"
+      printf 'Enter both in the app under Settings > Connection. The code works once and expires in 10 minutes.\n'
+    else
+      gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+      fail "Public self-check failed (health=$live bad-token=$bad no-token=$none); port set back to private. If health is not 200, open the URL once in a browser and tap Continue, then rerun."
+    fi
+  else
+    fail 'Could not set port 8000 public with gh. OWNER STEP: open the Ports tab, right-click port 8000, set Port Visibility to Public, then rerun start.sh.'
+  fi
+else
+  fail 'Public exposure disabled: K3 hardening tests did not pass. Port stays private.'
+fi
 pass 'Foreground service processes are tracked in private Codespaces state.'
 wait

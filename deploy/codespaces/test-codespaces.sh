@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
+for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
 pass 'all Codespaces shell scripts pass bash -n'
 python3 - "$ROOT/.devcontainer/devcontainer.json" <<'PY'
 import json,sys
@@ -26,9 +26,15 @@ bash "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" || fail 'invalid in
 grep -Fq -- 'gh codespace ports visibility 6080:private' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI forwarding missing'
 pass 'official Linux wrapper and setup.exe pins are verified and the headless route is guarded'
 grep -Fq -- '--host 127.0.0.1' "$ROOT/deploy/codespaces/start.sh" || fail 'bridge bind must be loopback-only'
-grep -Fq 'public-code-ready' "$ROOT/deploy/codespaces/start.sh" || fail 'missing public K3 readiness guard'
-if grep -Eq '^[[:space:]]*gh codespace ports visibility .*public' "$ROOT/deploy/codespaces/start.sh"; then fail 'start must not run public visibility command before K3'; fi
-pass 'public exposure remains blocked and bridge binds loopback'
+grep -Fq 'verify-public-ready.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'missing public K3 readiness guard'
+grep -Fq 'verify-public-ready.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'public exposure must be gated by the code-created marker'
+if grep -Eq '^gh codespace ports visibility .*public' "$ROOT/deploy/codespaces/start.sh"; then fail 'public visibility command must only live inside the guarded function'; fi
+grep -Fq 'gh codespace ports visibility 8000:public -c "$CODESPACE_NAME"' "$ROOT/deploy/codespaces/start.sh" || fail 'guarded public visibility command missing'
+grep -Fq 'deliberately-bad-token' "$ROOT/deploy/codespaces/start.sh" || fail 'bad-token self-check missing'
+grep -Fq 'X-Tunnel-Skip-AntiPhishing-Page: true' "$ROOT/deploy/codespaces/start.sh" || fail 'tunnel header missing from self-check'
+grep -Fq 'EXPECTED_FORWARDED_HOST' "$ROOT/deploy/codespaces/start.sh" || fail 'host check env not exported'
+if grep -Eq 'public-code-ready' <(git -C "$ROOT" ls-files 2>/dev/null); then fail 'marker must not be committed'; fi
+pass 'public exposure is guarded by a code-created marker, self-checked, and bridge binds loopback'
 grep -Fq 'export BRIDGE_HOST_PROFILE=EPHEMERAL' "$ROOT/deploy/codespaces/start.sh" || fail 'Codespaces bridge must announce EPHEMERAL'
 grep -Fq 'HOST_IDLE_TIMEOUT_SECONDS' "$ROOT/deploy/codespaces/start.sh" || fail 'configured idle timeout must reach bridge'
 grep -Fq 'HOST_STARTED_AT_EPOCH_SECONDS' "$ROOT/deploy/codespaces/start.sh" || fail 'host start epoch must reach bridge for countdown estimate'
