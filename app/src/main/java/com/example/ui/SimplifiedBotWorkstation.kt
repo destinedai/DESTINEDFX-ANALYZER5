@@ -422,9 +422,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         val applySelection = {
             selectedMt5Broker = brand; mt5Mode = mode
             secrets.saveSelectedMT5BrokerBrand(brand)
-            broker = BrokerType.MT5; viewModel.selectBroker(BrokerType.MT5); message = null
+            broker = BrokerType.FBS; viewModel.selectBroker(BrokerType.FBS); message = null
         }
-        if (changed && broker == BrokerType.MT5 && mt5Mode == "LIVE" && previousBridge?.hasPairing() == true) {
+        if (changed && broker.usesManagedMt5Terminal && mt5Mode == "LIVE" && previousBridge?.hasPairing() == true) {
             scope.launch {
                 if (busy) { message = "Wait for the current account action before switching slots."; return@launch }
                 busy = true
@@ -437,7 +437,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     }
     val selectBrokerType: (BrokerType) -> Unit = { type ->
         val previousBridge = bridge
-        if (type != broker && broker == BrokerType.MT5 && mt5Mode == "LIVE" && previousBridge?.hasPairing() == true) {
+        if (type != broker && broker.usesManagedMt5Terminal && mt5Mode == "LIVE" && previousBridge?.hasPairing() == true) {
             scope.launch {
                 if (busy) { message = "Wait for the current account action before switching brokers."; return@launch }
                 busy = true
@@ -471,7 +471,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             savePassword = secrets.isManagedMT5AccountPasswordSaveEnabled(mt5Profile)
             password = if (savePassword) secrets.getManagedMT5AccountPassword(mt5Profile) else ""
         }
-        if (broker == BrokerType.MT5 && bridge?.managedConfigured() == true && bridge.hasPairing()) {
+        if (broker.usesManagedMt5Terminal && bridge?.managedConfigured() == true && bridge.hasPairing()) {
             mt5Snapshot = null
             while (true) {
                 mt5Snapshot = runCatching { bridge.state() }.getOrNull() ?: mt5Snapshot?.copy(managedState = "OFFLINE", workerStatus = "OFFLINE", connected = false, terminalOnline = false, heartbeatFresh = false, state = "OFFLINE", liveAuthorized = false)
@@ -483,7 +483,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     }
 
     val connected = when (broker) {
-        BrokerType.MT5 -> mt5Snapshot?.let {
+        in setOf(BrokerType.MT5, BrokerType.FBS, BrokerType.EXNESS, BrokerType.HFM) -> mt5Snapshot?.let {
             isVerifiedMt5Connection(
                 snapshotConnected = it.connected,
                 workerReady = it.workerStatus == "READY",
@@ -505,18 +505,18 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         else -> connectionStatus == com.example.data.broker.BrokerConnectionStatus.CONNECTED
     }
     val running = when (broker) {
-        BrokerType.MT5 -> mt5Snapshot?.state in setOf("RUNNING", "PAUSED")
+        in setOf(BrokerType.MT5, BrokerType.FBS, BrokerType.EXNESS, BrokerType.HFM) -> mt5Snapshot?.state in setOf("RUNNING", "PAUSED")
         BrokerType.DERIV -> derivBotServiceState in setOf("RUNNING", "PAUSED")
         else -> botActive
     }
     val botUiState = deriveBotUiState(
         busy = busy,
         connected = connected,
-        pairingRequired = broker == BrokerType.MT5 && !bridge?.hasPairing().orFalse(),
-        terminalOnline = if (broker == BrokerType.MT5) mt5Snapshot?.terminalOnline else null,
-        heartbeatFresh = if (broker == BrokerType.MT5) mt5Snapshot?.heartbeatFresh else null,
-        terminalState = if (broker == BrokerType.MT5) mt5Snapshot?.state else if (running) "RUNNING" else null,
-        blocked = broker == BrokerType.MT5 && mt5Mode == "LIVE" && mt5Snapshot?.liveAuthorized != true,
+        pairingRequired = broker.usesManagedMt5Terminal && !bridge?.hasPairing().orFalse(),
+        terminalOnline = if (broker.usesManagedMt5Terminal) mt5Snapshot?.terminalOnline else null,
+        heartbeatFresh = if (broker.usesManagedMt5Terminal) mt5Snapshot?.heartbeatFresh else null,
+        terminalState = if (broker.usesManagedMt5Terminal) mt5Snapshot?.state else if (running) "RUNNING" else null,
+        blocked = broker.usesManagedMt5Terminal && mt5Mode == "LIVE" && mt5Snapshot?.liveAuthorized != true,
         error = message?.contains("failed", ignoreCase = true) == true,
     )
 
@@ -794,7 +794,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 Text("Service: ${serviceReadiness?.serviceStatus ?: if (MT5RemoteBridgeClient.validServiceOrigin(serviceUrl).isNullOrBlank()) "CONFIGURATION_REQUIRED" else "not checked"} · HTTP ${serviceReadiness?.httpStatus ?: "-"}", color = WarningAmber, fontSize = 10.sp)
                 Text("Durable storage: ${serviceReadiness?.database ?: "not checked"} · Execution config: ${serviceReadiness?.managedExecution ?: "not checked"}", color = TextSecondary, fontSize = 10.sp)
                 serviceReadiness?.errorCode?.takeIf { it.isNotBlank() }?.let { Text("Readiness blocker: $it", color = LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-                if (broker == BrokerType.MT5 && mt5Snapshot?.connected != true) Text("HOST OFFLINE", color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                if (broker.usesManagedMt5Terminal && mt5Snapshot?.connected != true) Text("HOST OFFLINE", color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("Worker job: ${mt5Snapshot?.workerStatus ?: "not checked"} · Managed readiness: ${mt5Snapshot?.managedState ?: "not checked"} · Terminal: ${mt5Snapshot?.state ?: "not checked"} · Fresh heartbeat: ${mt5Snapshot?.heartbeatFresh ?: false}", color = TextSecondary, fontSize = 10.sp)
                 val idleTimeoutSeconds = mt5Snapshot?.raw?.optInt("idle_timeout_seconds")?.takeIf { it > 0 } ?: 0
                 val hostStartedAt = mt5Snapshot?.raw?.optLong("host_started_at_epoch_seconds")?.takeIf { it > 0 } ?: 0
@@ -809,11 +809,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("BROKER CONNECTION", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(BrokerType.MT5, BrokerType.DERIV).forEach { type ->
-                        FilterChip(selected = broker == type, onClick = { selectBrokerType(type) }, label = { Text(if (type == BrokerType.MT5) "MetaTrader 5" else "Deriv", fontSize = 11.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
+                    listOf(BrokerType.FBS, BrokerType.EXNESS, BrokerType.DERIV, BrokerType.HFM).forEach { type ->
+                        FilterChip(selected = broker == type, onClick = { selectBrokerType(type) }, label = { Text(when (type) { BrokerType.DERIV -> "Deriv"; BrokerType.FBS -> "FBS"; BrokerType.EXNESS -> "Exness"; BrokerType.HFM -> "HFM"; else -> type.name }, fontSize = 11.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
                     }
                 }
-                if (broker == BrokerType.MT5) {
+                if (broker.usesManagedMt5Terminal) {
                     Text("MT5 ACCOUNTS", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedButton(onClick = { demoPassLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }, enabled = mt5Mode == "DEMO" && secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_DEMO").isNotBlank() && secrets.getManagedMT5AccountServer("${selectedMt5Broker}_DEMO").isNotBlank()) {
@@ -1112,7 +1112,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         scope.launch {
                             busy = true; message = null
                             try {
-                                if (broker == BrokerType.MT5) {
+                                if (broker.usesManagedMt5Terminal) {
                                     require(selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Select an MT5 broker before connecting." }
                                     val snapshot = requireNotNull(bridge) { "Select an MT5 broker." }.registerManagedAccount(login = login, password = password, server = server, accessType = accessType, consent = consent, savePasswordLocally = savePassword)
                                     mt5Snapshot = snapshot
@@ -1176,7 +1176,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             val opportunity = viewModel.findBestBotOpportunity()
                             selectedOpportunity = opportunity
                             require(opportunity != null) { "No qualified setup yet. Scanning continues." }
-                            if (broker == BrokerType.MT5) {
+                            if (broker.usesManagedMt5Terminal) {
                                 require(mt5Mode != "LIVE" || mt5Snapshot?.liveAuthorized == true) { "LIVE START blocked: explicitly authorize this exact LIVE profile first." }
                                 val config = JSONObject().put("strategy", viewModel.selectedStrategyId.value).put("symbols", JSONArray().put(opportunity.symbol)).put("timeframes", JSONArray().put("H1")).put("risk_percent", 1.0).put("max_daily_loss_percent", 2.0).put("max_concurrent_positions", 2)
                                 val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "START", config)
@@ -1227,7 +1227,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     scope.launch {
                         busy = true; commandPending = true
                         try {
-                            if (broker == BrokerType.MT5) {
+                            if (broker.usesManagedMt5Terminal) {
                                 val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "STOP")
                                 message = if (result.queued) "Stop requested; waiting for fresh broker state. Existing positions remain protected." else result.detail
                             } else { DerivDemoBotService.stop(context); viewModel.setBotStatus(false); message = "Stop requested. Existing positions remain broker-tracked." }
@@ -1421,10 +1421,10 @@ private fun ConnectedBotDashboard(
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, ProfitGreen.copy(alpha = 0.5f))) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("VERIFIED CONNECTED ACCOUNT", color = ProfitGreen, fontSize = 10.sp, fontWeight = FontWeight.Black)
-            Text(if (broker == BrokerType.MT5) "MetaTrader 5 · ${mt5Snapshot?.actualAccountMode ?: "unverified"}" else "Deriv · ${derivAccount?.mode?.uppercase() ?: "unverified"}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            val accountId = if (broker == BrokerType.MT5) mt5Snapshot?.actualLogin else derivAccount?.loginId
+            Text(if (broker.usesManagedMt5Terminal) "MetaTrader 5 · ${mt5Snapshot?.actualAccountMode ?: "unverified"}" else "Deriv · ${derivAccount?.mode?.uppercase() ?: "unverified"}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            val accountId = if (broker.usesManagedMt5Terminal) mt5Snapshot?.actualLogin else derivAccount?.loginId
             Text("Account: ${maskAccountId(accountId)}", color = TextSecondary, fontSize = 11.sp)
-            if (broker == BrokerType.MT5) {
+            if (broker.usesManagedMt5Terminal) {
                 Text("Server: ${mt5Snapshot?.actualServer ?: "unverified"} · Currency: ${mt5Snapshot?.currency ?: "unverified"}", color = TextSecondary, fontSize = 11.sp)
                 Text("Balance: ${mt5Snapshot?.balance?.toString() ?: "unavailable"} · Equity: ${mt5Snapshot?.equity?.toString() ?: "unavailable"}", color = TextSecondary, fontSize = 11.sp)
                 Text("Free margin: ${mt5Snapshot?.freeMargin?.toString() ?: "unavailable"} · Leverage: ${mt5Snapshot?.leverage?.toString() ?: "unavailable"}", color = TextSecondary, fontSize = 11.sp)
