@@ -72,7 +72,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/app_management
-      ADMIN_EMAILS: ci-admin@example.test
+      ADMIN_EMAILS: ci-admin@example.org
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -96,9 +96,9 @@ jobs:
               ready = client.get('/ready')
               assert ready.status_code == 200, ready.text
               assert ready.json() == {'status': 'ready', 'database': 'ok'}
-              created = client.post('/api/v1/auth/register', json={'email':'ci-user@example.test','password':'Correct horse battery staple 92!'})
+              created = client.post('/api/v1/auth/register', json={'email':'ci-user@example.org','password':'Correct horse battery staple 92!'})
               assert created.status_code == 201, created.text
-              token = client.post('/api/v1/auth/login', json={'email':'ci-user@example.test','password':'Correct horse battery staple 92!'}).json()['access_token']
+              token = client.post('/api/v1/auth/login', json={'email':'ci-user@example.org','password':'Correct horse battery staple 92!'}).json()['access_token']
               headers = {'Authorization': f'Bearer {token}'}
               saved = client.put('/api/v1/preferences/theme', json={'value': {'mode':'dark'}}, headers=headers)
               assert saved.status_code == 200, saved.text
