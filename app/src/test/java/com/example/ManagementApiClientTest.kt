@@ -13,6 +13,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.IOException
 
 class ManagementApiClientTest {
     @Test fun acceptsOnlyConfiguredBareHttpsOrigins() {
@@ -46,6 +47,29 @@ class ManagementApiClientTest {
             runCatching { client.login("a@example.org", "long enough password") }.exceptionOrNull()
         ).forEach { assertEquals(ManagementFailure.SECURE_STORAGE_UNAVAILABLE, (it as ManagementException).failure) }
         assertFalse(networkCalled)
+    }
+
+    @Test fun onlySafeGetRequestsRetryOnceOnTransportFailure() {
+        var getAttempts = 0
+        val getHttp = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            getAttempts++
+            if (getAttempts == 1) throw IOException("temporary network failure")
+            response(chain.request(), 200, "{\"theme\":{}}")
+        }).build()
+        val getClient = ManagementApiClient("https://api.example.org", FakeTokenStore("x".repeat(64)), getHttp)
+        assertTrue(getClient.getPreferences().has("theme"))
+        assertEquals(2, getAttempts)
+
+        var postAttempts = 0
+        val postHttp = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            postAttempts++
+            throw IOException("temporary network failure")
+        }).build()
+        val postClient = ManagementApiClient("https://api.example.org", FakeTokenStore(null), postHttp)
+        val error = runCatching { postClient.register("a@example.org", "long enough password") }
+            .exceptionOrNull() as ManagementException
+        assertEquals(ManagementFailure.OFFLINE, error.failure)
+        assertEquals(1, postAttempts)
     }
 
     @Test fun loginStoresOpaqueTokenAndExpiryAndPreferencePutUsesBearer() {

@@ -101,18 +101,22 @@ class ManagementApiClient(
             "PUT" -> requestBuilder.put(requestBody ?: ByteArray(0).toRequestBody(null)).build()
             else -> throw IllegalArgumentException("Unsupported management operation")
         }
-        try {
-            http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) throw statusFailure(response.code, path)
-                val text = response.body?.string().orEmpty()
-                if (text.isBlank() && allowEmpty) return JSONObject()
-                return try { JSONObject(text) } catch (_: Exception) { throw ManagementException(ManagementFailure.INVALID_RESPONSE) }
+        val attempts = if (method == "GET") 2 else 1
+        repeat(attempts) { attempt ->
+            try {
+                http.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) throw statusFailure(response.code, path)
+                    val text = response.body?.string().orEmpty()
+                    if (text.isBlank() && allowEmpty) return JSONObject()
+                    return try { JSONObject(text) } catch (_: Exception) { throw ManagementException(ManagementFailure.INVALID_RESPONSE) }
+                }
+            } catch (e: ManagementException) {
+                throw e
+            } catch (_: IOException) {
+                if (attempt == attempts - 1) throw ManagementException(ManagementFailure.OFFLINE)
             }
-        } catch (e: ManagementException) {
-            throw e
-        } catch (_: IOException) {
-            throw ManagementException(ManagementFailure.OFFLINE)
         }
+        throw ManagementException(ManagementFailure.OFFLINE)
     }
 
     private fun statusFailure(code: Int, path: String): ManagementException = ManagementException(when {
