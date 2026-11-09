@@ -41,7 +41,7 @@ class ManagementApiClientTest {
             networkCalled = true
             response(chain.request(), 200, "{}")
         }).build()
-        val client = ManagementApiClient("https://api.example.org", FakeTokenStore(null, available = false), http)
+        val client = ManagementApiClient("https://api.example.org", FakeTokenStore(null, isAvailable = false), http)
         listOf(
             runCatching { client.register("a@example.org", "long enough password") }.exceptionOrNull(),
             runCatching { client.login("a@example.org", "long enough password") }.exceptionOrNull()
