@@ -5,6 +5,8 @@ set -euo pipefail
 # mt5setup.exe. This script pins both official artifacts, then runs setup.exe directly.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIN_FILE="${DESTINEDFX_INSTALLER_PINS_FILE:-$SCRIPT_DIR/../../deploy/codespaces/installer-pins.env}"
+# shellcheck source=verify-mt5-signature.sh
+source "$SCRIPT_DIR/verify-mt5-signature.sh"
 if [[ -f "$PIN_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$PIN_FILE"
@@ -25,7 +27,7 @@ Usage: install-mt5.sh [options]
 
 Options:
   --expected-sha256 HEX          Required x86_64 Linux-wrapper pin.
-  --expected-setup-sha256 HEX    Required x86_64 setup.exe pin.
+  --expected-setup-sha256 HEX    Recorded setup.exe hash; mismatch warns after signature verification.
   --print-script-sha256          Download and print the Linux-wrapper hash, then stop.
   --print-setup-sha256           Download and print the setup.exe hash, then stop.
   --headless                     Run setup.exe with documented /auto /path under Xvfb.
@@ -107,18 +109,19 @@ if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
   echo "BLOCKED: supply --expected-sha256 with the reviewed Linux-wrapper hash." >&2
   exit 23
 fi
-if [[ ! "$EXPECTED_SETUP_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
-  echo "BLOCKED: supply --expected-setup-sha256 with the reviewed setup.exe hash." >&2
+if [[ -n "$EXPECTED_SETUP_SHA256" && ! "$EXPECTED_SETUP_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "BLOCKED: setup.exe recorded hash is malformed." >&2
   exit 24
 fi
 if [[ "${EXPECTED_SHA256,,}" != "${script_sha256,,}" ]]; then
   echo "BLOCKED: Linux-wrapper SHA-256 mismatch; review the newly printed value before changing the pin." >&2
   exit 25
 fi
-if [[ "${EXPECTED_SETUP_SHA256,,}" != "${setup_sha256,,}" ]]; then
-  echo "BLOCKED: setup.exe SHA-256 mismatch; review the newly printed value before changing the pin." >&2
-  exit 26
+if [[ -n "$EXPECTED_SETUP_SHA256" && "${EXPECTED_SETUP_SHA256,,}" != "${setup_sha256,,}" ]]; then
+  echo "WARNING: setup.exe SHA-256 changed; signature is authoritative, review and record the new last-known-good hash." >&2
 fi
+
+verify_mt5_authenticode "$setup"
 
 if [[ ! -x "$(command -v wine || true)" || ! -x "$(command -v xvfb-run || true)" ]]; then
   echo "BLOCKED: Wine and xvfb-run are required. Rebuild the Ubuntu Codespaces image with its repository packages." >&2

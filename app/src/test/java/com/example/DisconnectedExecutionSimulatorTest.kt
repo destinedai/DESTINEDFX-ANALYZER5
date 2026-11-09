@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.ui.DisconnectedExecutionSimulator
+import com.example.ui.DestinedFXScreen
 import com.example.ui.SimulatedOrderState
 import com.example.ui.SimulatorMode
 import org.junit.Assert.assertEquals
@@ -8,6 +9,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DisconnectedExecutionSimulatorTest {
+    @Test
+    fun simulatorIsOnlyInMoreAndCannotProvideTradingState() {
+        assertTrue(DestinedFXScreen.Simulator !in DestinedFXScreen.primaryScreens)
+        assertTrue(DestinedFXScreen.Simulator in DestinedFXScreen.moreScreens)
+        val snapshot = DisconnectedExecutionSimulator.initialSnapshot()
+        assertTrue(snapshot.identity.startsWith("SIM-"))
+        assertTrue(snapshot.server == "simulator-local")
+        assertTrue(DisconnectedExecutionSimulator.safetyNotice.contains("NO BROKER"))
+        assertTrue(DisconnectedExecutionSimulator.safetyNotice.contains("NO ORDERS"))
+    }
+
     @Test
     fun initialSnapshotIsClearlySynthetic() {
         val snapshot = DisconnectedExecutionSimulator.initialSnapshot()

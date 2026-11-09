@@ -2,6 +2,8 @@
 
 This is a standalone, broker-free FastAPI service for application accounts, sessions, user preferences, notification settings, minimal device registration, service health, and administrative audit reads. It does not connect to brokers, fetch brokerage balances, expose the MT5 bridge, or submit financial orders. The existing `bridge/` remains a separate owner-managed service and is not part of this stack.
 
+**Scope freeze:** this application-management stack is optional and unrelated to the broker gateway. Do not deploy or extend it as part of the Codespaces broker host. The Android app and broker bridge must remain fully functional when this directory is unconfigured.
+
 ## Supported deployment shape
 
 `compose.yaml` defines one self-hosted Docker Compose stack: the API, private PostgreSQL 16, and Caddy HTTPS reverse proxy. PostgreSQL uses the named `postgres_data` volume; Caddy certificate state uses named volumes. The database and API are not published directly to the host. Only Caddy publishes ports 80/443. This is deployment configuration, not evidence that a host has been provisioned or this service is running.
