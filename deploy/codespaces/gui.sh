@@ -27,6 +27,9 @@ wait_alive() {
   done
   fail "$name did not remain running; inspect $RUNTIME/${name,,}.log"
 }
+restart_recorded() {
+  stop_recorded "$1"
+}
 [[ "$(uname -m)" == x86_64 ]] || fail 'The owner-assisted MT5 route requires x86_64.'
 [[ -n "${CODESPACE_NAME:-}" ]] || fail 'CODESPACE_NAME is unavailable; run this inside GitHub Codespaces.'
 [[ -x "$(command -v x11vnc || true)" && -x "$(command -v websockify || true)" ]] || fail 'x11vnc and websockify are missing; rebuild the devcontainer image.'
@@ -39,16 +42,16 @@ if ! pgrep -f '^Xvfb :99 ' >/dev/null 2>&1; then
 fi
 export DISPLAY=:99
 
-if ! pgrep -f '^x11vnc .* -rfbport 5900' >/dev/null 2>&1; then
-  stop_recorded "$RUNTIME/x11vnc.pid"
-  x11vnc -display :99 -localhost -forever -nopw -rfbport 5900 >>"$RUNTIME/x11vnc.log" 2>&1 &
-  echo $! > "$RUNTIME/x11vnc.pid"
-fi
-if ! pgrep -f '^websockify .*6080 127.0.0.1:5900' >/dev/null 2>&1; then
-  stop_recorded "$RUNTIME/novnc.pid"
-  websockify --web=/usr/share/novnc 6080 127.0.0.1:5900 >>"$RUNTIME/novnc.log" 2>&1 &
-  echo $! > "$RUNTIME/novnc.pid"
-fi
+# Always replace the forwarding pair. Reusing an old websocket can leave the phone
+# attached to a frozen framebuffer after the Codespace or Wine display is recreated.
+restart_recorded "$RUNTIME/x11vnc.pid"
+restart_recorded "$RUNTIME/novnc.pid"
+x11vnc -display :99 -localhost -forever -shared -repeat -noxdamage -noxfixes -noxrecord \
+  -wait 5 -defer 5 -rfbport 5900 >>"$RUNTIME/x11vnc.log" 2>&1 &
+echo $! > "$RUNTIME/x11vnc.pid"
+websockify --web=/usr/share/novnc --heartbeat=30 --idle-timeout=0 \
+  6080 127.0.0.1:5900 >>"$RUNTIME/novnc.log" 2>&1 &
+echo $! > "$RUNTIME/novnc.pid"
 wait_alive Xvfb "$RUNTIME/xvfb.pid"
 wait_alive x11vnc "$RUNTIME/x11vnc.pid"
 wait_alive novnc "$RUNTIME/novnc.pid"
@@ -78,6 +81,6 @@ fi
 
 printf 'PASS: private installer GUI started.\n'
 printf 'INFO: display=%s; installer log=%s\n' "$DISPLAY" "$RUNTIME/installer-gui.log"
-printf 'OWNER STEP: open https://%s-6080.app.github.dev/vnc.html?autoconnect=true in the signed-in phone browser.\n' "$CODESPACE_NAME"
+printf 'OWNER STEP: open https://%s-6080.app.github.dev/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000&cacheBust=%s in the signed-in phone browser.\n' "$CODESPACE_NAME" "$(date +%s)"
 printf 'OWNER STEP: complete the MetaTrader wizard once, then run deploy/codespaces/start.sh.\n'
 printf 'FAIL: this is a private owner-assisted install route, not public exposure.\n'
