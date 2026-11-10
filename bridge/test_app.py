@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from pydantic import ValidationError
 os.environ['ALLOW_LOOPBACK_HTTP']='true'
-os.environ['BRIDGE_DB_PATH']='/tmp/destinedfx-bridge-test.sqlite3'
+os.environ['BRIDGE_DB_PATH']=f'/tmp/destinedfx-bridge-test-{os.getpid()}-{uuid.uuid4().hex}.sqlite3'
 os.environ['PAIR_RATE_LIMIT']='1000'
 try: os.unlink(os.environ['BRIDGE_DB_PATH'])
 except FileNotFoundError: pass
@@ -11,6 +11,11 @@ from fastapi.testclient import TestClient
 import app
 client=TestClient(app.app, base_url='https://testserver')
 ACCOUNT={'login':'123456','server':'Demo-Server','company':'Demo Broker','currency':'USD','account_mode':'DEMO'}
+
+def test_bridge_tests_use_a_process_isolated_database():
+    assert app.DB_PATH.startswith(f'/tmp/destinedfx-bridge-test-{os.getpid()}-')
+    assert app.DB_PATH != '/tmp/destinedfx-bridge-test.sqlite3'
+
 def pair():
     r=client.post('/v1/pairings'); assert r.status_code==201; return r.json()
 def claimed(p):
