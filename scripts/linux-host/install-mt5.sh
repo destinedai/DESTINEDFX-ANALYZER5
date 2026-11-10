@@ -127,6 +127,7 @@ if [[ ! -x "$(command -v wine || true)" || ! -x "$(command -v xvfb-run || true)"
   echo "BLOCKED: Wine and xvfb-run are required. Rebuild the Ubuntu Codespaces image with its repository packages." >&2
   exit 27
 fi
+"$SCRIPT_DIR/check-wine-mt5-compat.sh"
 mkdir -p "$WINEPREFIX_VALUE"
 chmod 700 "$WINEPREFIX_VALUE"
 export WINEPREFIX="$WINEPREFIX_VALUE"
@@ -154,6 +155,7 @@ if [[ "$GUI" == "1" ]]; then
   [[ -n "${DISPLAY:-}" ]] || { echo "BLOCKED: GUI mode needs DISPLAY. Run deploy/codespaces/gui.sh." >&2; exit 28; }
   echo "INFO: initializing Wine prefix at $WINEPREFIX_VALUE before opening the installer."
   "${clean_wine_env[@]}" wineboot -u
+  "${clean_wine_env[@]}" winecfg -v win10
   echo "OWNER STEP: complete the MetaTrader setup wizard in the private Codespaces noVNC window."
   exec "${clean_wine_env[@]}" wine "$setup"
 fi
@@ -162,6 +164,8 @@ fi
 # required by the Windows web installer without exposing a public port.
 xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
   "${clean_wine_env[@]}" wineboot -u
+xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
+  "${clean_wine_env[@]}" winecfg -v win10
 xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
   "${clean_wine_env[@]}" wine "$setup" /auto /path:"$INSTALL_PATH"
 terminal="$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/terminal64.exe"

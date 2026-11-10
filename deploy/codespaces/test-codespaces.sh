@@ -4,6 +4,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
+[[ -x "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" ]] || fail 'Wine MT5 compatibility gate missing or not executable'
 pass 'all Codespaces shell scripts pass bash -n'
 python3 - "$ROOT/.devcontainer/devcontainer.json" <<'PY'
 import json,sys
@@ -25,6 +26,8 @@ grep -Fq -- 'MetaQuotes' "$ROOT/scripts/linux-host/verify-mt5-signature.sh" || f
 grep -Fq -- 'wineboot -u' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'GUI Wine prefix initialization missing'
 grep -Fq -- 'debugger process detected' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'debugger preflight missing'
 grep -Fq -- 'WINEDEBUG=-all' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'clean Wine debug environment missing'
+grep -Fq -- 'check-wine-mt5-compat.sh' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Wine compatibility gate not wired'
+grep -Fq -- 'winecfg -v win10' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Windows 10 Wine prefix not configured'
 grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
 grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
 grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/gui.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
