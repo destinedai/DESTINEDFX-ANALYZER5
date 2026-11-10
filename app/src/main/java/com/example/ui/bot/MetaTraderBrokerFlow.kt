@@ -67,7 +67,7 @@ fun MetaTraderBrokerFlow(
     secrets: SecretsManager,
     modeArmingPolicy: ModeArmingPolicy,
     context: Context,
-    onConnect: suspend (BrokerLoginSpec, LoginForm) -> ConnectOutcome,
+    onConnect: suspend (BrokerLoginSpec, LoginForm, (ConnectStage) -> Unit) -> ConnectOutcome,
     onOpenModes: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -144,7 +144,7 @@ fun MetaTraderBrokerFlow(
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
                 Button(enabled = !busy && LoginRules.loginEnabled(spec, form), onClick = {
                     busy = true; failure = null; stage = null
-                    scope.launch { when (val outcome = onConnect(spec, form)) { is ConnectOutcome.Verified -> { verifiedMode = outcome.accountMode; page = FlowPage.VERIFIED }; is ConnectOutcome.Failed -> failure = outcome.sentence }; busy = false } }
+                    scope.launch { when (val outcome = onConnect(spec, form) { stage = it }) { is ConnectOutcome.Verified -> { verifiedMode = outcome.accountMode; page = FlowPage.VERIFIED }; is ConnectOutcome.Failed -> failure = outcome.sentence }; busy = false } }
                     , modifier = Modifier.fillMaxWidth().testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("LOGIN") }
                 if (busy) TextButton(onClick = { busy = false }) { Text("CANCEL") }
             }

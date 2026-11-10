@@ -531,7 +531,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             secrets = secrets,
             modeArmingPolicy = viewModel.app.modeArmingPolicy,
             context = context,
-            onConnect = { spec, form ->
+            onConnect = { spec, form, onStage ->
                 if (spec.connector != LoginConnector.MT5_TERMINAL) {
                     ConnectOutcome.Failed("LOGIN_FAILED_UNCLASSIFIED", "This connector requires its official grant or token flow; no MT5 password was sent.")
                 } else {
@@ -544,7 +544,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         brokerBrand = brand,
                         modeArmingPolicy = viewModel.app.modeArmingPolicy,
                     )
-                    ConnectUseCase(MT5BridgeConnectBackend(client)).connect(spec, form)
+                    ConnectUseCase(MT5BridgeConnectBackend(client)).connect(spec, form, onStage)
                 }
             },
             onOpenModes = { showModernBrokerFlow = false },
