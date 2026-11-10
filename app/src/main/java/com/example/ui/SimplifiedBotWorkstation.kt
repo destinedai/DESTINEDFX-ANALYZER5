@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.broker.BrokerType
+import com.example.data.broker.LoginConnector
 import com.example.data.ctrader.CTraderAccountOption
 import com.example.data.ctrader.CTraderVerifiedAccount
 import com.example.data.ctrader.CTraderSymbolMetadata
@@ -82,7 +83,6 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmber
 import com.example.ui.bot.ConnectOutcome
 import com.example.ui.bot.ConnectUseCase
-import com.example.ui.bot.LoginConnector
 import com.example.ui.bot.MT5BridgeConnectBackend
 import com.example.ui.bot.MetaTraderBrokerFlow
 import kotlinx.coroutines.delay
