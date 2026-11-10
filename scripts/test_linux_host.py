@@ -108,6 +108,20 @@ def test_report_is_blocked_when_terminal_dead_or_memory_low(monkeypatch):
     assert host_agent.report()["healthy"] is False
 
 
+def test_host_report_exposes_and_blocks_disallowed_wine(monkeypatch):
+    monkeypatch.setattr(host_agent, "terminal_process_alive", lambda: True)
+    monkeypatch.setattr(host_agent, "wine_report", lambda: ("wine-10.3", False))
+    monkeypatch.setattr(
+        host_agent,
+        "heartbeat_report",
+        lambda: {"fresh": True, "terminal_connected": True},
+    )
+    result = host_agent.report()
+    assert result["wine_version"] == "wine-10.3"
+    assert result["wine_ok"] is False
+    assert result["healthy"] is False
+
+
 def test_windows_mode_bridge_guard_is_noop():
     source = ROOT / "bridge" / "app.py"
     text = source.read_text()

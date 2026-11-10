@@ -1,4 +1,4 @@
-import os, time, uuid
+import io, os, time, uuid
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 from pydantic import ValidationError
@@ -783,6 +783,21 @@ def test_readiness_requires_valid_managed_configuration_and_storage(monkeypatch)
     response=client.get('/health/ready')
     assert response.status_code==503
     assert response.json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
+
+
+def test_linux_host_readiness_maps_unsupported_wine_to_blocked_code(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    payload={'healthy':False,'wine_version':'wine-10.3','wine_ok':False}
+    error=app.urllib.error.HTTPError(
+        app.HOST_AGENT_URL, 503, 'not ready', {}, io.BytesIO(app.json.dumps(payload).encode())
+    )
+    monkeypatch.setattr(app.urllib.request, 'urlopen', lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    response=client.get('/health/ready')
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='WINE_VERSION_UNSUPPORTED'
+    assert response.json()['detail']['message']=='Host Wine version is unsupported; run the guard fix'
+
 
 def test_worker_claim_receives_persisted_bridge_origin_and_readiness_fails_closed(monkeypatch):
     managed_env(monkeypatch)
