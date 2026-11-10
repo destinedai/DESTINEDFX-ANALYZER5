@@ -80,6 +80,11 @@ import com.example.ui.theme.ProfitGreen
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmber
+import com.example.ui.bot.ConnectOutcome
+import com.example.ui.bot.ConnectUseCase
+import com.example.ui.bot.LoginConnector
+import com.example.ui.bot.MT5BridgeConnectBackend
+import com.example.ui.bot.MetaTraderBrokerFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -218,6 +223,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var cloudflareClientSecret by remember { mutableStateOf("") }
     var serviceReadiness by remember { mutableStateOf<MT5RemoteBridgeClient.ServiceReadiness?>(null) }
     var showAdvancedConnection by remember { mutableStateOf(false) }
+    var showModernBrokerFlow by remember { mutableStateOf(true) }
     var mt5Snapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
     var showPairingRevokeDialog by remember(mt5Profile) { mutableStateOf(false) }
     var showLiveAuthorizationDialog by remember(mt5Profile) { mutableStateOf(false) }
@@ -519,6 +525,32 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         blocked = broker.usesManagedMt5Terminal && mt5Mode == "LIVE" && mt5Snapshot?.liveAuthorized != true,
         error = message?.contains("failed", ignoreCase = true) == true,
     )
+
+    if (showModernBrokerFlow) {
+        MetaTraderBrokerFlow(
+            secrets = secrets,
+            modeArmingPolicy = viewModel.app.modeArmingPolicy,
+            context = context,
+            onConnect = { spec, form ->
+                if (spec.connector != LoginConnector.MT5_TERMINAL) {
+                    ConnectOutcome.Failed("LOGIN_FAILED_UNCLASSIFIED", "This connector requires its official grant or token flow; no MT5 password was sent.")
+                } else {
+                    val brand = spec.id.removeSuffix("_MT5")
+                    val client = MT5RemoteBridgeClient(
+                        secrets,
+                        "${brand}_DEMO",
+                        { AppSecurityGuard.authorizeSensitiveAction() },
+                        accountMode = "DEMO",
+                        brokerBrand = brand,
+                        modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                    )
+                    ConnectUseCase(MT5BridgeConnectBackend(client)).connect(spec, form)
+                }
+            },
+            onClose = { showModernBrokerFlow = false },
+        )
+        return
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("DESTINEDFX BOT", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
