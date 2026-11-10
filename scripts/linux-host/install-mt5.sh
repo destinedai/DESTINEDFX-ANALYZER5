@@ -20,6 +20,51 @@ PRINT_ONLY=0
 GUI=0
 WINEPREFIX_VALUE="${WINEPREFIX:-$HOME/.mt5}"
 INSTALL_PATH='C:\Program Files\MetaTrader 5'
+STATE_DIR="${DESTINEDFX_CODESPACES_STATE_DIR:-$HOME/.local/share/destinedfx-codespaces}"
+PROVENANCE_FILE="${DESTINEDFX_MT5_INSTALLER_PROVENANCE_FILE:-$STATE_DIR/mt5-installer-provenance.env}"
+PREFIX_INFO_FILE="${DESTINEDFX_MT5_PREFIX_INFO_FILE:-$STATE_DIR/mt5-prefix.env}"
+
+url_host() {
+  python3 -c 'from urllib.parse import urlsplit; import sys; print(urlsplit(sys.argv[1]).hostname or "unavailable")' "$1"
+}
+
+record_private_metadata() {
+  local target="$1" temporary="$2"
+  mkdir -p "$(dirname "$target")"
+  chmod 700 "$(dirname "$target")"
+  chmod 600 "$temporary"
+  mv -f "$temporary" "$target"
+}
+
+record_installer_provenance() {
+  local temporary
+  mkdir -p "$(dirname "$PROVENANCE_FILE")"
+  temporary="$(mktemp "${PROVENANCE_FILE}.XXXXXX")"
+  {
+    printf 'verified_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'wrapper_host=%s\nwrapper_sha256=%s\nwrapper_expected_sha256=%s\n' \
+      "$(url_host "$MT5_INSTALLER_URL")" "$script_sha256" "$EXPECTED_SHA256"
+    printf 'setup_host=%s\nsetup_sha256=%s\nsetup_expected_sha256=%s\n' \
+      "$(url_host "$MT5_SETUP_URL")" "$setup_sha256" "$EXPECTED_SETUP_SHA256"
+    printf 'authenticode_status=verified\nauthenticode_signer=MetaQuotes Ltd\n'
+  } > "$temporary"
+  record_private_metadata "$PROVENANCE_FILE" "$temporary"
+}
+
+record_prefix_configuration() {
+  local temporary prefix_arch=unknown
+  mkdir -p "$(dirname "$PREFIX_INFO_FILE")"
+  temporary="$(mktemp "${PREFIX_INFO_FILE}.XXXXXX")"
+  if [[ -r "$WINEPREFIX_VALUE/system.reg" ]]; then
+    prefix_arch="$(sed -nE 's/^#arch=(win32|win64)$/\1/p' "$WINEPREFIX_VALUE/system.reg" | head -n 1)"
+    [[ -n "$prefix_arch" ]] || prefix_arch=unknown
+  fi
+  {
+    printf 'prefix=%s\n' "$WINEPREFIX_VALUE"
+    printf 'prefix_arch=%s\nwindows_version=win10\n' "$prefix_arch"
+  } > "$temporary"
+  record_private_metadata "$PREFIX_INFO_FILE" "$temporary"
+}
 
 usage() {
   cat <<'EOF'
@@ -105,8 +150,8 @@ fetch_and_hash() {
 
 script_sha256="$(fetch_and_hash "$MT5_INSTALLER_URL" "$script")"
 setup_sha256="$(fetch_and_hash "$MT5_SETUP_URL" "$setup")"
-printf 'official_linux_script_url=%s\nofficial_linux_script_sha256=%s\nofficial_setup_url=%s\nofficial_setup_sha256=%s\n' \
-  "$MT5_INSTALLER_URL" "$script_sha256" "$MT5_SETUP_URL" "$setup_sha256"
+printf 'official_linux_script_host=%s\nofficial_linux_script_sha256=%s\nofficial_setup_host=%s\nofficial_setup_sha256=%s\n' \
+  "$(url_host "$MT5_INSTALLER_URL")" "$script_sha256" "$(url_host "$MT5_SETUP_URL")" "$setup_sha256"
 if [[ "$PRINT_ONLY" == "1" ]]; then exit 0; fi
 if [[ "$PRINT_ONLY" == "2" ]]; then exit 0; fi
 
@@ -127,12 +172,13 @@ if [[ -n "$EXPECTED_SETUP_SHA256" && "${EXPECTED_SETUP_SHA256,,}" != "${setup_sh
 fi
 
 verify_mt5_authenticode "$setup"
+record_installer_provenance
 
 if [[ ! -x "$(command -v wine || true)" || ! -x "$(command -v xvfb-run || true)" ]]; then
   echo "BLOCKED: Wine and xvfb-run are required. Rebuild the Ubuntu Codespaces image with its repository packages." >&2
   exit 27
 fi
-"$SCRIPT_DIR/check-wine-mt5-compat.sh"
+WINE_GUARD_ALREADY_CHECKED=1 "$SCRIPT_DIR/check-wine-mt5-compat.sh"
 mkdir -p "$WINEPREFIX_VALUE"
 chmod 700 "$WINEPREFIX_VALUE"
 export WINEPREFIX="$WINEPREFIX_VALUE"
@@ -161,6 +207,7 @@ if [[ "$GUI" == "1" ]]; then
   echo "INFO: initializing Wine prefix at $WINEPREFIX_VALUE before opening the installer."
   "${clean_wine_env[@]}" wineboot -u
   "${clean_wine_env[@]}" winecfg -v win10
+  record_prefix_configuration
   echo "OWNER STEP: complete the MetaTrader setup wizard in the private Codespaces noVNC window."
   exec "${clean_wine_env[@]}" wine "$setup"
 fi
@@ -171,6 +218,7 @@ xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
   "${clean_wine_env[@]}" wineboot -u
 xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
   "${clean_wine_env[@]}" winecfg -v win10
+record_prefix_configuration
 xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
   "${clean_wine_env[@]}" wine "$setup" /auto /path:"$INSTALL_PATH"
 terminal="$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/terminal64.exe"

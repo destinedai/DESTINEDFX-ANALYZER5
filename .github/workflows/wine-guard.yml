@@ -52,3 +52,5 @@ jobs:
             scripts/linux-host/wine-guard.sh scripts/linux-host/wine-probe.sh
       - name: Run Wine and readiness regressions
         run: pytest -q scripts/test_wine_guard.py scripts/test_linux_host.py bridge/test_app.py
+      - name: Run Codespaces shell contract
+        run: bash deploy/codespaces/test-codespaces.sh

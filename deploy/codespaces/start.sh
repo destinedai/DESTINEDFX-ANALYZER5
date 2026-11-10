@@ -63,17 +63,28 @@ if TERMINAL_EXE="$(find_terminal)"; then
   # In /portable mode the data folder is the terminal folder: the terminal Journal is the Logs folder (Experts logs live elsewhere).
   export MT5_TERMINAL_EXE="$TERMINAL_EXE" MT5_JOURNAL_DIR="$TERMINAL_ROOT/Logs"
   export DESTINEDFX_EA_SET_PATH="$TERMINAL_ROOT/MQL5/Presets/DestinedFXTraderEA.set"
-  if [[ "$TERMINAL_EXE" == "$HOME/.mt5/"* ]]; then export WINEPREFIX="$HOME/.mt5"; fi
+  if [[ "$TERMINAL_EXE" == "$HOME/.mt5/"* ]]; then export WINEPREFIX="$HOME/.mt5"
+  elif [[ "$TERMINAL_EXE" == "$HOME/.wine/"* ]]; then export WINEPREFIX="$HOME/.wine"
+  fi
+else
+  unset MT5_TERMINAL_EXE
 fi
 export DESTINEDFX_TERMINAL_STARTUP_CONFIG="$STATE/startup.ini"
 export DESTINEDFX_ACTIVE_JOB_PATH="$STATE/active-job.json" CONNECT_JOB_START_FILE="$STATE/connect-job-start.epoch"
 export DESTINEDFX_TERMINAL_CONTROL=process DESTINEDFX_TERMINAL_PIDFILE="$RUNTIME/terminal.pid"
 export DESTINEDFX_TERMINAL_LAUNCHER="$ROOT/scripts/linux-host/launch-mt5.sh" DESTINEDFX_TERMINAL_LOG="$RUNTIME/terminal.log"
+export DESTINEDFX_RUNTIME_DIR="$RUNTIME" DESTINEDFX_TERMINAL_EXIT_CODE_FILE="$RUNTIME/terminal.exit-code"
 export DESTINEDFX_CONTROL_PLANE_URL="http://127.0.0.1:8000" DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true
 export DESTINEDFX_WORKER_ID="${DESTINEDFX_WORKER_ID:-codespaces-host-01}"
 
 if [[ -f "$RUNTIME/pids" ]]; then
-  while read -r pid; do [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && { pass 'Existing managed Codespaces processes are already running.'; exit 0; }; done < "$RUNTIME/pids"
+  while read -r pid; do
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      pass 'Existing managed Codespaces processes are already running.'
+      python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
+      exit 0
+    fi
+  done < "$RUNTIME/pids"
   rm -f "$RUNTIME/pids"
 fi
 : > "$RUNTIME/pids"
@@ -110,14 +121,16 @@ export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="
 pass 'Linux connect-job runner started (process control, loopback control plane).'
 
 if [[ -n "$TERMINAL_EXE" ]]; then
+  rm -f "$RUNTIME/terminal.exit-code"
   if python3 "$ROOT/scripts/linux-host/linux-worker.py" --terminal start >>"$RUNTIME/terminal-control.log" 2>&1; then
-    pass 'MT5 terminal process started under the process controller.'
+    printf 'INFO: MT5 terminal launch requested; process creation is not terminal readiness.\n'
   else
-    fail 'MT5 terminal could not be started; see terminal-control.log (no secrets are written there).'
+    fail 'MT5 terminal launch request failed; inspect redacted diagnostics and terminal-control.log.'
   fi
 else
   fail 'MT5 terminal is not installed (checked ~/.mt5 and ~/.wine); host runtime is diagnostic-only until it is.'
 fi
+python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
 
 expose_publicly() {
   # Leave the port protocol as HTTP: switching a public port to HTTPS makes it private again.

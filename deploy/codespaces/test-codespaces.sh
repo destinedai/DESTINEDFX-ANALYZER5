@@ -3,9 +3,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
+for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/launch-mt5.sh" "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" "$ROOT/scripts/linux-host/wine-guard.sh" "$ROOT/scripts/linux-host/wine-probe.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
 [[ -x "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" ]] || fail 'Wine MT5 compatibility gate missing or not executable'
+[[ -x "$ROOT/scripts/linux-host/wine-guard.sh" ]] || fail 'Wine version guard missing or not executable'
+[[ -x "$ROOT/scripts/linux-host/wine-probe.sh" ]] || fail 'Wine startup probe missing or not executable'
 pass 'all Codespaces shell scripts pass bash -n'
+python3 "$ROOT/scripts/test_mt5_diagnostics.py" || fail 'MT5 diagnostics regression tests failed'
 python3 - "$ROOT/.devcontainer/devcontainer.json" <<'PY'
 import json,sys
 x=json.load(open(sys.argv[1]))
@@ -27,10 +30,22 @@ grep -Fq -- 'wineboot -u' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'GUI
 grep -Fq -- 'debugger process detected' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'debugger preflight missing'
 grep -Fq -- 'WINEDEBUG=-all' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'clean Wine debug environment missing'
 grep -Fq -- 'check-wine-mt5-compat.sh' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Wine compatibility gate not wired'
+grep -Fq -- 'wine-guard.sh' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Wine version guard not wired into the installer'
+grep -Fq -- 'wine-guard.sh' "$ROOT/deploy/codespaces/gui.sh" || fail 'Wine version guard not wired before the GUI'
+grep -Fq -- 'wine-guard.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'Wine version guard not wired before host startup'
+grep -Fq -- 'Wine version allowed' "$ROOT/deploy/codespaces/start.sh" || fail 'Wine version status line missing'
+grep -Fq -- 'wine64 cmd /c ver' "$ROOT/scripts/linux-host/wine-probe.sh" || fail 'Wine probe smoke command missing'
 grep -Fq -- 'winecfg -v win10' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Windows 10 Wine prefix not configured'
-grep -Fq -- 'ARG WINE_PACKAGE_VERSION=9.0~repack-4build3' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu 24.04 Wine 9 package pin missing'
-grep -Fq -- 'wine=${WINE_PACKAGE_VERSION} wine64=${WINE_PACKAGE_VERSION}' "$ROOT/.devcontainer/Dockerfile" || fail 'Wine packages are not pinned to the compatible version'
-grep -Fq -- 'case "$wine_major" in 9|10)' "$ROOT/.devcontainer/Dockerfile" || fail 'Docker build must reject incompatible Wine majors'
+grep -Fq 'wine wine64 winetricks' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine packages missing'
+grep -Fq '99-destinedfx-ubuntu-wine' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine apt preferences missing'
+grep -Fq 'apt-mark hold wine wine64 libwine' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine package hold missing'
+grep -Fq 'WINEDEBUG=-all' "$ROOT/.devcontainer/Dockerfile" || fail 'non-interactive Wine debug environment missing'
+if grep -Fq 'WINE_PACKAGE_VERSION=' "$ROOT/.devcontainer/Dockerfile"; then fail 'Wine must not be pinned without a validated MT5 build combination'; fi
+grep -Fq 'no Wine version is established as compatible' "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" || fail 'Wine compatibility status must remain unverified'
+grep -Fq 'MT5_TERMINAL_EXIT_CODE' "$ROOT/scripts/linux-host/launch-mt5.sh" || fail 'terminal exit code is not reported'
+grep -Fq 'WINEDEBUG=-all' "$ROOT/scripts/linux-host/launch-mt5.sh" || fail 'terminal launch must clear Wine debug channels'
+grep -Fq 'MT5 terminal readiness remains unverified' "$ROOT/deploy/codespaces/gui.sh" || fail 'VNC readiness must not imply terminal readiness'
+grep -Fq 'mt5_terminal_ready NOT_VERIFIED' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'terminal readiness must remain unverified absent owner evidence'
 grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
 grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
 grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/gui.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
@@ -76,18 +91,21 @@ cat > "$TMP/wine-bin/wine" <<'MOCK_WINE'
 printf '%s\n' "${MOCK_WINE_VERSION:?}"
 MOCK_WINE
 chmod +x "$TMP/wine-bin/wine"
-for version in wine-9.0 wine-10.0; do
-	output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION="$version" bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh")" || fail "$version must be accepted"
-	grep -Fq "INFO: detected Wine version: $version" <<< "$output" || fail "$version must be reported"
+for version in wine-9.0 wine-9.22 wine-10.0 wine-10.2; do
+	output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION="$version" bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh")" || fail "$version must be allowed"
+	grep -Fq "Wine version allowed: PASS" <<< "$output" || fail "$version must pass the guard"
 done
-if output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION=wine-11.0 bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" 2>&1)"; then
-	fail 'Wine 11 must be rejected'
-fi
-grep -Fq 'OWNER STEP: rebuild the Codespace using the compatible Wine image.' <<< "$output" || fail 'Wine 11 rejection must provide the exact rebuild instruction'
+for version in wine-10.3 wine-11.0 garbage; do
+	if output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION="$version" bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" 2>&1)"; then
+		fail "$version must be blocked"
+	fi
+	grep -Fq 'Wine version allowed: FAIL' <<< "$output" || fail "$version must fail the guard"
+	grep -Fq 'sudo bash scripts/linux-host/wine-guard.sh --fix' <<< "$output" || fail "$version must print the fix command"
+done
 if grep -Eq '(^|[;&|[:space:]])(kill|pkill|killall)([[:space:]]|$)' "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh"; then
 	fail 'Wine compatibility gate must not kill processes'
 fi
-pass 'Wine compatibility gate reports versions, accepts 9/10, and rejects 11 without killing processes'
+pass 'Wine compatibility gate enforces the supported version range without killing processes'
 DESTINEDFX_CODESPACES_STATE_DIR="$TMP/state" "$ROOT/deploy/codespaces/stop.sh" | grep -q '^PASS:' || fail 'stop without state failed'
 pass 'stop safely handles empty private state'
 grep -Fq -- 'installer-gui.pid' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must clean stale GUI installer process'

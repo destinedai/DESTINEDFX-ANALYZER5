@@ -21,14 +21,35 @@ check_cmd() {
   local name="$1" cmd="$2" fix="$3" detail
   if detail=$(bash -c "$cmd" 2>&1); then record "$name" PASS "${detail//$'\n'/ }" "$fix"; else record "$name" FAIL "${detail//$'\n'/ }" "$fix"; fi
 }
+pidfile_alive() {
+  local pid
+  [[ -s "$1" ]] || return 1
+  pid="$(cat "$1" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
 
 check_file installer_verified "$STATE/installer-verified" 'Run post-create again, or run gui.sh only when the installer requests owner assistance.'
 check_cmd terminal_installed 'test -f "$HOME/.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe" || test -f "$HOME/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"' 'Install MT5 through postCreate.sh; use gui.sh only for the private owner-assisted fallback.'
 check_cmd wine_prefix 'test -d "$HOME/.mt5" && test -d "$HOME/.mt5/drive_c"' 'Run postCreate.sh and do not change the single ~/.mt5 path scheme.'
+if pidfile_alive "$RUNTIME/xvfb.pid" && pidfile_alive "$RUNTIME/x11vnc.pid" && pidfile_alive "$RUNTIME/novnc.pid"; then
+  record vnc_stack PASS 'Xvfb, x11vnc, and websockify processes are running' 'This confirms VNC only; it does not verify MT5 startup.'
+else
+  record vnc_stack NOT_VERIFIED 'private GUI stack is not running' 'Run deploy/codespaces/gui.sh only when the owner needs the installer GUI.'
+fi
 check_cmd xvfb 'command -v Xvfb >/dev/null && Xvfb -help >/dev/null 2>&1' 'Rebuild the Codespaces environment with Xvfb installed.'
 check_cmd host_agent 'curl -fsS --max-time 5 http://127.0.0.1:8787/health/ready >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/host-agent.log.'
 check_cmd bridge_loopback 'curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/bridge.log.'
 check_cmd runner_loop 'pgrep -f "linux-worker.py --loop" >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/linux-worker.log.'
+
+diagnostic_output="$(DESTINEDFX_CODESPACES_STATE_DIR="$STATE" DESTINEDFX_RUNTIME_DIR="$RUNTIME" \
+  python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" 2>&1 || true)"
+printf '%s\n' "$diagnostic_output"
+if grep -Eq '^MT5_TERMINAL_PROCESS state=EXITED exit_code=-?[1-9][0-9]*$' <<< "$diagnostic_output"; then
+  record mt5_terminal_process FAIL 'terminal process exited nonzero; see redacted diagnostics above' 'Check the reported exit code and redacted terminal startup lines; preserve the private prefix and installer provenance.'
+else
+  record mt5_terminal_process NOT_VERIFIED 'process status does not establish a usable terminal' 'Owner must confirm the terminal opens without the debugger dialog; do not infer readiness from VNC or a live process.'
+fi
+record mt5_terminal_ready NOT_VERIFIED 'no owner-returned evidence of successful terminal startup' 'Complete a real owner-run Codespaces check and return redacted evidence before marking terminal ready.'
 
 if [[ -n "${CODESPACE_NAME:-}" ]] && command -v gh >/dev/null 2>&1; then
   visibility="$(gh codespace ports -c "$CODESPACE_NAME" --json port,visibility --jq '.[] | select(.port==8000) | .visibility' 2>/dev/null || true)"

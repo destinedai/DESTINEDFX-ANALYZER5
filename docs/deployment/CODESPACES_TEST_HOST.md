@@ -2,6 +2,21 @@
 
 This runbook is for the owner-operated, ephemeral GitHub Codespaces host on branch `free/phone-only-v1`. It is a DEMO test host, not a 24/7 service and not evidence that a broker, terminal, EA, or order works. No account is created by this repository.
 
+## MT5 startup status: UNVERIFIED
+
+No Wine/MT5 combination has been validated as a working Codespaces terminal. On 2026-11-10, the inspected Codespace reported Wine `9.0~repack-4build3` from Ubuntu 24.04 `noble/universe`; the existing prefix reported `win64` and `Microsoft Windows 10` (registry build `19043`). The terminal executable was at `~/.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe`. The owner reported that MT5 still displayed “A debugger has been found running in your system,” despite no matching debugger process being present. This is a failing observation, not evidence that Wine 9 works or that Wine 10/11 do not.
+
+The installer pin file verifies the official MetaQuotes Linux wrapper and the downloaded `mt5setup.exe` SHA-256/Authenticode signer. `mt5setup.exe` is a web installer; it can download or update the terminal independently. Those installer hashes therefore do not pin the installed MT5 build. The current build was not recoverable from the inspected terminal logs or executable metadata and is reported as unavailable. Do not call a live process, visible desktop, VNC connection, wrapper checksum, or passing CI test “MT5 terminal ready.” Only an owner-run Codespaces test that confirms the real terminal opens without the warning can change this status; no such evidence is recorded here.
+
+The container uses Ubuntu's repository `wine` and `wine64` packages without asserting a compatible major version. The installation flow configures the existing private prefix at `~/.mt5` with `winecfg -v win10`; diagnostics read its architecture and Windows product version when available. Do not downgrade or pin Wine based on version alone. Test candidate combinations against the actual installed terminal build before changing the image policy.
+
+Safe recovery preserves the existing prefix and user data:
+
+1. Run `bash deploy/codespaces/stop.sh` to stop only recorded Codespaces/MT5 processes, then `bash deploy/codespaces/start.sh` to retry the existing terminal path.
+2. Read the `MT5_DIAGNOSTICS`, `MT5_TERMINAL_PROCESS`, and `MT5_TERMINAL_READY` output. `VNC READY` only describes Xvfb/x11vnc/websockify. A nonzero process exit is reported separately; `NOT_VERIFIED` remains the expected result until an owner confirms terminal startup.
+3. Keep the existing `~/.mt5` prefix and its installed data. Do not delete it, remove Wine debugger registry entries, disable MetaTrader checks, or kill unrelated processes. If testing another Wine/MT5 combination, use an owner-approved copy of the prefix and record both Wine package origin and the terminal build.
+4. Return only redacted diagnostics and owner confirmation. Never include a VNC URL, pairing code, token, password, account identity, or broker data in CI or issue logs.
+
 ## Requirements
 
 The owner needs a GitHub account with Codespaces access, an Android phone signed in to the same GitHub account, and an owner-controlled DEMO broker account. Use a 2-core Codespace. The repository devcontainer requests x86_64, no prebuild, and private forwarding by default. MT5 on Wine in a container remains UNVERIFIED until the owner returns a redacted connection report.
@@ -19,7 +34,7 @@ bash deploy/codespaces/start.sh
 bash deploy/codespaces/first-run-check.sh
 ```
 
-Run `bash deploy/codespaces/gui.sh` only if headless MT5 setup reports the documented owner step. The GUI uses the private noVNC forwarding path and must not be made public.
+Run `bash deploy/codespaces/gui.sh` only if headless MT5 setup reports the documented owner step. The GUI uses the private noVNC forwarding path and must not be made public. Its `VNC READY` message does not establish that the MetaTrader installer or terminal is ready.
 
 ## Expected startup
 
@@ -36,7 +51,7 @@ The pairing code is valid once for 10 minutes. Never place it in source, logs, s
 
 ## Self-check results
 
-`first-run-check.sh` prints redacted JSON followed by one `PASS`, `FAIL`, or `NOT_VERIFIED` line per component. It checks installer verification, terminal path, Wine prefix, Xvfb, host agent readiness, loopback bridge health, worker loop, public visibility, public health, bad and missing token rejection, optional authenticated state, pairing-record expiry, disk, RAM, idle timeout, and quota reporting.
+`first-run-check.sh` prints redacted MT5 diagnostics followed by redacted JSON and one `PASS`, `FAIL`, or `NOT_VERIFIED` line per component. It reports Wine version/package origin, prefix path/architecture/Windows product version, resolved terminal path, obtainable MT5 build, installer checksum/signer provenance, process status/exit code, and selected redacted startup errors. It checks VNC processes separately from terminal readiness, which remains `NOT_VERIFIED` without owner evidence. It also checks installer verification, terminal path, Wine prefix, Xvfb, host agent readiness, loopback bridge health, worker loop, public visibility, public health, bad and missing token rejection, optional authenticated state, pairing-record expiry, disk, RAM, idle timeout, and quota reporting.
 
 A `FAIL` includes the next fix. `NOT_VERIFIED` means the owner must supply an owner-side fact, such as an app token or GitHub billing view. The script never prints tokens, passwords, pairing codes, or forwarded header values.
 
@@ -70,6 +85,8 @@ Check usage at `https://github.com/settings/billing`. The host is not 24/7. Do n
 |---|---|
 | Installer signature invalid or missing | Do not bypass the check. Re-run post-create, inspect the official artifact, or use the private GUI owner step. |
 | Terminal not installed | Run `bash deploy/codespaces/gui.sh` only when requested, then rerun `start.sh`. |
+| MT5 displays the debugger warning | Do not assume a debugger is running or remove Wine/MetaTrader security checks. Read the diagnostic process names, Wine package origin, actual prefix version, MT5 build (if available), and redacted startup errors. Keep the existing prefix. Treat Wine/MT5 compatibility as unverified until the owner confirms the actual terminal build opens successfully. |
+| VNC works but MT5 startup is unverified | This is not a successful terminal check. Use the `MT5_TERMINAL_PROCESS` exit status and redacted startup logs; request owner confirmation before changing the runbook status. |
 | Host agent not ready | Inspect `~/.local/share/destinedfx-codespaces/runtime/host-agent.log`. Restart with `start.sh`. |
 | Bridge health is not 200 | Inspect `runtime/bridge.log`; keep the port private until health passes. |
 | Public port remains private | Confirm the K3 marker, then run `gh codespace ports visibility 8000:public -c "$CODESPACE_NAME"`. Leave the protocol as HTTP. |
