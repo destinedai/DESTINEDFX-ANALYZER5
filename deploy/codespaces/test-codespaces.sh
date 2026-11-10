@@ -22,6 +22,9 @@ grep -Fq -- 'wine "$setup" /auto /path:' "$ROOT/scripts/linux-host/install-mt5.s
 grep -Fq -- 'OWNER STEP: run deploy/codespaces/gui.sh' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'GUI fallback fix missing'
 grep -Fq -- 'verify_mt5_authenticode' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Authenticode verification not wired into installer'
 grep -Fq -- 'MetaQuotes' "$ROOT/scripts/linux-host/verify-mt5-signature.sh" || fail 'MetaQuotes signer check missing'
+grep -Fq -- 'wineboot -u' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'GUI Wine prefix initialization missing'
+grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
+grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
 bash "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" || fail 'invalid installer signature fixtures were accepted'
 grep -Fq -- 'installer-verified' "$ROOT/.devcontainer/postCreate.sh" || fail 'installer verification marker missing'
 bash "$ROOT/deploy/codespaces/first-run-check.sh" >/tmp/destinedfx-first-run-check.out 2>&1 || true

@@ -133,8 +133,10 @@ export WINEPREFIX="$WINEPREFIX_VALUE"
 
 if [[ "$GUI" == "1" ]]; then
   [[ -n "${DISPLAY:-}" ]] || { echo "BLOCKED: GUI mode needs DISPLAY. Run deploy/codespaces/gui.sh." >&2; exit 28; }
+  echo "INFO: initializing Wine prefix at $WINEPREFIX_VALUE before opening the installer."
+  env WINEPREFIX="$WINEPREFIX" DISPLAY="$DISPLAY" wineboot -u
   echo "OWNER STEP: complete the MetaTrader setup wizard in the private Codespaces noVNC window."
-  exec wine "$setup"
+  exec env WINEPREFIX="$WINEPREFIX" DISPLAY="$DISPLAY" wine "$setup"
 fi
 
 # MetaQuotes documents this exact switch pair for setup.exe. Xvfb supplies the display
