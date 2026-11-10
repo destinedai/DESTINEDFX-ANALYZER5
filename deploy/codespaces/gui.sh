@@ -83,4 +83,4 @@ printf 'PASS: private installer GUI started.\n'
 printf 'INFO: display=%s; installer log=%s\n' "$DISPLAY" "$RUNTIME/installer-gui.log"
 printf 'OWNER STEP: open https://%s-6080.app.github.dev/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000&cacheBust=%s in the signed-in phone browser.\n' "$CODESPACE_NAME" "$(date +%s)"
 printf 'OWNER STEP: complete the MetaTrader wizard once, then run deploy/codespaces/start.sh.\n'
-printf 'FAIL: this is a private owner-assisted install route, not public exposure.\n'
+printf 'INFO: this is a private owner-assisted install route, not public exposure.\n'

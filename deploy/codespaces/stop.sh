@@ -20,9 +20,15 @@ stop_recorded() {
 # The GUI fallback has its own recorded processes and is not part of start.sh's
 # general pids file. Clean them first so a retry cannot reuse a stale installer
 # or framebuffer connection.
+GUI_INSTALLER_WAS_TRACKED=0
+[[ -s "$RUNTIME/installer-gui.pid" ]] && GUI_INSTALLER_WAS_TRACKED=1
 for gui_pid in "$RUNTIME/installer-gui.pid" "$RUNTIME/x11vnc.pid" "$RUNTIME/novnc.pid" "$RUNTIME/xvfb.pid"; do
   stop_recorded "$gui_pid"
 done
+if (( GUI_INSTALLER_WAS_TRACKED )) && command -v wineserver >/dev/null 2>&1; then
+  GUI_WINEPREFIX="${DESTINEDFX_MT5_GUI_WINEPREFIX:-${WINEPREFIX:-$HOME/.mt5}}"
+  WINEPREFIX="$GUI_WINEPREFIX" wineserver -k >/dev/null 2>&1 || true
+fi
 # The terminal runs in its own session; stop it through the same controller that started it.
 if [[ -f "$RUNTIME/terminal.pid" ]]; then
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -12,13 +12,14 @@ major="$(printf '%s' "$version" | sed -nE 's/[^0-9]*([0-9]+).*/\1/p')"
   echo "BLOCKED: could not determine Wine version from '$version'." >&2
   exit 2
 }
-if (( major >= 11 )); then
-  echo "BLOCKED: $version is incompatible with current MetaTrader anti-debug checks." >&2
-  echo 'OWNER STEP: rebuild the Codespace with Ubuntu Wine 9 or Wine stable 10, then rerun postCreate.sh.' >&2
-  exit 3
-fi
-if (( major < 9 )); then
-  echo "BLOCKED: $version is too old for the supported MT5 host path." >&2
-  exit 4
-fi
-printf 'PASS: MT5-compatible Wine detected: %s\n' "$version"
+printf 'INFO: detected Wine version: %s\n' "$version"
+case "$major" in
+  9|10)
+    printf 'PASS: MT5-compatible Wine detected: %s\n' "$version"
+    ;;
+  *)
+    echo "BLOCKED: $version is unsupported; MT5 requires Wine 9 or Wine 10." >&2
+    echo 'OWNER STEP: rebuild the Codespace using the compatible Wine image.' >&2
+    exit 3
+    ;;
+esac

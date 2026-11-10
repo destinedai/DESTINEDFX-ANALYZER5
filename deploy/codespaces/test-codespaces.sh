@@ -28,6 +28,9 @@ grep -Fq -- 'debugger process detected' "$ROOT/scripts/linux-host/install-mt5.sh
 grep -Fq -- 'WINEDEBUG=-all' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'clean Wine debug environment missing'
 grep -Fq -- 'check-wine-mt5-compat.sh' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Wine compatibility gate not wired'
 grep -Fq -- 'winecfg -v win10' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Windows 10 Wine prefix not configured'
+grep -Fq -- 'ARG WINE_PACKAGE_VERSION=9.0~repack-4build3' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu 24.04 Wine 9 package pin missing'
+grep -Fq -- 'wine=${WINE_PACKAGE_VERSION} wine64=${WINE_PACKAGE_VERSION}' "$ROOT/.devcontainer/Dockerfile" || fail 'Wine packages are not pinned to the compatible version'
+grep -Fq -- 'case "$wine_major" in 9|10)' "$ROOT/.devcontainer/Dockerfile" || fail 'Docker build must reject incompatible Wine majors'
 grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
 grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
 grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/gui.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
@@ -38,6 +41,8 @@ grep -Fq -- 'installer-verified' "$ROOT/.devcontainer/postCreate.sh" || fail 'in
 bash "$ROOT/deploy/codespaces/first-run-check.sh" >/tmp/destinedfx-first-run-check.out 2>&1 || true
 grep -Fq -- 'SUMMARY:' /tmp/destinedfx-first-run-check.out || fail 'first-run-check summary missing'
 grep -Fq -- 'gh codespace ports visibility 6080:private' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI forwarding missing'
+grep -Fq -- 'INFO: this is a private owner-assisted install route, not public exposure.' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI route notice must not report a false failure'
+if grep -Fq -- 'FAIL: this is a private owner-assisted install route, not public exposure.' "$ROOT/deploy/codespaces/gui.sh"; then fail 'private GUI route notice must not report a false failure'; fi
 pass 'official Linux wrapper and setup.exe pins are verified and the headless route is guarded'
 grep -Fq -- '--host 127.0.0.1' "$ROOT/deploy/codespaces/start.sh" || fail 'bridge bind must be loopback-only'
 grep -Fq 'verify-public-ready.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'missing public K3 readiness guard'
@@ -65,8 +70,38 @@ if grep -Fq 'MQL5/Logs' "$ROOT/deploy/codespaces/start.sh"; then fail 'start.sh 
 pass 'T1 path scheme: one terminal location, platform Logs journal, runner and process control wired'
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/wine-bin"
+cat > "$TMP/wine-bin/wine" <<'MOCK_WINE'
+#!/usr/bin/env bash
+printf '%s\n' "${MOCK_WINE_VERSION:?}"
+MOCK_WINE
+chmod +x "$TMP/wine-bin/wine"
+for version in wine-9.0 wine-10.0; do
+	output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION="$version" bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh")" || fail "$version must be accepted"
+	grep -Fq "INFO: detected Wine version: $version" <<< "$output" || fail "$version must be reported"
+done
+if output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION=wine-11.0 bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" 2>&1)"; then
+	fail 'Wine 11 must be rejected'
+fi
+grep -Fq 'OWNER STEP: rebuild the Codespace using the compatible Wine image.' <<< "$output" || fail 'Wine 11 rejection must provide the exact rebuild instruction'
+if grep -Eq '(^|[;&|[:space:]])(kill|pkill|killall)([[:space:]]|$)' "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh"; then
+	fail 'Wine compatibility gate must not kill processes'
+fi
+pass 'Wine compatibility gate reports versions, accepts 9/10, and rejects 11 without killing processes'
 DESTINEDFX_CODESPACES_STATE_DIR="$TMP/state" "$ROOT/deploy/codespaces/stop.sh" | grep -q '^PASS:' || fail 'stop without state failed'
 pass 'stop safely handles empty private state'
 grep -Fq -- 'installer-gui.pid' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must clean stale GUI installer process'
 grep -Fq -- 'x11vnc.pid' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must clean stale VNC process'
+mkdir -p "$TMP/wineserver-bin" "$TMP/gui-state/runtime"
+cat > "$TMP/wineserver-bin/wineserver" <<'MOCK_WINESERVER'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$WINEPREFIX" "$*" >> "$WINESERVER_CALLS"
+MOCK_WINESERVER
+chmod +x "$TMP/wineserver-bin/wineserver"
+printf '99999999\n' > "$TMP/gui-state/runtime/installer-gui.pid"
+WINESERVER_CALLS="$TMP/wineserver.calls" PATH="$TMP/wineserver-bin:$PATH" \
+	DESTINEDFX_CODESPACES_STATE_DIR="$TMP/gui-state" DESTINEDFX_MT5_GUI_WINEPREFIX="$TMP/private-prefix" \
+	"$ROOT/deploy/codespaces/stop.sh" >/dev/null || fail 'stop failed for tracked GUI Wine state'
+grep -Fq "$TMP/private-prefix|-k" "$TMP/wineserver.calls" || fail 'stop must shut down Wine only in the tracked private GUI prefix'
+pass 'stop shuts down orphaned Wine processes in the tracked private GUI prefix'
 printf 'PASS: Codespaces K1 shell tests completed.\n'
