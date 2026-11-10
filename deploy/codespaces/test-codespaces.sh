@@ -23,6 +23,8 @@ grep -Fq -- 'OWNER STEP: run deploy/codespaces/gui.sh' "$ROOT/scripts/linux-host
 grep -Fq -- 'verify_mt5_authenticode' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Authenticode verification not wired into installer'
 grep -Fq -- 'MetaQuotes' "$ROOT/scripts/linux-host/verify-mt5-signature.sh" || fail 'MetaQuotes signer check missing'
 grep -Fq -- 'wineboot -u' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'GUI Wine prefix initialization missing'
+grep -Fq -- 'debugger process detected' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'debugger preflight missing'
+grep -Fq -- 'WINEDEBUG=-all' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'clean Wine debug environment missing'
 grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
 grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
 grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/gui.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'

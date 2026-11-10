@@ -131,20 +131,39 @@ mkdir -p "$WINEPREFIX_VALUE"
 chmod 700 "$WINEPREFIX_VALUE"
 export WINEPREFIX="$WINEPREFIX_VALUE"
 
+# MetaQuotes setup refuses to start when a debugger or instrumentation hook is
+# visible. Do not kill an owner's process silently: identify only debugger
+# processes owned by this user and give the owner a precise fix.
+debugger_pids="$(pgrep -u "$(id -u)" -f '(^|/)(winedbg|gdb|gdbserver|lldb|strace)([[:space:]]|$)' || true)"
+if [[ -n "$debugger_pids" ]]; then
+  echo "BLOCKED: debugger process detected for this owner: $debugger_pids" >&2
+  echo "OWNER STEP: close that debugger, then rerun deploy/codespaces/gui.sh." >&2
+  exit 26
+fi
+
+# Do not pass IDE tracing, debugger DLL overrides, preload shims, or Wine
+# diagnostic channels into the vendor installer. The bridge remains separately
+# observable through its own redacted logs.
+clean_wine_env=(env
+  -u WINEDEBUG -u WINEDLLOVERRIDES -u LD_PRELOAD -u LD_AUDIT
+  -u PROTON_DEBUG -u WINEESYNC -u WINEFSYNC
+  WINEDEBUG=-all WINEDLLOVERRIDES=''
+  WINEPREFIX="$WINEPREFIX")
+
 if [[ "$GUI" == "1" ]]; then
   [[ -n "${DISPLAY:-}" ]] || { echo "BLOCKED: GUI mode needs DISPLAY. Run deploy/codespaces/gui.sh." >&2; exit 28; }
   echo "INFO: initializing Wine prefix at $WINEPREFIX_VALUE before opening the installer."
-  env WINEPREFIX="$WINEPREFIX" DISPLAY="$DISPLAY" wineboot -u
+  "${clean_wine_env[@]}" wineboot -u
   echo "OWNER STEP: complete the MetaTrader setup wizard in the private Codespaces noVNC window."
-  exec env WINEPREFIX="$WINEPREFIX" DISPLAY="$DISPLAY" wine "$setup"
+  exec "${clean_wine_env[@]}" wine "$setup"
 fi
 
 # MetaQuotes documents this exact switch pair for setup.exe. Xvfb supplies the display
 # required by the Windows web installer without exposing a public port.
 xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
-  env WINEPREFIX="$WINEPREFIX" wineboot -u
+  "${clean_wine_env[@]}" wineboot -u
 xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
-  env WINEPREFIX="$WINEPREFIX" wine "$setup" /auto /path:"$INSTALL_PATH"
+  "${clean_wine_env[@]}" wine "$setup" /auto /path:"$INSTALL_PATH"
 terminal="$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/terminal64.exe"
 if [[ ! -f "$terminal" ]]; then
   echo "BLOCKED: /auto completed without terminal64.exe at the standard path." >&2
