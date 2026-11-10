@@ -98,13 +98,19 @@ def digest(s): return hashlib.sha256(s.encode()).hexdigest()
 def linux_host_report():
     if not LINUX_HOST_MODE: return {'healthy': True, 'mode': 'windows-or-managed-host'}
     try:
-        with urllib.request.urlopen(HOST_AGENT_URL, timeout=2) as response:
+        try:
+            with urllib.request.urlopen(HOST_AGENT_URL, timeout=2) as response:
+                payload=json.loads(response.read(128000).decode('utf-8'))
+        except urllib.error.HTTPError as response:
             payload=json.loads(response.read(128000).decode('utf-8'))
         if not isinstance(payload,dict): raise ValueError('host-agent response is not an object')
-        if not payload.get('healthy'): raise ValueError('host-agent reports BLOCKED')
-        return payload
     except Exception as exc:
         raise HTTPException(503, detail={'code':'LINUX_HOST_AGENT_UNHEALTHY','message':'Linux host agent is unavailable or reports blocked readiness'}) from exc
+    if payload.get('wine_ok') is False:
+        raise HTTPException(503, detail={'code':'WINE_VERSION_UNSUPPORTED','message':'Host Wine version is unsupported; run the guard fix'})
+    if not payload.get('healthy'):
+        raise HTTPException(503, detail={'code':'LINUX_HOST_AGENT_UNHEALTHY','message':'Linux host agent is unavailable or reports blocked readiness'})
+    return payload
 def broker_company_matches(brand, company):
     """Bind an MT5 profile to the broker identity actually reported by its terminal."""
     key=str(brand or 'UNKNOWN').strip().upper()

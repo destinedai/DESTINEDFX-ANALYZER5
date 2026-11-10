@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import shutil
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -23,6 +24,7 @@ TERMINAL_PATTERN = os.getenv("MT5_TERMINAL_PATTERN", r"(?i)(terminal64|terminal\
 HEARTBEAT_PATH = os.getenv("EA_HEARTBEAT_JSON", "")
 JOURNAL_PATH = os.getenv("MT5_JOURNAL_PATH", "")
 JOURNAL_DIR = os.getenv("MT5_JOURNAL_DIR", "/var/lib/destinedfx/terminal/Logs")
+WINE_BIN = os.getenv("WINE_BIN", "wine")
 CONNECT_JOB_START_FILE = os.getenv(
     "CONNECT_JOB_START_FILE", "/var/lib/destinedfx/connect-job-start.epoch"
 )
@@ -47,6 +49,26 @@ def terminal_process_alive():
         if re.search(TERMINAL_PATTERN, cmd):
             return True
     return False
+
+
+def wine_report():
+    try:
+        result = subprocess.run(
+            [WINE_BIN, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown", False
+    version = (result.stdout or result.stderr).strip().splitlines()
+    value = version[0][:128] if version else "unknown"
+    match = re.match(r"^wine-?([0-9]+)\.([0-9]+)(?:\s|$)", value)
+    if result.returncode != 0 or not match:
+        return "unknown", False
+    major, minor = match.groups()
+    return f"wine-{major}.{minor}", major == "9" or (major == "10" and minor in {"0", "1", "2"})
 
 
 def journal_classification():
@@ -112,6 +134,7 @@ def report():
         uptime = 0.0
     disk = shutil.disk_usage(os.getenv("HOST_AGENT_DISK_PATH", "/"))
     terminal = terminal_process_alive()
+    wine_version, wine_ok = wine_report()
     heartbeat = heartbeat_report()
     low_memory = mem_available > 0 and mem_available < int(
         os.getenv("HOST_AGENT_MIN_AVAILABLE_BYTES", str(256 * 1024 * 1024))
@@ -120,13 +143,15 @@ def report():
         "schema": "destinedfx.host-agent.v1",
         "timestamp": time.time(),
         "terminal_process_alive": terminal,
+        "wine_version": wine_version,
+        "wine_ok": wine_ok,
         "memory": {"total_bytes": mem_total, "available_bytes": mem_available, "low": low_memory},
         "swap": {"total_bytes": swap_total, "free_bytes": swap_free, "configured": swap_total >= 2 * 1024 * 1024 * 1024},
         "disk": {"free_bytes": disk.free, "total_bytes": disk.total},
         "uptime_seconds": uptime,
         "journal": journal_classification(),
         "ea_heartbeat": heartbeat,
-        "healthy": bool(terminal and not low_memory and heartbeat.get("fresh") and heartbeat.get("terminal_connected")),
+        "healthy": bool(wine_ok and terminal and not low_memory and heartbeat.get("fresh") and heartbeat.get("terminal_connected")),
     }
 
 
