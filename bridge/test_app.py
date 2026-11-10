@@ -1369,6 +1369,41 @@ def test_bad_and_missing_tokens_return_401_then_lockout(monkeypatch):
     other={'Host':'fixture-codespace-8000.app.github.dev','X-Forwarded-For':'203.0.113.10'}
     assert pub.get('/v1/app/state',headers=other).status_code==401
 
+def test_loopback_host_is_never_counted_or_locked_by_public_ip_guard(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',1)
+    local={'Host':'127.0.0.1'}
+    for _ in range(4):
+        assert pub.get('/v1/app/state',headers=local).status_code==401
+    with app.tx() as c:
+        assert c.execute("SELECT COUNT(*) AS n FROM ip_guard WHERE ip='local-loopback'").fetchone()['n']==0
+
+def test_unforwarded_loopback_peer_uses_public_unknown_bucket(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',2)
+    host={'Host':'fixture-codespace-8000.app.github.dev'}
+    assert pub.get('/v1/app/state',headers=host).status_code==401
+    assert pub.get('/v1/app/state',headers=host).status_code==401
+    locked=pub.get('/v1/app/state',headers=host)
+    assert locked.status_code==429
+    with app.tx() as c:
+        row=c.execute("SELECT fails,locked_until FROM ip_guard WHERE ip='public-unknown'").fetchone()
+    assert row is not None and row['locked_until']>time.time()
+
+def test_local_worker_and_ea_continue_when_public_unknown_bucket_is_locked(monkeypatch):
+    managed_env(monkeypatch)
+    p=pair(); t=claimed(p)
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',1)
+    public={'Host':'fixture-codespace-8000.app.github.dev'}
+    assert pub.get('/v1/app/state',headers=public).status_code==401
+    assert pub.get('/v1/app/state',headers=public).status_code==429
+    local={'Host':'127.0.0.1'}
+    worker=pub.post('/v1/worker/jobs/claim',headers={**local,'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},json={'worker_id':'local-worker'})
+    assert worker.status_code==200
+    ea=pub.get('/v1/terminal/commands',headers={**local,'Authorization':'Bearer '+t['terminal_token']})
+    assert ea.status_code==200
+
 def test_forwarded_for_uses_last_entry_so_spoofed_prefix_does_not_evade_lockout(monkeypatch):
     public_mode(monkeypatch)
     monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',2)

@@ -188,12 +188,21 @@ def secure(request):
     peer=request.client.host if request.client else ''
     if ALLOW_LOOPBACK and peer in ('127.0.0.1','::1','localhost'): return
     raise HTTPException(400,'HTTPS is required')
+def request_host(request):
+    raw=(request.headers.get('host') or getattr(request.url,'hostname','') or '').strip().lower().rstrip('.')
+    if raw.startswith('['): return raw[1:].split(']',1)[0]
+    if raw.count(':')==1: return raw.rsplit(':',1)[0]
+    return raw
+def host_is_loopback(request):
+    return request_host(request) in LOOPBACK_HOSTS
 def client_ip(request):
     peer=request.client.host if request.client else 'unknown'
-    # The Codespaces gateway reaches us over loopback and appends the real caller as the LAST
-    # X-Forwarded-For entry. Earlier entries are caller-supplied and are never trusted.
+    if host_is_loopback(request): return 'local-loopback'
+    # A local reverse proxy may append the actual caller as the last entry. This remains
+    # UNVERIFIED until the owner records the external forwarding diagnostic.
     forwarded=request.headers.get('x-forwarded-for','')
-    if peer in LOOPBACK_HOSTS and forwarded:
+    if peer in LOOPBACK_HOSTS:
+        if not forwarded: return 'public-unknown'
         last=forwarded.split(',')[-1].strip()
         if last and len(last)<=64: return last
     return peer
@@ -203,7 +212,7 @@ def public_host_guard(request):
     if host==EXPECTED_PUBLIC_HOST or host in LOOPBACK_HOSTS: return None
     return JSONResponse({'detail':{'code':'HOST_NOT_ALLOWED'}},421)
 def ip_guard_precheck(request):
-    if not PUBLIC_EXPOSURE or request.url.path=='/health/live': return None
+    if not PUBLIC_EXPOSURE or request.url.path=='/health/live' or host_is_loopback(request): return None
     ip=client_ip(request); t=time.time()
     with tx(immediate=True) as c:
         row=c.execute('SELECT * FROM ip_guard WHERE ip=?',(ip,)).fetchone()
@@ -219,7 +228,7 @@ def ip_guard_precheck(request):
             c.execute('INSERT INTO ip_guard(ip,window,count,fails,fail_window,locked_until) VALUES(?,?,1,0,?,0)',(ip,t,t))
     return None
 def record_auth_failure(request):
-    if not PUBLIC_EXPOSURE or request.url.path.startswith('/health/'): return
+    if not PUBLIC_EXPOSURE or request.url.path.startswith('/health/') or host_is_loopback(request): return
     ip=client_ip(request); t=time.time()
     with tx(immediate=True) as c:
         row=c.execute('SELECT fails,fail_window FROM ip_guard WHERE ip=?',(ip,)).fetchone()
