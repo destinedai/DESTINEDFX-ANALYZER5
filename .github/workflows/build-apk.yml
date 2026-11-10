@@ -3,12 +3,13 @@ name: Build APK
 on:
   push:
     branches: [ "**" ]
+    tags: [ "host-v*" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   python-tests:
@@ -481,6 +482,53 @@ jobs:
           name: DestinedFX-Windows-Worker-Kit
           path: dist/DestinedFX-Windows-Worker-Kit/
           if-no-files-found: error
+
+  package-host-v1-prerelease:
+    name: Package host-v1 prerelease
+    if: startsWith(github.ref, 'refs/tags/host-v')
+    needs: [mt5-ea-windows-compile, android-build-and-unit-tests, package-windows-worker-kit]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-MT5-EA-ex5
+          path: dist/incoming/ea
+      - uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-debug-apk
+          path: dist/incoming/apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-Windows-Worker-Kit
+          path: dist/incoming/worker-kit
+      - name: Assemble release assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/host-v1
+          ea="$(find dist/incoming/ea -type f -name 'DestinedFXTraderEA.ex5' -print -quit)"
+          apk="$(find dist/incoming/apk -type f -name 'app-debug.apk' -print -quit)"
+          test -s "$ea"; test -s "$apk"
+          cp "$ea" dist/host-v1/DestinedFXTraderEA.ex5
+          cp "$apk" dist/host-v1/DestinedFX-debug.apk
+          cp -R dist/incoming/worker-kit dist/host-v1/DestinedFX-Windows-Worker-Kit
+          (cd dist/host-v1 && zip -qr DestinedFX-Windows-Worker-Kit.zip DestinedFX-Windows-Worker-Kit && rm -rf DestinedFX-Windows-Worker-Kit)
+          (cd dist/host-v1 && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt)
+          cat > dist/host-v1/RELEASE-NOTES.txt <<'EOF'
+          DestinedFX host-v prerelease
+          This package is owner-operated and is not evidence of broker connectivity or trading readiness.
+          Verify SHA256SUMS.txt before installation. Start with DEMO and follow docs/deployment/GO_LIVE_CHECKLIST.md.
+          LIVE remains blocked until the existing ModeArmingPolicy and persistent-host requirements are independently satisfied.
+          EOF
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/host-v1/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --prerelease \
+            --title "DestinedFX ${GITHUB_REF_NAME} prerelease" \
+            --notes-file dist/host-v1/RELEASE-NOTES.txt
 
   iac-validate:
     name: Validate Azure for Students IaC

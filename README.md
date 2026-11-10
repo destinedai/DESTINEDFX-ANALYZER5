@@ -95,6 +95,10 @@ Broker connection steps require owner-controlled accounts, credentials, exact br
 
 `.github/workflows/build-apk.yml` is the source of truth for branch triggers, test jobs, artifact names, and retention. The workflow includes Android build and JVM tests plus Python, managed-worker, MT5 EA, secret-scan, and emulator-related jobs as configured in that file. A CI run is evidence only for its exact commit and completed jobs. APK artifacts are debug builds, not production release packages. See [APK installation](docs/INSTALL_APK.md) and [deployment limitations](docs/deployment/KNOWN_LIMITATIONS.md).
 
+## R1 go-live path
+
+The owner-facing path is **Accounts > Add account**, exact broker/server entry, verified DEMO identity and heartbeat, then the existing DEMO acceptance and process-local LIVE lease gates. Login alone never enables trading. Review the [R1 go-live checklist](docs/deployment/GO_LIVE_CHECKLIST.md) before any owner-side verification. A deliberate `host-v*` tag packages the APK, genuine MetaEditor `DestinedFXTraderEA.ex5`, Windows worker kit, and SHA-256 checksums as a GitHub prerelease; no tag or release is created automatically by development work.
+
 ## Limitations and troubleshooting
 
 - **No price or candles:** check the selected provider, symbol mapping, configuration, freshness, and upstream response. Missing data must remain unavailable rather than be replaced with sample values.
