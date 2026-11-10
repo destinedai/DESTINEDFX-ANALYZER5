@@ -64,4 +64,6 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 DESTINEDFX_CODESPACES_STATE_DIR="$TMP/state" "$ROOT/deploy/codespaces/stop.sh" | grep -q '^PASS:' || fail 'stop without state failed'
 pass 'stop safely handles empty private state'
+grep -Fq -- 'installer-gui.pid' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must clean stale GUI installer process'
+grep -Fq -- 'x11vnc.pid' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must clean stale VNC process'
 printf 'PASS: Codespaces K1 shell tests completed.\n'

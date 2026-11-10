@@ -4,6 +4,25 @@ STATE="${DESTINEDFX_CODESPACES_STATE_DIR:-$HOME/.local/share/destinedfx-codespac
 RUNTIME="$STATE/runtime"
 PASS=0
 FAIL=0
+stop_recorded() {
+  local file="$1" pid
+  [[ -s "$file" ]] || return 0
+  pid="$(cat "$file" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || { rm -f "$file"; return 0; }
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    kill -KILL "$pid" 2>/dev/null || true
+    printf 'PASS: stopped recorded GUI process %s.\n' "$pid"
+  fi
+  rm -f "$file"
+}
+# The GUI fallback has its own recorded processes and is not part of start.sh's
+# general pids file. Clean them first so a retry cannot reuse a stale installer
+# or framebuffer connection.
+for gui_pid in "$RUNTIME/installer-gui.pid" "$RUNTIME/x11vnc.pid" "$RUNTIME/novnc.pid" "$RUNTIME/xvfb.pid"; do
+  stop_recorded "$gui_pid"
+done
 # The terminal runs in its own session; stop it through the same controller that started it.
 if [[ -f "$RUNTIME/terminal.pid" ]]; then
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
