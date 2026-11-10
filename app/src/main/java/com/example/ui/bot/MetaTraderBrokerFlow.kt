@@ -68,6 +68,7 @@ fun MetaTraderBrokerFlow(
     modeArmingPolicy: ModeArmingPolicy,
     context: Context,
     onConnect: suspend (BrokerLoginSpec, LoginForm) -> ConnectOutcome,
+    onOpenModes: () -> Unit,
     onClose: () -> Unit,
 ) {
     var page by remember { mutableStateOf(FlowPage.ACCOUNTS) }
@@ -151,6 +152,7 @@ fun MetaTraderBrokerFlow(
                 Text("Account verified", color = ElectricCyan, fontSize = 20.sp)
                 Text("Terminal-reported mode: ${verifiedMode ?: "unverified"}", color = TextPrimary)
                 Text("Trading remains gated by DEMO acceptance and ModeArmingPolicy. LIVE is not enabled by login.", color = WarningAmber, fontSize = 12.sp)
+                Button(onClick = onOpenModes, modifier = Modifier.fillMaxWidth().testTag("open_modes"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { Text("OPEN MODES") }
             }
         }
     }

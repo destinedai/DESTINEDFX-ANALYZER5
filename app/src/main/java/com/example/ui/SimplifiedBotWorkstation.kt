@@ -547,6 +547,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     ConnectUseCase(MT5BridgeConnectBackend(client)).connect(spec, form)
                 }
             },
+            onOpenModes = { showModernBrokerFlow = false },
             onClose = { showModernBrokerFlow = false },
         )
         return
