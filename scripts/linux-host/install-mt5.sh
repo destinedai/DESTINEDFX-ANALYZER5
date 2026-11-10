@@ -88,6 +88,11 @@ if [[ "$arch" != "x86_64" ]]; then
   exit 22
 fi
 
+if [[ "$PRINT_ONLY" == "0" ]] && ! "$SCRIPT_DIR/wine-guard.sh"; then
+  echo "BLOCKED: Wine version is unsupported; refusing to execute the MetaTrader installer." >&2
+  exit 28
+fi
+
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 script="$workdir/mt5linux.sh"

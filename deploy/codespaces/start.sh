@@ -15,6 +15,12 @@ IDLE_TIMEOUT_MINUTES="${DESTINEDFX_IDLE_TIMEOUT_MINUTES:-240}"
 if [[ ! "$IDLE_TIMEOUT_MINUTES" =~ ^[0-9]+$ ]] || (( IDLE_TIMEOUT_MINUTES < 5 || IDLE_TIMEOUT_MINUTES > 240 )); then
   fail 'DESTINEDFX_IDLE_TIMEOUT_MINUTES must be an integer from 5 to 240.'; exit 1
 fi
+if "$ROOT/scripts/linux-host/wine-guard.sh"; then
+  pass 'Wine version allowed'
+else
+  fail 'Wine version allowed'
+  exit 1
+fi
 HOST_GENERATION="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 
 # All generated bridge credentials live only in this 0700 Codespaces-private directory.

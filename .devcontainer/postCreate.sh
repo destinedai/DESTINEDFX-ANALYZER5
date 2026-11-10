@@ -12,6 +12,11 @@ if [[ "$(uname -m)" != x86_64 ]]; then
   exit 1
 fi
 
+if ! "$ROOT/scripts/linux-host/wine-guard.sh"; then
+  fail 'Wine version allowed check failed; refusing MT5 installation.'
+  exit 1
+fi
+
 mkdir -p "$HOME/.local/share/destinedfx-codespaces"
 chmod 700 "$HOME/.local/share/destinedfx-codespaces"
 python3 -m venv "$HOME/.local/share/destinedfx-codespaces/venv"

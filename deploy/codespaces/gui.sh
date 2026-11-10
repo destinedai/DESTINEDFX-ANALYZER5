@@ -34,6 +34,10 @@ restart_recorded() {
 [[ -n "${CODESPACE_NAME:-}" ]] || fail 'CODESPACE_NAME is unavailable; run this inside GitHub Codespaces.'
 [[ -x "$(command -v x11vnc || true)" && -x "$(command -v websockify || true)" ]] || fail 'x11vnc and websockify are missing; rebuild the devcontainer image.'
 [[ -x "$STATE/venv/bin/python" ]] || fail 'Codespaces post-create has not completed; run it before gui.sh.'
+if ! "$ROOT/scripts/linux-host/wine-guard.sh"; then
+  fail 'Wine version allowed check failed; refusing to launch the installer GUI.'
+  exit 1
+fi
 
 if ! pgrep -f '^Xvfb :99 ' >/dev/null 2>&1; then
   stop_recorded "$RUNTIME/xvfb.pid"
