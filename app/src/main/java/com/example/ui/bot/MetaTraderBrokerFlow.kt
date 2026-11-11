@@ -61,9 +61,6 @@ import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginMode
 import com.example.data.broker.HostProfile
 import com.example.security.SecretsManager
-import com.example.ui.theme.DarkBackground
-import com.example.ui.theme.DarkSurface
-import com.example.ui.theme.DarkSurfaceVariant
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.LossRed
 import com.example.ui.theme.TextPrimary
@@ -74,6 +71,8 @@ import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 private val LoginBlue = Color(0xFF1976D2)
+private val BrokerSurface = Color(0xFF101010)
+private val BrokerSurfaceVariant = Color(0xFF181818)
 
 private enum class FlowPage { ACCOUNTS, BROKERS, LOGIN, PICK_ACCOUNT, ACCOUNT, SETTINGS, ADVANCED }
 private enum class AccountTab { TRADE, HISTORY, BOT }
@@ -118,6 +117,7 @@ fun MetaTraderBrokerFlow(
     var clockNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var accountChoices by remember { mutableStateOf<List<LoginAccountChoice>>(emptyList()) }
     var spotwareApprovalConfirmed by remember { mutableStateOf(false) }
+    var showInfoSheet by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val rows = remember { BrokerCatalog.rows() }
@@ -207,7 +207,7 @@ fun MetaTraderBrokerFlow(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(DarkBackground).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(Modifier.fillMaxSize().background(Color.Black).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
                 "‹",
@@ -232,6 +232,10 @@ fun MetaTraderBrokerFlow(
                     Text("SETTINGS", color = ElectricCyan)
                 }
             }
+            TextButton(
+                onClick = { showInfoSheet = true },
+                modifier = Modifier.size(48.dp).semantics { contentDescription = "Information" }.testTag("flow_info"),
+            ) { Text("ⓘ", color = ElectricCyan, fontSize = 20.sp) }
         }
         when (page) {
             FlowPage.ACCOUNTS -> {
@@ -299,14 +303,14 @@ fun MetaTraderBrokerFlow(
                 Button(
                     onClick = { page = FlowPage.ADVANCED },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("settings_advanced"),
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant),
                 ) { Text("ADVANCED", color = TextPrimary) }
             }
             FlowPage.ADVANCED -> {
                 Button(
                     onClick = onOpenAdvanced,
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("legacy_bot_tools"),
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant),
                 ) { Text("LEGACY BOT TOOLS", color = TextPrimary) }
             }
             FlowPage.BROKERS -> {
@@ -354,7 +358,7 @@ fun MetaTraderBrokerFlow(
                                 label,
                                 color = if (form.mode == mode) Color.White else TextSecondary,
                                 modifier = Modifier.weight(1f).height(48.dp)
-                                    .background(if (form.mode == mode) LoginBlue else DarkSurfaceVariant, RoundedCornerShape(4.dp))
+                                    .background(if (form.mode == mode) LoginBlue else BrokerSurfaceVariant, RoundedCornerShape(4.dp))
                                     .clickable { form = LoginRules.withMode(form, mode) }
                                     .testTag("login_mode_${label.lowercase()}"),
                             )
@@ -401,7 +405,7 @@ fun MetaTraderBrokerFlow(
                                 label,
                                 color = if (form.mode == mode) Color.White else TextSecondary,
                                 modifier = Modifier.weight(1f).height(48.dp)
-                                    .background(if (form.mode == mode) LoginBlue else DarkSurfaceVariant, RoundedCornerShape(4.dp))
+                                    .background(if (form.mode == mode) LoginBlue else BrokerSurfaceVariant, RoundedCornerShape(4.dp))
                                     .clickable { form = LoginRules.withMode(form, mode) }
                                     .testTag("login_mode_${label.lowercase()}"),
                             )
@@ -417,7 +421,7 @@ fun MetaTraderBrokerFlow(
                                 label,
                                 color = if (form.mode == mode) Color.White else TextSecondary,
                                 modifier = Modifier.weight(1f).height(48.dp)
-                                    .background(if (form.mode == mode) LoginBlue else DarkSurfaceVariant, RoundedCornerShape(4.dp))
+                                    .background(if (form.mode == mode) LoginBlue else BrokerSurfaceVariant, RoundedCornerShape(4.dp))
                                     .clickable { form = LoginRules.withMode(form, mode) }
                                     .testTag("login_mode_${label.lowercase()}"),
                             )
@@ -472,7 +476,7 @@ fun MetaTraderBrokerFlow(
                             connect(spec, next)
                         },
                         modifier = Modifier.fillMaxWidth().height(48.dp).testTag("provider_account_${account.id}"),
-                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant),
                     ) { Text("${account.label} · ${account.mode.name}", color = TextPrimary) }
                 }
             }
@@ -505,7 +509,7 @@ fun MetaTraderBrokerFlow(
                                 Button(
                                     onClick = { accountTab = tab },
                                     modifier = Modifier.weight(1f).height(48.dp).testTag("account_tab_${tab.name.lowercase()}"),
-                                    colors = ButtonDefaults.buttonColors(containerColor = if (accountTab == tab) LoginBlue else DarkSurfaceVariant),
+                                    colors = ButtonDefaults.buttonColors(containerColor = if (accountTab == tab) LoginBlue else BrokerSurfaceVariant),
                                 ) { Text(tab.name, color = TextPrimary) }
                             }
                         }
@@ -539,6 +543,18 @@ fun MetaTraderBrokerFlow(
         }
     }
     if (manualDialog) AlertDialog(onDismissRequest = { manualDialog = false }, title = { Text("Find your broker") }, text = { OutlinedTextField(manualName, { manualName = it }, label = { Text("Company or server name") }, singleLine = true) }, confirmButton = { TextButton(onClick = { ManualBrokerProfile.create(manualName); manualDialog = false; manualName = "" }) { Text("SAVE") } }, dismissButton = { TextButton(onClick = { manualDialog = false }) { Text("CANCEL") } })
+    if (showInfoSheet) AlertDialog(
+        onDismissRequest = { showInfoSheet = false },
+        title = { Text("Account safety") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Connected status requires fresh, identity-matched broker evidence.")
+                Text("Login never arms trading. Existing risk, news, lease, and Emergency Stop gates remain in force.")
+                Text("A fixture or test result is not proof of a broker login.")
+            }
+        },
+        confirmButton = { TextButton(onClick = { showInfoSheet = false }) { Text("CLOSE") } },
+    )
     pendingAction?.let { action ->
         AlertDialog(
             onDismissRequest = { pendingAction = null },
@@ -649,7 +665,7 @@ private fun AccountSummary(
     val brokerName = if (spec.connector == LoginConnector.CTRADER && details.server.isNotBlank()) details.server else spec.displayName
     Card(
         Modifier.fillMaxWidth().testTag("verified_account_summary"),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        colors = CardDefaults.cardColors(containerColor = BrokerSurface),
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
@@ -708,7 +724,7 @@ private fun AccountTradeList(
                 items(positions) { position ->
                     val ticket = position.optString("position_id").ifBlank { position.optString("ticket") }
                     val symbol = position.optString("symbol", "Unknown symbol")
-                    Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)) {
+                    Card(colors = CardDefaults.cardColors(containerColor = BrokerSurfaceVariant)) {
                         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text("$symbol · ${position.optString("direction", "unknown")}", color = TextPrimary)
@@ -734,7 +750,7 @@ private fun AccountTradeList(
                 items(orders) { order ->
                     val ticket = order.optString("ticket")
                     val symbol = order.optString("symbol", "Unknown symbol")
-                    Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)) {
+                    Card(colors = CardDefaults.cardColors(containerColor = BrokerSurfaceVariant)) {
                         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text("$symbol · ${order.optString("direction", "unknown")}", color = TextPrimary)
@@ -770,7 +786,7 @@ private fun AccountHistoryList(details: VerifiedAccountDetails, modifier: Modifi
                     Text(
                         "${deal.optString("symbol", "Unknown symbol")} · ${deal.optString("closed_at", "time unavailable")} · P/L ${deal.optString("profit", "unavailable")}",
                         color = TextPrimary,
-                        modifier = Modifier.fillMaxWidth().background(DarkSurface).padding(10.dp),
+                        modifier = Modifier.fillMaxWidth().background(BrokerSurface).padding(10.dp),
                     )
                 }
             }
@@ -800,7 +816,7 @@ private fun AccountBotControls(
         Text("ModeArmingPolicy: $policyMessage", color = WarningAmber, fontSize = 12.sp, modifier = Modifier.testTag("mode_arming_state"))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
             Button(onClick = onStart, enabled = canStart && !busy && !running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { Text("START") }
-            Button(onClick = onPauseResume, enabled = canControl && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)) { Text(if (details.engineState == "PAUSED") "RESUME" else "PAUSE") }
+            Button(onClick = onPauseResume, enabled = canControl && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant)) { Text(if (details.engineState == "PAUSED") "RESUME" else "PAUSE") }
             Button(onClick = onStop, enabled = canControl && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = LossRed)) { Text("STOP") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
@@ -825,7 +841,7 @@ private fun AccountRow(account: SavedLoginAccount, onClick: () -> Unit) {
     val brokerName = if (account.spec.id == "CTRADER" && account.server.isNotBlank()) account.server else account.spec.displayName
     Card(
         Modifier.fillMaxWidth().height(64.dp).clickable { onClick() }.testTag("saved_account_$testKey"),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        colors = CardDefaults.cardColors(containerColor = BrokerSurface),
     ) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = 14.dp),
@@ -847,7 +863,7 @@ private fun maskSavedLogin(value: String): String =
 private fun BrokerRowCard(row: BrokerRow, onClick: () -> Unit) {
     Card(
         Modifier.fillMaxWidth().height(64.dp).clickable { onClick() }.testTag("broker_${row.specId}"),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+        colors = CardDefaults.cardColors(containerColor = BrokerSurfaceVariant),
         shape = RoundedCornerShape(0.dp),
     ) {
         Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {

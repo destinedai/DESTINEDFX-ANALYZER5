@@ -54,6 +54,9 @@ class MetaTraderBrokerFlowTest {
     fun accountsBrokersLoginAndSettingsScreensAreReachable() {
         openFlow()
         composeRule.onNodeWithText("Accounts").assertIsDisplayed()
+        composeRule.onNodeWithTag("flow_info").performClick()
+        composeRule.onNodeWithText("Account safety").assertIsDisplayed()
+        composeRule.onNodeWithText("CLOSE").performClick()
         composeRule.onNodeWithTag("add_account").performClick()
         composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
         composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
