@@ -11,6 +11,7 @@ import com.example.data.mt5.MT5AccountSlot
 import com.example.data.trade.BridgeGatewayException
 import com.example.data.trade.BridgeGatewayFailure
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 
 /** One row of the Brokers list, built only from BrokerLoginSpecs. */
 data class BrokerRow(
@@ -44,8 +45,9 @@ object SavedLoginAccounts {
         }
         val providers = providerProfiles.mapNotNull { profile ->
             val spec = BrokerLoginSpecs.byId(profile.specId) ?: return@mapNotNull null
-            if (spec.connector == LoginConnector.MT5_TERMINAL || profile.login.isBlank()) return@mapNotNull null
-            SavedLoginAccount(spec, profile.accountId, profile.login, profile.server, profile.mode)
+            val login = profile.login.ifBlank { profile.accountId }
+            if (spec.connector == LoginConnector.MT5_TERMINAL || login.isBlank()) return@mapNotNull null
+            SavedLoginAccount(spec, profile.accountId, login, profile.server, profile.mode)
         }
         return (mt5 + providers).distinctBy { "${it.spec.id}:${it.profileKey}:${it.mode.name}" }
             .sortedWith(compareBy<SavedLoginAccount> { it.spec.displayName }.thenBy { it.mode.name }.thenBy { it.login })
@@ -208,7 +210,29 @@ data class ConnectObservation(
     val failureCode: String? = null,
     val accountMode: String? = null,
     val accountChoices: List<LoginAccountChoice>? = null,
+    val account: VerifiedAccountDetails? = null,
 )
+
+data class VerifiedAccountDetails(
+    val login: String,
+    val server: String,
+    val mode: String,
+    val currency: String?,
+    val balance: Double?,
+    val equity: Double?,
+    val freeMargin: Double?,
+    val marginLevel: Double?,
+    val leverage: Int?,
+    val retrievedAtMs: Long,
+    val positions: List<JSONObject>? = null,
+    val pendingOrders: List<JSONObject>? = null,
+    val deals: List<JSONObject>? = null,
+    val hostProfile: HostProfile? = null,
+    val engineState: String? = null,
+) {
+    fun isFreshAt(nowMs: Long, maxAgeMs: Long = 15_000L): Boolean =
+        retrievedAtMs > 0L && retrievedAtMs <= nowMs && nowMs - retrievedAtMs <= maxAgeMs
+}
 
 /** Everything the host exposes to the use case. The real adapter talks to the verified bridge; tests use a labelled fake. */
 interface ConnectBackend {
@@ -220,7 +244,11 @@ interface ConnectBackend {
 
 sealed interface ConnectOutcome {
     /** [accountMode] is what the terminal reported, never what the form implied. */
-    data class Verified(val accountMode: String, val modeMismatch: Boolean) : ConnectOutcome
+    data class Verified(
+        val accountMode: String,
+        val modeMismatch: Boolean,
+        val account: VerifiedAccountDetails? = null,
+    ) : ConnectOutcome
     data class Failed(val code: String, val sentence: String) : ConnectOutcome
     data class SelectAccount(val accounts: List<LoginAccountChoice>) : ConnectOutcome
 }
@@ -265,7 +293,11 @@ class ConnectUseCase(
                 if (reached == ConnectStage.VERIFIED) {
                     val actual = seen.accountMode?.uppercase().orEmpty()
                     if (actual != "DEMO" && actual != "LIVE") return failed("LOGIN_FAILED_UNCLASSIFIED")
-                    return ConnectOutcome.Verified(actual, modeMismatch = actual != form.mode.name)
+                    return ConnectOutcome.Verified(
+                        actual,
+                        modeMismatch = actual != form.mode.name,
+                        account = seen.account,
+                    )
                 }
                 if (clock() >= deadline) return failed("CONNECT_TIMEOUT")
                 pause(pollIntervalMs)

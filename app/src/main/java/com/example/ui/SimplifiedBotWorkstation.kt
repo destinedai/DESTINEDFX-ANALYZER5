@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -61,6 +62,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.broker.BrokerType
 import com.example.data.broker.LoginConnector
+import com.example.data.broker.LoginMode
 import com.example.data.ctrader.CTraderAccountOption
 import com.example.data.ctrader.CTraderVerifiedAccount
 import com.example.data.ctrader.CTraderSymbolMetadata
@@ -532,32 +534,44 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     if (showModernBrokerFlow) {
         MetaTraderBrokerFlow(
             secrets = secrets,
-            modeArmingPolicy = viewModel.app.modeArmingPolicy,
             context = context,
             hostProfile = mt5Snapshot?.hostProfile ?: com.example.data.broker.HostProfile.EPHEMERAL,
             onGrantAccess = { _, form ->
                 if (!secrets.isSecureStorageAvailable) {
                     "Secure storage is unavailable; cTrader authorization is blocked."
-                } else if (!secrets.saveCTraderApplication(form.appId, form.token, cTraderRedirectUri)) {
-                    "cTrader application details were not saved to encrypted storage."
                 } else {
-                    cTraderSpotwareApproved = true
-                    try {
-                        context.startActivity(Intent(
-                            Intent.ACTION_VIEW,
-                            viewModel.app.cTraderOAuthClient.authorizationUri(com.example.data.ctrader.CTraderOAuthClient.VIEW_SCOPE),
-                        ))
-                        null
-                    } catch (_: Exception) {
-                        "Could not open the cTrader authorization page."
+                    val storedSecret = if (form.token.isBlank()) {
+                        if (!AppSecurityGuard.authorizeSensitiveAction()) {
+                            return@MetaTraderBrokerFlow "REAUTHENTICATION_REQUIRED: authenticate to use the encrypted cTrader application secret"
+                        }
+                        secrets.getCTraderClientSecret()
+                    } else form.token
+                    if (storedSecret.isBlank() || !secrets.saveCTraderApplication(form.appId, storedSecret, cTraderRedirectUri)) {
+                    "cTrader application details were not saved to encrypted storage."
+                    } else {
+                        cTraderSpotwareApproved = true
+                        try {
+                            context.startActivity(Intent(
+                                Intent.ACTION_VIEW,
+                                viewModel.app.cTraderOAuthClient.authorizationUri(com.example.data.ctrader.CTraderOAuthClient.VIEW_SCOPE),
+                            ))
+                            null
+                        } catch (_: Exception) {
+                            "Could not open the cTrader authorization page."
+                        }
                     }
                 }
             },
             onConnect = { spec, form, onStage ->
                 when (spec.connector) {
-                    LoginConnector.DERIV_OPTIONS -> ConnectUseCase(
+                    LoginConnector.DERIV_OPTIONS -> {
+                        val outcome = ConnectUseCase(
                         ProviderConnectBackend(DerivOptionsLoginVerifier(secrets, viewModel.app.derivBrokerGateway))
-                    ).connect(spec, form, onStage)
+                        ).connect(spec, form, onStage)
+                        if (outcome is com.example.ui.bot.ConnectOutcome.Verified) {
+                            outcome.copy(account = outcome.account?.copy(engineState = derivBotServiceState))
+                        } else outcome
+                    }
                     LoginConnector.CTRADER -> ConnectUseCase(
                         ProviderConnectBackend(CTraderLoginVerifier(
                             secrets, viewModel.app.cTraderOAuthClient, viewModel.app.cTraderGateway,
@@ -578,14 +592,549 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     }
                 }
             },
-            onOpenModes = { showModernBrokerFlow = false },
-            onClose = { showModernBrokerFlow = false },
+            onRefreshAccount = { spec, loginForm ->
+                when (spec.connector) {
+                    LoginConnector.MT5_TERMINAL -> {
+                        val brand = spec.id.removeSuffix("_MT5")
+                        val mode = loginForm.mode.name
+                        val profile = "${brand}_${mode}"
+                        val client = MT5RemoteBridgeClient(
+                            secrets, profile, { AppSecurityGuard.authorizeSensitiveAction() },
+                            accountMode = mode, brokerBrand = brand, modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                        )
+                        val snapshot = client.state()
+                        val matchedMode = snapshot.connected && snapshot.accountVerified &&
+                            snapshot.brokerIdentityVerified && snapshot.heartbeatFresh &&
+                            snapshot.actualLogin == loginForm.login && snapshot.actualServer == loginForm.server &&
+                            snapshot.actualAccountMode == mode
+                        val verifiedMismatch = com.example.ui.bot.hasVerifiedModeMismatchEvidence(
+                            requestedMode = mode,
+                            actualMode = snapshot.actualAccountMode,
+                            requestedLogin = loginForm.login,
+                            actualLogin = snapshot.actualLogin,
+                            requestedServer = loginForm.server,
+                            actualServer = snapshot.actualServer,
+                            workerReady = snapshot.workerStatus == "READY",
+                            terminalOnline = snapshot.terminalOnline,
+                            terminalConnected = snapshot.terminalConnected,
+                            heartbeatFresh = snapshot.heartbeatFresh,
+                            brokerIdentityVerified = snapshot.brokerIdentityVerified,
+                        )
+                        if (!matchedMode && !verifiedMismatch) {
+                            null
+                        } else {
+                            val heartbeatAgeMs = snapshot.raw.optLong("heartbeat_age_seconds", 0L).coerceAtLeast(0L) * 1_000L
+                            com.example.ui.bot.VerifiedAccountDetails(
+                                login = snapshot.actualLogin,
+                                server = snapshot.actualServer,
+                                mode = snapshot.actualAccountMode,
+                                currency = snapshot.currency.takeIf { it.isNotBlank() },
+                                balance = snapshot.balance,
+                                equity = snapshot.equity,
+                                freeMargin = snapshot.freeMargin,
+                                marginLevel = snapshot.marginLevel,
+                                leverage = snapshot.leverage,
+                                retrievedAtMs = System.currentTimeMillis() - heartbeatAgeMs,
+                                positions = snapshot.positions.takeIf { snapshot.snapshotsValid },
+                                pendingOrders = snapshot.activeOrders.takeIf { snapshot.snapshotsValid },
+                                deals = snapshot.closedDeals.takeIf { snapshot.snapshotsValid },
+                                hostProfile = snapshot.hostProfile,
+                                engineState = snapshot.state,
+                            )
+                        }
+                    }
+                    LoginConnector.DERIV_OPTIONS -> {
+                        val gateway = viewModel.app.derivBrokerGateway
+                        val account = gateway.accountInfo.value
+                        val metrics = gateway.accountMetrics.value
+                        val retrievedAt = gateway.accountMetricsUpdatedAtMs.value
+                        val expectedMode = if (loginForm.mode == LoginMode.DEMO) "demo" else "real"
+                        if (gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY ||
+                            account == null || account.mode != expectedMode || account.accountType != expectedMode ||
+                            (loginForm.login.isNotBlank() && account.loginId != loginForm.login) ||
+                            (loginForm.accountId != null && account.loginId != loginForm.accountId) ||
+                            retrievedAt <= 0L || System.currentTimeMillis() - retrievedAt !in 0..15_000L ||
+                            metrics?.balance?.isFinite() != true || metrics.balance < 0.0
+                        ) {
+                            null
+                        } else {
+                            com.example.ui.bot.VerifiedAccountDetails(
+                                login = account.loginId,
+                                server = "",
+                                mode = if (expectedMode == "demo") "DEMO" else "LIVE",
+                                currency = metrics.currency,
+                                balance = metrics.balance,
+                                equity = null,
+                                freeMargin = null,
+                                marginLevel = null,
+                                leverage = null,
+                                retrievedAtMs = retrievedAt,
+                                engineState = derivBotServiceState,
+                            )
+                        }
+                    }
+                    LoginConnector.CTRADER -> CTraderLoginVerifier(
+                        secrets, viewModel.app.cTraderOAuthClient, viewModel.app.cTraderGateway,
+                    ).verify(spec, loginForm).account
+                }
+            },
+            onAccountCommand = { spec, loginForm, action, ticket ->
+                if (spec.connector == LoginConnector.MT5_TERMINAL) {
+                    val brand = spec.id.removeSuffix("_MT5")
+                    val mode = loginForm.mode.name
+                    val profile = "${brand}_${mode}"
+                    val client = MT5RemoteBridgeClient(
+                        secrets,
+                        profile,
+                        { AppSecurityGuard.authorizeSensitiveAction() },
+                        accountMode = mode,
+                        brokerBrand = brand,
+                        modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                    )
+                    when (action) {
+                        "CHECK_MODE" -> {
+                            val snapshot = client.state()
+                            val path = com.example.data.broker.ModePath.valueOf("${brand}_MT5")
+                            val identity = com.example.data.broker.ModeAccountIdentity(
+                                path,
+                                brand,
+                                snapshot.actualLogin,
+                                snapshot.actualServer,
+                                com.example.data.broker.AccountMode.valueOf(mode),
+                                secrets.getManagedMT5CredentialGeneration(profile),
+                            )
+                            val verification = com.example.data.broker.ModeReadOnlyVerification(
+                                identity,
+                                System.currentTimeMillis(),
+                                authenticatedSession = snapshot.connected && snapshot.terminalConnected,
+                                freshAccountData = snapshot.snapshotsValid,
+                                freshQuote = false,
+                                freshHeartbeat = snapshot.heartbeatFresh,
+                                accountIdentityMatched = snapshot.accountVerified && snapshot.brokerIdentityVerified &&
+                                    snapshot.actualLogin == loginForm.login && snapshot.actualServer == loginForm.server &&
+                                    snapshot.actualAccountMode == mode,
+                            )
+                            val decision = if (mode == "DEMO") {
+                                viewModel.app.modeArmingPolicy.demoDecision(
+                                    identity,
+                                    verification,
+                                    secrets.getPathDemoAcceptance(identity),
+                                    identity.credentialGeneration,
+                                )
+                            } else {
+                                viewModel.app.modeArmingPolicy.liveDecision(identity, hostProfile = snapshot.hostProfile)
+                            }
+                            "${decision.status}: ${decision.reason}"
+                        }
+                        "START" -> {
+                            val opportunity = viewModel.findBestBotOpportunity()
+                                ?: return@MetaTraderBrokerFlow "START_BLOCKED: no qualified setup is available"
+                            val config = JSONObject()
+                                .put("strategy", viewModel.selectedStrategyId.value)
+                                .put("symbols", JSONArray().put(opportunity.symbol))
+                                .put("timeframes", JSONArray().put("H1"))
+                                .put("risk_percent", 1.0)
+                                .put("max_daily_loss_percent", 2.0)
+                                .put("max_concurrent_positions", 2)
+                            val result = client.command(UUID.randomUUID().toString(), "START", config)
+                            if (result.queued) "Start requested for ${opportunity.symbol}; waiting for fresh broker acknowledgement." else result.detail
+                        }
+                        "CLOSE_POSITION_SELECTED", "CANCEL_PENDING_SELECTED" -> {
+                            val target = ticket?.takeIf { it.isNotBlank() }
+                                ?: return@MetaTraderBrokerFlow "ACTION_BLOCKED: selected broker ticket is unavailable"
+                            val config = JSONObject().put("tickets", JSONArray().put(target))
+                            val result = client.command(UUID.randomUUID().toString(), action, config)
+                            if (result.queued) "Action queued for broker confirmation." else result.detail
+                        }
+                        else -> {
+                            val result = client.command(UUID.randomUUID().toString(), action)
+                            if (result.queued) "$action requested; waiting for fresh broker acknowledgement." else result.detail
+                        }
+                    }
+                } else if (spec.connector == LoginConnector.DERIV_OPTIONS) {
+                    val gateway = viewModel.app.derivBrokerGateway
+                    val account = gateway.accountInfo.value
+                    val expectedMode = if (loginForm.mode == LoginMode.DEMO) "demo" else "real"
+                    when (action) {
+                        "CHECK_MODE" -> {
+                            if (account == null || !account.mode.equals(expectedMode, true) ||
+                                !account.accountType.equals(expectedMode, true) ||
+                                (loginForm.login.isNotBlank() && account.loginId != loginForm.login) ||
+                                (loginForm.accountId != null && account.loginId != loginForm.accountId)
+                            ) {
+                                "BLOCKED: account identity does not match the selected Deriv $expectedMode profile"
+                            } else {
+                                val now = System.currentTimeMillis()
+                                val retrievedAt = gateway.accountMetricsUpdatedAtMs.value
+                                val metrics = gateway.accountMetrics.value
+                                val freshAccount = gateway.connectionState.value == com.example.data.deriv.DerivConnectionState.READY &&
+                                    retrievedAt > 0L && retrievedAt <= now && now - retrievedAt <= 15_000L &&
+                                    metrics?.balance?.isFinite() == true && metrics.balance >= 0.0
+                                val quote = gateway.getQuote("R_100").getOrNull()
+                                val freshQuote = quote?.timestampMs?.let { it > 0L && it <= now && now - it <= 15_000L } == true
+                                val identity = com.example.data.broker.ModeAccountIdentity(
+                                    com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", account.loginId, "",
+                                    com.example.data.broker.AccountMode.valueOf(loginForm.mode.name),
+                                    account.credentialGeneration,
+                                )
+                                val verification = com.example.data.broker.ModeReadOnlyVerification(
+                                    identity, now,
+                                    authenticatedSession = gateway.connectionState.value == com.example.data.deriv.DerivConnectionState.READY,
+                                    freshAccountData = freshAccount,
+                                    freshQuote = freshQuote,
+                                    freshHeartbeat = false,
+                                    accountIdentityMatched = account.loginId == identity.accountId &&
+                                        account.mode.equals(expectedMode, true) && account.accountType.equals(expectedMode, true),
+                                )
+                                val decision = if (loginForm.mode == LoginMode.DEMO) {
+                                    viewModel.app.modeArmingPolicy.demoDecision(
+                                        identity, verification, secrets.getPathDemoAcceptance(identity),
+                                        identity.credentialGeneration, now,
+                                    )
+                                } else {
+                                    viewModel.app.modeArmingPolicy.liveDecision(
+                                        identity,
+                                        now,
+                                        mt5Snapshot?.hostProfile ?: com.example.data.broker.HostProfile.EPHEMERAL,
+                                    )
+                                }
+                                "${decision.status}: ${decision.reason}"
+                            }
+                        }
+                        "START" -> {
+                            if (loginForm.mode != LoginMode.DEMO) {
+                                "LIVE_START_BLOCKED: LIVE remains gated by ModeArmingPolicy and the existing owner execution path"
+                            } else {
+                                val current = requireNotNull(account) { "START_BLOCKED: Deriv account is unavailable" }
+                                require(current.mode.equals("demo", true) && current.accountType.equals("demo", true) &&
+                                    (loginForm.login.isBlank() || current.loginId == loginForm.login) &&
+                                    (loginForm.accountId == null || current.loginId == loginForm.accountId)
+                                ) { "START_BLOCKED: an exact authenticated Deriv DEMO account is required" }
+                                val unresolved = viewModel.app.db.derivExecutionDao().unresolved(current.loginId, "DEMO").size
+                                val ready = gateway.isAccountReadyForTrading(current, unresolved)
+                                require(ready) { "START_BLOCKED: Deriv DEMO needs fresh authenticated balance, account-matched portfolio, and clear reconciliation" }
+                                val now = System.currentTimeMillis()
+                                val quote = gateway.getQuote("R_100").getOrNull()
+                                val quoteFresh = quote?.timestampMs?.let { it > 0L && it <= now && now - it <= 15_000L } == true
+                                val identity = com.example.data.broker.ModeAccountIdentity(
+                                    com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", current.loginId, "",
+                                    com.example.data.broker.AccountMode.DEMO, current.credentialGeneration,
+                                )
+                                val verification = com.example.data.broker.ModeReadOnlyVerification(
+                                    identity, now,
+                                    authenticatedSession = gateway.connectionState.value == com.example.data.deriv.DerivConnectionState.READY,
+                                    freshAccountData = ready,
+                                    freshQuote = quoteFresh,
+                                    freshHeartbeat = false,
+                                    accountIdentityMatched = current.mode.equals("demo", true) &&
+                                        current.accountType.equals("demo", true) &&
+                                        secrets.getDerivCredentialGeneration("demo") == current.credentialGeneration,
+                                )
+                                val decision = viewModel.app.modeArmingPolicy.demoDecision(
+                                    identity, verification, secrets.getPathDemoAcceptance(identity),
+                                    secrets.getDerivCredentialGeneration("demo"), now,
+                                )
+                                require(decision.allowed && secrets.hasCurrentDerivDemoAcceptance(
+                                    current.loginId, current.currency, current.authenticatedSessionId, current.credentialGeneration,
+                                )) { "START_BLOCKED: ${decision.reason}" }
+                                if (!DerivDemoBotService.hasNotificationPermission(context)) {
+                                    val reason = "START_BLOCKED: notification permission is required for the persistent DEMO service"
+                                    DerivDemoBotService.recordStartBlocked(context, reason)
+                                    if (android.os.Build.VERSION.SDK_INT >= 33) permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    return@MetaTraderBrokerFlow reason
+                                }
+                                val opportunity = viewModel.findBestBotOpportunity()
+                                    ?: return@MetaTraderBrokerFlow "START_BLOCKED: no qualified setup is available"
+                                DerivDemoBotService.start(context, opportunity.symbol, viewModel.selectedStrategyId.value, "H1")
+                                "DEMO start requested for ${opportunity.symbol}; the foreground service will re-verify session, risk data and reconciliation."
+                            }
+                        }
+                        "PAUSE" -> {
+                            DerivDemoBotService.pause(context)
+                            "DEMO paused; monitoring continues and no new entries will be submitted."
+                        }
+                        "RESUME" -> {
+                            DerivDemoBotService.resume(context)
+                            "DEMO resume requested; the service will re-run its safety checks."
+                        }
+                        "STOP" -> {
+                            DerivDemoBotService.stop(context)
+                            viewModel.setBotStatus(false)
+                            "DEMO stop requested. Existing positions remain broker-tracked."
+                        }
+                        else -> "READ_ONLY_PROVIDER: the selected Deriv action is not available in this account flow"
+                    }
+                } else {
+                    "CTRADER_TRADING_NOT_IMPLEMENTED: cTrader account verification is read-only"
+                }
+            },
+            onEmergencyStop = { spec, loginForm ->
+                val disarmed = viewModel.app.modeArmingPolicy.emergencyStop()
+                val derivResult = runCatching {
+                    DerivDemoBotService.stop(context)
+                    secrets.invalidateDerivRealAuthorization()
+                    viewModel.setBotStatus(false)
+                    "Deriv service stop requested"
+                }.getOrElse { "Deriv service stop failed: verify and stop manually" }
+                val mt5Result = if (spec.connector == LoginConnector.MT5_TERMINAL) {
+                    runCatching {
+                        val brand = spec.id.removeSuffix("_MT5")
+                        val mode = loginForm.mode.name
+                        val client = MT5RemoteBridgeClient(
+                            secrets, "${brand}_${mode}", { AppSecurityGuard.authorizeSensitiveAction() },
+                            accountMode = mode, brokerBrand = brand, modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                        )
+                        client.command(UUID.randomUUID().toString(), "EMERGENCY_STOP")
+                    }.fold(
+                        { if (it.queued) "Selected MT5 bridge stop acknowledged" else "Selected MT5 bridge stop not acknowledged: ${it.detail.take(120)}" },
+                        { "Selected MT5 bridge stop failed; verify at the owner host" },
+                    )
+                } else "No MT5 account selected in this flow"
+                "Emergency stop requested; $disarmed LIVE lease(s) disarmed. $derivResult. $mt5Result. Existing positions were not liquidated."
+            },
+            onAcceptDemo = { spec, loginForm ->
+                when (spec.connector) {
+                    LoginConnector.MT5_TERMINAL -> {
+                        val brand = spec.id.removeSuffix("_MT5")
+                        val profile = "${brand}_DEMO"
+                        val path = com.example.data.broker.ModePath.valueOf("${brand}_MT5")
+                        val identity = com.example.data.broker.ModeAccountIdentity(
+                            path, brand,
+                            secrets.getManagedMT5AccountLogin(profile),
+                            secrets.getManagedMT5AccountServer(profile),
+                            com.example.data.broker.AccountMode.DEMO,
+                            secrets.getManagedMT5CredentialGeneration(profile),
+                        )
+                        val digest = pendingMt5DemoPassDigest
+                        require(identity.isValid() && pendingMt5DemoPassIdentity == identity && !digest.isNullOrBlank()) {
+                            "DEMO_ACCEPTANCE_BLOCKED: import and validate the matching broker-specific DEMO PASS first"
+                        }
+                        val demoClient = MT5RemoteBridgeClient(
+                            secrets, profile, { AppSecurityGuard.authorizeSensitiveAction() },
+                            accountMode = "DEMO", brokerBrand = brand, modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                        )
+                        val snapshot = demoClient.state()
+                        require(snapshot.managedState == "READY" && snapshot.accountVerified && snapshot.brokerIdentityVerified &&
+                            snapshot.heartbeatFresh && snapshot.actualLogin == identity.accountId && snapshot.actualServer == identity.server &&
+                            snapshot.actualAccountMode == "DEMO"
+                        ) { "DEMO_ACCEPTANCE_BLOCKED: fresh identity-matched DEMO heartbeat is required" }
+                        require(secrets.savePathDemoAcceptance(identity, digest)) {
+                            "DEMO_ACCEPTANCE_BLOCKED: encrypted owner acceptance could not be saved"
+                        }
+                        demoPassDigests = demoPassDigests + (brand to digest)
+                        pendingMt5DemoPassDigest = null
+                        pendingMt5DemoPassIdentity = null
+                        "DEMO_ENABLED: owner acceptance recorded for the verified $brand DEMO account"
+                    }
+                    LoginConnector.DERIV_OPTIONS -> {
+                        require(loginForm.mode == LoginMode.DEMO) { "DEMO_ACCEPTANCE_BLOCKED: verify the Deriv DEMO account first" }
+                        val gateway = viewModel.app.derivBrokerGateway
+                        val account = requireNotNull(gateway.accountInfo.value) { "DEMO_ACCEPTANCE_BLOCKED: authenticated Deriv account is unavailable" }
+                        val metrics = gateway.accountMetrics.value
+                        val now = System.currentTimeMillis()
+                        val retrievedAt = gateway.accountMetricsUpdatedAtMs.value
+                        require(gateway.connectionState.value == com.example.data.deriv.DerivConnectionState.READY &&
+                            account.mode.equals("demo", true) && account.accountType.equals("demo", true) &&
+                            (loginForm.login.isBlank() || account.loginId == loginForm.login) &&
+                            (loginForm.accountId == null || account.loginId == loginForm.accountId) &&
+                            retrievedAt > 0L && retrievedAt <= now && now - retrievedAt <= 15_000L &&
+                            metrics?.balance?.isFinite() == true && metrics.balance >= 0.0
+                        ) { "DEMO_ACCEPTANCE_BLOCKED: fresh identity-matched Deriv DEMO account data is required" }
+                        val quote = gateway.getQuote("R_100").getOrElse {
+                            throw IllegalStateException("DEMO_ACCEPTANCE_BLOCKED: fresh Deriv quote is unavailable")
+                        }
+                        require(quote.timestampMs > 0L && quote.timestampMs <= now && now - quote.timestampMs <= 15_000L) {
+                            "DEMO_ACCEPTANCE_BLOCKED: fresh Deriv quote is required"
+                        }
+                        val identity = com.example.data.broker.ModeAccountIdentity(
+                            com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", account.loginId, "",
+                            com.example.data.broker.AccountMode.DEMO, account.credentialGeneration,
+                        )
+                        val verification = com.example.data.broker.ModeReadOnlyVerification(
+                            identity, now,
+                            authenticatedSession = gateway.connectionState.value == com.example.data.deriv.DerivConnectionState.READY,
+                            freshAccountData = true,
+                            freshQuote = true,
+                            freshHeartbeat = false,
+                            accountIdentityMatched = account.loginId == identity.accountId && account.mode.equals("demo", true),
+                        )
+                        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(
+                            "${identity.fingerprint()}|$retrievedAt|${quote.timestampMs}|${metrics.balance}".toByteArray(),
+                        ).joinToString("") { "%02x".format(it) }
+                        val candidate = com.example.data.broker.ModeDemoAcceptance(identity, now, digest)
+                        val decision = viewModel.app.modeArmingPolicy.demoDecision(identity, verification, candidate, identity.credentialGeneration, now)
+                        require(decision.allowed) { "DEMO_ACCEPTANCE_BLOCKED: ${decision.reason}" }
+                        require(secrets.saveDerivDemoAcceptance(
+                            account.loginId, account.currency, account.authenticatedSessionId, account.credentialGeneration,
+                        ) && secrets.savePathDemoAcceptance(identity, digest)) {
+                            "DEMO_ACCEPTANCE_BLOCKED: encrypted Deriv acceptance could not be saved"
+                        }
+                        "DEMO_ENABLED: owner acceptance recorded for the verified Deriv DEMO account"
+                    }
+                    LoginConnector.CTRADER -> {
+                        require(loginForm.mode == LoginMode.DEMO) { "DEMO_ACCEPTANCE_BLOCKED: verify the cTrader DEMO account first" }
+                        val observation = CTraderLoginVerifier(
+                            secrets, viewModel.app.cTraderOAuthClient, viewModel.app.cTraderGateway,
+                        ).verify(spec, loginForm)
+                        val account = requireNotNull(observation.account) { "DEMO_ACCEPTANCE_BLOCKED: fresh cTrader account details are unavailable" }
+                        val accountId = requireNotNull(loginForm.accountId) { "DEMO_ACCEPTANCE_BLOCKED: select the exact cTrader account first" }
+                        val generation = secrets.getCTraderCredentialGeneration()
+                        val identity = com.example.data.broker.ModeAccountIdentity(
+                            com.example.data.broker.ModePath.CTRADER_ACCOUNT, account.server, accountId, account.server,
+                            com.example.data.broker.AccountMode.DEMO, generation,
+                        )
+                        val now = System.currentTimeMillis()
+                        val verification = com.example.data.broker.ModeReadOnlyVerification(
+                            identity, now,
+                            authenticatedSession = viewModel.app.cTraderOAuthClient.accessTokenIsFresh(now),
+                            freshAccountData = account.isFreshAt(now),
+                            freshQuote = true,
+                            freshHeartbeat = false,
+                            accountIdentityMatched = account.mode == "DEMO" && loginForm.accountId == accountId,
+                        )
+                        val digest = java.security.MessageDigest.getInstance("SHA-256")
+                            .digest("${identity.fingerprint()}|${account.retrievedAtMs}".toByteArray())
+                            .joinToString("") { "%02x".format(it) }
+                        val candidate = com.example.data.broker.ModeDemoAcceptance(identity, now, digest)
+                        val decision = viewModel.app.modeArmingPolicy.demoDecision(identity, verification, candidate, generation, now)
+                        require(decision.allowed) { "DEMO_ACCEPTANCE_BLOCKED: ${decision.reason}" }
+                        require(secrets.savePathDemoAcceptance(identity, digest)) {
+                            "DEMO_ACCEPTANCE_BLOCKED: encrypted cTrader acceptance could not be saved"
+                        }
+                        "DEMO_ENABLED: owner acceptance recorded for the verified cTrader DEMO account"
+                    }
+                }
+            },
+            onArmLive = { spec, loginForm, typedConfirmation, minimumLot ->
+                when (spec.connector) {
+                    LoginConnector.MT5_TERMINAL -> {
+                        val brand = spec.id.removeSuffix("_MT5")
+                        val profile = "${brand}_LIVE"
+                        require(loginForm.mode == LoginMode.LIVE) { "LIVE_PROFILE_REQUIRED" }
+                        val client = MT5RemoteBridgeClient(
+                            secrets, profile, { AppSecurityGuard.authorizeSensitiveAction() },
+                            accountMode = "LIVE", brokerBrand = brand, modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                        )
+                        val snapshot = client.state()
+                        val path = com.example.data.broker.ModePath.valueOf("${brand}_MT5")
+                        val liveIdentity = com.example.data.broker.ModeAccountIdentity(
+                            path, brand, snapshot.actualLogin, snapshot.actualServer,
+                            com.example.data.broker.AccountMode.LIVE, secrets.getManagedMT5CredentialGeneration(profile),
+                        )
+                        val demoProfile = "${brand}_DEMO"
+                        val demoIdentity = com.example.data.broker.ModeAccountIdentity(
+                            path, brand,
+                            secrets.getManagedMT5AccountLogin(demoProfile),
+                            secrets.getManagedMT5AccountServer(demoProfile),
+                            com.example.data.broker.AccountMode.DEMO,
+                            secrets.getManagedMT5CredentialGeneration(demoProfile),
+                        )
+                        val risk = snapshot.raw.optJSONObject("risk_controls")
+                        val firstLot = minimumLot.toDoubleOrNull()
+                        val verification = com.example.data.broker.ModeReadOnlyVerification(
+                            liveIdentity, System.currentTimeMillis(),
+                            authenticatedSession = snapshot.connected && snapshot.terminalConnected,
+                            freshAccountData = snapshot.snapshotsValid,
+                            freshQuote = false,
+                            freshHeartbeat = snapshot.heartbeatFresh,
+                            accountIdentityMatched = snapshot.accountVerified && snapshot.brokerIdentityVerified &&
+                                snapshot.actualLogin == loginForm.login && snapshot.actualServer == loginForm.server &&
+                                snapshot.actualAccountMode == "LIVE" && snapshot.accessType == "MASTER",
+                        )
+                        val lease = viewModel.app.modeArmingPolicy.armLive(com.example.data.broker.LiveArmRequest(
+                            identity = liveIdentity,
+                            demoAcceptance = secrets.getPathDemoAcceptance(demoIdentity),
+                            currentDemoCredentialGeneration = demoIdentity.credentialGeneration,
+                            liveVerification = verification,
+                            typedConfirmation = typedConfirmation,
+                            ownerReauthenticated = AppSecurityGuard.authorizeSensitiveAction(),
+                            firstMinimumSizeVerified = firstLot != null && firstLot.isFinite() && firstLot > 0.0,
+                            dailyRiskClear = risk?.optBoolean("daily_loss_clear", false) == true,
+                            riskCapsClear = risk?.optBoolean("risk_caps_clear", false) == true,
+                            hostProfile = snapshot.hostProfile,
+                        )).getOrElse { throw it }
+                        try {
+                            val expiry = client.authorizeLiveSession()
+                            "LIVE_ARMED: local lease until ${lease.expiresAtMs}; bridge lease until $expiry"
+                        } catch (error: Exception) {
+                            viewModel.app.modeArmingPolicy.disarm(liveIdentity, "BRIDGE_LIVE_AUTH_FAILED")
+                            throw error
+                        }
+                    }
+                    LoginConnector.DERIV_OPTIONS -> {
+                        require(loginForm.mode == LoginMode.LIVE) { "LIVE_PROFILE_REQUIRED" }
+                        val gateway = viewModel.app.derivBrokerGateway
+                        val account = requireNotNull(gateway.accountInfo.value) { "LIVE_ARMING_BLOCKED: authenticated Deriv account is unavailable" }
+                        require(account.mode.equals("real", true) && account.accountType.equals("real", true) &&
+                            (loginForm.login.isBlank() || account.loginId == loginForm.login)
+                        ) { "LIVE_ARMING_BLOCKED: exact authenticated Deriv REAL account is required" }
+                        val unresolved = viewModel.app.db.derivExecutionDao().unresolved(account.loginId, "REAL").size
+                        val ready = gateway.isAccountReadyForTrading(account, unresolved)
+                        val quote = gateway.getQuote("R_100").getOrNull()
+                        val now = System.currentTimeMillis()
+                        val quoteFresh = quote?.timestampMs?.let { it > 0L && it <= now && now - it <= 15_000L } == true
+                        val demoGeneration = secrets.getDerivCredentialGeneration("demo")
+                        val demoIdentity = com.example.data.broker.ModeAccountIdentity(
+                            com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", account.loginId, "",
+                            com.example.data.broker.AccountMode.DEMO, demoGeneration,
+                        )
+                        val liveIdentity = com.example.data.broker.ModeAccountIdentity(
+                            com.example.data.broker.ModePath.DERIV_OPTIONS, "DERIV", account.loginId, "",
+                            com.example.data.broker.AccountMode.LIVE, account.credentialGeneration,
+                        )
+                        val verification = com.example.data.broker.ModeReadOnlyVerification(
+                            liveIdentity, now,
+                            authenticatedSession = gateway.connectionState.value == com.example.data.deriv.DerivConnectionState.READY,
+                            freshAccountData = ready,
+                            freshQuote = quoteFresh,
+                            freshHeartbeat = false,
+                            accountIdentityMatched = account.loginId.isNotBlank() &&
+                                account.mode.equals("real", true) && account.accountType.equals("real", true) &&
+                                secrets.getDerivCredentialGeneration("real") == account.credentialGeneration,
+                        )
+                        val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                            .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date(now))
+                        val dailyBaseline = secrets.getDerivDailyRiskStartingEquity(account.loginId, "REAL", day)
+                        val minimumStake = minimumLot.toDoubleOrNull()
+                        val persistentHost = mt5Snapshot?.hostProfile ?: com.example.data.broker.HostProfile.EPHEMERAL
+                        val lease = viewModel.app.modeArmingPolicy.armLive(com.example.data.broker.LiveArmRequest(
+                            identity = liveIdentity,
+                            demoAcceptance = secrets.getPathDemoAcceptance(demoIdentity),
+                            currentDemoCredentialGeneration = demoGeneration,
+                            liveVerification = verification,
+                            typedConfirmation = typedConfirmation,
+                            ownerReauthenticated = AppSecurityGuard.authorizeSensitiveAction(),
+                            firstMinimumSizeVerified = minimumStake != null && minimumStake.isFinite() && minimumStake > 0.0,
+                            dailyRiskClear = ready && dailyBaseline != null &&
+                                !secrets.isDerivDailyRiskLocked(account.loginId, "REAL", day),
+                            riskCapsClear = com.example.domain.risk.TradingSafetyLimits.MAX_TRADE_RISK_PERCENT <= 1.0 &&
+                                com.example.domain.risk.TradingSafetyLimits.MIN_REWARD_TO_RISK >= 2.0,
+                            hostProfile = persistentHost,
+                        )).getOrElse { throw it }
+                        if (!secrets.enableDerivRealExecution(
+                                true, account.loginId, account.accountType, account.currency,
+                                account.authenticatedSessionId, account.credentialGeneration,
+                            )
+                        ) {
+                            viewModel.app.modeArmingPolicy.disarm(liveIdentity, "DERIV_SESSION_LEASE_FAILED")
+                            throw IllegalStateException("Deriv's authenticated-session REAL lease could not be armed.")
+                        }
+                        "LIVE_ARMED: Deriv local lease until ${lease.expiresAtMs}. No order was sent."
+                    }
+                    LoginConnector.CTRADER -> "CTRADER_TRADING_NOT_IMPLEMENTED: cTrader actions are read-only"
+                }
+            },
+            onOpenAdvanced = { showModernBrokerFlow = false },
+            onClose = { showModernBrokerFlow = true },
         )
         return
     }
 
     Column(modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("DESTINEDFX BOT", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("LEGACY BOT TOOLS", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
+            TextButton(onClick = { showModernBrokerFlow = true }, modifier = Modifier.height(48.dp)) { Text("BACK TO BOT TAB") }
+        }
         Text("Connect an account, then let the engine scan eligible markets automatically.", color = TextSecondary, fontSize = 11.sp)
         Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CardBorder)) {
             Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

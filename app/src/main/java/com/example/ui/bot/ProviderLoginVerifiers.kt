@@ -59,6 +59,18 @@ class DerivOptionsLoginVerifier(
         return ConnectObservation(
             stage = ConnectStage.VERIFIED,
             accountMode = if (account.mode == "demo") "DEMO" else "LIVE",
+            account = VerifiedAccountDetails(
+                login = account.loginId,
+                server = "",
+                mode = if (account.mode == "demo") "DEMO" else "LIVE",
+                currency = metrics?.currency,
+                balance = balance,
+                equity = null,
+                freeMargin = null,
+                marginLevel = null,
+                leverage = null,
+                retrievedAtMs = retrievedAt,
+            ),
         )
     }
 }
@@ -131,6 +143,18 @@ class CTraderLoginVerifier(
         return ConnectObservation(
             stage = ConnectStage.VERIFIED,
             accountMode = if (verified.isLive) "LIVE" else "DEMO",
+            account = VerifiedAccountDetails(
+                login = verified.traderLogin.toString(),
+                server = verified.brokerName,
+                mode = if (verified.isLive) "LIVE" else "DEMO",
+                currency = null,
+                balance = verified.balance,
+                equity = null,
+                freeMargin = null,
+                marginLevel = null,
+                leverage = verified.leverage.takeIf { it.isFinite() && it > 0.0 }?.toInt(),
+                retrievedAtMs = verified.receivedAtMs,
+            ),
         )
     }
 

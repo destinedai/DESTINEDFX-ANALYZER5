@@ -77,6 +77,7 @@ class BrokerLoginModelTest {
         )
         assertTrue(saved.any { it.profileKey == "FBS_LIVE" && it.mode == LoginMode.LIVE })
         assertTrue(saved.any { it.profileKey == "7001" && it.login == "8001" && it.server == "Deriv" })
+        assertTrue(saved.any { it.profileKey == "V100001" && it.login == "V100001" && it.mode == LoginMode.DEMO })
     }
 
     @Test fun searchFiltersByBrandAndAliasAsTheOwnerTypes() {
@@ -209,6 +210,47 @@ class BrokerLoginModelTest {
         assertEquals(ConnectOutcome.Verified("LIVE", modeMismatch = true), useCase(backend).connect(mt5, goodForm))
     }
 
+    @Test fun verifiedAccountScreenUsesDetailsFromTheVerifiedBackend() = runBlocking {
+        val details = VerifiedAccountDetails(
+            login = "123456",
+            server = "Fixture-Demo",
+            mode = "DEMO",
+            currency = "USD",
+            balance = 1_000.0,
+            equity = 990.0,
+            freeMargin = 900.0,
+            marginLevel = 990.0,
+            leverage = 100,
+            retrievedAtMs = 10_000L,
+        )
+        val backend = FakeBackend(listOf(
+            ConnectObservation(ConnectStage.VERIFIED, accountMode = "DEMO", account = details),
+        ))
+        val outcome = useCase(backend).connect(mt5, goodForm) as ConnectOutcome.Verified
+        assertEquals("123456", outcome.account?.login)
+        assertEquals("Fixture-Demo", outcome.account?.server)
+        assertEquals(990.0, outcome.account?.equity)
+    }
+
+    @Test fun accountScreenFreshnessTurnsStaleAfterFifteenSecondsAndRejectsFutureEvidence() {
+        val details = VerifiedAccountDetails(
+            login = "123456",
+            server = "Fixture-Demo",
+            mode = "DEMO",
+            currency = "USD",
+            balance = 1_000.0,
+            equity = 1_000.0,
+            freeMargin = 1_000.0,
+            marginLevel = 0.0,
+            leverage = 100,
+            retrievedAtMs = 10_000L,
+        )
+        assertTrue(details.isFreshAt(25_000L))
+        assertFalse(details.isFreshAt(25_001L))
+        assertFalse(details.isFreshAt(9_999L))
+        assertFalse(details.copy(retrievedAtMs = 0L).isFreshAt(10_000L))
+    }
+
     @Test fun terminalModeMismatchIsComparedToSelectedModeAndReconnectUsesThatMode() = runBlocking {
         val backend = FakeBackend(listOf(ConnectObservation(ConnectStage.VERIFIED, accountMode = "DEMO")))
         val liveForm = goodForm.copy(mode = LoginMode.LIVE, type = AccessType.INVESTOR, server = "Broker-Real")
@@ -216,6 +258,41 @@ class BrokerLoginModelTest {
         assertEquals(ConnectOutcome.Verified("DEMO", modeMismatch = true), outcome)
         assertEquals(LoginMode.DEMO, LoginRules.withMode(liveForm, LoginMode.DEMO).mode)
         assertEquals(AccessType.TRADE, LoginRules.withMode(liveForm, LoginMode.DEMO).type)
+    }
+
+    @Test fun mt5ModeMismatchRequiresFreshExactIdentityAndBrokerEvidence() {
+        fun evidence(
+            actualMode: String = "LIVE",
+            actualLogin: String = "123456",
+            actualServer: String = "Fixture-Demo",
+            workerReady: Boolean = true,
+            terminalOnline: Boolean = true,
+            terminalConnected: Boolean = true,
+            heartbeatFresh: Boolean = true,
+            brokerIdentityVerified: Boolean = true,
+        ) = hasVerifiedModeMismatchEvidence(
+            requestedMode = "DEMO",
+            actualMode = actualMode,
+            requestedLogin = "123456",
+            actualLogin = actualLogin,
+            requestedServer = "Fixture-Demo",
+            actualServer = actualServer,
+            workerReady = workerReady,
+            terminalOnline = terminalOnline,
+            terminalConnected = terminalConnected,
+            heartbeatFresh = heartbeatFresh,
+            brokerIdentityVerified = brokerIdentityVerified,
+        )
+        assertTrue(evidence())
+        assertFalse(evidence(actualMode = "DEMO"))
+        assertFalse(evidence(actualMode = "UNKNOWN"))
+        assertFalse(evidence(actualLogin = "654321"))
+        assertFalse(evidence(actualServer = "Other-Server"))
+        assertFalse(evidence(workerReady = false))
+        assertFalse(evidence(terminalOnline = false))
+        assertFalse(evidence(terminalConnected = false))
+        assertFalse(evidence(heartbeatFresh = false))
+        assertFalse(evidence(brokerIdentityVerified = false))
     }
 
     @Test fun injectedProviderFixtureUsesTheSharedConnectAndAccountPickerContract() = runBlocking {
