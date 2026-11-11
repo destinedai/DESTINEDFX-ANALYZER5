@@ -37,6 +37,7 @@ grep -Fq -- 'Wine version allowed' "$ROOT/deploy/codespaces/start.sh" || fail 'W
 grep -Fq -- 'wine64 cmd /c ver' "$ROOT/scripts/linux-host/wine-probe.sh" || fail 'Wine probe smoke command missing'
 grep -Fq -- 'winecfg -v win10' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Windows 10 Wine prefix not configured'
 grep -Fq 'wine wine64 winetricks' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine packages missing'
+grep -Eq '(^|[[:space:]])gh([[:space:]\\]|$)' "$ROOT/.devcontainer/Dockerfile" || fail 'GitHub CLI package missing from Codespaces image'
 grep -Fq '99-destinedfx-ubuntu-wine' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine apt preferences missing'
 grep -Fq 'apt-mark hold wine wine64 libwine' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine package hold missing'
 grep -Fq 'WINEDEBUG=-all' "$ROOT/.devcontainer/Dockerfile" || fail 'non-interactive Wine debug environment missing'

@@ -11,7 +11,7 @@ RUN printf '%s\n' \
    'Pin-Priority: 1001' \
    > /etc/apt/preferences.d/99-destinedfx-ubuntu-wine \
    && apt-get update && apt-get install -y --no-install-recommends \
-   ca-certificates curl wget xvfb xauth x11vnc novnc websockify wine wine64 winetricks \
+   ca-certificates curl wget gh xvfb xauth x11vnc novnc websockify wine wine64 winetricks \
    python3 python3-pip python3-venv python3-dev build-essential \
    libgl1 libx11-6 libxext6 libxrender1 libxtst6 libxi6 libfreetype6 \
    && apt-mark hold wine wine64 libwine \
