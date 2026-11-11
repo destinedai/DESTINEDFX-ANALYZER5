@@ -2,6 +2,8 @@ package com.example.ui.bot
 
 import com.example.data.broker.BrokerLoginSpec
 import com.example.data.broker.BrokerLoginSpecs
+import com.example.data.broker.HostProfile
+import com.example.data.broker.LoginMode
 import com.example.data.trade.BridgeGatewayException
 import com.example.data.trade.BridgeGatewayFailure
 import kotlinx.coroutines.CancellationException
@@ -18,13 +20,18 @@ class BrokerLoginModelTest {
     private val mt5 = BrokerLoginSpecs.byId("FBS_MT5")!!
     private val derivOptions = BrokerLoginSpecs.byId("DERIV_OPTIONS")!!
     private val ctrader = BrokerLoginSpecs.byId("CTRADER")!!
-    private val goodForm = LoginForm(login = "123456", password = "fixture-secret", server = "Fixture-Demo")
+    private val goodForm = LoginForm(type = AccessType.TRADE, mode = LoginMode.DEMO, login = "123456", password = "fixture-secret", server = "Fixture-Demo")
 
-    private class FakeBackend(private val script: List<ConnectObservation>, private val failSubmit: Exception? = null) : ConnectBackend {
+    private class FakeBackend(
+        private val script: List<ConnectObservation>,
+        private val failSubmit: Exception? = null,
+        private val preflightFailure: String? = null,
+    ) : ConnectBackend {
         var submitted = 0
         private var index = 0
         override suspend fun submit(spec: BrokerLoginSpec, form: LoginForm) { failSubmit?.let { throw it }; submitted++ }
         override suspend fun observe(): ConnectObservation = script[minOf(index++, script.lastIndex)]
+        override suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm): String? = preflightFailure
     }
 
     private fun useCase(backend: ConnectBackend, timeoutMs: Long = 120_000, clockStep: Long = 0): ConnectUseCase {
@@ -91,6 +98,44 @@ class BrokerLoginModelTest {
         assertEquals(ServerModeHint.UNKNOWN, LoginRules.serverModeHint("Deriv-Server"))
     }
 
+    @Test fun modeDefaultsFromDemoOrTrialServerAndCanBeChangedByOwner() {
+        assertEquals(LoginMode.DEMO, LoginRules.modeForServer("Broker-Demo"))
+        assertEquals(LoginMode.DEMO, LoginRules.modeForServer("Broker-Trial"))
+        assertEquals(LoginMode.LIVE, LoginRules.modeForServer("Broker-Real"))
+        assertEquals(LoginMode.LIVE, LoginRules.modeForServer(""))
+        val live = LoginRules.withMode(goodForm, LoginMode.LIVE)
+        assertEquals(AccessType.INVESTOR, live.type)
+        assertEquals(LoginMode.DEMO, LoginRules.withMode(live, LoginMode.DEMO).mode)
+        assertEquals(AccessType.TRADE, LoginRules.withMode(live, LoginMode.DEMO).type)
+    }
+
+    @Test fun liveTradeAccountIsOnlySelectableOnPersistentHost() {
+        assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR),
+            LoginRules.availableTypes(mt5, LoginMode.DEMO, HostProfile.EPHEMERAL))
+        assertEquals(listOf(AccessType.INVESTOR),
+            LoginRules.availableTypes(mt5, LoginMode.LIVE, HostProfile.EPHEMERAL))
+        assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR),
+            LoginRules.availableTypes(mt5, LoginMode.LIVE, HostProfile.PERSISTENT))
+        assertEquals(listOf(AccessType.TRADE),
+            LoginRules.availableTypes(derivOptions, LoginMode.LIVE, HostProfile.PERSISTENT))
+    }
+
+    @Test fun ephemeralLiveMasterPasswordIsRejectedBeforeSubmit() = runBlocking {
+        val backend = FakeBackend(
+            listOf(ConnectObservation(ConnectStage.VERIFIED, accountMode = "LIVE")),
+            preflightFailure = "EPHEMERAL_HOST_LIVE_BLOCKED",
+        )
+        val outcome = useCase(backend).connect(mt5, goodForm.copy(mode = LoginMode.LIVE))
+        assertEquals(
+            ConnectOutcome.Failed(
+                "EPHEMERAL_HOST_LIVE_BLOCKED",
+                "LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.",
+            ),
+            outcome,
+        )
+        assertEquals(0, backend.submitted)
+    }
+
     @Test fun serverDropdownNeverGuessesAndEndsWithTypeServerName() {
         val options = ServerOptions.build(mt5, ownerHistory = listOf("Mine-Demo", ""), hostReported = listOf("Host-Demo", "Mine-Demo"))
         assertEquals(listOf("Mine-Demo", "Host-Demo"), options.filterIsInstance<ServerOption.Suggested>().map { it.value })
@@ -131,6 +176,15 @@ class BrokerLoginModelTest {
     @Test fun aDemoLookingServerThatTheTerminalReportsAsLiveIsFlaggedNotTrusted() = runBlocking {
         val backend = FakeBackend(listOf(ConnectObservation(ConnectStage.VERIFIED, accountMode = "LIVE")))
         assertEquals(ConnectOutcome.Verified("LIVE", modeMismatch = true), useCase(backend).connect(mt5, goodForm))
+    }
+
+    @Test fun terminalModeMismatchIsComparedToSelectedModeAndReconnectUsesThatMode() = runBlocking {
+        val backend = FakeBackend(listOf(ConnectObservation(ConnectStage.VERIFIED, accountMode = "DEMO")))
+        val liveForm = goodForm.copy(mode = LoginMode.LIVE, type = AccessType.INVESTOR, server = "Broker-Real")
+        val outcome = useCase(backend).connect(mt5, liveForm)
+        assertEquals(ConnectOutcome.Verified("DEMO", modeMismatch = true), outcome)
+        assertEquals(LoginMode.DEMO, LoginRules.withMode(liveForm, LoginMode.DEMO).mode)
+        assertEquals(AccessType.TRADE, LoginRules.withMode(liveForm, LoginMode.DEMO).type)
     }
 
     @Test fun verifiedWithoutATerminalModeIsNeverAccepted() = runBlocking {

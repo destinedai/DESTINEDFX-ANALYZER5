@@ -4,6 +4,8 @@ import com.example.data.broker.BrokerLoginSpec
 import com.example.data.broker.BrokerLoginSpecs
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginField
+import com.example.data.broker.LoginMode
+import com.example.data.broker.HostProfile
 import com.example.data.trade.BridgeGatewayException
 import com.example.data.trade.BridgeGatewayFailure
 import kotlinx.coroutines.delay
@@ -63,7 +65,8 @@ enum class AccessType(val label: String, val wireValue: String) {
 }
 
 data class LoginForm(
-    val type: AccessType = AccessType.TRADE,
+    val type: AccessType = AccessType.INVESTOR,
+    val mode: LoginMode = LoginMode.LIVE,
     val login: String = "",
     val password: String = "",
     val server: String = "",
@@ -87,8 +90,28 @@ object LoginRules {
         LoginConnector.CTRADER -> true // Grant access opens the provider's own consent page; no secret is typed here.
     }
 
-    fun availableTypes(spec: BrokerLoginSpec): List<AccessType> =
-        if (spec.investorAccess) AccessType.values().toList() else listOf(AccessType.TRADE)
+    fun availableTypes(
+        spec: BrokerLoginSpec,
+        mode: LoginMode = LoginMode.DEMO,
+        hostProfile: HostProfile = HostProfile.PERSISTENT,
+    ): List<AccessType> = when {
+        !spec.investorAccess -> listOf(AccessType.TRADE)
+        mode == LoginMode.LIVE && hostProfile != HostProfile.PERSISTENT -> listOf(AccessType.INVESTOR)
+        else -> AccessType.values().toList()
+    }
+
+    fun modeForServer(server: String): LoginMode =
+        if (server.contains("demo", ignoreCase = true) || server.contains("trial", ignoreCase = true)) LoginMode.DEMO
+        else LoginMode.LIVE
+
+    fun withMode(form: LoginForm, mode: LoginMode): LoginForm = form.copy(
+        mode = mode,
+        type = when {
+            mode == LoginMode.LIVE -> AccessType.INVESTOR
+            form.type == AccessType.INVESTOR -> AccessType.TRADE
+            else -> form.type
+        },
+    )
 
     /** Save password is ON by default only with a secure lock screen or biometrics; otherwise OFF, disabled, and says why. */
     fun savePasswordPolicy(secureLockAvailable: Boolean): SavePasswordPolicy =
@@ -127,7 +150,7 @@ object ConnectFailures {
         "ALGO_TRADING_DISABLED" to "Algo trading is disabled in the terminal.",
         "WEBREQUEST_NOT_ALLOWED" to "The terminal is blocking the bridge address (WebRequest not allowed).",
         "ACCOUNT_DISABLED" to "The broker reports this account as disabled.",
-        "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE accounts are blocked on the test host. Use a DEMO account.",
+        "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.",
         "CONNECT_TIMEOUT" to "The terminal did not answer in time. Retry.",
         "FORM_INCOMPLETE" to "Fill in every field first.",
         "LOGIN_FAILED_UNCLASSIFIED" to "Login failed for a reason the host could not classify.",
@@ -147,6 +170,8 @@ data class ConnectObservation(val stage: ConnectStage?, val failureCode: String?
 interface ConnectBackend {
     suspend fun submit(spec: BrokerLoginSpec, form: LoginForm)
     suspend fun observe(): ConnectObservation
+    /** A rejection happens before any credentials are submitted. */
+    suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm): String? = null
 }
 
 sealed interface ConnectOutcome {
@@ -165,6 +190,7 @@ class ConnectUseCase(
     suspend fun connect(spec: BrokerLoginSpec, form: LoginForm, onStage: (ConnectStage) -> Unit = {}): ConnectOutcome {
         if (!LoginRules.loginEnabled(spec, form)) return failed("FORM_INCOMPLETE")
         try {
+            backend.preflight(spec, form)?.let { return failed(it) }
             backend.submit(spec, form)
             onStage(ConnectStage.SENT)
             var reached = ConnectStage.SENT
@@ -176,8 +202,7 @@ class ConnectUseCase(
                 if (reached == ConnectStage.VERIFIED) {
                     val actual = seen.accountMode?.uppercase().orEmpty()
                     if (actual != "DEMO" && actual != "LIVE") return failed("LOGIN_FAILED_UNCLASSIFIED")
-                    val hint = LoginRules.serverModeHint(form.server)
-                    return ConnectOutcome.Verified(actual, modeMismatch = hint == ServerModeHint.DEMO_LIKELY && actual == "LIVE")
+                    return ConnectOutcome.Verified(actual, modeMismatch = actual != form.mode.name)
                 }
                 if (clock() >= deadline) return failed("CONNECT_TIMEOUT")
                 pause(pollIntervalMs)

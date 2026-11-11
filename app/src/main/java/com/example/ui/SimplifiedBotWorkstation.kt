@@ -531,16 +531,18 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             secrets = secrets,
             modeArmingPolicy = viewModel.app.modeArmingPolicy,
             context = context,
+            hostProfile = mt5Snapshot?.hostProfile ?: com.example.data.broker.HostProfile.EPHEMERAL,
             onConnect = { spec, form, onStage ->
                 if (spec.connector != LoginConnector.MT5_TERMINAL) {
                     ConnectOutcome.Failed("LOGIN_FAILED_UNCLASSIFIED", "This connector requires its official grant or token flow; no MT5 password was sent.")
                 } else {
                     val brand = spec.id.removeSuffix("_MT5")
+                    val mode = form.mode.name
                     val client = MT5RemoteBridgeClient(
                         secrets,
-                        "${brand}_DEMO",
+                        "${brand}_${mode}",
                         { AppSecurityGuard.authorizeSensitiveAction() },
-                        accountMode = "DEMO",
+                        accountMode = mode,
                         brokerBrand = brand,
                         modeArmingPolicy = viewModel.app.modeArmingPolicy,
                     )

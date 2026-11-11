@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.broker.BrokerLoginSpec
 import com.example.data.broker.BrokerLoginSpecs
 import com.example.data.broker.LoginConnector
+import com.example.data.broker.LoginMode
+import com.example.data.broker.HostProfile
 import com.example.data.broker.ModeArmingPolicy
 import com.example.security.SecretsManager
 import com.example.ui.theme.DarkBackground
@@ -67,6 +69,7 @@ fun MetaTraderBrokerFlow(
     secrets: SecretsManager,
     modeArmingPolicy: ModeArmingPolicy,
     context: Context,
+    hostProfile: HostProfile,
     onConnect: suspend (BrokerLoginSpec, LoginForm, (ConnectStage) -> Unit) -> ConnectOutcome,
     onOpenModes: () -> Unit,
     onClose: () -> Unit,
@@ -80,12 +83,29 @@ fun MetaTraderBrokerFlow(
     var stage by remember { mutableStateOf<ConnectStage?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     var verifiedMode by remember { mutableStateOf<String?>(null) }
+    var modeMismatch by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val rows = remember { BrokerCatalog.rows() }
     val filtered = BrokerCatalog.search(rows, query)
     val securePolicy = LoginRules.savePasswordPolicy(secrets.isSecureStorageAvailable)
     val openUrl: (String) -> Unit = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    val connect: (BrokerLoginSpec, LoginForm) -> Unit = { spec, candidate ->
+        busy = true
+        failure = null
+        stage = null
+        scope.launch {
+            when (val outcome = onConnect(spec, candidate) { stage = it }) {
+                is ConnectOutcome.Verified -> {
+                    verifiedMode = outcome.accountMode
+                    modeMismatch = outcome.modeMismatch
+                    page = FlowPage.VERIFIED
+                }
+                is ConnectOutcome.Failed -> failure = outcome.sentence
+            }
+            busy = false
+        }
+    }
     val goBack = { when (page) { FlowPage.ACCOUNTS -> onClose(); FlowPage.BROKERS -> page = FlowPage.ACCOUNTS; FlowPage.LOGIN -> page = FlowPage.BROKERS; FlowPage.VERIFIED -> page = FlowPage.ACCOUNTS } }
 
     Column(Modifier.fillMaxSize().background(DarkBackground).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -122,13 +142,32 @@ fun MetaTraderBrokerFlow(
                 Text("Open a real account", color = TextSecondary, modifier = Modifier.clickable { openUrl(spec.demoSignupUrl) }.testTag("open_real"))
                 Text("Login to an existing account", color = TextPrimary, fontSize = 18.sp)
                 if (spec.connector == LoginConnector.MT5_TERMINAL) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        LoginMode.values().forEach { mode ->
+                            val label = mode.name
+                            Text(
+                                label,
+                                color = if (form.mode == mode) Color.White else TextSecondary,
+                                modifier = Modifier.weight(1f).height(48.dp)
+                                    .background(if (form.mode == mode) LoginBlue else DarkSurfaceVariant, RoundedCornerShape(4.dp))
+                                    .clickable { form = LoginRules.withMode(form, mode) }
+                                    .testTag("login_mode_${label.lowercase()}"),
+                            )
+                        }
+                    }
                     var typeMenu by remember { mutableStateOf(false) }
                     Text("Type: ${form.type.label}", color = TextPrimary, modifier = Modifier.fillMaxWidth().clickable { typeMenu = true }.padding(12.dp).testTag("type_dropdown"))
-                    DropdownMenu(typeMenu, { typeMenu = false }) { LoginRules.availableTypes(spec).forEach { type -> DropdownMenuItem(text = { Text(type.label) }, onClick = { form = form.copy(type = type); typeMenu = false }) } }
+                    DropdownMenu(typeMenu, { typeMenu = false }) { LoginRules.availableTypes(spec, form.mode, hostProfile).forEach { type -> DropdownMenuItem(text = { Text(type.label) }, onClick = { form = form.copy(type = type); typeMenu = false }) } }
+                    if (form.mode == LoginMode.LIVE && form.type == AccessType.INVESTOR) {
+                        Text("Investor access cannot trade", color = WarningAmber, fontSize = 14.sp)
+                    }
+                    if (form.mode == LoginMode.LIVE && hostProfile != HostProfile.PERSISTENT) {
+                        Text("LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.", color = WarningAmber, fontSize = 14.sp)
+                    }
                     LoginInput("Login", form.login, { form = form.copy(login = it.filter(Char::isDigit)) }, KeyboardType.Number)
                     LoginInput("Password", form.password, { form = form.copy(password = it) }, KeyboardType.Password, true)
                     var serverMenu by remember { mutableStateOf(false) }
-                    OutlinedTextField(form.server, { form = form.copy(server = it) }, modifier = Modifier.fillMaxWidth().clickable { serverMenu = true }.testTag("server_field"), label = { Text("Server") }, singleLine = true)
+                    OutlinedTextField(form.server, { server -> form = form.copy(server = server, mode = LoginRules.modeForServer(server)) }, modifier = Modifier.fillMaxWidth().clickable { serverMenu = true }.testTag("server_field"), label = { Text("Server") }, singleLine = true)
                     DropdownMenu(serverMenu, { serverMenu = false }) { ServerOptions.build(spec, emptyList(), emptyList()).forEach { option -> if (option is ServerOption.Suggested) DropdownMenuItem(text = { Text(option.value) }, onClick = { form = form.copy(server = option.value); serverMenu = false }) else DropdownMenuItem(text = { Text("Type server name") }, onClick = { serverMenu = false }) } }
                 } else {
                     LoginInput("App ID", form.appId, { form = form.copy(appId = it) }, KeyboardType.Number)
@@ -142,17 +181,30 @@ fun MetaTraderBrokerFlow(
                 Text("Forgot password?", color = ElectricCyan, modifier = Modifier.clickable { openUrl(spec.passwordRecoveryUrl) })
                 stage?.let { Text("${it.label}...", color = ElectricCyan, modifier = Modifier.testTag("connect_progress")) }
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
-                Button(enabled = !busy && LoginRules.loginEnabled(spec, form), onClick = {
-                    busy = true; failure = null; stage = null
-                    scope.launch { when (val outcome = onConnect(spec, form) { stage = it }) { is ConnectOutcome.Verified -> { verifiedMode = outcome.accountMode; page = FlowPage.VERIFIED }; is ConnectOutcome.Failed -> failure = outcome.sentence }; busy = false } }
-                    , modifier = Modifier.fillMaxWidth().testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("LOGIN") }
+                Button(enabled = !busy && LoginRules.loginEnabled(spec, form), onClick = { connect(spec, form) },
+                    modifier = Modifier.fillMaxWidth().testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
+                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("LOGIN")
+                }
                 if (busy) TextButton(onClick = { busy = false }) { Text("CANCEL") }
             }
             FlowPage.VERIFIED -> {
                 Text("Account verified", color = ElectricCyan, fontSize = 20.sp)
-                Text("Terminal-reported mode: ${verifiedMode ?: "unverified"}", color = TextPrimary)
-                Text("Trading remains gated by DEMO acceptance and ModeArmingPolicy. LIVE is not enabled by login.", color = WarningAmber, fontSize = 12.sp)
-                Button(onClick = onOpenModes, modifier = Modifier.fillMaxWidth().testTag("open_modes"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { Text("OPEN MODES") }
+                if (modeMismatch && verifiedMode != null) {
+                    Text("Terminal reports $verifiedMode; reconnect as $verifiedMode", color = WarningAmber, modifier = Modifier.testTag("terminal_mode_mismatch"))
+                    Button(
+                        onClick = {
+                            val targetMode = LoginMode.valueOf(requireNotNull(verifiedMode))
+                            val retryForm = LoginRules.withMode(form, targetMode)
+                            form = retryForm
+                            connect(requireNotNull(selected), retryForm)
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("reconnect_reported_mode"),
+                        colors = ButtonDefaults.buttonColors(containerColor = LoginBlue),
+                    ) { Text("RECONNECT AS $verifiedMode") }
+                } else {
+                    Text("Terminal-reported mode: ${verifiedMode ?: "unverified"}", color = TextPrimary)
+                    Button(onClick = onOpenModes, modifier = Modifier.fillMaxWidth().testTag("open_modes"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { Text("OPEN MODES") }
+                }
             }
         }
     }
