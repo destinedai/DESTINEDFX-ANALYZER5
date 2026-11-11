@@ -26,6 +26,8 @@ class LoginContractParityTest {
 
     @Test fun everySharedFailureHasPlainSentence() {
         val failures = contract().getJSONArray("failures")
+        val codes = (0 until failures.length()).map { failures.getString(it) }.toSet()
+        assertEquals(ConnectFailures.knownCodes, codes)
         for (index in 0 until failures.length()) {
             val code = failures.getString(index)
             assertTrue(code, ConnectFailures.sentence(code).isNotBlank())

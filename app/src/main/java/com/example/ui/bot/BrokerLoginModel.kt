@@ -234,6 +234,14 @@ data class VerifiedAccountDetails(
         retrievedAtMs > 0L && retrievedAtMs <= nowMs && nowMs - retrievedAtMs <= maxAgeMs
 }
 
+internal fun matchesVerifiedAccountIdentity(
+    current: VerifiedAccountDetails?,
+    refreshed: VerifiedAccountDetails,
+): Boolean = current != null &&
+    refreshed.login == current.login &&
+    refreshed.server == current.server &&
+    refreshed.mode == current.mode
+
 /** Everything the host exposes to the use case. The real adapter talks to the verified bridge; tests use a labelled fake. */
 interface ConnectBackend {
     suspend fun submit(spec: BrokerLoginSpec, form: LoginForm)

@@ -21,6 +21,8 @@ jobs:
           python-version: "3.12"
       - name: Install bridge test dependencies
         run: python -m pip install -r bridge/requirements.txt
+      - name: Run shared MT5 login contract fixtures
+        run: python -m pytest -q scripts/test_login_contract.py
       - name: Run offline Deriv DEMO smoke-harness tests
         run: python -m pytest -q scripts/test_deriv_demo_smoke.py
       - name: Run Linux MT5 host runtime and recovery tests

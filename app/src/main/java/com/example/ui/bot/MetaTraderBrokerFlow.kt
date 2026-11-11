@@ -168,7 +168,7 @@ fun MetaTraderBrokerFlow(
             val spec = selected ?: break
             try {
                 onRefreshAccount(spec, form)?.let { refreshed ->
-                    if (refreshed.login == accountDetails?.login && refreshed.mode == accountDetails?.mode) {
+                    if (matchesVerifiedAccountIdentity(accountDetails, refreshed)) {
                         accountDetails = refreshed
                         accountMessage = null
                     }

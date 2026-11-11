@@ -251,6 +251,26 @@ class BrokerLoginModelTest {
         assertFalse(details.copy(retrievedAtMs = 0L).isFreshAt(10_000L))
     }
 
+    @Test fun refreshedAccountDataMustMatchLoginServerAndMode() {
+        val verified = VerifiedAccountDetails(
+            login = "123456",
+            server = "Fixture-Demo",
+            mode = "DEMO",
+            currency = "USD",
+            balance = 1_000.0,
+            equity = 1_000.0,
+            freeMargin = 900.0,
+            marginLevel = 1_000.0,
+            leverage = 100,
+            retrievedAtMs = 10_000L,
+        )
+        assertTrue(matchesVerifiedAccountIdentity(verified, verified.copy(balance = 1_100.0)))
+        assertFalse(matchesVerifiedAccountIdentity(verified, verified.copy(login = "654321")))
+        assertFalse(matchesVerifiedAccountIdentity(verified, verified.copy(server = "Other-Server")))
+        assertFalse(matchesVerifiedAccountIdentity(verified, verified.copy(mode = "LIVE")))
+        assertFalse(matchesVerifiedAccountIdentity(null, verified))
+    }
+
     @Test fun terminalModeMismatchIsComparedToSelectedModeAndReconnectUsesThatMode() = runBlocking {
         val backend = FakeBackend(listOf(ConnectObservation(ConnectStage.VERIFIED, accountMode = "DEMO")))
         val liveForm = goodForm.copy(mode = LoginMode.LIVE, type = AccessType.INVESTOR, server = "Broker-Real")
@@ -347,6 +367,52 @@ class BrokerLoginModelTest {
             waiting,
         )
         assertTrue(seenSpecs.containsAll(listOf("CTRADER:LIVE", "DERIV_OPTIONS:LIVE")))
+    }
+
+    @Test fun everyRequestedBrokerPathAndModeUsesTheSharedFixtureConnectContract() = runBlocking {
+        // FIXTURE only: exercises the common app contract, not external provider authentication.
+        val paths = listOf(
+            "DERIV_OPTIONS", "DERIV_CTRADER", "CTRADER",
+            "FBS_MT5", "EXNESS_MT5", "HFM_MT5", "DERIV_MT5",
+        ).map { BrokerLoginSpecs.byId(it)!! }
+
+        for (spec in paths) {
+            for (mode in LoginMode.values()) {
+                val form = when (spec.connector) {
+                    com.example.data.broker.LoginConnector.MT5_TERMINAL -> LoginForm(
+                        type = if (mode == LoginMode.LIVE) AccessType.INVESTOR else AccessType.TRADE,
+                        mode = mode,
+                        login = "123456",
+                        password = "fixture-secret",
+                        server = "Fixture-${mode.name}",
+                    )
+                    com.example.data.broker.LoginConnector.DERIV_OPTIONS -> LoginForm(
+                        mode = mode,
+                        appId = "fixture-app",
+                        token = "fixture-token",
+                    )
+                    com.example.data.broker.LoginConnector.CTRADER -> LoginForm(mode = mode)
+                }
+                val backend = ProviderConnectBackend(ProviderLoginVerifier { _, submitted ->
+                    if (spec.connector == com.example.data.broker.LoginConnector.CTRADER && submitted.accountId == null) {
+                        ConnectObservation(
+                            stage = null,
+                            accountChoices = listOf(LoginAccountChoice("fixture-account", "Fixture broker · ••••1234", mode)),
+                        )
+                    } else {
+                        ConnectObservation(ConnectStage.VERIFIED, accountMode = submitted.mode.name)
+                    }
+                })
+                val outcome = ConnectUseCase(backend).connect(spec, form)
+                val verified = if (spec.connector == com.example.data.broker.LoginConnector.CTRADER) {
+                    assertEquals(ConnectOutcome.SelectAccount(
+                        listOf(LoginAccountChoice("fixture-account", "Fixture broker · ••••1234", mode)),
+                    ), outcome)
+                    ConnectUseCase(backend).connect(spec, form.copy(accountId = "fixture-account"))
+                } else outcome
+                assertEquals("${spec.id}:${mode.name}", ConnectOutcome.Verified(mode.name, false), verified)
+            }
+        }
     }
 
     @Test fun verifiedWithoutATerminalModeIsNeverAccepted() = runBlocking {
