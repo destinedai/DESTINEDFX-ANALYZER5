@@ -85,6 +85,9 @@ import com.example.ui.bot.ConnectOutcome
 import com.example.ui.bot.ConnectUseCase
 import com.example.ui.bot.MT5BridgeConnectBackend
 import com.example.ui.bot.MetaTraderBrokerFlow
+import com.example.ui.bot.ProviderConnectBackend
+import com.example.ui.bot.DerivOptionsLoginVerifier
+import com.example.ui.bot.CTraderLoginVerifier
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -532,21 +535,47 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             modeArmingPolicy = viewModel.app.modeArmingPolicy,
             context = context,
             hostProfile = mt5Snapshot?.hostProfile ?: com.example.data.broker.HostProfile.EPHEMERAL,
-            onConnect = { spec, form, onStage ->
-                if (spec.connector != LoginConnector.MT5_TERMINAL) {
-                    ConnectOutcome.Failed("LOGIN_FAILED_UNCLASSIFIED", "This connector requires its official grant or token flow; no MT5 password was sent.")
+            onGrantAccess = { _, form ->
+                if (!secrets.isSecureStorageAvailable) {
+                    "Secure storage is unavailable; cTrader authorization is blocked."
+                } else if (!secrets.saveCTraderApplication(form.appId, form.token, cTraderRedirectUri)) {
+                    "cTrader application details were not saved to encrypted storage."
                 } else {
-                    val brand = spec.id.removeSuffix("_MT5")
-                    val mode = form.mode.name
-                    val client = MT5RemoteBridgeClient(
-                        secrets,
-                        "${brand}_${mode}",
-                        { AppSecurityGuard.authorizeSensitiveAction() },
-                        accountMode = mode,
-                        brokerBrand = brand,
-                        modeArmingPolicy = viewModel.app.modeArmingPolicy,
-                    )
-                    ConnectUseCase(MT5BridgeConnectBackend(client)).connect(spec, form, onStage)
+                    cTraderSpotwareApproved = true
+                    try {
+                        context.startActivity(Intent(
+                            Intent.ACTION_VIEW,
+                            viewModel.app.cTraderOAuthClient.authorizationUri(com.example.data.ctrader.CTraderOAuthClient.VIEW_SCOPE),
+                        ))
+                        null
+                    } catch (_: Exception) {
+                        "Could not open the cTrader authorization page."
+                    }
+                }
+            },
+            onConnect = { spec, form, onStage ->
+                when (spec.connector) {
+                    LoginConnector.DERIV_OPTIONS -> ConnectUseCase(
+                        ProviderConnectBackend(DerivOptionsLoginVerifier(secrets, viewModel.app.derivBrokerGateway))
+                    ).connect(spec, form, onStage)
+                    LoginConnector.CTRADER -> ConnectUseCase(
+                        ProviderConnectBackend(CTraderLoginVerifier(
+                            viewModel.app.cTraderOAuthClient, viewModel.app.cTraderGateway,
+                        ))
+                    ).connect(spec, form, onStage)
+                    LoginConnector.MT5_TERMINAL -> {
+                        val brand = spec.id.removeSuffix("_MT5")
+                        val mode = form.mode.name
+                        val client = MT5RemoteBridgeClient(
+                            secrets,
+                            "${brand}_${mode}",
+                            { AppSecurityGuard.authorizeSensitiveAction() },
+                            accountMode = mode,
+                            brokerBrand = brand,
+                            modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                        )
+                        ConnectUseCase(MT5BridgeConnectBackend(client)).connect(spec, form, onStage)
+                    }
                 }
             },
             onOpenModes = { showModernBrokerFlow = false },

@@ -62,7 +62,7 @@ import kotlinx.coroutines.launch
 
 private val LoginBlue = Color(0xFF1976D2)
 
-private enum class FlowPage { ACCOUNTS, BROKERS, LOGIN, VERIFIED }
+private enum class FlowPage { ACCOUNTS, BROKERS, LOGIN, PICK_ACCOUNT, VERIFIED }
 
 @Composable
 fun MetaTraderBrokerFlow(
@@ -70,6 +70,7 @@ fun MetaTraderBrokerFlow(
     modeArmingPolicy: ModeArmingPolicy,
     context: Context,
     hostProfile: HostProfile,
+    onGrantAccess: (BrokerLoginSpec, LoginForm) -> String?,
     onConnect: suspend (BrokerLoginSpec, LoginForm, (ConnectStage) -> Unit) -> ConnectOutcome,
     onOpenModes: () -> Unit,
     onClose: () -> Unit,
@@ -84,6 +85,8 @@ fun MetaTraderBrokerFlow(
     var failure by remember { mutableStateOf<String?>(null) }
     var verifiedMode by remember { mutableStateOf<String?>(null) }
     var modeMismatch by remember { mutableStateOf(false) }
+    var accountChoices by remember { mutableStateOf<List<LoginAccountChoice>>(emptyList()) }
+    var spotwareApprovalConfirmed by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val rows = remember { BrokerCatalog.rows() }
@@ -101,17 +104,29 @@ fun MetaTraderBrokerFlow(
                     modeMismatch = outcome.modeMismatch
                     page = FlowPage.VERIFIED
                 }
+                is ConnectOutcome.SelectAccount -> {
+                    accountChoices = outcome.accounts
+                    page = FlowPage.PICK_ACCOUNT
+                }
                 is ConnectOutcome.Failed -> failure = outcome.sentence
             }
             busy = false
         }
     }
-    val goBack = { when (page) { FlowPage.ACCOUNTS -> onClose(); FlowPage.BROKERS -> page = FlowPage.ACCOUNTS; FlowPage.LOGIN -> page = FlowPage.BROKERS; FlowPage.VERIFIED -> page = FlowPage.ACCOUNTS } }
+    val goBack = { when (page) { FlowPage.ACCOUNTS -> onClose(); FlowPage.BROKERS -> page = FlowPage.ACCOUNTS; FlowPage.LOGIN, FlowPage.PICK_ACCOUNT -> page = FlowPage.BROKERS; FlowPage.VERIFIED -> page = FlowPage.ACCOUNTS } }
 
     Column(Modifier.fillMaxSize().background(DarkBackground).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text("‹", color = TextPrimary, fontSize = 32.sp, modifier = Modifier.testTag("broker_back").clickable { goBack() })
-            Text(if (page == FlowPage.ACCOUNTS) "Accounts" else if (page == FlowPage.BROKERS) "Brokers" else selected?.displayName ?: "Account", color = TextPrimary, fontSize = 22.sp, modifier = Modifier.weight(1f).padding(start = 12.dp))
+            Text(
+                when (page) {
+                    FlowPage.ACCOUNTS -> "Accounts"
+                    FlowPage.BROKERS -> "Brokers"
+                    FlowPage.PICK_ACCOUNT -> "Select account"
+                    else -> selected?.displayName ?: "Account"
+                },
+                color = TextPrimary, fontSize = 22.sp, modifier = Modifier.weight(1f).padding(start = 12.dp),
+            )
         }
         when (page) {
             FlowPage.ACCOUNTS -> {
@@ -131,7 +146,25 @@ fun MetaTraderBrokerFlow(
                     Text(BrokerCatalog.CAUTION, color = WarningAmber, fontSize = 12.sp)
                 } else LazyColumn(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.weight(1f)) {
                     items(filtered, key = { it.specId }) { row ->
-                        BrokerRowCard(row) { selected = BrokerLoginSpecs.byId(row.specId); form = LoginForm(); failure = null; page = FlowPage.LOGIN }
+                        BrokerRowCard(row) {
+                            selected = BrokerLoginSpecs.byId(row.specId)
+                            val spec = selected
+                            form = when (spec?.connector) {
+                                LoginConnector.DERIV_OPTIONS -> LoginForm(
+                                    mode = LoginRules.modeForServer(secrets.getDerivAccountMode()),
+                                    appId = secrets.getDerivAppId(),
+                                    token = secrets.getDerivApiToken(secrets.getDerivAccountMode()),
+                                )
+                                LoginConnector.CTRADER -> LoginForm(
+                                    mode = LoginMode.LIVE,
+                                    appId = secrets.getCTraderClientId(),
+                                    token = secrets.getCTraderClientSecret(),
+                                )
+                                else -> LoginForm()
+                            }
+                            failure = null
+                            page = FlowPage.LOGIN
+                        }
                     }
                 }
                 TextButton(onClick = { manualDialog = true }, modifier = Modifier.fillMaxWidth().testTag("cant_find_broker")) { Text(BrokerCatalog.CANT_FIND, color = ElectricCyan) }
@@ -167,17 +200,83 @@ fun MetaTraderBrokerFlow(
                     LoginInput("Login", form.login, { form = form.copy(login = it.filter(Char::isDigit)) }, KeyboardType.Number)
                     LoginInput("Password", form.password, { form = form.copy(password = it) }, KeyboardType.Password, true)
                     var serverMenu by remember { mutableStateOf(false) }
-                    OutlinedTextField(form.server, { server -> form = form.copy(server = server, mode = LoginRules.modeForServer(server)) }, modifier = Modifier.fillMaxWidth().clickable { serverMenu = true }.testTag("server_field"), label = { Text("Server") }, singleLine = true)
-                    DropdownMenu(serverMenu, { serverMenu = false }) { ServerOptions.build(spec, emptyList(), emptyList()).forEach { option -> if (option is ServerOption.Suggested) DropdownMenuItem(text = { Text(option.value) }, onClick = { form = form.copy(server = option.value); serverMenu = false }) else DropdownMenuItem(text = { Text("Type server name") }, onClick = { serverMenu = false }) } }
-                } else {
-                    LoginInput("App ID", form.appId, { form = form.copy(appId = it) }, KeyboardType.Number)
+                    OutlinedTextField(
+                        form.server,
+                        { server -> form = LoginRules.withMode(form.copy(server = server), LoginRules.modeForServer(server)) },
+                        modifier = Modifier.fillMaxWidth().clickable { serverMenu = true }.testTag("server_field"),
+                        label = { Text("Server") },
+                        singleLine = true,
+                    )
+                    DropdownMenu(serverMenu, { serverMenu = false }) {
+                        ServerOptions.build(spec, emptyList(), emptyList()).forEach { option ->
+                            if (option is ServerOption.Suggested) DropdownMenuItem(
+                                text = { Text(option.value) },
+                                onClick = {
+                                    form = LoginRules.withMode(form.copy(server = option.value), LoginRules.modeForServer(option.value))
+                                    serverMenu = false
+                                },
+                            ) else DropdownMenuItem(text = { Text("Type server name") }, onClick = { serverMenu = false })
+                        }
+                    }
+                } else if (spec.connector == LoginConnector.DERIV_OPTIONS) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        LoginMode.values().forEach { mode ->
+                            val label = mode.name
+                            Text(
+                                label,
+                                color = if (form.mode == mode) Color.White else TextSecondary,
+                                modifier = Modifier.weight(1f).height(48.dp)
+                                    .background(if (form.mode == mode) LoginBlue else DarkSurfaceVariant, RoundedCornerShape(4.dp))
+                                    .clickable { form = LoginRules.withMode(form, mode) }
+                                    .testTag("login_mode_${label.lowercase()}"),
+                            )
+                        }
+                    }
+                    LoginInput("App ID", form.appId, { form = form.copy(appId = it) }, KeyboardType.Number, true)
                     LoginInput("Personal Access Token", form.token, { form = form.copy(token = it) }, KeyboardType.Password, true)
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        LoginMode.values().forEach { mode ->
+                            val label = mode.name
+                            Text(
+                                label,
+                                color = if (form.mode == mode) Color.White else TextSecondary,
+                                modifier = Modifier.weight(1f).height(48.dp)
+                                    .background(if (form.mode == mode) LoginBlue else DarkSurfaceVariant, RoundedCornerShape(4.dp))
+                                    .clickable { form = LoginRules.withMode(form, mode) }
+                                    .testTag("login_mode_${label.lowercase()}"),
+                            )
+                        }
+                    }
+                    LoginInput("Client ID", form.appId, { form = form.copy(appId = it) }, KeyboardType.Text)
+                    LoginInput("Client Secret", form.token, { form = form.copy(token = it) }, KeyboardType.Password, true)
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                        androidx.compose.material3.Checkbox(
+                            checked = spotwareApprovalConfirmed,
+                            onCheckedChange = { spotwareApprovalConfirmed = it },
+                        )
+                        Text(
+                            if (spotwareApprovalConfirmed) "Spotware approval confirmed" else "WAITING FOR SPOTWARE APPROVAL",
+                            color = if (spotwareApprovalConfirmed) ElectricCyan else WarningAmber,
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            failure = onGrantAccess(spec, form)
+                                ?: "WAITING FOR SPOTWARE APPROVAL"
+                        },
+                        enabled = spotwareApprovalConfirmed && form.appId.isNotBlank() && form.token.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().testTag("grant_access"),
+                        colors = ButtonDefaults.buttonColors(containerColor = LoginBlue),
+                    ) { Text("GRANT ACCESS") }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.Checkbox(checked = form.savePassword, enabled = securePolicy.enabled, onCheckedChange = { form = form.copy(savePassword = it) })
-                    Text("Save password", color = TextPrimary)
+                if (spec.connector != LoginConnector.CTRADER) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.Checkbox(checked = form.savePassword, enabled = securePolicy.enabled, onCheckedChange = { form = form.copy(savePassword = it) })
+                        Text(if (spec.connector == LoginConnector.DERIV_OPTIONS) "Save token" else "Save password", color = TextPrimary)
+                    }
+                    if (!securePolicy.enabled) Text(securePolicy.reason.orEmpty(), color = WarningAmber, fontSize = 11.sp)
                 }
-                if (!securePolicy.enabled) Text(securePolicy.reason.orEmpty(), color = WarningAmber, fontSize = 11.sp)
                 Text("Forgot password?", color = ElectricCyan, modifier = Modifier.clickable { openUrl(spec.passwordRecoveryUrl) })
                 stage?.let { Text("${it.label}...", color = ElectricCyan, modifier = Modifier.testTag("connect_progress")) }
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
@@ -186,6 +285,20 @@ fun MetaTraderBrokerFlow(
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("LOGIN")
                 }
                 if (busy) TextButton(onClick = { busy = false }) { Text("CANCEL") }
+            }
+            FlowPage.PICK_ACCOUNT -> {
+                val spec = selected ?: return@Column
+                accountChoices.forEach { account ->
+                    Button(
+                        onClick = {
+                            val next = form.copy(accountId = account.id, mode = account.mode)
+                            form = next
+                            connect(spec, next)
+                        },
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("provider_account_${account.id}"),
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                    ) { Text("${account.label} · ${account.mode.name}", color = TextPrimary) }
+                }
             }
             FlowPage.VERIFIED -> {
                 Text("Account verified", color = ElectricCyan, fontSize = 20.sp)

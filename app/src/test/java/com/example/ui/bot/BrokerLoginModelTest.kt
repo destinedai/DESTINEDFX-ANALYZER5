@@ -153,7 +153,8 @@ class BrokerLoginModelTest {
         listOf(
             "WRONG_CREDENTIALS", "ACCOUNT_OR_SERVER_MISMATCH", "NO_CONNECTION", "SERVER_NOT_FOUND", "TERMINAL_OFFLINE", "EA_OFFLINE",
             "ALGO_TRADING_DISABLED", "WEBREQUEST_NOT_ALLOWED", "LOGIN_FAILED_UNCLASSIFIED", "EPHEMERAL_HOST_LIVE_BLOCKED",
-            "BRIDGE_NEEDS_BROWSER_APPROVAL", "BRIDGE_URL_CHANGED",
+            "BRIDGE_NEEDS_BROWSER_APPROVAL", "BRIDGE_URL_CHANGED", "WAITING_FOR_SPOTWARE_APPROVAL",
+            "PROVIDER_AUTH_FAILED", "ACCOUNT_IDENTITY_MISMATCH", "PROVIDER_DATA_STALE", "SECURE_STORAGE_UNAVAILABLE",
         ).forEach { code ->
             assertTrue(code, ConnectFailures.knownCodes.contains(code))
             assertTrue(code, ConnectFailures.sentence(code).let { it.isNotBlank() && !it.contains("\n") })
@@ -185,6 +186,60 @@ class BrokerLoginModelTest {
         assertEquals(ConnectOutcome.Verified("DEMO", modeMismatch = true), outcome)
         assertEquals(LoginMode.DEMO, LoginRules.withMode(liveForm, LoginMode.DEMO).mode)
         assertEquals(AccessType.TRADE, LoginRules.withMode(liveForm, LoginMode.DEMO).type)
+    }
+
+    @Test fun injectedProviderFixtureUsesTheSharedConnectAndAccountPickerContract() = runBlocking {
+        // FIXTURE transport: this validates app orchestration only, not a provider login.
+        val seenSpecs = mutableListOf<String>()
+        val backend = ProviderConnectBackend(ProviderLoginVerifier { spec, form ->
+            seenSpecs += "${spec.id}:${form.mode.name}"
+            if (spec.id == "CTRADER" && form.accountId == null) {
+                ConnectObservation(
+                    stage = null,
+                    accountChoices = listOf(LoginAccountChoice("fixture-42", "Fixture broker · ••••0042", LoginMode.LIVE)),
+                )
+            } else {
+                ConnectObservation(ConnectStage.VERIFIED, accountMode = form.mode.name)
+            }
+        })
+        val selectionStages = mutableListOf<ConnectStage>()
+        val choices = ConnectUseCase(backend).connect(ctrader, LoginForm(mode = LoginMode.LIVE)) {
+            selectionStages += it
+        }
+        assertEquals(
+            ConnectOutcome.SelectAccount(
+                listOf(LoginAccountChoice("fixture-42", "Fixture broker · ••••0042", LoginMode.LIVE)),
+            ),
+            choices,
+        )
+        assertEquals(listOf(ConnectStage.SENT), selectionStages)
+        val verifiedStages = mutableListOf<ConnectStage>()
+        val verified = ConnectUseCase(backend).connect(
+            ctrader,
+            LoginForm(mode = LoginMode.LIVE, accountId = "fixture-42"),
+        ) { verifiedStages += it }
+        assertEquals(ConnectOutcome.Verified("LIVE", modeMismatch = false), verified)
+        assertEquals(listOf(ConnectStage.SENT, ConnectStage.VERIFIED), verifiedStages)
+
+        val deriv = ProviderConnectBackend(ProviderLoginVerifier { spec, form ->
+            seenSpecs += "${spec.id}:${form.mode.name}"
+            ConnectObservation(ConnectStage.VERIFIED, accountMode = "DEMO")
+        })
+        val derivOutcome = ConnectUseCase(deriv).connect(
+            derivOptions,
+            LoginForm(mode = LoginMode.LIVE, appId = "fixture-app", token = "fixture-token"),
+        )
+        assertEquals(ConnectOutcome.Verified("DEMO", modeMismatch = true), derivOutcome)
+        val waiting = ConnectUseCase(
+            ProviderConnectBackend(ProviderLoginVerifier { _, _ ->
+                throw ConnectSubmissionFailure("WAITING_FOR_SPOTWARE_APPROVAL")
+            }),
+        ).connect(ctrader, LoginForm())
+        assertEquals(
+            ConnectOutcome.Failed("WAITING_FOR_SPOTWARE_APPROVAL", "WAITING FOR SPOTWARE APPROVAL"),
+            waiting,
+        )
+        assertTrue(seenSpecs.containsAll(listOf("CTRADER:LIVE", "DERIV_OPTIONS:LIVE")))
     }
 
     @Test fun verifiedWithoutATerminalModeIsNeverAccepted() = runBlocking {

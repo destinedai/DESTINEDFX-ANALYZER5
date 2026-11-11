@@ -67,6 +67,7 @@ enum class AccessType(val label: String, val wireValue: String) {
 data class LoginForm(
     val type: AccessType = AccessType.INVESTOR,
     val mode: LoginMode = LoginMode.LIVE,
+    val accountId: String? = null,
     val login: String = "",
     val password: String = "",
     val server: String = "",
@@ -151,6 +152,11 @@ object ConnectFailures {
         "WEBREQUEST_NOT_ALLOWED" to "The terminal is blocking the bridge address (WebRequest not allowed).",
         "ACCOUNT_DISABLED" to "The broker reports this account as disabled.",
         "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.",
+        "WAITING_FOR_SPOTWARE_APPROVAL" to "WAITING FOR SPOTWARE APPROVAL",
+        "PROVIDER_AUTH_FAILED" to "Provider authorization failed. Check the grant and try again.",
+        "ACCOUNT_IDENTITY_MISMATCH" to "Provider account identity did not match the selected authorized account.",
+        "PROVIDER_DATA_STALE" to "Provider session or account data is not fresh.",
+        "SECURE_STORAGE_UNAVAILABLE" to "Secure device storage is unavailable; provider login is blocked.",
         "CONNECT_TIMEOUT" to "The terminal did not answer in time. Retry.",
         "FORM_INCOMPLETE" to "Fill in every field first.",
         "LOGIN_FAILED_UNCLASSIFIED" to "Login failed for a reason the host could not classify.",
@@ -164,7 +170,14 @@ enum class ConnectStage(val label: String) {
     SENT("Sent"), TERMINAL_LOGGING_IN("Terminal logging in"), HEARTBEAT("Heartbeat"), VERIFIED("Verified")
 }
 
-data class ConnectObservation(val stage: ConnectStage?, val failureCode: String? = null, val accountMode: String? = null)
+data class LoginAccountChoice(val id: String, val label: String, val mode: LoginMode)
+
+data class ConnectObservation(
+    val stage: ConnectStage?,
+    val failureCode: String? = null,
+    val accountMode: String? = null,
+    val accountChoices: List<LoginAccountChoice>? = null,
+)
 
 /** Everything the host exposes to the use case. The real adapter talks to the verified bridge; tests use a labelled fake. */
 interface ConnectBackend {
@@ -178,6 +191,24 @@ sealed interface ConnectOutcome {
     /** [accountMode] is what the terminal reported, never what the form implied. */
     data class Verified(val accountMode: String, val modeMismatch: Boolean) : ConnectOutcome
     data class Failed(val code: String, val sentence: String) : ConnectOutcome
+    data class SelectAccount(val accounts: List<LoginAccountChoice>) : ConnectOutcome
+}
+
+class ConnectSubmissionFailure(val code: String) : Exception(code)
+
+fun interface ProviderLoginVerifier {
+    suspend fun verify(spec: BrokerLoginSpec, form: LoginForm): ConnectObservation
+}
+
+/** Adapts injected provider transports to the shared phone-login contract. */
+class ProviderConnectBackend(private val verifier: ProviderLoginVerifier) : ConnectBackend {
+    private var observation: ConnectObservation? = null
+
+    override suspend fun submit(spec: BrokerLoginSpec, form: LoginForm) {
+        observation = verifier.verify(spec, form)
+    }
+
+    override suspend fun observe(): ConnectObservation = observation ?: ConnectObservation(null)
 }
 
 class ConnectUseCase(
@@ -198,6 +229,7 @@ class ConnectUseCase(
             while (true) {
                 val seen = backend.observe()
                 seen.failureCode?.let { return failed(it) }
+                seen.accountChoices?.takeIf { it.isNotEmpty() }?.let { return ConnectOutcome.SelectAccount(it) }
                 seen.stage?.takeIf { it.ordinal > reached.ordinal }?.let { reached = it; onStage(it) }
                 if (reached == ConnectStage.VERIFIED) {
                     val actual = seen.accountMode?.uppercase().orEmpty()
@@ -209,6 +241,8 @@ class ConnectUseCase(
             }
         } catch (e: BridgeGatewayException) {
             return failed(e.failure.name)
+        } catch (e: ConnectSubmissionFailure) {
+            return failed(e.code)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {
