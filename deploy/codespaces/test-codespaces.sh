@@ -107,7 +107,7 @@ if grep -Eq '(^|[;&|[:space:]])(kill|pkill|killall)([[:space:]]|$)' "$ROOT/scrip
 	fail 'Wine compatibility gate must not kill processes'
 fi
 mkdir -p "$TMP/gui-precondition-bin" "$TMP/gui-precondition-home"
-for tool in dirname mkdir chmod uname; do
+for tool in bash dirname mkdir chmod uname awk; do
 	ln -s "$(command -v "$tool")" "$TMP/gui-precondition-bin/$tool"
 done
 if output="$(env -u CODESPACE_NAME HOME="$TMP/gui-precondition-home" \
@@ -128,7 +128,14 @@ cat > "$TMP/gui-precondition-bin/allowed-wine/wine" <<'MOCK_ALLOWED_WINE'
 printf '%s\n' 'wine-9.0'
 MOCK_ALLOWED_WINE
 chmod +x "$TMP/gui-precondition-bin/allowed-wine/wine"
-if output="$(PATH="$TMP/gui-precondition-bin/allowed-wine:$PATH" \
+
+# Satisfy the GUI's earlier VNC-tool precondition so this case specifically
+# exercises the missing-GitHub-CLI guard without relying on host-installed tools.
+for tool in x11vnc websockify; do
+	printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/gui-precondition-bin/wine-tools/$tool"
+	chmod +x "$TMP/gui-precondition-bin/wine-tools/$tool"
+done
+if output="$(PATH="$TMP/gui-precondition-bin/wine-tools:$TMP/gui-precondition-bin/allowed-wine:$TMP/gui-precondition-bin" \
 	WINE_BIN="$TMP/gui-precondition-bin/allowed-wine/wine" \
 	CODESPACE_NAME=fixture-codespace HOME="$TMP/gui-precondition-home" \
 	DESTINEDFX_CODESPACES_STATE_DIR="$TMP/no-gh-state" \
