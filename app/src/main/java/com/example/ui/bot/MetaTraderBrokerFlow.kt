@@ -131,10 +131,54 @@ fun MetaTraderBrokerFlow(
         when (page) {
             FlowPage.ACCOUNTS -> {
                 Text("Saved accounts", color = TextSecondary, fontSize = 14.sp)
-                val saved = BrokerLoginSpecs.all.filter { it.id.endsWith("_MT5") && secrets.getManagedMT5AccountLogin("${it.id.removeSuffix("_MT5")}_DEMO").isNotBlank() }
+                val saved = SavedLoginAccounts.build(
+                    secrets.getManagedMT5AccountRegistry(),
+                    secrets.getBrokerAccountProfiles(),
+                )
                 if (saved.isEmpty()) Text("No saved accounts. Add a broker to connect.", color = TextSecondary, modifier = Modifier.testTag("accounts_empty"))
-                saved.forEach { spec ->
-                    AccountRow(spec, secrets.getManagedMT5AccountLogin("${spec.id.removeSuffix("_MT5")}_DEMO")) { selected = spec; page = FlowPage.LOGIN }
+                saved.forEach { account ->
+                    AccountRow(account) {
+                        selected = account.spec
+                        form = when (account.spec.connector) {
+                            LoginConnector.MT5_TERMINAL -> {
+                                val accessType = AccessType.values().firstOrNull {
+                                    it.wireValue == secrets.getManagedMT5AccountAccessType(account.profileKey)
+                                } ?: AccessType.INVESTOR
+                                val passwordSaved = secrets.isManagedMT5AccountPasswordSaveEnabled(account.profileKey)
+                                LoginForm(
+                                    type = accessType,
+                                    mode = account.mode,
+                                    login = account.login,
+                                    password = if (passwordSaved && com.example.security.AppSecurityGuard.authorizeSensitiveAction()) {
+                                        secrets.getManagedMT5AccountPassword(account.profileKey)
+                                    } else "",
+                                    server = account.server,
+                                    savePassword = passwordSaved,
+                                )
+                            }
+                            LoginConnector.DERIV_OPTIONS -> {
+                                val mode = if (account.mode == LoginMode.DEMO) "demo" else "real"
+                                LoginForm(
+                                    mode = account.mode,
+                                    accountId = account.profileKey,
+                                    login = account.login,
+                                    appId = secrets.getDerivAppId(),
+                                    token = if (secrets.isDerivApiTokenSaveEnabled()) secrets.getDerivApiToken(mode) else "",
+                                    savePassword = secrets.isDerivApiTokenSaveEnabled(),
+                                )
+                            }
+                            LoginConnector.CTRADER -> LoginForm(
+                                mode = account.mode,
+                                accountId = account.profileKey,
+                                login = account.login,
+                                server = account.server,
+                                appId = secrets.getCTraderClientId(),
+                                token = secrets.getCTraderClientSecret(),
+                            )
+                        }
+                        failure = null
+                        page = FlowPage.LOGIN
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 Button(onClick = { page = FlowPage.BROKERS }, modifier = Modifier.fillMaxWidth().testTag("add_account"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { Text("ADD ACCOUNT") }
@@ -172,7 +216,7 @@ fun MetaTraderBrokerFlow(
             FlowPage.LOGIN -> {
                 val spec = selected ?: return@Column
                 Text("Open a demo account", color = TextPrimary, modifier = Modifier.clickable { openUrl(spec.demoSignupUrl) }.testTag("open_demo"))
-                Text("Open a real account", color = TextSecondary, modifier = Modifier.clickable { openUrl(spec.demoSignupUrl) }.testTag("open_real"))
+                Text("Open a real account", color = TextSecondary, modifier = Modifier.clickable { openUrl(spec.realAccountUrl) }.testTag("open_real"))
                 Text("Login to an existing account", color = TextPrimary, fontSize = 18.sp)
                 if (spec.connector == LoginConnector.MT5_TERMINAL) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -324,6 +368,29 @@ fun MetaTraderBrokerFlow(
     if (manualDialog) AlertDialog(onDismissRequest = { manualDialog = false }, title = { Text("Find your broker") }, text = { OutlinedTextField(manualName, { manualName = it }, label = { Text("Company or server name") }, singleLine = true) }, confirmButton = { TextButton(onClick = { ManualBrokerProfile.create(manualName); manualDialog = false; manualName = "" }) { Text("SAVE") } }, dismissButton = { TextButton(onClick = { manualDialog = false }) { Text("CANCEL") } })
 }
 
-@Composable private fun AccountRow(spec: BrokerLoginSpec, login: String, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable { onClick() }.testTag("saved_account_${spec.id}"), colors = CardDefaults.cardColors(containerColor = DarkSurface)) { Column(Modifier.padding(14.dp)) { Text(spec.displayName, color = TextPrimary); Text("$login · saved account", color = TextSecondary, fontSize = 12.sp) } } }
+@Composable
+private fun AccountRow(account: SavedLoginAccount, onClick: () -> Unit) {
+    val testKey = "${account.spec.id}_${account.mode.name}_${account.profileKey}".replace(Regex("[^A-Za-z0-9_-]"), "_")
+    val brokerName = if (account.spec.id == "CTRADER" && account.server.isNotBlank()) account.server else account.spec.displayName
+    Card(
+        Modifier.fillMaxWidth().height(64.dp).clickable { onClick() }.testTag("saved_account_$testKey"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column {
+                Text(brokerName, color = TextPrimary)
+                Text(maskSavedLogin(account.login), color = TextSecondary, fontSize = 12.sp)
+            }
+            Text(account.mode.name, color = ElectricCyan, fontSize = 12.sp)
+        }
+    }
+}
+
+private fun maskSavedLogin(value: String): String =
+    if (value.length <= 4) "••••" else "••••${value.takeLast(4)}"
 @Composable private fun BrokerRowCard(row: BrokerRow, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable { onClick() }.testTag("broker_${row.specId}"), colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(0.dp)) { Row(Modifier.padding(vertical = 12.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text(row.title.take(1), color = ElectricCyan, fontSize = 20.sp, modifier = Modifier.size(36.dp)); Column { Text(row.title, color = TextPrimary); Text(row.subtitle, color = ElectricCyan, fontSize = 12.sp) } } } }
 @Composable private fun LoginInput(label: String, value: String, onValue: (String) -> Unit, keyboard: KeyboardType, secret: Boolean = false) { OutlinedTextField(value, onValue, modifier = Modifier.fillMaxWidth().testTag("field_${label.replace(" ", "_").lowercase()}"), label = { Text(label) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = keyboard), visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None) }

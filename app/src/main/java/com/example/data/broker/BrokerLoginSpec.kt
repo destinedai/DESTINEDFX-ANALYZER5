@@ -25,6 +25,7 @@ data class BrokerLoginSpec(
     val investorAccess: Boolean,
     val connectedEvidence: Set<String>,
     val demoSignupUrl: String,
+    val realAccountUrl: String,
     val passwordRecoveryUrl: String,
     val sourceUrls: List<String>,
     val serverSuggestions: List<ServerSuggestion>,
@@ -37,12 +38,21 @@ data class BrokerLoginSpec(
         require(fields.all { fieldLabels[it].orEmpty().isNotBlank() })
         require(modes.isNotEmpty())
         require(connectedEvidence.isNotEmpty())
+        require(realAccountUrl.isNotBlank())
         require(sourceUrls.isNotEmpty())
         require(serverSuggestions.all { it.source != ServerSuggestionSource.OFFICIAL_PAGE || !it.sourceUrl.isNullOrBlank() })
         require(companyAliases.isNotEmpty())
         require(capabilityRow.isNotBlank())
     }
 }
+
+data class SavedBrokerAccountProfile(
+    val specId: String,
+    val accountId: String,
+    val server: String,
+    val mode: LoginMode,
+    val login: String = accountId,
+)
 
 object BrokerLoginSpecs {
     private const val DERIV_AUTH = "https://developers.deriv.com/docs/intro/authentication/"
@@ -60,6 +70,7 @@ object BrokerLoginSpecs {
     private const val HFM_LOGIN = "https://my.hfm.com/int/en/login"
     private const val CTRADER_AUTH = "https://help.ctrader.com/open-api/account-authentication/"
     private const val CTRADER_HOME = "https://www.ctrader.com/"
+    private const val CTRADER_BROKERS = "https://ctrader.com/brokers/"
     private const val CTRADER_LOGIN = "https://id.ctrader.com/"
     private const val MT5_PYTHON_INIT = "https://www.mql5.com/en/docs/python_metatrader5/mt5initialize_py"
     private const val MT5_PYTHON_LOGIN = "https://www.mql5.com/en/docs/python_metatrader5/mt5login_py"
@@ -88,15 +99,17 @@ object BrokerLoginSpecs {
     private val noServers = emptyList<ServerSuggestion>()
     private val noAliases = listOf("Deriv", "cTrader", "Spotware")
 
-    // Official URL verification performed 2026-11-07. Login pages are the closest official
-    // recovery entry where the provider renders the password-reset action dynamically.
+    // Account entry points checked 2026-11-11 against official provider domains. Some broker
+    // portals are region-specific and require sign-in; cTrader links to Spotware's broker page.
+    // Exness and HFM blocked automated registration-page fetches, so their official home portals
+    // are used rather than guessing a registration route.
 
     val all: List<BrokerLoginSpec> = listOf(
         BrokerLoginSpec(
             id = "DERIV_OPTIONS", displayName = "Deriv Options / Multipliers", connector = LoginConnector.DERIV_OPTIONS,
             fields = derivFields, fieldLabels = derivLabels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = false,
             connectedEvidence = setOf("authenticated Deriv session", "fresh account data", "fresh quote", "account identity match"),
-            demoSignupUrl = DERIV_SIGNUP, passwordRecoveryUrl = DERIV_LOGIN, sourceUrls = listOf(DERIV_AUTH, DERIV_SIGNUP, DERIV_LOGIN),
+            demoSignupUrl = DERIV_SIGNUP, realAccountUrl = DERIV_LOGIN, passwordRecoveryUrl = DERIV_LOGIN, sourceUrls = listOf(DERIV_AUTH, DERIV_SIGNUP, DERIV_LOGIN),
             serverSuggestions = noServers, companyAliases = noAliases,
             capabilityRow = "Phone API login; read-only verification and DEMO acceptance required; LIVE remains owner-armed.",
         ),
@@ -104,7 +117,7 @@ object BrokerLoginSpecs {
             id = "DERIV_CTRADER", displayName = "Deriv cTrader", connector = LoginConnector.CTRADER,
             fields = ctraderFields, fieldLabels = ctraderLabels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("Spotware-approved app", "owner grant", "fresh account data", "fresh quote", "account identity match"),
-            demoSignupUrl = DERIV_SIGNUP, passwordRecoveryUrl = CTRADER_LOGIN, sourceUrls = listOf(CTRADER_AUTH, DERIV_SIGNUP, CTRADER_LOGIN),
+            demoSignupUrl = DERIV_SIGNUP, realAccountUrl = DERIV_LOGIN, passwordRecoveryUrl = CTRADER_LOGIN, sourceUrls = listOf(CTRADER_AUTH, DERIV_SIGNUP, DERIV_LOGIN, CTRADER_LOGIN),
             serverSuggestions = noServers, companyAliases = noAliases,
             capabilityRow = "cTrader Open API grant flow; account access is unverified until Spotware approval and owner consent succeed.",
         ),
@@ -112,7 +125,7 @@ object BrokerLoginSpecs {
             id = "DERIV_MT5", displayName = "Deriv MT5", connector = LoginConnector.MT5_TERMINAL,
             fields = mt5Fields, fieldLabels = mt5Labels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("fresh EA heartbeat", "exact login", "exact server", "company alias match", "terminal mode match"),
-            demoSignupUrl = DERIV_SIGNUP, passwordRecoveryUrl = DERIV_LOGIN, sourceUrls = listOf(DERIV_SIGNUP, DERIV_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
+            demoSignupUrl = DERIV_SIGNUP, realAccountUrl = DERIV_LOGIN, passwordRecoveryUrl = DERIV_LOGIN, sourceUrls = listOf(DERIV_SIGNUP, DERIV_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
             serverSuggestions = mt5Servers("DERIV"), companyAliases = mt5Aliases("DERIV"),
             capabilityRow = "Owner-hosted genuine MT5 terminal; Android does not log into MT5 directly.",
         ),
@@ -120,7 +133,7 @@ object BrokerLoginSpecs {
             id = "FBS_MT5", displayName = "FBS MT5", connector = LoginConnector.MT5_TERMINAL,
             fields = mt5Fields, fieldLabels = mt5Labels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("fresh EA heartbeat", "exact login", "exact server", "company alias match", "terminal mode match"),
-            demoSignupUrl = FBS_SIGNUP, passwordRecoveryUrl = FBS_LOGIN, sourceUrls = listOf(FBS_SIGNUP, FBS_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
+            demoSignupUrl = FBS_SIGNUP, realAccountUrl = FBS_HOME, passwordRecoveryUrl = FBS_LOGIN, sourceUrls = listOf(FBS_HOME, FBS_SIGNUP, FBS_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
             serverSuggestions = mt5Servers("FBS"), companyAliases = mt5Aliases("FBS"),
             capabilityRow = "Owner-hosted genuine MT5 terminal; exact broker-issued server is required and never guessed.",
         ),
@@ -128,7 +141,7 @@ object BrokerLoginSpecs {
             id = "EXNESS_MT5", displayName = "Exness MT5", connector = LoginConnector.MT5_TERMINAL,
             fields = mt5Fields, fieldLabels = mt5Labels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("fresh EA heartbeat", "exact login", "exact server", "company alias match", "terminal mode match"),
-            demoSignupUrl = EXNESS_SIGNUP, passwordRecoveryUrl = EXNESS_LOGIN, sourceUrls = listOf(EXNESS_SIGNUP, EXNESS_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
+            demoSignupUrl = EXNESS_SIGNUP, realAccountUrl = EXNESS_HOME, passwordRecoveryUrl = EXNESS_LOGIN, sourceUrls = listOf(EXNESS_HOME, EXNESS_SIGNUP, EXNESS_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
             serverSuggestions = mt5Servers("EXNESS"), companyAliases = mt5Aliases("EXNESS"),
             capabilityRow = "Owner-hosted genuine MT5 terminal; Exness API is not substituted for the MT5 route.",
         ),
@@ -136,7 +149,7 @@ object BrokerLoginSpecs {
             id = "HFM_MT5", displayName = "HFM MT5", connector = LoginConnector.MT5_TERMINAL,
             fields = mt5Fields, fieldLabels = mt5Labels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("fresh EA heartbeat", "exact login", "exact server", "company alias match", "terminal mode match"),
-            demoSignupUrl = HFM_SIGNUP, passwordRecoveryUrl = HFM_LOGIN, sourceUrls = listOf(HFM_SIGNUP, HFM_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
+            demoSignupUrl = HFM_SIGNUP, realAccountUrl = HFM_HOME, passwordRecoveryUrl = HFM_LOGIN, sourceUrls = listOf(HFM_HOME, HFM_SIGNUP, HFM_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
             serverSuggestions = mt5Servers("HFM"), companyAliases = mt5Aliases("HFM"),
             capabilityRow = "Owner-hosted genuine MT5 terminal; exact broker-issued server and company identity are required.",
         ),
@@ -144,7 +157,7 @@ object BrokerLoginSpecs {
             id = "CTRADER", displayName = "Generic cTrader", connector = LoginConnector.CTRADER,
             fields = ctraderFields, fieldLabels = ctraderLabels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("Spotware-approved app", "owner grant", "fresh account data", "fresh quote", "account identity match"),
-            demoSignupUrl = CTRADER_HOME, passwordRecoveryUrl = CTRADER_LOGIN, sourceUrls = listOf(CTRADER_AUTH, CTRADER_HOME, CTRADER_LOGIN),
+            demoSignupUrl = CTRADER_HOME, realAccountUrl = CTRADER_BROKERS, passwordRecoveryUrl = CTRADER_LOGIN, sourceUrls = listOf(CTRADER_AUTH, CTRADER_HOME, CTRADER_BROKERS, CTRADER_LOGIN),
             serverSuggestions = noServers, companyAliases = noAliases,
             capabilityRow = "Generic cTrader Open API grant flow; broker/account enablement remains owner-verification dependent.",
         ),

@@ -560,7 +560,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     ).connect(spec, form, onStage)
                     LoginConnector.CTRADER -> ConnectUseCase(
                         ProviderConnectBackend(CTraderLoginVerifier(
-                            viewModel.app.cTraderOAuthClient, viewModel.app.cTraderGateway,
+                            secrets, viewModel.app.cTraderOAuthClient, viewModel.app.cTraderGateway,
                         ))
                     ).connect(spec, form, onStage)
                     LoginConnector.MT5_TERMINAL -> {

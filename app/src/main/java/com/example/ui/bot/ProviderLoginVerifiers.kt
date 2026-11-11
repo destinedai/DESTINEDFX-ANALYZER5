@@ -3,6 +3,7 @@ package com.example.ui.bot
 import com.example.data.broker.BrokerLoginSpec
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginMode
+import com.example.data.broker.SavedBrokerAccountProfile
 import com.example.data.ctrader.CTraderOAuthClient
 import com.example.data.ctrader.CTraderReadOnlyGateway
 import com.example.data.deriv.DerivBrokerGateway
@@ -48,6 +49,13 @@ class DerivOptionsLoginVerifier(
         ) {
             throw ConnectSubmissionFailure("PROVIDER_DATA_STALE")
         }
+        if (!secrets.saveBrokerAccountProfile(SavedBrokerAccountProfile(
+                specId = spec.id,
+                accountId = account.loginId,
+                server = "",
+                mode = if (account.mode == "demo") LoginMode.DEMO else LoginMode.LIVE,
+            ))
+        ) throw ConnectSubmissionFailure("SECURE_STORAGE_UNAVAILABLE")
         return ConnectObservation(
             stage = ConnectStage.VERIFIED,
             accountMode = if (account.mode == "demo") "DEMO" else "LIVE",
@@ -56,6 +64,7 @@ class DerivOptionsLoginVerifier(
 }
 
 class CTraderLoginVerifier(
+    private val secrets: SecretsManager,
     private val oauth: CTraderOAuthClient,
     private val gateway: CTraderReadOnlyGateway,
 ) : ProviderLoginVerifier {
@@ -109,6 +118,16 @@ class CTraderLoginVerifier(
             true
         } == true
         if (!freshQuote) throw ConnectSubmissionFailure("PROVIDER_DATA_STALE")
+        if (!secrets.saveBrokerAccountProfile(SavedBrokerAccountProfile(
+                specId = spec.id,
+                accountId = verified.accountId.toString(),
+                server = verified.brokerName,
+                mode = if (verified.isLive) LoginMode.LIVE else LoginMode.DEMO,
+                login = verified.traderLogin.toString(),
+            ))
+        ) {
+            throw ConnectSubmissionFailure("SECURE_STORAGE_UNAVAILABLE")
+        }
         return ConnectObservation(
             stage = ConnectStage.VERIFIED,
             accountMode = if (verified.isLive) "LIVE" else "DEMO",
@@ -117,4 +136,5 @@ class CTraderLoginVerifier(
 
     private fun maskLogin(value: String): String =
         if (value.length <= 4) "••••" else "••••${value.takeLast(4)}"
+
 }

@@ -2,10 +2,12 @@ package com.example.ui.bot
 
 import com.example.data.broker.BrokerLoginSpec
 import com.example.data.broker.BrokerLoginSpecs
+import com.example.data.broker.SavedBrokerAccountProfile
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginField
 import com.example.data.broker.LoginMode
 import com.example.data.broker.HostProfile
+import com.example.data.mt5.MT5AccountSlot
 import com.example.data.trade.BridgeGatewayException
 import com.example.data.trade.BridgeGatewayFailure
 import kotlinx.coroutines.delay
@@ -20,6 +22,35 @@ data class BrokerRow(
     val companyVerified: Boolean,
     val searchTerms: List<String>,
 )
+
+data class SavedLoginAccount(
+    val spec: BrokerLoginSpec,
+    val profileKey: String,
+    val login: String,
+    val server: String,
+    val mode: LoginMode,
+)
+
+object SavedLoginAccounts {
+    fun build(
+        mt5Profiles: List<MT5AccountSlot>,
+        providerProfiles: List<SavedBrokerAccountProfile>,
+    ): List<SavedLoginAccount> {
+        val mt5 = mt5Profiles.mapNotNull { profile ->
+            val spec = BrokerLoginSpecs.byId("${profile.broker}_MT5") ?: return@mapNotNull null
+            val mode = runCatching { LoginMode.valueOf(profile.accountMode) }.getOrNull() ?: return@mapNotNull null
+            if (profile.login.isBlank()) return@mapNotNull null
+            SavedLoginAccount(spec, profile.accountId, profile.login, profile.server, mode)
+        }
+        val providers = providerProfiles.mapNotNull { profile ->
+            val spec = BrokerLoginSpecs.byId(profile.specId) ?: return@mapNotNull null
+            if (spec.connector == LoginConnector.MT5_TERMINAL || profile.login.isBlank()) return@mapNotNull null
+            SavedLoginAccount(spec, profile.accountId, profile.login, profile.server, profile.mode)
+        }
+        return (mt5 + providers).distinctBy { "${it.spec.id}:${it.profileKey}:${it.mode.name}" }
+            .sortedWith(compareBy<SavedLoginAccount> { it.spec.displayName }.thenBy { it.mode.name }.thenBy { it.login })
+    }
+}
 
 object BrokerCatalog {
     const val EMPTY_STATE = "Use search to find a company"

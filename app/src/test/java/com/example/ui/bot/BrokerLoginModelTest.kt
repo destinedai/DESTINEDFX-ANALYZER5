@@ -4,6 +4,8 @@ import com.example.data.broker.BrokerLoginSpec
 import com.example.data.broker.BrokerLoginSpecs
 import com.example.data.broker.HostProfile
 import com.example.data.broker.LoginMode
+import com.example.data.broker.SavedBrokerAccountProfile
+import com.example.data.mt5.MT5AccountSlot
 import com.example.data.trade.BridgeGatewayException
 import com.example.data.trade.BridgeGatewayFailure
 import kotlinx.coroutines.CancellationException
@@ -47,6 +49,34 @@ class BrokerLoginModelTest {
         assertEquals("FBS Markets Inc.", rows.first { it.specId == "FBS_MT5" }.title)
         rows.filter { it.specId in setOf("EXNESS_MT5", "HFM_MT5") }.forEach { assertFalse(it.companyVerified) }
         assertEquals("Exness MT5", rows.first { it.specId == "EXNESS_MT5" }.title)
+    }
+
+    @Test fun savedAccountsCombineBothMt5ModesWithProviderProfiles() {
+        fun mt5Slot(key: String, mode: String, login: String) = MT5AccountSlot(
+            accountId = key,
+            broker = "FBS",
+            platform = "MT5",
+            accountMode = mode,
+            login = login,
+            server = "Fixture-$mode",
+            accessType = "INVESTOR",
+            connected = false,
+            passwordSaved = false,
+        )
+        val saved = SavedLoginAccounts.build(
+            mt5Profiles = listOf(mt5Slot("FBS_DEMO", "DEMO", "111111"), mt5Slot("FBS_LIVE", "LIVE", "222222")),
+            providerProfiles = listOf(
+                SavedBrokerAccountProfile("DERIV_OPTIONS", "V100001", "", LoginMode.DEMO),
+                SavedBrokerAccountProfile("DERIV_CTRADER", "7001", "Deriv", LoginMode.LIVE, "8001"),
+                SavedBrokerAccountProfile("CTRADER", "9001", "Fixture broker", LoginMode.DEMO, "9011"),
+            ),
+        )
+        assertEquals(
+            setOf("FBS_MT5", "DERIV_OPTIONS", "DERIV_CTRADER", "CTRADER"),
+            saved.map { it.spec.id }.toSet(),
+        )
+        assertTrue(saved.any { it.profileKey == "FBS_LIVE" && it.mode == LoginMode.LIVE })
+        assertTrue(saved.any { it.profileKey == "7001" && it.login == "8001" && it.server == "Deriv" })
     }
 
     @Test fun searchFiltersByBrandAndAliasAsTheOwnerTypes() {

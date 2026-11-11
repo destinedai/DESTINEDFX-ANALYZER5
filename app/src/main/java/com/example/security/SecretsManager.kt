@@ -7,6 +7,8 @@ import com.example.data.deriv.DerivRealAuthorizationLease
 import com.example.data.broker.ModeAccountIdentity
 import com.example.data.broker.ModeDemoAcceptance
 import com.example.data.broker.ModeArmingAuditEvent
+import com.example.data.broker.LoginMode
+import com.example.data.broker.SavedBrokerAccountProfile
 import java.security.MessageDigest
 
 /**
@@ -72,6 +74,7 @@ class SecretsManager internal constructor(
         private const val CTRADER_ACCESS_TOKEN = "ctrader_access_token"
         private const val CTRADER_REFRESH_TOKEN = "ctrader_refresh_token"
         private const val CTRADER_ACCESS_EXPIRES_AT_MS = "ctrader_access_expires_at_ms"
+        private const val BROKER_ACCOUNT_PROFILE_PREFIX = "broker_account_profile_"
         private const val MANAGEMENT_ACCESS_TOKEN = "management_access_token"
         private const val MANAGEMENT_ACCESS_EXPIRES_AT_MS = "management_access_expires_at_ms"
         private const val MODE_DEMO_ACCEPTANCE_PREFIX = "mode_demo_acceptance_"
@@ -135,6 +138,53 @@ class SecretsManager internal constructor(
     fun getCTraderAccessToken(): String = prefs.getString(CTRADER_ACCESS_TOKEN, "").orEmpty()
     fun getCTraderRefreshToken(): String = prefs.getString(CTRADER_REFRESH_TOKEN, "").orEmpty()
     fun getCTraderAccessExpiresAtMs(): Long = prefs.getLong(CTRADER_ACCESS_EXPIRES_AT_MS, 0L)
+
+    fun saveBrokerAccountProfile(profile: SavedBrokerAccountProfile): Boolean {
+        if (!isSecureStorageAvailable || profile.specId !in setOf(
+                "DERIV_OPTIONS", "DERIV_CTRADER", "CTRADER",
+            ) || profile.accountId.isBlank() || profile.accountId.length > 128 ||
+            profile.accountId.any { it.isISOControl() } || profile.login.isBlank() || profile.login.length > 128 ||
+            profile.login.any { it.isISOControl() } || profile.server.length > 128 ||
+            profile.server.any { it.isISOControl() }
+        ) return false
+        val keyHash = sha256Hex("${profile.specId}\u0000${profile.accountId}\u0000${profile.mode.name}")
+        val value = org.json.JSONObject()
+            .put("spec_id", profile.specId)
+            .put("account_id", profile.accountId)
+            .put("login", profile.login)
+            .put("server", profile.server)
+            .put("mode", profile.mode.name)
+        return prefs.edit().putString(BROKER_ACCOUNT_PROFILE_PREFIX + keyHash, value.toString()).commit()
+    }
+
+    fun getBrokerAccountProfiles(): List<SavedBrokerAccountProfile> {
+        if (!isSecureStorageAvailable) return emptyList()
+        return prefs.all.entries.asSequence()
+            .filter { it.key.startsWith(BROKER_ACCOUNT_PROFILE_PREFIX) }
+            .mapNotNull { (key, raw) ->
+                val value = raw as? String ?: return@mapNotNull null
+                try {
+                    val json = org.json.JSONObject(value)
+                    SavedBrokerAccountProfile(
+                        specId = json.getString("spec_id"),
+                        accountId = json.getString("account_id"),
+                        server = json.optString("server"),
+                        mode = LoginMode.valueOf(json.getString("mode")),
+                        login = json.optString("login", json.getString("account_id")),
+                    ).takeIf { profile ->
+                        profile.specId in setOf("DERIV_OPTIONS", "DERIV_CTRADER", "CTRADER") &&
+                            profile.accountId.isNotBlank() &&
+                            key == BROKER_ACCOUNT_PROFILE_PREFIX +
+                            sha256Hex("${profile.specId}\u0000${profile.accountId}\u0000${profile.mode.name}")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SecretsManager", "Stored broker account profile could not be decoded.", e)
+                    null
+                }
+            }
+            .sortedWith(compareBy<SavedBrokerAccountProfile> { it.specId }.thenBy { it.mode.name }.thenBy { it.accountId })
+            .toList()
+    }
 
     /** Non-secret fingerprint of the registered cTrader application credentials. */
     fun getCTraderCredentialGeneration(): String {

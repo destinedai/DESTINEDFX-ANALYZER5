@@ -28,14 +28,24 @@ class BrokerLoginSpecTest {
             assertTrue(spec.connectedEvidence.isNotEmpty())
             assertTrue(spec.sourceUrls.isNotEmpty())
             assertTrue(spec.demoSignupUrl.startsWith("https://"))
+            assertTrue(spec.realAccountUrl.startsWith("https://"))
             assertTrue(spec.passwordRecoveryUrl.startsWith("https://"))
             assertTrue(spec.companyAliases.isNotEmpty())
             assertTrue(spec.capabilityRow.isNotBlank())
             assertTrue(spec.sourceUrls.all { it.startsWith("https://") })
+            assertTrue(spec.sourceUrls.contains(spec.realAccountUrl))
         }
         assertEquals(listOf(LoginField.LOGIN, LoginField.PASSWORD, LoginField.SERVER), BrokerLoginSpecs.byId("FBS_MT5")!!.fields)
         assertEquals(listOf(LoginField.APP_ID, LoginField.TOKEN), BrokerLoginSpecs.byId("DERIV_OPTIONS")!!.fields)
         assertEquals(listOf(LoginField.GRANT_ACCESS), BrokerLoginSpecs.byId("CTRADER")!!.fields)
+    }
+
+    @Test
+    fun realAccountLinksDoNotReuseTheDemoSignupUrl() {
+        BrokerLoginSpecs.all.forEach { spec ->
+            assertTrue(spec.id, spec.realAccountUrl != spec.demoSignupUrl)
+        }
+        assertEquals("https://ctrader.com/brokers/", BrokerLoginSpecs.byId("CTRADER")!!.realAccountUrl)
     }
 
     @Test
