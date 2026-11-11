@@ -34,7 +34,7 @@ bash deploy/codespaces/start.sh
 bash deploy/codespaces/first-run-check.sh
 ```
 
-Run `bash deploy/codespaces/gui.sh` only if headless MT5 setup reports the documented owner step. The GUI uses the private noVNC forwarding path and must not be made public. Its `VNC READY` message does not establish that the MetaTrader installer or terminal is ready.
+Run `bash deploy/codespaces/gui.sh` only if headless MT5 setup reports the documented owner step. The GUI requires authenticated GitHub CLI access so it can set port 6080 to Private before starting Xvfb, x11vnc, noVNC, or the installer. If the CLI is unavailable or visibility cannot be set, the route fails closed; set the port to Private in the Codespaces Ports panel and retry with an authenticated `gh` CLI. The port must not be made public. Its `VNC READY` message does not establish that the MetaTrader installer or terminal is ready.
 
 ## Expected startup
 

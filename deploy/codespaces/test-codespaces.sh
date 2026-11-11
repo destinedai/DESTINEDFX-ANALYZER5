@@ -56,6 +56,7 @@ grep -Fq -- 'installer-verified' "$ROOT/.devcontainer/postCreate.sh" || fail 'in
 bash "$ROOT/deploy/codespaces/first-run-check.sh" >/tmp/destinedfx-first-run-check.out 2>&1 || true
 grep -Fq -- 'SUMMARY:' /tmp/destinedfx-first-run-check.out || fail 'first-run-check summary missing'
 grep -Fq -- 'gh codespace ports visibility 6080:private' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI forwarding missing'
+grep -Fq 'cannot enforce private port 6080 visibility' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI route must fail closed without GitHub CLI'
 grep -Fq -- 'INFO: this is a private owner-assisted install route, not public exposure.' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI route notice must not report a false failure'
 if grep -Fq -- 'FAIL: this is a private owner-assisted install route, not public exposure.' "$ROOT/deploy/codespaces/gui.sh"; then fail 'private GUI route notice must not report a false failure'; fi
 pass 'official Linux wrapper and setup.exe pins are verified and the headless route is guarded'
@@ -95,7 +96,7 @@ for version in wine-9.0 wine-9.22 wine-10.0 wine-10.2; do
 	output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION="$version" bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh")" || fail "$version must be allowed"
 	grep -Fq "Wine version allowed: PASS" <<< "$output" || fail "$version must pass the guard"
 done
-for version in wine-10.3 wine-11.0 garbage; do
+for version in wine-10.3 wine-11.0 wine-8.21 garbage; do
 	if output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION="$version" bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" 2>&1)"; then
 		fail "$version must be blocked"
 	fi
@@ -105,7 +106,68 @@ done
 if grep -Eq '(^|[;&|[:space:]])(kill|pkill|killall)([[:space:]]|$)' "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh"; then
 	fail 'Wine compatibility gate must not kill processes'
 fi
-pass 'Wine compatibility gate enforces the supported version range without killing processes'
+mkdir -p "$TMP/gui-precondition-bin" "$TMP/gui-precondition-home"
+for tool in dirname mkdir chmod uname; do
+	ln -s "$(command -v "$tool")" "$TMP/gui-precondition-bin/$tool"
+done
+if output="$(env -u CODESPACE_NAME HOME="$TMP/gui-precondition-home" \
+	DESTINEDFX_CODESPACES_STATE_DIR="$TMP/no-codespace-state" \
+	bash "$ROOT/deploy/codespaces/gui.sh" 2>&1)"; then
+	fail 'GUI launcher must reject runs outside Codespaces'
+fi
+grep -Fq 'CODESPACE_NAME is unavailable' <<< "$output" || fail 'GUI launcher must report missing Codespaces context'
+mkdir -p "$TMP/gui-precondition-bin/wine-tools" "$TMP/gui-precondition-bin/allowed-wine" \
+	"$TMP/gui-precondition-state/venv/bin" "$TMP/no-gh-state/venv/bin"
+cat > "$TMP/no-gh-state/venv/bin/python" <<'MOCK_PYTHON'
+#!/usr/bin/env bash
+exit 0
+MOCK_PYTHON
+chmod +x "$TMP/no-gh-state/venv/bin/python"
+cat > "$TMP/gui-precondition-bin/allowed-wine/wine" <<'MOCK_ALLOWED_WINE'
+#!/usr/bin/env bash
+printf '%s\n' 'wine-9.0'
+MOCK_ALLOWED_WINE
+chmod +x "$TMP/gui-precondition-bin/allowed-wine/wine"
+if output="$(PATH="$TMP/gui-precondition-bin/allowed-wine:$PATH" \
+	WINE_BIN="$TMP/gui-precondition-bin/allowed-wine/wine" \
+	CODESPACE_NAME=fixture-codespace HOME="$TMP/gui-precondition-home" \
+	DESTINEDFX_CODESPACES_STATE_DIR="$TMP/no-gh-state" \
+	bash "$ROOT/deploy/codespaces/gui.sh" 2>&1)"; then
+	fail 'GUI launcher must reject runs that cannot verify private port visibility'
+fi
+grep -Fq 'GitHub CLI is unavailable' <<< "$output" || fail 'GUI launcher must require GitHub CLI for private forwarding'
+[[ ! -e "$TMP/no-gh-state/runtime/xvfb.pid" ]] || fail 'GUI launcher must not start Xvfb before confirming private forwarding'
+cat > "$TMP/gui-precondition-bin/wine-tools/wine" <<'MOCK_BLOCKED_WINE'
+#!/usr/bin/env bash
+printf '%s\n' 'wine-10.3'
+MOCK_BLOCKED_WINE
+cat > "$TMP/gui-precondition-bin/wine-tools/x11vnc" <<'MOCK_VNC'
+#!/usr/bin/env bash
+exit 0
+MOCK_VNC
+cat > "$TMP/gui-precondition-bin/wine-tools/websockify" <<'MOCK_NOVNC'
+#!/usr/bin/env bash
+exit 0
+MOCK_NOVNC
+cat > "$TMP/gui-precondition-bin/wine-tools/Xvfb" <<'MOCK_XVFB'
+#!/usr/bin/env bash
+printf 'started\n' >> "$XVFB_MARKER"
+MOCK_XVFB
+cat > "$TMP/gui-precondition-state/venv/bin/python" <<'MOCK_PYTHON'
+#!/usr/bin/env bash
+exit 0
+MOCK_PYTHON
+chmod +x "$TMP/gui-precondition-bin/wine-tools/"* "$TMP/gui-precondition-state/venv/bin/python"
+if output="$(PATH="$TMP/gui-precondition-bin/wine-tools:$PATH" \
+	WINE_BIN="$TMP/gui-precondition-bin/wine-tools/wine" \
+	CODESPACE_NAME=fixture-codespace HOME="$TMP/gui-precondition-home" \
+	XVFB_MARKER="$TMP/xvfb.started" DESTINEDFX_CODESPACES_STATE_DIR="$TMP/gui-precondition-state" \
+	bash "$ROOT/deploy/codespaces/gui.sh" 2>&1)"; then
+	fail 'GUI launcher must reject an unsupported Wine version'
+fi
+grep -Fq 'Wine version allowed check failed' <<< "$output" || fail 'GUI launcher must report unsupported Wine'
+[[ ! -e "$TMP/xvfb.started" ]] || fail 'GUI launcher must reject unsupported Wine before starting Xvfb'
+pass 'Wine allowlist and Codespaces GUI preconditions fail closed before startup'
 DESTINEDFX_CODESPACES_STATE_DIR="$TMP/state" "$ROOT/deploy/codespaces/stop.sh" | grep -q '^PASS:' || fail 'stop without state failed'
 pass 'stop safely handles empty private state'
 grep -Fq -- 'installer-gui.pid' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must clean stale GUI installer process'

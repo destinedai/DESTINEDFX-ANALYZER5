@@ -62,7 +62,8 @@ fi
 PUBLIC_HOST="${CODESPACE_NAME:-unknown}-8000.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
 if [[ "${CODESPACE_NAME:-}" != '' ]]; then
   live="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H 'Accept: application/json' -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://$PUBLIC_HOST/health/live" 2>/dev/null || true)"
-  bad="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H 'Accept: application/json' -H 'X-Tunnel-Skip-AntiPhishing-Page: true' -H 'Authorization: Bearer deliberately-invalid' "https://$PUBLIC_HOST/v1/app/state" 2>/dev/null || true)"
+  invalid_test_token=invalid-test-token
+  bad="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H 'Accept: application/json' -H 'X-Tunnel-Skip-AntiPhishing-Page: true' -H "Authorization: Bearer $invalid_test_token" "https://$PUBLIC_HOST/v1/app/state" 2>/dev/null || true)"
   none="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H 'Accept: application/json' -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://$PUBLIC_HOST/v1/app/state" 2>/dev/null || true)"
   [[ "$live" == 200 ]] && record public_health PASS "status=200" 'If this was the first browser visit, open the URL once and tap Continue.' || record public_health FAIL "status=$live" 'Open the bridge URL once in a phone browser and tap Continue, then rerun this check.'
   [[ "$bad" == 401 && "$none" == 401 ]] && record auth_rejection PASS 'bad_token=401 no_token=401' 'No action.' || record auth_rejection FAIL "bad_token=$bad no_token=$none" 'Keep the port public and inspect bridge authentication and forwarding headers.'

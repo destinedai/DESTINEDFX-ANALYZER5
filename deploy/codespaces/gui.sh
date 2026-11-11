@@ -38,6 +38,9 @@ if ! "$ROOT/scripts/linux-host/wine-guard.sh"; then
   fail 'Wine version allowed check failed; refusing to launch the installer GUI.'
   exit 1
 fi
+command -v gh >/dev/null 2>&1 || fail 'GitHub CLI is unavailable; cannot enforce private port 6080 visibility.'
+gh codespace ports visibility 6080:private -c "$CODESPACE_NAME" >/dev/null 2>&1 ||
+  fail 'Could not set port 6080 to Private; refusing to launch the installer GUI.'
 
 if ! pgrep -f '^Xvfb :99 ' >/dev/null 2>&1; then
   stop_recorded "$RUNTIME/xvfb.pid"
@@ -60,12 +63,6 @@ wait_alive Xvfb "$RUNTIME/xvfb.pid"
 wait_alive x11vnc "$RUNTIME/x11vnc.pid"
 wait_alive novnc "$RUNTIME/novnc.pid"
 printf 'PASS: VNC READY (Xvfb, x11vnc, and websockify are running); this does not verify MT5 terminal startup.\n'
-
-# Codespaces private forwarding requires the owner's authenticated browser session.
-if command -v gh >/dev/null 2>&1; then
-  gh codespace ports visibility 6080:private -c "$CODESPACE_NAME" >/dev/null 2>&1 ||
-    printf 'WARN: Could not set port visibility; verify Codespaces shows port 6080 as Private.\n' >&2
-fi
 
 if ! pgrep -f 'install-mt5.sh --gui' >/dev/null 2>&1; then
   # shellcheck disable=SC1091
