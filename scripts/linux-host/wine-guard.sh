@@ -41,7 +41,8 @@ version_allowed() {
     return 1
   fi
   [[ "$major" == 9 ]] && return 0
-  [[ "$major" == 10 && "$minor" =~ ^[012]$ ]]
+  [[ "$major" == 10 && "$minor" =~ ^[012]$ ]] && return 0
+  [[ "$major" == 11 && "$minor" == 21 ]]
 }
 
 print_report() {

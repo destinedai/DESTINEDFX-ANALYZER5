@@ -124,6 +124,9 @@ object LoginRules {
         LoginConnector.CTRADER -> true // Grant access opens the provider's own consent page; no secret is typed here.
     }
 
+    fun canSubmitLogin(spec: BrokerLoginSpec, form: LoginForm, mt5ModeHintChosen: Boolean): Boolean =
+        loginEnabled(spec, form) && (spec.connector != LoginConnector.MT5_TERMINAL || mt5ModeHintChosen)
+
     fun availableTypes(
         spec: BrokerLoginSpec,
         mode: LoginMode = LoginMode.DEMO,

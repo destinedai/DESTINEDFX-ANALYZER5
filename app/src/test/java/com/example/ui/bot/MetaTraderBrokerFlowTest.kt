@@ -3,6 +3,7 @@ package com.example.ui.bot
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -60,10 +61,12 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("add_account").performClick()
         composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
         composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
-        composeRule.onNodeWithTag("login_mode_demo").performClick()
+        composeRule.onNodeWithTag("mt5_mode_hint_notice").assertIsDisplayed()
         composeRule.onNodeWithTag("field_login").performTextInput("123456")
         composeRule.onNodeWithTag("field_password").performTextInput("fixture-password")
         composeRule.onNodeWithTag("server_field").performTextInput("Fixture-Demo")
+        composeRule.onNodeWithTag("login_button").assertIsNotEnabled()
+        composeRule.onNodeWithTag("login_mode_demo").performClick()
         composeRule.onNodeWithTag("login_button").assertIsEnabled()
         composeRule.onNodeWithTag("broker_back").performClick()
         composeRule.onNodeWithTag("broker_back").performClick()

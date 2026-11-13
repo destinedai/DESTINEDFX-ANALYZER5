@@ -226,9 +226,10 @@ def restart_ini_contents(record: dict[str, Any]) -> str:
     access = record.get("access_type", "")
     brand = record.get("broker_brand", "")
     bridge_url = record.get("bridge_url", "")
-    if not (LOGIN.fullmatch(str(login)) and SAFE_SERVER.fullmatch(str(server)) and mode in {"DEMO", "LIVE"}
+    if not (LOGIN.fullmatch(str(login)) and SAFE_SERVER.fullmatch(str(server)) and mode in {"DEMO", "LIVE", "UNVERIFIED", ""}
             and access in VALID_ACCESS and brand in SUPPORTED_BROKER_BRANDS and validate_origin(str(bridge_url))):
         raise ProvisionError("RESTART_CONFIGURATION_UNVERIFIED")
+    expected_mode = mode if mode in {"DEMO", "LIVE"} else ""
     allow_trade = "1" if access == "MASTER" else "0"
     return ("[Common]\n"
             f"Login={login}\nServer={server}\nKeepPrivate=1\nNewsEnable=0\nProxyEnable=0\n"
@@ -479,7 +480,7 @@ def validate_job(job: Any) -> dict[str, Any]:
         raise ProvisionError("INVALID_ACCOUNT")
     if access not in VALID_ACCESS:
         raise ProvisionError("INVALID_ACCESS_TYPE")
-    if mode not in {"DEMO", "LIVE"}:
+    if mode not in {"DEMO", "LIVE", "UNVERIFIED", ""}:
         raise ProvisionError("INVALID_ACCOUNT_MODE")
     brand = str(account.get("broker_brand") or "").strip().upper()
     if brand not in SUPPORTED_BROKER_BRANDS:
@@ -686,9 +687,13 @@ def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
             raise ProvisionError("INVALID_ZERO_COMMISSION_EVIDENCE")
     elif commission <= 0 or len(evidence) < 8:
         raise ProvisionError("INVALID_CONFIGURED_COST_EVIDENCE")
+    mode = account.get("account_mode", "")
+    if mode not in ("DEMO", "LIVE", "UNVERIFIED", ""):
+        raise ProvisionError("INVALID_ACCOUNT_MODE")
+    expected_mode = mode if mode in ("DEMO", "LIVE") else ""
     return (f"InpBridgeBaseURL={bridge_url}\nInpPairingCode={pairing_code}\n"
             f"InpExpectedLogin={account['login']}\nInpExpectedServer={account['server']}\n"
-            f"InpExpectedAccountMode={account['account_mode']}\n"
+            f"InpExpectedAccountMode={expected_mode}\n"
             "InpSymbols=EURUSD\nInpTimeframes=M5\nInpRiskPercent=0.25\n"
             "InpMaxDailyLossPercent=2.0\nInpMaxConcurrentPositions=2\n"
             "InpPollSeconds=5\nInpScanSeconds=10\nInpHeartbeatSeconds=5\n"

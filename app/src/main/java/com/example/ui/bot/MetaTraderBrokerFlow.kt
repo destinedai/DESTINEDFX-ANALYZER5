@@ -99,6 +99,7 @@ fun MetaTraderBrokerFlow(
     var manualDialog by remember { mutableStateOf(false) }
     var manualName by remember { mutableStateOf("") }
     var form by remember { mutableStateOf(LoginForm()) }
+    var modeHintChosen by remember { mutableStateOf(false) }
     var stage by remember { mutableStateOf<ConnectStage?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     var verifiedMode by remember { mutableStateOf<String?>(null) }
@@ -250,7 +251,8 @@ fun MetaTraderBrokerFlow(
                         saved.forEach { account ->
                             AccountRow(account) {
                         selected = account.spec
-                        form = when (account.spec.connector) {
+                            modeHintChosen = false
+                            form = when (account.spec.connector) {
                             LoginConnector.MT5_TERMINAL -> {
                                 val accessType = AccessType.values().firstOrNull {
                                     it.wireValue == secrets.getManagedMT5AccountAccessType(account.profileKey)
@@ -322,7 +324,8 @@ fun MetaTraderBrokerFlow(
                     items(filtered, key = { it.specId }) { row ->
                         BrokerRowCard(row) {
                             selected = BrokerLoginSpecs.byId(row.specId)
-                            val spec = selected
+                        modeHintChosen = false
+                        val spec = selected
                             form = when (spec?.connector) {
                                 LoginConnector.DERIV_OPTIONS -> LoginForm(
                                     mode = LoginRules.modeForServer(secrets.getDerivAccountMode()),
@@ -351,15 +354,24 @@ fun MetaTraderBrokerFlow(
                 Text("Open a real account", color = TextSecondary, modifier = Modifier.fillMaxWidth().height(48.dp).clickable { openUrl(spec.realAccountUrl) }.testTag("open_real"))
                 Text("Login to an existing account", color = TextPrimary, fontSize = 18.sp)
                 if (spec.connector == LoginConnector.MT5_TERMINAL) {
+                    Text(
+                        "Unverified connection hint only. The terminal determines the account mode after login.",
+                        color = WarningAmber,
+                        fontSize = 12.sp,
+                        modifier = Modifier.testTag("mt5_mode_hint_notice"),
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         LoginMode.values().forEach { mode ->
                             val label = mode.name
                             Text(
                                 label,
-                                color = if (form.mode == mode) Color.White else TextSecondary,
+                                color = if (modeHintChosen && form.mode == mode) Color.White else TextSecondary,
                                 modifier = Modifier.weight(1f).height(48.dp)
-                                    .background(if (form.mode == mode) LoginBlue else BrokerSurfaceVariant, RoundedCornerShape(4.dp))
-                                    .clickable { form = LoginRules.withMode(form, mode) }
+                                    .background(if (modeHintChosen && form.mode == mode) LoginBlue else BrokerSurfaceVariant, RoundedCornerShape(4.dp))
+                                    .clickable {
+                                        form = LoginRules.withMode(form, mode)
+                                        modeHintChosen = true
+                                    }
                                     .testTag("login_mode_${label.lowercase()}"),
                             )
                         }
@@ -378,7 +390,7 @@ fun MetaTraderBrokerFlow(
                     var serverMenu by remember { mutableStateOf(false) }
                     OutlinedTextField(
                         form.server,
-                        { server -> form = LoginRules.withMode(form.copy(server = server), LoginRules.modeForServer(server)) },
+                        { server -> form = form.copy(server = server) },
                         modifier = Modifier.fillMaxWidth().clickable { serverMenu = true }.testTag("server_field"),
                         label = { Text("Server") },
                         singleLine = true,
@@ -391,7 +403,7 @@ fun MetaTraderBrokerFlow(
                             if (option is ServerOption.Suggested) DropdownMenuItem(
                                 text = { Text(option.value) },
                                 onClick = {
-                                    form = LoginRules.withMode(form.copy(server = option.value), LoginRules.modeForServer(option.value))
+                                    form = form.copy(server = option.value)
                                     serverMenu = false
                                 },
                             ) else DropdownMenuItem(text = { Text("Type server name") }, onClick = { serverMenu = false })
@@ -460,7 +472,9 @@ fun MetaTraderBrokerFlow(
                 Text("Forgot password?", color = ElectricCyan, modifier = Modifier.fillMaxWidth().height(48.dp).clickable { openUrl(spec.passwordRecoveryUrl) })
                 stage?.let { Text("${it.label}...", color = ElectricCyan, modifier = Modifier.testTag("connect_progress")) }
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
-                Button(enabled = !busy && LoginRules.loginEnabled(spec, form), onClick = { connect(spec, form) },
+                Button(
+                    enabled = !busy && LoginRules.canSubmitLogin(spec, form, modeHintChosen),
+                    onClick = { connect(spec, form) },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("LOGIN")
                 }

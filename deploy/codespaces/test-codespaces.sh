@@ -93,11 +93,11 @@ cat > "$TMP/wine-bin/wine" <<'MOCK_WINE'
 printf '%s\n' "${MOCK_WINE_VERSION:?}"
 MOCK_WINE
 chmod +x "$TMP/wine-bin/wine"
-for version in wine-9.0 wine-9.22 wine-10.0 wine-10.2; do
+for version in wine-9.0 wine-9.22 wine-10.0 wine-10.2 "wine-11.21 (Staging)"; do
 	output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION="$version" bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh")" || fail "$version must be allowed"
 	grep -Fq "Wine version allowed: PASS" <<< "$output" || fail "$version must pass the guard"
 done
-for version in wine-10.3 wine-11.0 wine-8.21 garbage; do
+for version in wine-10.3 wine-11.0 wine-11.20 wine-11.22 wine-8.21 garbage; do
 	if output="$(WINE_BIN="$TMP/wine-bin/wine" MOCK_WINE_VERSION="$version" bash "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" 2>&1)"; then
 		fail "$version must be blocked"
 	fi

@@ -232,6 +232,11 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("InpExpectedServer=Demo-Server", text)
         self.assertIn("InpExpectedAccountMode=DEMO", text)
 
+    def test_unverified_registration_does_not_pin_a_mode(self):
+        account = {**self.job["account"], "account_mode": "UNVERIFIED"}
+        text = worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234", account)
+        self.assertIn("InpExpectedAccountMode=\n", text)
+
     def test_configured_cost_model_requires_positive_value_and_evidence(self):
         account = {**self.job["account"], "cost_model": "CONFIGURED_ROUND_TURN",
                    "commission_per_lot": 7.5, "cost_evidence": "broker tariff 2026-10"}
@@ -254,10 +259,9 @@ class WorkerTests(unittest.TestCase):
                                  {**account, "cost_evidence": "bad\nreference"})
         self.assertEqual(error.exception.code, "INVALID_COST_EVIDENCE")
 
-    def test_job_requires_explicit_valid_account_mode(self):
-        missing = {**self.job, "account": {k: v for k, v in self.job["account"].items() if k != "account_mode"}}
-        with self.assertRaises(worker.ProvisionError):
-            worker.validate_job(missing)
+    def test_job_keeps_unknown_mode_unverified(self):
+        unknown = {**self.job, "account": {**self.job["account"], "account_mode": "UNVERIFIED"}}
+        self.assertEqual("UNVERIFIED", worker.validate_job(unknown)["account"]["account_mode"])
         unknown = {**self.job, "account": {**self.job["account"], "account_mode": "UNKNOWN"}}
         with self.assertRaises(worker.ProvisionError) as e:
             worker.validate_job(unknown)

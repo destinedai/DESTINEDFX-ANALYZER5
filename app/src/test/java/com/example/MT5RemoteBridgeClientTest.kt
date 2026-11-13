@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import org.json.JSONArray
 import org.json.JSONObject
+import okhttp3.Request
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -181,6 +182,27 @@ class MT5RemoteBridgeClientTest {
         assertFalse(MT5RemoteBridgeClient.effectConfirmed("CLOSE_POSITION_SELECTED", open, listOf(positionId)))
         val closed = open.copy(positions = emptyList())
         assertTrue(MT5RemoteBridgeClient.effectConfirmed("CLOSE_POSITION_SELECTED", closed, listOf(positionId)))
+    }
+
+    @Test fun ownerBootstrapHeaderIsRestrictedToInitialPairingRequest() {
+        val pairing = Request.Builder().url("https://bridge.realcop.com/v1/pairings")
+        MT5RemoteBridgeClient.addOwnerBootstrapHeader(
+            pairing, "POST", "/v1/pairings", "one-time-owner-code"
+        )
+        assertEquals("one-time-owner-code", pairing.build().header("X-Owner-Bootstrap"))
+
+        val normal = Request.Builder().url("https://bridge.realcop.com/v1/app/state")
+        MT5RemoteBridgeClient.addOwnerBootstrapHeader(
+            normal, "GET", "/v1/app/state", null
+        )
+        assertEquals(null, normal.build().header("X-Owner-Bootstrap"))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.addOwnerBootstrapHeader(
+                Request.Builder().url("https://bridge.realcop.com/v1/app/state"),
+                "GET", "/v1/app/state", "one-time-owner-code"
+            )
+        }
     }
 
     private fun snapshot(orders: List<JSONObject>) = MT5RemoteBridgeClient.Snapshot(

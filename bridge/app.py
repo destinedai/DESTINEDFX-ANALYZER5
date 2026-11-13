@@ -204,13 +204,22 @@ def host_is_loopback(request):
 def client_ip(request):
     peer=request.client.host if request.client else 'unknown'
     if host_is_loopback(request): return 'local-loopback'
-    # A local reverse proxy may append the actual caller as the last entry. This remains
-    # UNVERIFIED until the owner records the external forwarding diagnostic.
-    forwarded=request.headers.get('x-forwarded-for','')
     if peer in LOOPBACK_HOSTS:
-        if not forwarded: return 'public-unknown'
-        last=forwarded.split(',')[-1].strip()
-        if last and len(last)<=64: return last
+        # Cloudflare Tunnel connects over loopback. Prefer Cloudflare's single-IP
+        # visitor header, then retain the existing last-entry X-Forwarded-For fallback.
+        candidates=[
+            request.headers.get('cf-connecting-ip',''),
+            request.headers.get('x-forwarded-for','').split(',')[-1],
+        ]
+        for candidate in candidates:
+            candidate=candidate.strip()
+            if not candidate or len(candidate)>64:
+                continue
+            try:
+                return str(ipaddress.ip_address(candidate))
+            except ValueError:
+                continue
+        return 'public-unknown'
     return peer
 def public_host_guard(request):
     if not PUBLIC_EXPOSURE: return None
@@ -313,7 +322,7 @@ async def limits(request:Request, call_next):
 class Pair(BaseModel): model_config=ConfigDict(extra='forbid')
 class ManagedAccount(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    login:str=Field(min_length=1,max_length=20); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; account_mode:str; consent:bool
+    login:str=Field(min_length=1,max_length=20); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; account_mode:str|None=None; consent:bool
     broker_brand:str=Field(default='UNKNOWN',min_length=1,max_length=20)
     cost_model:str=Field(default='OBSERVED_ROUND_TURN',min_length=1,max_length=40)
     commission_per_lot:float=Field(default=0.0,ge=0,allow_inf_nan=False)
@@ -869,7 +878,7 @@ def heartbeat_news_clear(beat, symbols=None):
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
     require_durable_execution()
     p=auth(authorization,'app'); fernet,_=managed_config()
-    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in ('DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, profile mode, and valid access_type are required')
+    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or not x.server.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, server, and valid access_type are required')
     brand=x.broker_brand.strip().upper()
     if brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
     evidence=x.cost_evidence.strip()
@@ -884,7 +893,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
-        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode,brand,x.cost_model,float(x.commission_per_lot),evidence))
+        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,'UNVERIFIED',brand,x.cost_model,float(x.commission_per_lot),evidence))
         c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+CONNECT_JOB_TTL_SECONDS,p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) VALUES(?,?,'PROVISION','QUEUED',?)",(job_id,p['id'],t))
     return {'job_id':job_id,'status':'QUEUED'}
@@ -913,9 +922,6 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
         m=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=? AND revoked=0',(r['pairing_id'],)).fetchone()
         if not m:
             c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_REVOKED',error_message='Account was revoked before provisioning' WHERE id=?",(r['id'],))
-            return {'job':None}
-        if m['account_mode'] not in ('DEMO','LIVE'):
-            c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_MODE_UNVERIFIED',error_message='Account mode must be re-verified before provisioning' WHERE id=?",(r['id'],))
             return {'job':None}
         account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']; account['account_mode']=m['account_mode']; account['broker_brand']=m['broker_brand']
         account['cost_model']=m['cost_model']; account['commission_per_lot']=float(m['commission_per_lot']); account['cost_evidence']=m['cost_evidence']
@@ -1042,8 +1048,14 @@ def claim(x:Claim):
             fernet,_=managed_config()
             expected_login=fernet.decrypt(managed['login_enc'].encode()).decode()
             expected_server=fernet.decrypt(managed['server_enc'].encode()).decode()
-            if managed['account_mode'] not in ('DEMO','LIVE') or x.account['login']!=expected_login or not broker_server_matches(managed['broker_brand'],expected_server,x.account['server']) or x.account['account_mode']!=managed['account_mode'] or not broker_company_matches(managed['broker_brand'],x.account.get('company')):
-                raise HTTPException(401,'Authenticated terminal broker, login, server or mode does not match the selected managed account')
+            reported_mode=x.account.get('account_mode')
+            if (reported_mode not in ('DEMO','LIVE') or x.account['login']!=expected_login or
+                not broker_server_matches(managed['broker_brand'],expected_server,x.account['server']) or
+                (managed['account_mode'] in ('DEMO','LIVE') and reported_mode!=managed['account_mode']) or
+                not broker_company_matches(managed['broker_brand'],x.account.get('company'))):
+                raise HTTPException(401,'Terminal-reported broker, login, server or mode does not match the managed account')
+            if managed['account_mode']=='UNVERIFIED':
+                c.execute("UPDATE managed_accounts SET account_mode=? WHERE pairing_id=? AND account_mode='UNVERIFIED'",(reported_mode,found['id']))
         c.execute('UPDATE pairings SET consumed=1,terminal_hash=?,terminal_id=?,instance_id=?,account=? WHERE id=? AND consumed=0',(digest(terminal_token),terminal_id,x.terminal_instance_id,json.dumps(x.account,separators=(',',':')),found['id']))
         if c.total_changes<1: raise HTTPException(409,'Pairing code already consumed')
     return {'terminal_id':terminal_id,'terminal_token':terminal_token,'poll_seconds':2}

@@ -309,13 +309,50 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     with app.tx() as c:
         row=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
         assert 'topsecret' not in str(dict(row)) and '99881' not in str(dict(row))
+        assert row['account_mode']=='UNVERIFIED'
     assert client.post('/v1/worker/jobs/claim',json={'worker_id':'w1'}).status_code==401
     wh={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
-    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
+    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'UNVERIFIED','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
     state=client.get('/v1/app/state',headers=ah).json()['managed_execution']
     assert state['worker_status']=='LEASED' and state['status']!='READY'
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
+
+def test_terminal_reported_mode_resolves_registration_not_mode_hint(monkeypatch):
+    managed_env(monkeypatch)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'556677', 'server':'FBS-Demo-Server', 'password':'fixture-secret',
+        'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS', 'consent':True
+    })
+    assert response.status_code == 202
+    job = client.post('/v1/worker/jobs/claim', headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+                      json={'worker_id':'mode-neutral-worker'}).json()
+    assert job['account']['account_mode'] == 'UNVERIFIED'
+    assert client.get('/v1/app/state', headers=ah).json()['managed_execution']['account_mode'] == 'UNVERIFIED'
+    assert client.post('/v1/app/commands', headers=ah, json=command_req('START')).status_code == 409
+
+    actual = {'login':'556677', 'server':'FBS-Demo-Server', 'company':'FBS Markets Inc.',
+              'currency':'USD', 'account_mode':'DEMO'}
+    wrong_server = {**actual, 'server':'FBS-Other-Server'}
+    assert client.post('/v1/terminal/claim', json={
+        'pairing_code':job['pairing_code'], 'terminal_instance_id':'wrong-server-terminal', 'account':wrong_server
+    }).status_code == 401
+    wrong_login = {**actual, 'login':'999999'}
+    assert client.post('/v1/terminal/claim', json={
+        'pairing_code':job['pairing_code'], 'terminal_instance_id':'wrong-login-terminal', 'account':wrong_login
+    }).status_code == 401
+    with app.tx() as c:
+        row=c.execute('SELECT account_mode FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
+    assert row['account_mode'] == 'UNVERIFIED'
+    claim = client.post('/v1/terminal/claim', json={
+        'pairing_code':job['pairing_code'], 'terminal_instance_id':'mode-report-terminal', 'account':actual
+    })
+    assert claim.status_code == 200
+    assert client.get('/v1/app/state', headers=ah).json()['managed_execution']['account_mode'] == 'DEMO'
+    with app.tx() as c:
+        row=c.execute('SELECT account_mode FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
+    assert row['account_mode'] == 'DEMO'
 
 def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypatch):
     managed_env(monkeypatch)
@@ -485,7 +522,7 @@ def test_bridge_claim_payload_validates_in_worker_for_all_canonical_brands_and_m
             assert claim.status_code == 200
             payload = claim.json()
             assert payload['account']['broker_brand'] == brand
-            assert payload['account']['account_mode'] == mode
+            assert payload['account']['account_mode'] == 'UNVERIFIED'
             assert worker.validate_job(payload)['account']['broker_brand'] == brand
 
 def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
@@ -748,17 +785,22 @@ def test_live_profile_rejects_demo_terminal_and_expired_authorization(monkeypatc
     wh2={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job2=client.post('/v1/worker/jobs/claim',headers=wh2,json={'worker_id':'worker-live2'}).json()
     demo={**actual,'login':'700003','account_mode':'DEMO'}
-    mismatch=client.post('/v1/terminal/claim',json={'pairing_code':job2['pairing_code'],'terminal_instance_id':'wrong-mode','account':demo})
-    assert mismatch.status_code==401
+    claim=client.post('/v1/terminal/claim',json={'pairing_code':job2['pairing_code'],'terminal_instance_id':'reported-demo-mode','account':demo})
+    assert claim.status_code==200
+    assert client.get('/v1/app/state',headers=ah2).json()['managed_execution']['account_mode']=='DEMO'
+    assert client.post('/v1/app/live-authorization',headers=ah2,json={'confirm_live_trading':True}).status_code==409
 
-
-def test_missing_account_mode_fails_closed_at_registration_and_terminal_claim():
+def test_registration_does_not_require_mode_but_terminal_report_must_include_it(monkeypatch):
+    managed_env(monkeypatch)
     p,ah=managed_pair()
-    missing=client.post('/v1/app/managed-account',headers=ah,json={'login':'333','server':'S','password':'x','access_type':'MASTER','consent':True})
-    assert missing.status_code==422
-    unpaired=pair()
-    no_mode={'login':'123456','server':'Demo-Server','company':'Demo Broker','currency':'USD'}
-    assert client.post('/v1/terminal/claim',json={'pairing_code':unpaired['pairing_code'],'terminal_instance_id':'no-mode','account':no_mode}).status_code==422
+    missing=client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'333','server':'S','password':'x','access_type':'MASTER','broker_brand':'FBS','consent':True
+    })
+    assert missing.status_code==202
+    job=client.post('/v1/worker/jobs/claim',headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+                    json={'worker_id':'missing-mode-worker'}).json()
+    no_mode={'login':'333','server':'S','company':'FBS Markets Inc.','currency':'USD'}
+    assert client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'no-mode','account':no_mode}).status_code==422
 
 
 def test_live_authorization_revocation_and_profile_pairing_isolation(monkeypatch):
@@ -1431,6 +1473,28 @@ def test_forwarded_for_uses_last_entry_so_spoofed_prefix_does_not_evade_lockout(
     pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'1.1.1.1, 203.0.113.50'})
     pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'2.2.2.2, 203.0.113.50'})
     assert pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'3.3.3.3, 203.0.113.50'}).status_code==429
+
+def test_cf_connecting_ip_preferred_over_forwarded_for_lockout(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',2)
+    base={'Host':'fixture-codespace-8000.app.github.dev'}
+    for spoofed in ('1.1.1.1','2.2.2.2'):
+        pub.get('/v1/app/state',headers={**base,'CF-Connecting-IP':'203.0.113.60','X-Forwarded-For':spoofed})
+    locked=pub.get('/v1/app/state',headers={**base,'CF-Connecting-IP':'203.0.113.60','X-Forwarded-For':'3.3.3.3'})
+    assert locked.status_code==429
+    with app.tx() as c:
+        row=c.execute("SELECT locked_until FROM ip_guard WHERE ip='203.0.113.60'").fetchone()
+    assert row is not None and row['locked_until']>time.time()
+
+
+def test_invalid_cf_connecting_ip_falls_back_to_valid_forwarded_for(monkeypatch):
+    public_mode(monkeypatch)
+    base={'Host':'fixture-codespace-8000.app.github.dev'}
+    pub.get('/v1/app/state',headers={**base,'CF-Connecting-IP':'not-an-ip','X-Forwarded-For':'198.51.100.9, 203.0.113.77'})
+    with app.tx() as c:
+        row=c.execute("SELECT fails FROM ip_guard WHERE ip='203.0.113.77'").fetchone()
+    assert row is not None and row['fails']==1
+
 
 def test_per_ip_rate_limit_in_public_mode(monkeypatch):
     public_mode(monkeypatch)

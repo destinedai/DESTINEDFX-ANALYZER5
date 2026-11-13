@@ -24,7 +24,7 @@ class ModeArmingPolicyTest {
     private fun accepted(identity: ModeAccountIdentity, now: Long = 900_000L) =
         ModeDemoAcceptance(identity, now, "a".repeat(64))
 
-    private fun request(liveIdentity: ModeAccountIdentity = identity(mode = AccountMode.LIVE, generation = "cred-live", server = "Broker-Live"),
+    private fun request(liveIdentity: ModeAccountIdentity = identity(mode = AccountMode.LIVE, generation = "cred-live"),
         demoIdentity: ModeAccountIdentity = identity(), liveVerified: ModeReadOnlyVerification = verified(liveIdentity),
         confirmation: String = "ARM LIVE " + liveIdentity.broker + " " + liveIdentity.accountId, minSize: Boolean = true,
         dailyRisk: Boolean = true, riskCaps: Boolean = true, reauthenticated: Boolean = true,
@@ -43,6 +43,18 @@ class ModeArmingPolicyTest {
         assertFalse(policy.demoDecision(demo.copy(mode = AccountMode.LIVE), verified(demo), accepted(demo), "cred-demo").allowed)
     }
 
+    @Test fun unknownModeCannotBeAcceptedOrArmed() {
+        val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
+        val unknownDemo = identity(mode = AccountMode.UNKNOWN)
+        assertFalse(unknownDemo.isValid())
+        assertFalse(policy.demoDecision(unknownDemo, verified(unknownDemo), accepted(unknownDemo), "cred-demo").allowed)
+        val unknownLive = identity(mode = AccountMode.UNKNOWN, generation = "cred-live", server = "Broker-Live")
+        assertFalse(policy.armLive(request(unknownLive, unknownDemo, verified(unknownLive))).isSuccess)
+        val live = request()
+        policy.armLive(live).getOrThrow()
+        assertFalse(policy.liveDecision(live.identity.copy(mode = AccountMode.UNKNOWN)).allowed)
+    }
+
     @Test fun liveNeedsMatchingDemoPassFreshLiveVerificationTypedConfirmationAndAllRiskGates() {
         val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
         val good = request()
@@ -54,8 +66,10 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request(riskCaps = false)).isSuccess)
         assertFalse(policy.armLive(request(reauthenticated = false)).isSuccess)
         assertFalse(policy.armLive(request(demoIdentity = identity(account = "999999"))).isSuccess)
+        assertFalse(policy.armLive(request(demoIdentity = identity(server = "Other-Server"))).isSuccess)
         assertFalse(policy.armLive(request(currentDemoGeneration = "rotated")).isSuccess)
         assertFalse(policy.armLive(request(liveVerified = verified(identity(mode = AccountMode.LIVE).copy(accountId = "999999")))).isSuccess)
+        assertFalse(policy.armLive(request(liveVerified = verified(good.identity.copy(credentialGeneration = "rotated")))).isSuccess)
     }
 
     @Test fun ephemeralHostCannotArmOrDecideLiveButDemoPolicyRemainsAvailable() {

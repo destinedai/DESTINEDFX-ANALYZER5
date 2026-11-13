@@ -33,11 +33,11 @@ class MT5RemoteBridgeClient(
     brokerBrand: String,
     private val modeArmingPolicy: ModeArmingPolicy? = null
 ) {
-    /** Local secure-storage namespace, e.g. FBS_DEMO or EXNESS_LIVE. */
+    /** Legacy mode-keyed storage namespace; neutral identity migration is still pending. */
     val profile: String = profile.trim().uppercase().also {
         require(it.matches(Regex("[A-Z0-9_-]{1,80}"))) { "Invalid broker account profile key." }
     }
-    /** Actual broker account mode remains DEMO or LIVE, independent of the local namespace. */
+    /** Legacy connection hint required by callers; only fresh terminal reports establish account mode. */
     val accountMode: String = accountMode.trim().uppercase().also {
         require(it == "DEMO" || it == "LIVE") { "Account mode must be DEMO or LIVE." }
     }
@@ -103,7 +103,7 @@ class MT5RemoteBridgeClient(
         } catch (_: Exception) { ServiceReadiness(false, null, "unreachable", "unknown", "unknown") }
     }
 
-    /** Registers one mode-scoped pairing. The bridge stores broker credentials encrypted; this client never logs them. */
+    /** Registers the credential identity; terminal-reported mode is resolved by the bridge after claim. */
     suspend fun registerManagedAccount(
         login: String,
         password: String,
@@ -113,7 +113,8 @@ class MT5RemoteBridgeClient(
         savePasswordLocally: Boolean = false,
         costModel: String = "OBSERVED_ROUND_TURN",
         commissionPerLot: Double = 0.0,
-        costEvidence: String = ""
+        costEvidence: String = "",
+        ownerBootstrapCode: String = ""
     ): Snapshot {
         check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; managed account registration was not attempted." }
         require(managedConfigured()) { "CONFIGURATION_REQUIRED" }
@@ -156,17 +157,24 @@ class MT5RemoteBridgeClient(
         if (previousLogin.isNotBlank() && previousLogin != login.trim()) {
             modeArmingPolicy?.onAccountSwitch(modePath, brokerBrand, login.trim())
         }
-        if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) pair()
+        if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) pair(ownerBootstrapCode)
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
-            .put("access_type", accessType).put("account_mode", accountMode).put("broker_brand", brokerBrand).put("consent", consent)
+            .put("access_type", accessType).put("broker_brand", brokerBrand).put("consent", consent)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
         return state()
     }
 
-    suspend fun pair(): Pairing {
+    suspend fun pair(ownerBootstrapCode: String = ""): Pairing {
         check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; pairing request was not sent." }
-        val body = request("POST", "/v1/pairings", JSONObject())
+        val bootstrap = ownerBootstrapCode.trim()
+        require(bootstrap.length <= 200 && bootstrap.none { it.code < 32 || it.code == 127 }) {
+            "Invalid owner bootstrap code."
+        }
+        val body = request(
+            "POST", "/v1/pairings", JSONObject(),
+            ownerBootstrapCode = bootstrap.takeIf { it.isNotEmpty() }
+        )
         val code = body.optString("pairing_code"); val token = body.optString("app_token")
         require(code.isNotBlank() && token.isNotBlank()) { "Bridge returned an incomplete pairing response." }
         check(secrets.saveMT5BridgeAccountAppToken(profile, token)) { "Bridge app token could not be durably stored in encrypted preferences." }
@@ -447,10 +455,11 @@ class MT5RemoteBridgeClient(
         }
     }
 
-    private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun request(method: String, path: String, body: JSONObject? = null, ownerBootstrapCode: String? = null): JSONObject = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException(if (!managedConfigured()) "CONFIGURATION_REQUIRED" else "Managed service URL is invalid; HTTPS is required.")
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
         addOptionalAccessHeaders(builder)
+        addOwnerBootstrapHeader(builder, method, path, ownerBootstrapCode)
         secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->
@@ -485,6 +494,20 @@ class MT5RemoteBridgeClient(
     class BridgeHttpException(val status: Int, val safeDescription: String) : Exception(safeDescription)
 
     companion object {
+        internal fun addOwnerBootstrapHeader(
+            builder: Request.Builder,
+            method: String,
+            path: String,
+            ownerBootstrapCode: String?
+        ) {
+            if (ownerBootstrapCode != null) {
+                require(method == "POST" && path == "/v1/pairings") {
+                    "Owner bootstrap is permitted only for initial pairing."
+                }
+                builder.header("X-Owner-Bootstrap", ownerBootstrapCode)
+            }
+        }
+
         internal val TRADE_ACTIONS = setOf("CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")
         private val MAX_UINT64 = BigInteger("18446744073709551615")
 

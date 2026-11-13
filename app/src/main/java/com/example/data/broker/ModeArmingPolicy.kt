@@ -14,7 +14,7 @@ enum class ModePath {
         }
 }
 
-enum class AccountMode { DEMO, LIVE }
+enum class AccountMode { UNKNOWN, DEMO, LIVE }
 enum class HostProfile { PERSISTENT, EPHEMERAL }
 
 /** Account identity only. Never put passwords, PATs or OAuth tokens in this model. */
@@ -27,11 +27,11 @@ data class ModeAccountIdentity(
     val credentialGeneration: String
 ) {
     fun isValid(): Boolean =
-        broker.isNotBlank() && accountId.isNotBlank() && credentialGeneration.isNotBlank() &&
+        mode != AccountMode.UNKNOWN && broker.isNotBlank() && accountId.isNotBlank() && credentialGeneration.isNotBlank() &&
             (path !in setOf(ModePath.FBS_MT5, ModePath.EXNESS_MT5, ModePath.HFM_MT5, ModePath.DERIV_MT5) || server.isNotBlank())
 
     fun sameLogicalAccount(other: ModeAccountIdentity): Boolean =
-        path == other.path && broker.equals(other.broker, true) && accountId == other.accountId
+        path == other.path && broker.equals(other.broker, true) && accountId == other.accountId && server == other.server
 
     fun fingerprint(): String = sha256(
         listOf(path.name, broker.uppercase(), accountId, server, mode.name, credentialGeneration).joinToString("\u0000")

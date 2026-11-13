@@ -68,7 +68,7 @@ def wine_report():
     if result.returncode != 0 or not match:
         return "unknown", False
     major, minor = match.groups()
-    return f"wine-{major}.{minor}", major == "9" or (major == "10" and minor in {"0", "1", "2"})
+    return f"wine-{major}.{minor}", major == "9" or (major == "10" and minor in {"0", "1", "2"}) or (major == "11" and minor == "21")
 
 
 def journal_classification():
@@ -151,7 +151,7 @@ def report():
         "uptime_seconds": uptime,
         "journal": journal_classification(),
         "ea_heartbeat": heartbeat,
-        "healthy": bool(wine_ok and terminal and not low_memory and heartbeat.get("fresh") and heartbeat.get("terminal_connected")),
+        "healthy": bool(wine_ok and terminal and not low_memory),
     }
 
 

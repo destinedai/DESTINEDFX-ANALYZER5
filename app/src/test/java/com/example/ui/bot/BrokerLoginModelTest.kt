@@ -105,6 +105,12 @@ class BrokerLoginModelTest {
         assertFalse(LoginRules.loginEnabled(mt5, goodForm.copy(server = "")))
     }
 
+    @Test fun mt5LoginRequiresAnExplicitUnverifiedModeHintNotInferredFromServer() {
+        val form = goodForm.copy(server = "Broker-Demo")
+        assertFalse(LoginRules.canSubmitLogin(mt5, form, mt5ModeHintChosen = false))
+        assertTrue(LoginRules.canSubmitLogin(mt5, form, mt5ModeHintChosen = true))
+    }
+
     @Test fun derivOptionsNeedsAppIdAndTokenAndCtraderUsesGrantAccess() {
         assertFalse(LoginRules.loginEnabled(derivOptions, LoginForm(appId = "1089")))
         assertTrue(LoginRules.loginEnabled(derivOptions, LoginForm(appId = "1089", token = "fixture-token")))
@@ -129,7 +135,7 @@ class BrokerLoginModelTest {
         assertEquals(ServerModeHint.UNKNOWN, LoginRules.serverModeHint("Deriv-Server"))
     }
 
-    @Test fun modeDefaultsFromDemoOrTrialServerAndCanBeChangedByOwner() {
+    @Test fun legacyModeHintHelperCanBeChangedByOwner() {
         assertEquals(LoginMode.DEMO, LoginRules.modeForServer("Broker-Demo"))
         assertEquals(LoginMode.DEMO, LoginRules.modeForServer("Broker-Trial"))
         assertEquals(LoginMode.LIVE, LoginRules.modeForServer("Broker-Real"))
