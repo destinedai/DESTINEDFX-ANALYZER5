@@ -1,0 +1,110 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - openssl
+  - python3
+  - python3-venv
+  - python3-pip
+
+write_files:
+  - path: /usr/local/sbin/destinedfx-azure-first-boot
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      readonly root_dir=/var/lib/destinedfx
+      readonly repo_dir=/opt/destinedfx/repo
+      readonly first_run="$root_dir/first-run.txt"
+      readonly state="$root_dir/bootstrap-state"
+      mkdir -p "$root_dir" /opt/destinedfx /etc/destinedfx
+      chmod 0700 "$root_dir" /etc/destinedfx
+      exec 9>"$root_dir/bootstrap.lock"
+      flock -n 9 || exit 0
+      if [[ -f "$state" && "$(cat "$state")" == READY ]]; then
+        exit 0
+      fi
+      printf 'RUNNING\n' > "$state"
+      chmod 0600 "$state"
+      {
+        echo "DestinedFX Azure for Students first-run record"
+        echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "vm_architecture=$(uname -m)"
+        echo "private_access=NO_PUBLIC_IP; Tailscale login is owner-interactive"
+      } > "$first_run"
+      chmod 0600 "$first_run"
+
+      if ! command -v tailscale >/dev/null 2>&1; then
+        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://tailscale.com/install.sh | sh
+      fi
+      tailscale_up_log=/run/destinedfx-tailscale-up.log
+      if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; then
+        (tailscale up --ssh --accept-dns=false >"$tailscale_up_log" 2>&1 || true)
+      fi
+      if [[ -s "$tailscale_up_log" ]]; then
+        {
+          echo ""
+          echo "tailscale_output_begin"
+          sed -n '1,40p' "$tailscale_up_log"
+          echo "tailscale_output_end"
+        } >> "$first_run"
+      fi
+
+      repo_url=https://github.com/destinedai/DESTINEDFX-ANALYZER5.git
+      repo_ref=free/phone-only-v1
+      if [[ ! -d "$repo_dir/.git" ]]; then
+        git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_dir"
+      else
+        git -C "$repo_dir" fetch --depth 1 origin "$repo_ref"
+        git -C "$repo_dir" reset --hard FETCH_HEAD
+      fi
+
+      # D1 host-agent.py is the required runtime contract for a real MT5 host.
+      # This checkout currently predates D1, so do not invent a substitute service.
+      if [[ ! -f "$repo_dir/host-agent.py" && ! -f "$repo_dir/managed-worker/host-agent.py" && ! -f "$repo_dir/scripts/linux-host/host-agent.py" ]]; then
+        {
+          echo "status=BLOCKED"
+          echo "reason=D1 host-agent.py is absent from the selected repository head."
+          echo "fix=Merge the reviewed D1 Linux host runtime into free/phone-only-v1, then rerun: sudo systemctl restart destinedfx-azure-first-boot.service"
+          echo "trading=REFUSED"
+        } >> "$first_run"
+        printf 'BLOCKED\n' > "$state"
+      chmod 0600 "$state"
+      exit 0
+      fi
+
+      {
+        echo "status=READY_FOR_OWNER_PAIRING_ONLY"
+        echo "trading=REFUSED until D1 doctor, fresh EA heartbeat, DEMO acceptance, and rollout gates pass"
+      } >> "$first_run"
+      printf 'READY\n' > "$state"
+      chmod 0600 "$state"
+
+  - path: /etc/systemd/system/destinedfx-azure-first-boot.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=DestinedFX Azure first boot and runtime contract check
+      Wants=network-online.target
+      After=network-online.target
+      ConditionPathExists=/usr/local/sbin/destinedfx-azure-first-boot
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/destinedfx-azure-first-boot
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [bash, -lc, /usr/local/sbin/destinedfx-azure-first-boot]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, destinedfx-azure-first-boot.service]
+
+final_message: "DestinedFX Azure bootstrap finished. Read /var/lib/destinedfx/first-run.txt with Azure Run Command; do not treat reachability as broker or trading readiness."

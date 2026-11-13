@@ -58,7 +58,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "poll cadence 5s": "InpPollSeconds=5" in source,
         "revoked token fails closed": "code==401||code==403" in source and "RevokeSession" in source and 'g_state="STOPPED"' in source and 'FileDelete("DestinedFX_terminal_token.txt")' in source and 'g_terminalToken=""' in source,
         "stale heartbeat fails closed": "HEARTBEAT_STALE_SECONDS 15" in source and "TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS" in source and "No accepted heartbeat within HEARTBEAT_STALE_SECONDS=15" in source,
-        "trade gate requires fresh accepted heartbeat": "g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS" in source and 'void Scan(){if(g_state!="RUNNING"' in source,
+        "trade gate requires fresh accepted heartbeat": "g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS" in source and 'if(g_state!="RUNNING"' in source,
         "heartbeat excludes app-only fields": all(x not in heartbeat for x in ["pairing_status", "terminal_online", "heartbeat_age_seconds", "ea_state", "last_heartbeat_at", "last_command"]),
         "heartbeat required fields": all(('\\"' + x + '\\"') in heartbeat for x in ["state", "timestamp", "terminal_connected", "trade_allowed", "account", "account_mode", "configuration", "last_signal", "last_error", "open_positions", "active_orders", "closed_deals"]),
         "ISO UTC formatter": "T%02d:%02d:%02dZ" in source and "IsoUtc(TimeGMT())" in heartbeat and "TimeToString" not in source,
@@ -71,7 +71,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "conservative initial volume and controlled scaling": all(x in source for x in ["InpInitialVolume=0.01", "InpMaxVolume=0.01", "InpScalingEnabled=false", "g_scalingEnabled?g_maxVolume:g_initialVolume", "scaling_min_closed_trades"]),
         "runtime configuration applied": "ArrayCopy(g_symbols,syms)" in source and "g_maxConcurrent=concurrent" in source and "g_dailyLossPercent=daily" in source,
         "risk validated without clamping": "risk<=0||risk>1" in source and "g_riskPercent=risk" in source,
-        "processed command retains original ack": "Ack(id,g_ackOutcomes[ai],g_ackMessages[ai])" in source and "g_ackOutcomes[n]=outcome" in source,
+        "processed command retains original ack": "Ack(id,g_ackOutcomes[ai],g_ackMessages[ai])" in source and "g_ackOutcomes[intent]=outcome" in source and "g_ackOutcomes[intent]=\"IN_PROGRESS\"" in source,
         "persistent daily equity": "GlobalVariableSet(equityKey,equity)" in source and "AccountInfoDouble(ACCOUNT_EQUITY)" in source,
         "rates readiness": "CopyRates(syms[si],mtf,0,80,hr)<50" in source and "MarketReady(syms[si],mtf)" in source,
         "trade permission readiness": "!MQLInfoInteger(MQL_TRADE_ALLOWED)||!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)" in source and "!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)" in source,
@@ -97,7 +97,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "authoritative news gate immediately before broker call": "bool NewsClear(string sym)" in source and "if(!NewsClear(sym))" in source and "trade.Buy" in source and "NEWS_BLOCKED" in source,
         "news verdict is timestamped and fail closed": all(x in source for x in ["retrieved_at_ms", "coverage_from_ms", "coverage_to_ms", "g_newsStatus=\"UNKNOWN\"", "NEWS UNKNOWN"]),
         "pending news cancellation is EA-owned only": "CancelNewsBlockedPendingOrders" in source and "ORDER_MAGIC" in source and "trade.OrderDelete" in source and "HistoryOrderSelect" in source,
-        "signal dedupe persisted before submission": "if(!Remember(key))" in source and "PersistSeen()" in source and 'FileOpen(SeenFile(),FILE_READ' in source and "AtomicWrite" in source,
+        "signal dedupe persisted before submission": "if(!Remember(key))" in source and "PersistSeen()" in source and "ReadJournalRecovered" in source and "AtomicWrite" in source,
         "signal identity excludes direction": 'string SignalKey(string sym,ENUM_TIMEFRAMES tf,datetime bar){return g_strategy+"|"+sym+"|"+TFLabel(tf)+"|"+IntegerToString((int)bar);}' in source and "SignalKey(sym,tf,bt);" in source,
         "source persists signal dedupe": "PersistSeen()" in source and "SeenFile()" in source and "AtomicWrite" in source,
     }
@@ -131,6 +131,23 @@ def test_followup_safety_contracts():
     assert "DEAL_MAGIC" in source and "ManagedClosedPosition" in source
     assert "MathAbs(exited-entered)<=MathMax" in source
     assert "effectiveMaxAge=MathMin" in source and "InpNewsFreshnessSeconds" in source
+
+
+def test_quote_freshness_is_conservative_and_instrument_aware():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert "InpQuoteFreshnessSeconds=15" in source
+    assert "QuoteFreshnessSeconds(string sym)" in source
+    assert "StringFind(u,\"XAU\")" in source
+    assert "StringFind(u,\"BTC\")" in source
+    assert "!QuoteFresh(sym,q)" in source
+    assert "InpQuoteFreshnessSeconds>120" in source
+
+
+def test_news_block_is_checked_before_signal_is_consumed():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    news = source.index("if(!NewsClear(sym))")
+    remember = source.index("if(!Remember(key))")
+    assert news < remember, "a temporary news rejection must remain retryable"
 
 
 
@@ -230,7 +247,7 @@ def test_ticket_operation_safety_contracts():
             for term in (
                 '\\"results\\":%s',
                 'resultJson="[]"',
-                'g_ackResults[n]=results',
+                'g_ackResults[intent]=results',
                 '"ticket\\":\\"',
                 '"message\\":\\"',
             )
@@ -309,3 +326,69 @@ def test_daily_limit_blocks_start_resume_and_timer_keeps_exit_retrying():
     assert 'if(!RiskDayOK()){g_state="STOPPED";outcome="REJECTED";msg="DAILY RISK GUARD' in source
     assert 'if(RiskDayOK()&&AccountIdentityMatches()' in source
     assert 'if(!RiskDayOK()){if(DailyRiskLocked())DailyEmergencyExit();' in source
+
+
+def test_journal_failure_contracts_fail_closed_before_ack_or_submission():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    atomic = source[source.index("bool AtomicWrite("):source.index("bool SaveToken(")]
+    place = source[source.index("bool Place("):source.index("\nvoid SetWait")]
+    commands = source[source.index("void ProcessCommands()"):source.index("void ReconcileOrder(")]
+    scan = source[source.index("void Scan()"):source.index("void Ack(")]
+    assert "uint written=encoded==0?0:FileWriteArray(h,bytes,0,encoded)" in atomic
+    assert "FILE_WRITE|FILE_BIN" in atomic and "CP_UTF8" in atomic
+    assert "FileFlush(h)" in atomic and "FileSize(h)" in atomic
+    assert "ReadBinaryJournal(tmp,verified)" in atomic and "verified!=text" in atomic
+    assert "FileMove(name,0,bak,FILE_REWRITE)" in atomic and "FileMove(bak,0,name,FILE_REWRITE)" in atomic
+    assert "ReadJournalRecovered" in source and "manual recovery" in source
+    assert "Periodic order-state journal persistence failed" in source
+    assert place.index('g_sigExecutionState="SUBMISSION_INTENT"') < place.index("if(!PersistOrderState())") < place.index("trade.Buy")
+    assert 'g_sigExecutionState="SUBMISSION_UNKNOWN"' in place and 'g_state="STOPPED"' in place
+    assert 'persistedSignal=g_lastSignal;StringReplace(persistedSignal,"|","%7C")' in source
+    assert 'AccountInfoInteger(ACCOUNT_LOGIN)' in source and 'AccountInfoString(ACCOUNT_SERVER)' in source
+    assert 'g_sigExecutionState=="SUBMISSION_INTENT"' in source and 'g_state="STOPPED"' in source[source.index("void LoadOrderState()"):source.index("bool PersistSeen()")]
+    intent_pos = commands.index('g_ackOutcomes[intent]="IN_PROGRESS"')
+    intent_persist = commands.index("if(!PersistProcessed())", intent_pos)
+    operation_pos = commands.index('ExecuteTicketOperation(id,action,obj', intent_persist)
+    assert intent_pos < intent_persist < operation_pos
+    assert commands.index("if(!PersistProcessed())", commands.index("g_ackOutcomes[intent]=outcome")) < commands.index("Ack(id,outcome,msg,results)")
+    assert 'if(!SaveCursor())' in commands and 'g_cursor=previousCursor' in commands
+    assert 'g_ackOutcomes[ai]=="IN_PROGRESS"' in commands and 'was not re-applied' in commands
+    assert 'if(g_sigExecutionState=="SUBMISSION_INTENT"' in scan
+
+
+def test_real_terminal_fixes_are_fail_closed_and_telemetry_is_authoritative():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert "input int InpQuoteFreshnessSeconds=15;" in source
+    assert "QuoteFresh(sym,q)" in source
+    assert "QuoteFresh(syms[si],tq)" in source
+    assert "InpQuoteFreshnessSeconds<1||InpQuoteFreshnessSeconds>120" in source
+    place = source[source.index("bool Place("):source.index("\nvoid SetWait", source.index("bool Place("))]
+    assert place.index("if(!NewsClear(sym))") < place.index("if(!Remember(key))")
+    assert "g_sigEntry=entry;g_sigSL=sl;g_sigTP=tp;" in place
+
+def test_new_broker_orders_require_positive_valid_sl_and_tp():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    place = source[source.index("bool Place(") : source.index("void Heartbeat()")]
+    assert "sl<=0||tp<=0" in place
+    assert "Finite(sl)||!Finite(tp)" in place
+    assert "trade.Buy(vol,sym,0,sl,tp" in place
+    assert "trade.Sell(vol,sym,0,sl,tp" in place
+
+
+def test_restart_recovery_precedes_start_resume_and_scanning():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    startup = source[source.index("bool StartupBrokerSnapshotReady()") : source.index("void OnTimer()") ]
+    commands = source[source.index("void ProcessCommands()") : source.index("void ReconcileOrder()") ]
+    scan = source[source.index("void Scan()") : source.index("void Ack(")]
+    assert "g_journalsLoaded" in startup
+    assert "TERMINAL_CONNECTED" in startup and "HistorySelect(" in startup
+    assert "PositionGetTicket(i)" in startup and "PositionSelectByTicket(ticket)" in startup
+    assert "OrderGetTicket(i)" in startup and "OrderSelect(ticket)" in startup
+    assert "ReconcileOrder();" in startup and "ReconcileOperations();" in startup
+    assert "PersistOrderState()||!PersistOperations()" in startup
+    assert "g_ackOutcomes[k]==\"IN_PROGRESS\"" in startup
+    assert "g_startupRecoveryReady" in commands and "START withheld" in commands
+    assert "RESUME withheld" in commands
+    assert "if(!g_startupRecoveryReady)" in scan
+    timer = source[source.index("void OnTimer()") : source.index("void OnTick()")]
+    assert timer.index("StartupBrokerSnapshotReady()") < timer.index("ProcessCommands()")

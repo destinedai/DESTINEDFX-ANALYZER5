@@ -6,6 +6,7 @@ arguments. Importing this module is safe on non-Windows hosts for unit testing.
 from __future__ import annotations
 
 import argparse
+import csv
 import ipaddress
 import math
 import json
@@ -26,6 +27,7 @@ import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from mt5_journal import classify_mt5_journal, latest_journal_file, read_recent_mt5_journal
 
 LOG = logging.getLogger("destinedfx.worker")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -34,6 +36,18 @@ LOGIN = re.compile(r"^[0-9]{1,20}$")
 SAFE_SERVER = re.compile(r"^[A-Za-z0-9 ._:-]{1,128}$")
 SAFE_SYMBOL = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 VALID_ACCESS = {"MASTER", "INVESTOR"}
+SUPPORTED_BROKER_BRANDS = {"FBS", "EXNESS", "HFM", "DERIV"}
+
+def classify_terminal_journal(text: str, since_epoch: float | None = None) -> str:
+    """Return a bounded code for a real MT5 authorization-failure line only."""
+    return classify_mt5_journal(text, since_epoch)
+
+def login_password(account: dict[str, Any]) -> str:
+    """Prefer an explicitly supplied investor password for read-only login attempts."""
+    investor = account.get("investor_password")
+    if isinstance(investor, str) and investor and "\r" not in investor and "\n" not in investor:
+        return investor
+    return str(account.get("password", ""))
 
 
 class ProcessState(str, Enum):
@@ -160,6 +174,21 @@ def update_marker(path: Path, record: dict[str, Any]) -> None:
     write_marker_atomic(path, record)
 
 
+def recorded_terminal_executable(marker: Path, record: dict[str, Any]) -> Path:
+    """Return the absolute executable recorded for this worker-owned terminal."""
+    raw = record.get("executable")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ProvisionError("TERMINAL_MARKER_EXECUTABLE_MISSING")
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        raise ProvisionError("TERMINAL_MARKER_EXECUTABLE_INVALID")
+    terminal_home = marker.parent.resolve()
+    executable = candidate.resolve()
+    if executable.parent != terminal_home:
+        raise ProvisionError("TERMINAL_MARKER_EXECUTABLE_INVALID")
+    return executable
+
+
 def terminate_owned_process(pid: int, executable: Path) -> ProcessState:
     """Terminate only an identity-verified process and re-check that it exited."""
     state = process_is_owned(pid, executable)
@@ -195,10 +224,12 @@ def restart_ini_contents(record: dict[str, Any]) -> str:
     server = record.get("expected_server", "")
     mode = record.get("account_mode", "")
     access = record.get("access_type", "")
+    brand = record.get("broker_brand", "")
     bridge_url = record.get("bridge_url", "")
-    if not (LOGIN.fullmatch(str(login)) and SAFE_SERVER.fullmatch(str(server)) and mode in {"DEMO", "LIVE"}
-            and access in VALID_ACCESS and validate_origin(str(bridge_url))):
+    if not (LOGIN.fullmatch(str(login)) and SAFE_SERVER.fullmatch(str(server)) and mode in {"DEMO", "LIVE", "UNVERIFIED", ""}
+            and access in VALID_ACCESS and brand in SUPPORTED_BROKER_BRANDS and validate_origin(str(bridge_url))):
         raise ProvisionError("RESTART_CONFIGURATION_UNVERIFIED")
+    expected_mode = mode if mode in {"DEMO", "LIVE"} else ""
     allow_trade = "1" if access == "MASTER" else "0"
     return ("[Common]\n"
             f"Login={login}\nServer={server}\nKeepPrivate=1\nNewsEnable=0\nProxyEnable=0\n"
@@ -219,7 +250,17 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
     results = []
     for marker, record in terminal_records(root):
         terminal_home = marker.parent
-        executable = (terminal_home / Path(settings["terminal_exe"]).name).resolve()
+        try:
+            executable = recorded_terminal_executable(marker, record)
+        except ProvisionError as exc:
+            record["status"] = "OPERATOR_REVIEW"
+            try:
+                update_marker(marker, record)
+            except OSError:
+                pass
+            LOG.error("Terminal marker rejected for job %s (%s)", record.get("job_id", "unknown"), exc.code)
+            results.append({"job_id": record.get("job_id", "unknown"), "status": "OPERATOR_REVIEW", "error": exc.code})
+            continue
         pid = int(record.get("pid", 0) or 0)
         backend_status = None
         if base and token and worker_id:
@@ -231,6 +272,45 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
                 backend_status = None
         state = process_is_owned(pid, executable)
         if state == ProcessState.OWNED_RUNNING:
+            if record.get("restart_requires_reauthentication"):
+                acknowledged = bool(record.get("restart_auth_acknowledged"))
+                fresh_ready = backend_status == "READY" and acknowledged
+                started = float(record.get("last_restart", time.time()) or time.time())
+                if not fresh_ready and time.time() - started >= max(1, int(settings.get("auth_timeout_seconds", 300))):
+                    ended = terminate_owned_process(pid, executable)
+                    if ended == ProcessState.DEFINITELY_DEAD:
+                        remove_terminal_configs(terminal_home.parent)
+                        record["status"] = "FAILED"
+                        record["restart_requires_reauthentication"] = False
+                        update_marker(marker, record)
+                        if base and token and worker_id:
+                            try:
+                                post_state(base, token, record["job_id"], worker_id, "FAILED", "AUTH_TIMEOUT", "Terminal authentication timed out")
+                            except ProvisionError:
+                                pass
+                        results.append({"job_id": record["job_id"], "status": "FAILED"})
+                        continue
+                    record["status"] = "OPERATOR_REVIEW"
+                    update_marker(marker, record)
+                    results.append({"job_id": record["job_id"], "status": "OPERATOR_REVIEW", "process_state": ended.value})
+                    continue
+                if backend_status == "AUTHENTICATING":
+                    if not record.get("restart_auth_acknowledged"):
+                        record["restart_auth_acknowledged"] = True
+                    record["status"] = "AUTHENTICATING"
+                    update_marker(marker, record)
+                elif backend_status == "READY" and record.get("restart_auth_acknowledged"):
+                    remove_terminal_configs(terminal_home.parent)
+                    record["restart_requires_reauthentication"] = False
+                    record["status"] = "READY"
+                    update_marker(marker, record)
+                    results.append({"job_id": record["job_id"], "status": "READY"})
+                    continue
+                else:
+                    record["status"] = "AUTHENTICATING"
+                    update_marker(marker, record)
+                    results.append({"job_id": record["job_id"], "status": "AUTHENTICATING"})
+                    continue
             record["status"] = backend_status or "RUNNING"
             update_marker(marker, record)
             results.append({"job_id": record["job_id"], "status": record["status"]})
@@ -267,14 +347,13 @@ def supervise_terminals(settings: dict, base: str | None = None, token: str | No
                                     shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, close_fds=True)
         except (OSError, ProvisionError):
+            restart_ini.unlink(missing_ok=True)
             record["status"] = "RESTART_FAILED"
             update_marker(marker, record)
             results.append({"job_id": record["job_id"], "status": "RESTART_FAILED"})
             continue
-        finally:
-            restart_ini.unlink(missing_ok=True)
         record.update(pid=proc.pid, restart_count=retries + 1, status="AUTHENTICATING", last_restart=time.time(),
-                      restart_requires_reauthentication=True)
+                      restart_requires_reauthentication=True, restart_auth_acknowledged=False)
         try:
             update_marker(marker, record)
         except Exception:
@@ -306,7 +385,7 @@ def quarantine_terminal(settings: dict, job_id: str) -> str:
         if record.get("job_id") != job_id:
             continue
         terminal_home = marker.parent
-        executable = (terminal_home / Path(settings["terminal_exe"]).name).resolve()
+        executable = recorded_terminal_executable(marker, record)
         state = process_is_owned(int(record.get("pid", 0) or 0), executable)
         if state == ProcessState.OWNED_RUNNING:
             record["status"] = "OPERATOR_REVIEW"
@@ -328,7 +407,7 @@ def quarantine_terminal(settings: dict, job_id: str) -> str:
 def settings_for_broker(settings: dict, broker_brand: str) -> dict:
     """Resolve a declared broker terminal install; never guess a brand from a path."""
     brand = str(broker_brand or "").strip().upper()
-    if brand not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+    if brand not in SUPPORTED_BROKER_BRANDS:
         raise ProvisionError("BROKER_BRAND_REQUIRED")
     mapping = settings.get("broker_terminals")
     if isinstance(mapping, dict) and mapping:
@@ -396,19 +475,49 @@ def validate_job(job: Any) -> dict[str, Any]:
         raise ProvisionError("INVALID_ACCOUNT")
     if not isinstance(password, str) or not password or "\r" in password or "\n" in password:
         raise ProvisionError("INVALID_ACCOUNT")
+    investor_password = account.get("investor_password")
+    if investor_password is not None and (not isinstance(investor_password, str) or not investor_password or "\r" in investor_password or "\n" in investor_password):
+        raise ProvisionError("INVALID_ACCOUNT")
     if access not in VALID_ACCESS:
         raise ProvisionError("INVALID_ACCESS_TYPE")
-    if mode not in {"DEMO", "LIVE"}:
+    if mode not in {"DEMO", "LIVE", "UNVERIFIED", ""}:
         raise ProvisionError("INVALID_ACCOUNT_MODE")
-    if account.get("broker_brand") not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+    brand = str(account.get("broker_brand") or "").strip().upper()
+    if brand not in SUPPORTED_BROKER_BRANDS:
         raise ProvisionError("INVALID_BROKER_BRAND")
+    # Accept a legacy alias only when it explicitly agrees; it never supplies
+    # or overrides the canonical broker identity.
+    if "broker" in account:
+        legacy_brand = str(account.get("broker") or "").strip().upper()
+        if legacy_brand not in SUPPORTED_BROKER_BRANDS or legacy_brand != brand:
+            raise ProvisionError("CONFLICTING_BROKER_IDENTITY")
     result = dict(job)
+    result["account"] = dict(account, broker_brand=brand)
     result["bridge_url"] = normalized
     return result
+
+def journal_failure_code(settings: dict, connect_started_at: float | None = None) -> str:
+    path = settings.get("journal_path")
+    if not isinstance(path, str) or not path:
+        return "LOGIN_FAILED_UNCLASSIFIED"
+    try:
+        journal = Path(path)
+        if journal.is_dir():
+            journal = latest_journal_file(journal)
+        if journal is None or not journal.is_file():
+            return "LOGIN_FAILED_UNCLASSIFIED"
+        return classify_terminal_journal(read_recent_mt5_journal(journal), connect_started_at)
+    except OSError:
+        return "LOGIN_FAILED_UNCLASSIFIED"
 
 
 def request_json(url: str, token: str, method: str, payload: dict | None = None, timeout: int = 20) -> dict:
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    access_id = os.environ.get("CF_ACCESS_CLIENT_ID", "").strip()
+    access_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET", "").strip()
+    if access_id and access_secret:
+        headers["Cf-Access-Client-Id"] = access_id
+        headers["Cf-Access-Client-Secret"] = access_secret
     data = None
     if payload is not None:
         headers["Content-Type"] = "application/json"
@@ -442,6 +551,38 @@ def wait_for_terminal(base: str, token: str, job_id: str, worker_id: str, timeou
     return "TIMEOUT"
 
 
+def remove_terminal_configs(account_dir: Path) -> None:
+    """Remove credential-bearing startup INIs only after authenticated READY."""
+    for ini in account_dir.glob("startup-*.ini"):
+        ini.unlink(missing_ok=True)
+    for ini in account_dir.glob("restart-*.ini"):
+        ini.unlink(missing_ok=True)
+
+
+def stop_terminal_for_timeout(settings: dict, job_id: str) -> str:
+    """On auth timeout, remove account data only after verified termination."""
+    root = Path(settings["data_root"]).resolve()
+    for marker, record in terminal_records(root):
+        if record.get("job_id") != job_id:
+            continue
+        executable = recorded_terminal_executable(marker, record)
+        pid = int(record.get("pid", 0) or 0)
+        state = process_is_owned(pid, executable)
+        if state == ProcessState.OWNED_RUNNING:
+            state = terminate_owned_process(pid, executable)
+        if state != ProcessState.DEFINITELY_DEAD:
+            record["status"] = "OPERATOR_REVIEW"
+            try:
+                update_marker(marker, record)
+            except OSError:
+                pass
+            return "OPERATOR_REVIEW"
+        account_dir = marker.parent.parent
+        shutil.rmtree(account_dir)
+        return "TERMINATED"
+    return "NOT_FOUND"
+
+
 def revoke_pairing(settings: dict, pairing_id: str) -> None:
     """Stop only the terminal process recorded by this worker, then erase its local account tree."""
     if not SAFE_ID.fullmatch(pairing_id):
@@ -456,7 +597,7 @@ def revoke_pairing(settings: dict, pairing_id: str) -> None:
                 continue
             found = True
             pid = int(data.get("pid", 0))
-            exe = Path(data.get("executable") or (marker.parent / Path(settings["terminal_exe"]).name).resolve())
+            exe = recorded_terminal_executable(marker, data)
             state = process_is_owned(pid, exe)
             if state == ProcessState.OWNED_RUNNING:
                 state = terminate_owned_process(pid, exe)
@@ -484,6 +625,14 @@ def write_private(path: Path, text: str) -> None:
     # account ACL (see README); chmod is additionally useful on POSIX tests.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
+        if os.name == "nt":
+            sid = current_process_user_sid()
+            result = subprocess.run(["icacls.exe", str(path), "/inheritance:r", "/grant:r",
+                                     "*S-1-5-18:F", "*S-1-5-32-544:F", f"*{sid}:F"],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=15, check=False)
+            if result.returncode != 0:
+                raise OSError("Could not secure private configuration ACL")
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
             f.flush()
@@ -491,6 +640,26 @@ def write_private(path: Path, text: str) -> None:
     except Exception:
         path.unlink(missing_ok=True)
         raise
+
+
+def current_process_user_sid() -> str:
+    """Resolve and validate the current Windows identity SID for a file ACL."""
+    try:
+        result = subprocess.run(["whoami.exe", "/user", "/fo", "csv", "/nh"],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=10, check=False, text=True, encoding="utf-8")
+    except (OSError, subprocess.TimeoutExpired):
+        raise OSError("Could not determine current process identity") from None
+    if result.returncode != 0:
+        raise OSError("Could not determine current process identity")
+    try:
+        rows = list(csv.reader(result.stdout.splitlines()))
+        sid = rows[0][1].strip() if len(rows) == 1 and len(rows[0]) == 2 else ""
+    except (csv.Error, IndexError):
+        sid = ""
+    if not re.fullmatch(r"S-1-(?:[0-9]+-){1,14}[0-9]+", sid, re.IGNORECASE):
+        raise OSError("Current process identity SID is invalid")
+    return sid
 
 
 def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
@@ -518,9 +687,13 @@ def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
             raise ProvisionError("INVALID_ZERO_COMMISSION_EVIDENCE")
     elif commission <= 0 or len(evidence) < 8:
         raise ProvisionError("INVALID_CONFIGURED_COST_EVIDENCE")
+    mode = account.get("account_mode", "")
+    if mode not in ("DEMO", "LIVE", "UNVERIFIED", ""):
+        raise ProvisionError("INVALID_ACCOUNT_MODE")
+    expected_mode = mode if mode in ("DEMO", "LIVE") else ""
     return (f"InpBridgeBaseURL={bridge_url}\nInpPairingCode={pairing_code}\n"
             f"InpExpectedLogin={account['login']}\nInpExpectedServer={account['server']}\n"
-            f"InpExpectedAccountMode={account['account_mode']}\n"
+            f"InpExpectedAccountMode={expected_mode}\n"
             "InpSymbols=EURUSD\nInpTimeframes=M5\nInpRiskPercent=0.25\n"
             "InpMaxDailyLossPercent=2.0\nInpMaxConcurrentPositions=2\n"
             "InpPollSeconds=5\nInpScanSeconds=10\nInpHeartbeatSeconds=5\n"
@@ -533,7 +706,7 @@ def ini_text(job: dict, access_type: str, symbol: str) -> str:
     account = job["account"]
     allow_trade = "1" if access_type == "MASTER" else "0"
     return ("[Common]\n"
-            f"Login={account['login']}\nServer={account['server']}\nPassword={account['password']}\n"
+            f"Login={account['login']}\nServer={account['server']}\nPassword={login_password(account)}\n"
             "KeepPrivate=1\nNewsEnable=0\nProxyEnable=0\n"
             "\n[Experts]\n"
             f"AllowLiveTrading={allow_trade}\nAllowDllImport=0\nEnabled=1\nAccount=1\nProfile=1\n"
@@ -641,7 +814,7 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
     presets = terminal_home / "MQL5" / "Presets"
     presets.mkdir(parents=True, exist_ok=True)
     write_private(presets / "DestinedFXTraderEA.set", make_set_file(job["bridge_url"], job["pairing_code"], job["account"]))
-    # Credentials exist only in this short-lived INI until process creation.
+    # The protected INI must remain available for delayed MT5 initialization.
     ini = account_dir / f"startup-{uuid.uuid4().hex}.ini"
     write_private(ini, ini_text(job, job["account"]["access_type"], settings.get("symbol", "EURUSD")))
     if not launch:
@@ -675,19 +848,20 @@ def _provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
                     update_marker(marker, record)
                 except OSError:
                     pass
-                ini.unlink(missing_ok=True)
                 raise ProvisionError("TERMINAL_OWNERSHIP_UNVERIFIED") from None
-        ini.unlink(missing_ok=True)
         raise ProvisionError("TERMINAL_LAUNCH_FAILED") from None
-    finally:
-        # Terminal reads /config synchronously during startup; remove as soon as
-        # CreateProcess returns. persisted broker login material is terminal-owned.
-        ini.unlink(missing_ok=True)
     return account_dir
 
 
 def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
     """Provision with evidence-based cleanup; never delete a possibly live tree."""
+    job = validate_job(job)
+    brand = job["account"]["broker_brand"]
+    selected_brand = settings.get("selected_broker_brand")
+    if selected_brand is not None and selected_brand != brand:
+        raise ProvisionError("BROKER_TERMINAL_NOT_CONFIGURED")
+    if selected_brand is None:
+        settings = settings_for_broker(settings, brand)
     root = Path(settings["data_root"]).resolve()
     account_dir = safe_child(root, job["job_id"])
     try:
@@ -697,7 +871,7 @@ def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
         if marker.exists():
             try:
                 record = json.loads(marker.read_text(encoding="utf-8"))
-                executable = Path(record.get("executable", ""))
+                executable = recorded_terminal_executable(marker, record)
                 state = process_is_owned(int(record.get("pid", 0) or 0), executable)
                 if state == ProcessState.OWNED_RUNNING:
                     state = terminate_owned_process(int(record["pid"]), executable)
@@ -706,7 +880,9 @@ def provision(job: dict, settings: dict, *, launch: bool = True) -> Path:
                 else:
                     record["status"] = "OPERATOR_REVIEW"
                     update_marker(marker, record)
-            except (OSError, ValueError, TypeError, KeyError):
+            except (OSError, ValueError, TypeError, KeyError, ProvisionError):
+                # If marker identity cannot be validated, preserve the tree for
+                # operator review rather than risking deletion of an unknown process.
                 pass
         elif account_dir.exists():
             # The marker is created before Popen. Absence therefore proves that
@@ -744,6 +920,7 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
     try:
         job = validate_job(job)
         broker_settings = settings_for_broker(settings, job["account"]["broker_brand"])
+        attempt_started_at = time.time()
         post_state(base, operator_token, job_id, worker_id, "PROVISIONING")
         provision(job, broker_settings)
         # A process launch/authentication attempt is not evidence of a fresh EA
@@ -752,13 +929,21 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
         terminal_status = wait_for_terminal(base, operator_token, job_id, worker_id,
                                             int(settings.get("auth_timeout_seconds", 300)))
         if terminal_status == "READY":
+            # Bridge READY is emitted only for a fresh authenticated heartbeat
+            # whose account identity matches the pairing/job identity.
+            remove_terminal_configs(safe_child(Path(settings["data_root"]), job_id))
             LOG.info("Terminal authenticated and fresh for job %s", job_id)
         elif terminal_status == "FAILED":
+            code = journal_failure_code(settings, attempt_started_at)
+            try:
+                post_state(base, operator_token, job_id, worker_id, "FAILED", code, "Terminal authentication failed")
+            except ProvisionError:
+                pass
             quarantine_terminal(settings, job_id)
             LOG.error("Terminal authentication failed for job %s", job_id)
         elif terminal_status == "TIMEOUT":
-            post_state(base, operator_token, job_id, worker_id, "FAILED", "TERMINAL_AUTH_TIMEOUT", "Terminal did not authenticate in time")
-            quarantine_terminal(settings, job_id)
+            post_state(base, operator_token, job_id, worker_id, "FAILED", journal_failure_code(settings, attempt_started_at), "Terminal did not authenticate in time")
+            stop_terminal_for_timeout(settings, job_id)
             LOG.error("Terminal authentication timed out for job %s", job_id)
     except ProvisionError as exc:
         try:
@@ -789,12 +974,13 @@ def load_settings(path: Path) -> dict:
             if not isinstance(mapping, dict) or not mapping:
                 raise ValueError
             for brand, item in mapping.items():
-                if brand not in {"FBS", "EXNESS", "HFM", "DERIV"} or not isinstance(item, dict):
+                if brand not in SUPPORTED_BROKER_BRANDS or not isinstance(item, dict):
                     raise ValueError
                 if any(not isinstance(item.get(k), str) or not item[k] for k in ("mt5_install", "terminal_exe", "metaeditor_exe")):
                     raise ValueError
         else:
-            if str(cfg.get("single_broker_brand", "")).upper() not in {"FBS", "EXNESS", "HFM", "DERIV"}:
+            cfg["single_broker_brand"] = str(cfg.get("single_broker_brand", "")).strip().upper()
+            if cfg["single_broker_brand"] not in SUPPORTED_BROKER_BRANDS:
                 raise ValueError
             if any(not isinstance(cfg.get(k), str) or not cfg[k] for k in ("mt5_install", "terminal_exe", "metaeditor_exe")):
                 raise ValueError

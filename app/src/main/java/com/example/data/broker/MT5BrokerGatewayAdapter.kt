@@ -22,6 +22,8 @@ class MT5BrokerGatewayAdapter(
 
     private val _accountMetrics = MutableStateFlow<AccountMetrics?>(null)
     override val accountMetrics: StateFlow<AccountMetrics?> = _accountMetrics.asStateFlow()
+    private val _accountSnapshot = MutableStateFlow<BrokerAccountSnapshot?>(null)
+    override val accountSnapshot: StateFlow<BrokerAccountSnapshot?> = _accountSnapshot.asStateFlow()
 
     private val _openPositions = MutableStateFlow<List<Position>>(emptyList())
     override val openPositions: StateFlow<List<Position>> = _openPositions.asStateFlow()
@@ -29,6 +31,7 @@ class MT5BrokerGatewayAdapter(
     override suspend fun connect(): Result<Boolean> {
         _connectionStatus.value = BrokerConnectionStatus.ERROR
         _accountMetrics.value = null
+        _accountSnapshot.value = BrokerAccountSnapshot.unavailable("MT5", BrokerConnectionStatus.ERROR, "DIRECT_CONNECTION_DISABLED")
         _openPositions.value = emptyList()
         return Result.failure(IllegalStateException("Direct MT5 connection is disabled; authenticate through the configured managed terminal service."))
     }
@@ -37,6 +40,7 @@ class MT5BrokerGatewayAdapter(
         mt5Repo.disconnectSession()
         _connectionStatus.value = BrokerConnectionStatus.DISCONNECTED
         _accountMetrics.value = null
+        _accountSnapshot.value = BrokerAccountSnapshot.unavailable("MT5", BrokerConnectionStatus.DISCONNECTED)
         _openPositions.value = emptyList()
     }
 
@@ -72,7 +76,25 @@ class MT5BrokerGatewayAdapter(
         }
         val metricsRes = mt5Repo.getAccountMetrics()
         if (metricsRes.isSuccess) {
-            _accountMetrics.value = metricsRes.getOrThrow()
+            val metrics = metricsRes.getOrThrow()
+            _accountMetrics.value = metrics
+            _accountSnapshot.value = if (_connectionStatus.value == BrokerConnectionStatus.CONNECTED) {
+                BrokerAccountSnapshot(
+                    providerId = "MT5",
+                    origin = DataOrigin.BROKER_API,
+                    status = _connectionStatus.value,
+                    retrievedAtMs = System.currentTimeMillis(),
+                    environment = null,
+                    currency = metrics.currency,
+                    balance = metrics.balance,
+                    equity = metrics.equity,
+                    margin = metrics.margin,
+                    freeMargin = metrics.freeMargin,
+                    validity = DataValidity.FRESH
+                )
+            } else {
+                BrokerAccountSnapshot.unavailable("MT5", _connectionStatus.value, "SESSION_NOT_CONNECTED")
+            }
         }
         refreshPositions()
     }

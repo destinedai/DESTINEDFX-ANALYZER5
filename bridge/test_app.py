@@ -1,9 +1,9 @@
-import os, time, uuid
+import io, os, time, uuid
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 from pydantic import ValidationError
 os.environ['ALLOW_LOOPBACK_HTTP']='true'
-os.environ['BRIDGE_DB_PATH']='/tmp/destinedfx-bridge-test.sqlite3'
+os.environ['BRIDGE_DB_PATH']=f'/tmp/destinedfx-bridge-test-{os.getpid()}-{uuid.uuid4().hex}.sqlite3'
 os.environ['PAIR_RATE_LIMIT']='1000'
 try: os.unlink(os.environ['BRIDGE_DB_PATH'])
 except FileNotFoundError: pass
@@ -11,6 +11,11 @@ from fastapi.testclient import TestClient
 import app
 client=TestClient(app.app, base_url='https://testserver')
 ACCOUNT={'login':'123456','server':'Demo-Server','company':'Demo Broker','currency':'USD','account_mode':'DEMO'}
+
+def test_bridge_tests_use_a_process_isolated_database():
+    assert app.DB_PATH.startswith(f'/tmp/destinedfx-bridge-test-{os.getpid()}-')
+    assert app.DB_PATH != '/tmp/destinedfx-bridge-test.sqlite3'
+
 def pair():
     r=client.post('/v1/pairings'); assert r.status_code==201; return r.json()
 def claimed(p):
@@ -58,6 +63,16 @@ def test_authenticated_analysis_is_typed_non_executable_and_idempotent(monkeypat
     assert replay.status_code==200 and replay.json()==body
     changed={**payload,'symbol':'GBP/USD'}
     assert client.post('/v1/app/analysis',headers=headers,json=changed).status_code==409
+
+
+def test_authorized_requests_are_rate_limited_by_bearer_token_without_echoing_it(monkeypatch):
+    p=pair(); token_value=p['app_token']; headers={'Authorization':'Bearer '+token_value}
+    monkeypatch.setattr(app,'TOKEN_RATE',1)
+    first=client.get('/v1/app/state',headers=headers)
+    assert first.status_code==200
+    second=client.get('/v1/app/state',headers=headers)
+    assert second.status_code==429
+    assert token_value not in second.text
 
 
 def test_analysis_response_model_rejects_directionally_invalid_candidate_geometry():
@@ -203,7 +218,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
+    assert set(state)=={'host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 
@@ -231,8 +246,41 @@ def managed_env(monkeypatch):
         c.execute('DELETE FROM managed_accounts')
         c.execute('DELETE FROM rate')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
-    monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-2026-very-long')
+    monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-' + '2026-very-long')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.destinedfx.internal')
+
+def test_cloudflare_access_origin_validation_fails_closed(monkeypatch):
+    monkeypatch.setenv('CF_ACCESS_TEAM_DOMAIN','https://team.cloudflareaccess.com')
+    monkeypatch.setenv('CF_ACCESS_AUD','expected-audience')
+    monkeypatch.setattr(app,'validate_cloudflare_assertion',lambda assertion: assertion=='valid-assertion')
+    assert client.post('/v1/pairings').status_code==401
+    assert client.post('/v1/pairings',headers={'Cf-Access-Jwt-Assertion':'invalid'}).status_code==401
+    assert client.post('/v1/pairings',headers={'Cf-Access-Jwt-Assertion':'valid-assertion'}).status_code==201
+    assert client.get('/health/live').status_code == 200
+    monkeypatch.delenv('CF_ACCESS_AUD')
+    misconfigured=client.post('/v1/pairings')
+    assert misconfigured.status_code==503 and misconfigured.json()['detail']['code']=='ACCESS_VALIDATION_MISCONFIGURED'
+    monkeypatch.delenv('CF_ACCESS_TEAM_DOMAIN')
+    assert client.get('/health').status_code == 200
+    assert client.post('/v1/pairings').status_code == 201
+
+def test_cloudflare_access_assertion_verifies_signature_issuer_audience_and_expiry(monkeypatch):
+    from types import SimpleNamespace
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    private_key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+    public_key=private_key.public_key()
+    class LocalJwks:
+        def get_signing_key_from_jwt(self,assertion): return SimpleNamespace(key=public_key)
+    monkeypatch.setattr(app,'_cloudflare_jwks_client',lambda domain: LocalJwks())
+    monkeypatch.setenv('CF_ACCESS_TEAM_DOMAIN','https://team.cloudflareaccess.com')
+    monkeypatch.setenv('CF_ACCESS_AUD','expected-audience')
+    now=int(time.time())
+    token=app.jwt.encode({'iss':'https://team.cloudflareaccess.com','aud':'expected-audience','iat':now,'exp':now+60},private_key,algorithm='RS256',headers={'kid':'fixture'})
+    assert app.validate_cloudflare_assertion(token)
+    wrong_audience=app.jwt.encode({'iss':'https://team.cloudflareaccess.com','aud':'wrong-audience','iat':now,'exp':now+60},private_key,algorithm='RS256',headers={'kid':'fixture'})
+    with pytest.raises(app.jwt.InvalidTokenError): app.validate_cloudflare_assertion(wrong_audience)
+    expired=app.jwt.encode({'iss':'https://team.cloudflareaccess.com','aud':'expected-audience','iat':now-120,'exp':now-60},private_key,algorithm='RS256',headers={'kid':'fixture'})
+    with pytest.raises(app.jwt.ExpiredSignatureError): app.validate_cloudflare_assertion(expired)
 
 def command_req(action='START'):
     return {'request_id':str(uuid.uuid4()),'action':action,'config':{}}
@@ -261,11 +309,93 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     with app.tx() as c:
         row=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
         assert 'topsecret' not in str(dict(row)) and '99881' not in str(dict(row))
+        assert row['account_mode']=='UNVERIFIED'
     assert client.post('/v1/worker/jobs/claim',json={'worker_id':'w1'}).status_code==401
-    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    wh={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
-    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
+    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'UNVERIFIED','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
+    state=client.get('/v1/app/state',headers=ah).json()['managed_execution']
+    assert state['worker_status']=='LEASED' and state['status']!='READY'
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
+
+def test_worker_account_mode_unverified_failure_is_reported_safely(monkeypatch):
+    managed_env(monkeypatch)
+    p, ah = managed_pair()
+
+    registered = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'556677',
+        'server':'FBS-Demo-Server',
+        'password':'fixture-secret',
+        'access_type':'MASTER',
+        'account_mode':'DEMO',
+        'broker_brand':'FBS',
+        'consent':True
+    })
+    assert registered.status_code == 202
+
+    wh = {'Authorization':'Bearer ' + os.environ['WORKER_TOKEN']}
+    job = client.post('/v1/worker/jobs/claim', headers=wh, json={
+        'worker_id':'mode-unverified-worker'
+    })
+    assert job.status_code == 200
+    job_id = job.json()['job_id']
+
+    failed = client.patch(f'/v1/worker/jobs/{job_id}', headers=wh, json={
+        'worker_id':'mode-unverified-worker',
+        'status':'FAILED',
+        'error_code':'ACCOUNT_MODE_UNVERIFIED',
+        'error_message':'private diagnostic must not be exposed'
+    })
+    assert failed.status_code == 200
+
+    status = client.get(
+        f'/v1/worker/jobs/{job_id}/status?worker_id=mode-unverified-worker',
+        headers=wh
+    )
+    assert status.status_code == 200
+    result = status.json()
+    assert result['error_code'] == 'ACCOUNT_MODE_UNVERIFIED'
+    assert result['error_message'] == (
+        'The terminal could not verify whether this account is DEMO or LIVE'
+    )
+    assert 'private diagnostic' not in status.text
+
+
+def test_terminal_reported_mode_resolves_registration_not_mode_hint(monkeypatch):
+    managed_env(monkeypatch)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'556677', 'server':'FBS-Demo-Server', 'password':'fixture-secret',
+        'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS', 'consent':True
+    })
+    assert response.status_code == 202
+    job = client.post('/v1/worker/jobs/claim', headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+                      json={'worker_id':'mode-neutral-worker'}).json()
+    assert job['account']['account_mode'] == 'UNVERIFIED'
+    assert client.get('/v1/app/state', headers=ah).json()['managed_execution']['account_mode'] == 'UNVERIFIED'
+    assert client.post('/v1/app/commands', headers=ah, json=command_req('START')).status_code == 409
+
+    actual = {'login':'556677', 'server':'FBS-Demo-Server', 'company':'FBS Markets Inc.',
+              'currency':'USD', 'account_mode':'DEMO'}
+    wrong_server = {**actual, 'server':'FBS-Other-Server'}
+    assert client.post('/v1/terminal/claim', json={
+        'pairing_code':job['pairing_code'], 'terminal_instance_id':'wrong-server-terminal', 'account':wrong_server
+    }).status_code == 401
+    wrong_login = {**actual, 'login':'999999'}
+    assert client.post('/v1/terminal/claim', json={
+        'pairing_code':job['pairing_code'], 'terminal_instance_id':'wrong-login-terminal', 'account':wrong_login
+    }).status_code == 401
+    with app.tx() as c:
+        row=c.execute('SELECT account_mode FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
+    assert row['account_mode'] == 'UNVERIFIED'
+    claim = client.post('/v1/terminal/claim', json={
+        'pairing_code':job['pairing_code'], 'terminal_instance_id':'mode-report-terminal', 'account':actual
+    })
+    assert claim.status_code == 200
+    assert client.get('/v1/app/state', headers=ah).json()['managed_execution']['account_mode'] == 'DEMO'
+    with app.tx() as c:
+        row=c.execute('SELECT account_mode FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
+    assert row['account_mode'] == 'DEMO'
 
 def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypatch):
     managed_env(monkeypatch)
@@ -414,6 +544,29 @@ def test_worker_lease_capacity_blocks_second_simultaneous_claim(monkeypatch):
     assert second.status_code == 200
     assert second.json() == {'job':None}
 
+
+def test_bridge_claim_payload_validates_in_worker_for_all_canonical_brands_and_modes(monkeypatch):
+    import sys
+    from pathlib import Path
+    worker_dir = str(Path(__file__).resolve().parents[1] / 'managed-worker')
+    if worker_dir not in sys.path:
+        sys.path.insert(0, worker_dir)
+    import worker
+    managed_env(monkeypatch)
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    for index, brand in enumerate(('FBS','EXNESS','HFM','DERIV')):
+        for mode in ('DEMO','LIVE'):
+            _, headers = managed_pair()
+            assert client.post('/v1/app/managed-account', headers=headers, json={
+                'login':f'800{index}{1 if mode == "LIVE" else 0}','server':'Broker-Server','password':'fixture-secret',
+                'access_type':'MASTER','account_mode':mode,'broker_brand':brand.lower(),'consent':True
+            }).status_code == 202
+            claim = client.post('/v1/worker/jobs/claim', headers=wh, json={'worker_id':f'worker-{index}-{mode}'})
+            assert claim.status_code == 200
+            payload = claim.json()
+            assert payload['account']['broker_brand'] == brand
+            assert payload['account']['account_mode'] == 'UNVERIFIED'
+            assert worker.validate_job(payload)['account']['broker_brand'] == brand
 
 def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
     managed_env(monkeypatch)
@@ -675,17 +828,22 @@ def test_live_profile_rejects_demo_terminal_and_expired_authorization(monkeypatc
     wh2={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job2=client.post('/v1/worker/jobs/claim',headers=wh2,json={'worker_id':'worker-live2'}).json()
     demo={**actual,'login':'700003','account_mode':'DEMO'}
-    mismatch=client.post('/v1/terminal/claim',json={'pairing_code':job2['pairing_code'],'terminal_instance_id':'wrong-mode','account':demo})
-    assert mismatch.status_code==401
+    claim=client.post('/v1/terminal/claim',json={'pairing_code':job2['pairing_code'],'terminal_instance_id':'reported-demo-mode','account':demo})
+    assert claim.status_code==200
+    assert client.get('/v1/app/state',headers=ah2).json()['managed_execution']['account_mode']=='DEMO'
+    assert client.post('/v1/app/live-authorization',headers=ah2,json={'confirm_live_trading':True}).status_code==409
 
-
-def test_missing_account_mode_fails_closed_at_registration_and_terminal_claim():
+def test_registration_does_not_require_mode_but_terminal_report_must_include_it(monkeypatch):
+    managed_env(monkeypatch)
     p,ah=managed_pair()
-    missing=client.post('/v1/app/managed-account',headers=ah,json={'login':'333','server':'S','password':'x','access_type':'MASTER','consent':True})
-    assert missing.status_code==422
-    unpaired=pair()
-    no_mode={'login':'123456','server':'Demo-Server','company':'Demo Broker','currency':'USD'}
-    assert client.post('/v1/terminal/claim',json={'pairing_code':unpaired['pairing_code'],'terminal_instance_id':'no-mode','account':no_mode}).status_code==422
+    missing=client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'333','server':'S','password':'x','access_type':'MASTER','broker_brand':'FBS','consent':True
+    })
+    assert missing.status_code==202
+    job=client.post('/v1/worker/jobs/claim',headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+                    json={'worker_id':'missing-mode-worker'}).json()
+    no_mode={'login':'333','server':'S','company':'FBS Markets Inc.','currency':'USD'}
+    assert client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'no-mode','account':no_mode}).status_code==422
 
 
 def test_live_authorization_revocation_and_profile_pairing_isolation(monkeypatch):
@@ -708,8 +866,41 @@ def test_readiness_requires_valid_managed_configuration_and_storage(monkeypatch)
     assert response.status_code==503
     managed_env(monkeypatch)
     response=client.get('/health/ready')
-    assert response.status_code==200
-    assert response.json()=={'status':'ready','database':'ok','managed_execution':'configured'}
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
+
+
+def test_linux_host_readiness_maps_unsupported_wine_to_blocked_code(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    payload={'healthy':False,'wine_version':'wine-10.3','wine_ok':False}
+    error=app.urllib.error.HTTPError(
+        app.HOST_AGENT_URL, 503, 'not ready', {}, io.BytesIO(app.json.dumps(payload).encode())
+    )
+    monkeypatch.setattr(app.urllib.request, 'urlopen', lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    response=client.get('/health/ready')
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='WINE_VERSION_UNSUPPORTED'
+    assert response.json()['detail']['message']=='Host Wine version is unsupported; run the guard fix'
+
+
+def test_worker_claim_receives_persisted_bridge_origin_and_readiness_fails_closed(monkeypatch):
+    managed_env(monkeypatch)
+    expected='https://bridge.destinedfx.internal'
+    assert client.get('/health/ready').status_code==503
+    p,ah=managed_pair()
+    assert client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'123456','server':'Demo-Server','password':'test-only',
+        'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+    }).status_code==202
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    claim=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'origin-regression-worker'})
+    assert claim.status_code==200
+    assert claim.json()['bridge_url']==expected
+    monkeypatch.delenv('BRIDGE_BASE_URL',raising=False)
+    response=client.get('/health/ready')
+    assert response.status_code==503
+    assert response.json()['detail']['code']=='CONFIGURATION_REQUIRED'
 
 def test_non_durable_storage_is_not_execution_ready(monkeypatch):
     managed_env(monkeypatch)
@@ -721,9 +912,10 @@ def test_non_durable_storage_is_not_execution_ready(monkeypatch):
 def test_documented_health_paths_are_implemented(monkeypatch):
     assert client.get('/health').status_code==200
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
-    monkeypatch.setenv('WORKER_TOKEN','operator-secret-test-fixture-2026-very-long')
+    monkeypatch.setenv('WORKER_TOKEN','unit-test-worker-token-not-live-0001')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.realcop.com')
-    assert client.get('/health/ready').status_code==200
+    assert client.get('/health/ready').status_code==503
+    assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
 
 
 def test_malformed_managed_origin_fails_closed(monkeypatch):
@@ -879,7 +1071,7 @@ def test_showmytrades_adapter_clears_only_with_fresh_complete_coverage(monkeypat
 
 def test_showmytrades_adapter_fails_closed_on_stale_calendar_snapshot(monkeypatch):
     monkeypatch.setattr(app,'NEWS_PROVIDER_URL','https://showmytrades.com/api/public/calendar/v1')
-    payload=_showmytrades_payload([],generated_offset_seconds=1200)
+    payload=_showmytrades_payload([],generated_offset_seconds=max(app.NEWS_MAX_AGE,960)+1)
     monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: _MockCalendarResponse(payload))
     verdict=app.provider_news('EURUSD')
     assert verdict['status']=='UNKNOWN'
@@ -911,7 +1103,8 @@ def test_render_external_url_fallback_can_make_bridge_ready(monkeypatch):
     monkeypatch.setenv('RENDER_EXTERNAL_URL','https://destinedfx-managed-bridge.onrender.com')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', app.Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN','render-worker-token-test-fixture-at-least-32-chars')
-    assert client.get('/health/ready').status_code==200
+    assert client.get('/health/ready').status_code==503
+    assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
 
 def test_render_tls_forwarding_is_accepted_only_for_configured_render_origin(monkeypatch):
     from starlette.requests import Request
@@ -1172,3 +1365,196 @@ def test_non_durable_mode_blocks_new_execution_but_preserves_emergency_stop_and_
     assert client.delete('/v1/app/live-authorization',headers=ah).status_code == 200
     assert client.delete('/v1/app/pairing',headers=ah).status_code == 200
     monkeypatch.setenv('EXECUTION_STORAGE_DURABLE', 'true')
+
+
+def test_host_profile_health_and_state_contract(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','PERSISTENT')
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    health=client.get('/health').json()
+    assert health['host_profile']=='PERSISTENT'
+    assert health['idle_timeout_seconds']>0 and health['host_started_at_epoch_seconds']>0
+    state=client.get('/v1/app/state',headers=headers).json()
+    assert state['host_profile']=='PERSISTENT'
+    assert state['idle_timeout_seconds']==health['idle_timeout_seconds']
+    assert state['host_started_at_epoch_seconds']==health['host_started_at_epoch_seconds']
+
+
+def test_ephemeral_blocks_live_auth_and_start_with_stable_reason(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
+    p,ah,wh,job,th,actual=live_ready(monkeypatch)
+    auth_response=client.post('/v1/app/live-authorization',headers=ah,json={'confirm_live_trading':True})
+    assert auth_response.status_code==409
+    assert auth_response.json()['detail']['code']=='EPHEMERAL_HOST_LIVE_BLOCKED'
+    for action in ('START','RESUME'):
+        response=client.post('/v1/app/commands',headers=ah,json=command_req(action))
+        assert response.status_code==409
+        assert response.json()['detail']['code']=='EPHEMERAL_HOST_LIVE_BLOCKED'
+    assert client.get('/v1/app/state',headers=ah).json()['host_profile']=='EPHEMERAL'
+
+
+def test_ephemeral_allows_demo_start(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
+    managed_env(monkeypatch); p,ah=managed_pair()
+    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'123456','server':'Demo-Server','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==202
+    wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'ephemeral-demo'}).json()
+    client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'ephemeral-demo','status':'AUTHENTICATING'})
+    terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'ephemeral-demo','account':fbs_terminal_account()}).json()
+    th={'Authorization':'Bearer '+terminal['terminal_token']}
+    client.post('/v1/terminal/heartbeat',headers=th,json=heartbeat_data(account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100}))
+    status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=ephemeral-demo',headers=wh)
+    assert status.json()['status']=='READY'
+    response=client.post('/v1/app/commands',headers=ah,json=command_req('START'))
+    assert response.status_code==202, response.text
+    delivered=client.get('/v1/terminal/commands?cursor=0',headers=th)
+    assert [item['action'] for item in delivered.json()['commands']]==['START']
+
+
+def test_ephemeral_withholds_and_acknowledges_stale_queued_start_resume(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
+    p=pair(); t=claimed(p); th={'Authorization':'Bearer '+t['terminal_token']}
+    ids=[]
+    with app.tx(True) as c:
+        for action in ('START','RESUME','STOP'):
+            cur=c.execute('INSERT INTO commands(pairing_id,request_id,action,config) VALUES(?,?,?,?)',(p['pairing_id'],str(uuid.uuid4()),action,'{}'))
+            ids.append(cur.lastrowid)
+    response=client.get('/v1/terminal/commands?cursor=0',headers=th)
+    assert [x['action'] for x in response.json()['commands']]==['STOP']
+    with app.tx() as c:
+        blocked=c.execute('SELECT ack FROM commands WHERE id IN (?,?) ORDER BY id',ids[:2]).fetchall()
+    assert all(app.json.loads(row['ack'])['code']=='EPHEMERAL_HOST_RESTART_RECONCILE_REQUIRED' for row in blocked)
+
+
+pub=TestClient(app.app, base_url='https://testserver', client=('127.0.0.1',50000))  # peer is loopback, like the tunnel
+# ---- K3 public-exposure hardening (fixtures only; no real host or broker involved) ----
+def public_mode(monkeypatch, host='fixture-codespace-8000.app.github.dev'):
+    monkeypatch.setattr(app,'PUBLIC_EXPOSURE',True)
+    monkeypatch.setattr(app,'EXPECTED_PUBLIC_HOST',host)
+    with app.tx(immediate=True) as c:
+        c.execute('DELETE FROM ip_guard'); c.execute('DELETE FROM owner_bootstrap')
+
+def test_public_mode_rejects_unexpected_host(monkeypatch):
+    public_mode(monkeypatch)
+    assert pub.get('/v1/app/state',headers={'Host':'evil.example'}).status_code==421
+    assert pub.get('/health/live',headers={'Host':'fixture-codespace-8000.app.github.dev'}).status_code==200
+
+def test_public_pairing_needs_one_time_owner_code(monkeypatch):
+    public_mode(monkeypatch)
+    host={'Host':'fixture-codespace-8000.app.github.dev'}
+    assert pub.post('/v1/pairings',headers=host).status_code==401
+    code,ttl=app.issue_owner_bootstrap_code()
+    assert ttl==600
+    ok=pub.post('/v1/pairings',headers={**host,'X-Owner-Bootstrap':code})
+    assert ok.status_code==201
+    assert pub.post('/v1/pairings',headers={**host,'X-Owner-Bootstrap':code}).status_code==401
+
+def test_owner_code_expires_after_ten_minutes(monkeypatch):
+    public_mode(monkeypatch)
+    code,_=app.issue_owner_bootstrap_code()
+    real=time.time
+    monkeypatch.setattr(app.time,'time',lambda: real()+601)
+    assert app.consume_owner_bootstrap_code(code) is False
+
+def test_owner_code_is_stored_only_as_a_hash(monkeypatch):
+    public_mode(monkeypatch)
+    code,_=app.issue_owner_bootstrap_code()
+    with app.tx() as c:
+        stored=[r['code_hash'] for r in c.execute('SELECT code_hash FROM owner_bootstrap').fetchall()]
+    assert code not in stored and app.digest(code) in stored
+
+def test_bad_and_missing_tokens_return_401_then_lockout(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',3)
+    host={'Host':'fixture-codespace-8000.app.github.dev','X-Forwarded-For':'203.0.113.9'}
+    assert pub.get('/v1/app/state',headers=host).status_code==401
+    for _ in range(2):
+        assert pub.get('/v1/app/state',headers={**host,'Authorization':'Bearer wrong'}).status_code==401
+    locked=pub.get('/v1/app/state',headers=host)
+    assert locked.status_code==429 and locked.json()['detail']['code']=='TEMPORARILY_LOCKED'
+    other={'Host':'fixture-codespace-8000.app.github.dev','X-Forwarded-For':'203.0.113.10'}
+    assert pub.get('/v1/app/state',headers=other).status_code==401
+
+def test_loopback_host_is_never_counted_or_locked_by_public_ip_guard(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',1)
+    local={'Host':'127.0.0.1'}
+    for _ in range(4):
+        assert pub.get('/v1/app/state',headers=local).status_code==401
+    with app.tx() as c:
+        assert c.execute("SELECT COUNT(*) AS n FROM ip_guard WHERE ip='local-loopback'").fetchone()['n']==0
+
+def test_unforwarded_loopback_peer_uses_public_unknown_bucket(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',2)
+    host={'Host':'fixture-codespace-8000.app.github.dev'}
+    assert pub.get('/v1/app/state',headers=host).status_code==401
+    assert pub.get('/v1/app/state',headers=host).status_code==401
+    locked=pub.get('/v1/app/state',headers=host)
+    assert locked.status_code==429
+    with app.tx() as c:
+        row=c.execute("SELECT fails,locked_until FROM ip_guard WHERE ip='public-unknown'").fetchone()
+    assert row is not None and row['locked_until']>time.time()
+
+def test_local_worker_and_ea_continue_when_public_unknown_bucket_is_locked(monkeypatch):
+    managed_env(monkeypatch)
+    p=pair(); t=claimed(p)
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',1)
+    public={'Host':'fixture-codespace-8000.app.github.dev'}
+    assert pub.get('/v1/app/state',headers=public).status_code==401
+    assert pub.get('/v1/app/state',headers=public).status_code==429
+    local={'Host':'127.0.0.1'}
+    worker=pub.post('/v1/worker/jobs/claim',headers={**local,'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},json={'worker_id':'local-worker'})
+    assert worker.status_code==200
+    ea=pub.get('/v1/terminal/commands',headers={**local,'Authorization':'Bearer '+t['terminal_token']})
+    assert ea.status_code==200
+
+def test_forwarded_for_uses_last_entry_so_spoofed_prefix_does_not_evade_lockout(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',2)
+    base={'Host':'fixture-codespace-8000.app.github.dev'}
+    pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'1.1.1.1, 203.0.113.50'})
+    pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'2.2.2.2, 203.0.113.50'})
+    assert pub.get('/v1/app/state',headers={**base,'X-Forwarded-For':'3.3.3.3, 203.0.113.50'}).status_code==429
+
+def test_cf_connecting_ip_preferred_over_forwarded_for_lockout(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'AUTH_FAIL_LIMIT',2)
+    base={'Host':'fixture-codespace-8000.app.github.dev'}
+    for spoofed in ('1.1.1.1','2.2.2.2'):
+        pub.get('/v1/app/state',headers={**base,'CF-Connecting-IP':'203.0.113.60','X-Forwarded-For':spoofed})
+    locked=pub.get('/v1/app/state',headers={**base,'CF-Connecting-IP':'203.0.113.60','X-Forwarded-For':'3.3.3.3'})
+    assert locked.status_code==429
+    with app.tx() as c:
+        row=c.execute("SELECT locked_until FROM ip_guard WHERE ip='203.0.113.60'").fetchone()
+    assert row is not None and row['locked_until']>time.time()
+
+
+def test_invalid_cf_connecting_ip_falls_back_to_valid_forwarded_for(monkeypatch):
+    public_mode(monkeypatch)
+    base={'Host':'fixture-codespace-8000.app.github.dev'}
+    pub.get('/v1/app/state',headers={**base,'CF-Connecting-IP':'not-an-ip','X-Forwarded-For':'198.51.100.9, 203.0.113.77'})
+    with app.tx() as c:
+        row=c.execute("SELECT fails FROM ip_guard WHERE ip='203.0.113.77'").fetchone()
+    assert row is not None and row['fails']==1
+
+
+def test_per_ip_rate_limit_in_public_mode(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'IP_RATE',3)
+    h={'Host':'fixture-codespace-8000.app.github.dev','X-Forwarded-For':'203.0.113.77'}
+    codes=[pub.get('/health/ready',headers=h).status_code for _ in range(5)]
+    assert 429 in codes
+
+def test_token_rotation_revokes_existing_app_tokens(monkeypatch):
+    p=pair()
+    h={'Authorization':'Bearer '+p['app_token']}
+    assert pub.get('/v1/app/state',headers=h).status_code!=401
+    assert app.rotate_all_app_tokens()>=1
+    assert pub.get('/v1/app/state',headers=h).status_code==401
+
+def test_oversized_body_is_refused_in_public_mode(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'MAX_BODY',10)
+    r=pub.post('/v1/pairings',content=b'x'*50,headers={'Host':'fixture-codespace-8000.app.github.dev'})
+    assert r.status_code==413

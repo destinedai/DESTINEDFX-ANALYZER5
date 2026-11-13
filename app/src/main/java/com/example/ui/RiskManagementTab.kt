@@ -31,9 +31,10 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
     val brokerType by viewModel.activeBrokerType.collectAsStateWithLifecycle()
     val gateway by viewModel.activeBrokerGateway.collectAsStateWithLifecycle()
     val connection by gateway.connectionStatus.collectAsStateWithLifecycle()
-    val metrics by gateway.accountMetrics.collectAsStateWithLifecycle()
+    val accountSnapshot by gateway.accountSnapshot.collectAsStateWithLifecycle()
     val positions by gateway.openPositions.collectAsStateWithLifecycle()
     val brokerConnected = connection == com.example.data.broker.BrokerConnectionStatus.CONNECTED
+    val currentAccount = accountSnapshot?.takeIf { it.isDisplayable() }
 
     LazyColumn(modifier = Modifier.fillMaxSize().background(DarkBackground),
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 22.dp),
@@ -55,18 +56,22 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
                         Text(if (brokerConnected) "CONNECTED" else "OFFLINE", fontSize = 9.sp,
                             color = if (brokerConnected) ProfitGreen else WarningAmber, fontWeight = FontWeight.Black)
                     }
-                    val usableMetrics = metrics.takeIf { brokerConnected }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                        StatChip("BALANCE", usableMetrics?.let { "${it.currency} ${String.format(Locale.US, "%.2f", it.balance)}" } ?: "—", Modifier.weight(1f), TextPrimary)
-                        StatChip("EQUITY", usableMetrics?.let { "${it.currency} ${String.format(Locale.US, "%.2f", it.equity)}" } ?: "—", Modifier.weight(1f), TextPrimary)
-                        StatChip("FREE MARGIN", usableMetrics?.let { "${it.currency} ${String.format(Locale.US, "%.2f", it.freeMargin)}" } ?: "—", Modifier.weight(1f), TextPrimary)
+                        StatChip("BALANCE", currentAccount?.balance?.let { "${currentAccount.currency} ${String.format(Locale.US, "%.2f", it)}" } ?: "—", Modifier.weight(1f), TextPrimary)
+                        StatChip("EQUITY", currentAccount?.equity?.let { "${currentAccount.currency} ${String.format(Locale.US, "%.2f", it)}" } ?: "—", Modifier.weight(1f), TextPrimary)
+                        StatChip("FREE MARGIN", currentAccount?.freeMargin?.let { "${currentAccount.currency} ${String.format(Locale.US, "%.2f", it)}" } ?: "—", Modifier.weight(1f), TextPrimary)
                     }
                     val floatingPnl = positions.sumOf { it.currentProfit }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                        StatChip("OPEN POSITIONS", if (brokerConnected) positions.size.toString() else "—", Modifier.weight(1f), ElectricCyan)
-                        StatChip("FLOATING P&L", if (brokerConnected) String.format(Locale.US, "%.2f", floatingPnl) else "—", Modifier.weight(1f), if (floatingPnl >= 0.0) ProfitGreen else LossRed)
+                        StatChip("OPEN POSITIONS", if (currentAccount != null) positions.size.toString() else "—", Modifier.weight(1f), ElectricCyan)
+                        StatChip("FLOATING P&L", if (currentAccount != null) String.format(Locale.US, "%.2f", floatingPnl) else "—", Modifier.weight(1f), if (floatingPnl >= 0.0) ProfitGreen else LossRed)
                         StatChip("DRAWDOWN", "UNAVAILABLE", Modifier.weight(1f), WarningAmber)
                     }
+                    Text(
+                        if (currentAccount != null) "DATA SOURCE: BROKER_API · ${currentAccount.providerId} · ${currentAccount.environment ?: "environment unreported"} · retrieved ${currentAccount.retrievedAtMs}"
+                        else "DATA SOURCE: UNAVAILABLE · account values remain -- until a fresh broker snapshot is verified.",
+                        fontSize = 9.sp, color = TextSecondary
+                    )
                     Text("Account-specific drawdown is not supplied by this broker connection; it is not inferred from unavailable history.", fontSize = 9.sp, color = TextSecondary)
                 }
             }

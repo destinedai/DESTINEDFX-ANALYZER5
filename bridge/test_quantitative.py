@@ -274,7 +274,7 @@ def test_ict_rejects_an_otherwise_valid_pattern_outside_session():
 
 def test_unknown_strategy_is_only_not_implemented_case():
     result = evaluate_strategy(validate(candles()), strategy_id="future-strategy", symbol="EUR/USD", timeframe="M15")
-    assert result.state == "WAITING"
+    assert result.state == "NOT_IMPLEMENTED"
     assert result.reason == "NOT_IMPLEMENTED"
     assert result.strategy_id == "future-strategy"
     assert result.executable is False
@@ -329,7 +329,7 @@ def test_json_boundary_unknown_strategy_is_not_implemented_without_fallback():
         "source": "fixture-provider", "now_ms": NOW, "expected_interval_ms": INTERVAL,
         "provider_retrieved_at_ms": NOW, "candles": [row.__dict__ for row in candles()],
     })))
-    assert result["state"] == "WAITING"
+    assert result["state"] == "NOT_IMPLEMENTED"
     assert result["strategy_version"] == "NOT_IMPLEMENTED"
     assert result["reason"] == "NOT_IMPLEMENTED"
     assert result["executable"] is False

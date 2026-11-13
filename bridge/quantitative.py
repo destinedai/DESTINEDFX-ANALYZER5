@@ -180,10 +180,10 @@ def _ict_silver_bullet_window(timestamp_ms: int) -> str | None:
 
 
 def _waiting(series: ValidatedSeries, symbol: str, timeframe: str,
-             strategy_id: str, reason: str, evidence=()) -> SignalCandidate:
+             strategy_id: str, reason: str, evidence=(), state: str = "WAITING") -> SignalCandidate:
     return SignalCandidate(
         symbol, strategy_id, STRATEGY_RULESETS.get(strategy_id, "NOT_IMPLEMENTED"),
-        timeframe, "WAITING", "WAIT", None, None, None, None, 0, (),
+        timeframe, state, "WAIT", None, None, None, None, 0, (),
         tuple(evidence), reason, series.source, series.last_timestamp_ms, False,
     )
 
@@ -360,7 +360,7 @@ def evaluate_strategy(series: ValidatedSeries, *, strategy_id: str,
                       quote_ask: float | None = None) -> SignalCandidate:
     """Dispatch known rulesets; unknown IDs fail closed as NOT_IMPLEMENTED."""
     if strategy_id not in STRATEGY_RULESETS:
-        return _waiting(series, symbol, timeframe, strategy_id, "NOT_IMPLEMENTED")
+        return _waiting(series, symbol, timeframe, strategy_id, "NOT_IMPLEMENTED", state="NOT_IMPLEMENTED")
     if strategy_id == STRATEGY_ID:
         return evaluate_smc(series, symbol=symbol, timeframe=timeframe, quote_bid=quote_bid, quote_ask=quote_ask)
     return _evaluate_ruleset(series, symbol=symbol, timeframe=timeframe, strategy_id=strategy_id, quote_bid=quote_bid, quote_ask=quote_ask)

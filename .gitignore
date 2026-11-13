@@ -20,3 +20,6 @@ debug.keystore
 __pycache__/
 *.pyc
 .pytest_cache/
+/bridge/.env.owner
+/bridge/certs/
+deploy/codespaces/public-code-ready

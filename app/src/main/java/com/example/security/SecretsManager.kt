@@ -4,6 +4,11 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.data.deriv.DerivRealAuthorizationLease
+import com.example.data.broker.ModeAccountIdentity
+import com.example.data.broker.ModeDemoAcceptance
+import com.example.data.broker.ModeArmingAuditEvent
+import com.example.data.broker.LoginMode
+import com.example.data.broker.SavedBrokerAccountProfile
 import java.security.MessageDigest
 
 /**
@@ -44,9 +49,18 @@ class SecretsManager internal constructor(
         private const val DERIV_API_TOKEN_REAL = "deriv_api_token_real"
         private const val DERIV_APP_ID = "deriv_app_id"
         private const val DERIV_ACCOUNT_MODE = "deriv_account_mode"
+        private const val DERIV_SAVE_TOKEN = "deriv_save_token"
+        private const val DERIV_DEMO_ACCEPTED = "deriv_demo_accepted"
+        private const val DERIV_DEMO_ACCEPTED_ACCOUNT = "deriv_demo_accepted_account"
+        private const val DERIV_DEMO_ACCEPTED_CURRENCY = "deriv_demo_accepted_currency"
+        private const val DERIV_DEMO_ACCEPTED_SESSION = "deriv_demo_accepted_session"
+        private const val DERIV_DEMO_ACCEPTED_CREDENTIAL = "deriv_demo_accepted_credential"
+        private const val DERIV_DEMO_ACCEPTED_AT = "deriv_demo_accepted_at"
         private const val DERIV_REAL_EXECUTION_ENABLED = "deriv_real_execution_enabled"
         private const val TG_STATUS = "telegram_connection_status"
         private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
+        private const val CF_ACCESS_CLIENT_ID = "cf_access_client_id"
+        private const val CF_ACCESS_CLIENT_SECRET = "cf_access_client_secret"
         private const val MT5_BRIDGE_TOKEN = "mt5_remote_bridge_app_token"
         private const val MT5_MANAGED_SERVICE_URL = "mt5_managed_service_url"
         private const val MT5_BRIDGE_PENDING_ID = "mt5_remote_bridge_pending_id"
@@ -54,6 +68,18 @@ class SecretsManager internal constructor(
         private const val MT5_BRIDGE_SAFETY_ORIGINAL_ID = "mt5_remote_bridge_safety_original_id"
         private const val MT5_BRIDGE_SAFETY_ORIGINAL_ACTION = "mt5_remote_bridge_safety_original_action"
         private const val MT5_BRIDGE_SAFETY_STOP_ID = "mt5_remote_bridge_safety_stop_id"
+        private const val CTRADER_CLIENT_ID = "ctrader_client_id"
+        private const val CTRADER_CLIENT_SECRET = "ctrader_client_secret"
+        private const val CTRADER_REDIRECT_URI = "ctrader_redirect_uri"
+        private const val CTRADER_ACCESS_TOKEN = "ctrader_access_token"
+        private const val CTRADER_REFRESH_TOKEN = "ctrader_refresh_token"
+        private const val CTRADER_ACCESS_EXPIRES_AT_MS = "ctrader_access_expires_at_ms"
+        private const val BROKER_ACCOUNT_PROFILE_PREFIX = "broker_account_profile_"
+        private const val MANAGEMENT_ACCESS_TOKEN = "management_access_token"
+        private const val MANAGEMENT_ACCESS_EXPIRES_AT_MS = "management_access_expires_at_ms"
+        private const val MODE_DEMO_ACCEPTANCE_PREFIX = "mode_demo_acceptance_"
+        private const val MODE_ARMING_AUDIT = "mode_arming_audit_v1"
+        private val MODE_ARMING_AUDIT_LOCK = Any()
     }
 
     val isSecureStorageAvailable: Boolean
@@ -79,6 +105,175 @@ class SecretsManager internal constructor(
         }
         isSecureStorageAvailable = prefs !== UnavailableSharedPreferences
     }
+
+    fun saveCTraderOAuth(
+        clientId: String,
+        clientSecret: String,
+        redirectUri: String,
+        accessToken: String,
+        refreshToken: String,
+        accessExpiresAtMs: Long
+    ): Boolean {
+        if (!isSecureStorageAvailable || listOf(clientId, clientSecret, redirectUri, accessToken, refreshToken).any { it.isBlank() } || accessExpiresAtMs <= 0L) return false
+        return prefs.edit()
+            .putString(CTRADER_CLIENT_ID, clientId)
+            .putString(CTRADER_CLIENT_SECRET, clientSecret)
+            .putString(CTRADER_REDIRECT_URI, redirectUri)
+            .putString(CTRADER_ACCESS_TOKEN, accessToken)
+            .putString(CTRADER_REFRESH_TOKEN, refreshToken)
+            .putLong(CTRADER_ACCESS_EXPIRES_AT_MS, accessExpiresAtMs)
+            .commit()
+    }
+
+    fun saveCTraderApplication(clientId: String, clientSecret: String, redirectUri: String): Boolean {
+        if (!isSecureStorageAvailable || listOf(clientId, clientSecret, redirectUri).any { it.isBlank() }) return false
+        return prefs.edit().putString(CTRADER_CLIENT_ID, clientId)
+            .putString(CTRADER_CLIENT_SECRET, clientSecret)
+            .putString(CTRADER_REDIRECT_URI, redirectUri).commit()
+    }
+
+    fun getCTraderClientId(): String = prefs.getString(CTRADER_CLIENT_ID, "").orEmpty()
+    fun getCTraderClientSecret(): String = prefs.getString(CTRADER_CLIENT_SECRET, "").orEmpty()
+    fun getCTraderRedirectUri(): String = prefs.getString(CTRADER_REDIRECT_URI, "").orEmpty()
+    fun getCTraderAccessToken(): String = prefs.getString(CTRADER_ACCESS_TOKEN, "").orEmpty()
+    fun getCTraderRefreshToken(): String = prefs.getString(CTRADER_REFRESH_TOKEN, "").orEmpty()
+    fun getCTraderAccessExpiresAtMs(): Long = prefs.getLong(CTRADER_ACCESS_EXPIRES_AT_MS, 0L)
+
+    fun saveBrokerAccountProfile(profile: SavedBrokerAccountProfile): Boolean {
+        if (!isSecureStorageAvailable || profile.specId !in setOf(
+                "DERIV_OPTIONS", "DERIV_CTRADER", "CTRADER",
+            ) || profile.accountId.isBlank() || profile.accountId.length > 128 ||
+            profile.accountId.any { it.isISOControl() } || profile.login.isBlank() || profile.login.length > 128 ||
+            profile.login.any { it.isISOControl() } || profile.server.length > 128 ||
+            profile.server.any { it.isISOControl() }
+        ) return false
+        val keyHash = sha256Hex("${profile.specId}\u0000${profile.accountId}\u0000${profile.mode.name}")
+        val value = org.json.JSONObject()
+            .put("spec_id", profile.specId)
+            .put("account_id", profile.accountId)
+            .put("login", profile.login)
+            .put("server", profile.server)
+            .put("mode", profile.mode.name)
+        return prefs.edit().putString(BROKER_ACCOUNT_PROFILE_PREFIX + keyHash, value.toString()).commit()
+    }
+
+    fun getBrokerAccountProfiles(): List<SavedBrokerAccountProfile> {
+        if (!isSecureStorageAvailable) return emptyList()
+        return prefs.all.entries.asSequence()
+            .filter { it.key.startsWith(BROKER_ACCOUNT_PROFILE_PREFIX) }
+            .mapNotNull { (key, raw) ->
+                val value = raw as? String ?: return@mapNotNull null
+                try {
+                    val json = org.json.JSONObject(value)
+                    SavedBrokerAccountProfile(
+                        specId = json.getString("spec_id"),
+                        accountId = json.getString("account_id"),
+                        server = json.optString("server"),
+                        mode = LoginMode.valueOf(json.getString("mode")),
+                        login = json.optString("login", json.getString("account_id")),
+                    ).takeIf { profile ->
+                        profile.specId in setOf("DERIV_OPTIONS", "DERIV_CTRADER", "CTRADER") &&
+                            profile.accountId.isNotBlank() &&
+                            key == BROKER_ACCOUNT_PROFILE_PREFIX +
+                            sha256Hex("${profile.specId}\u0000${profile.accountId}\u0000${profile.mode.name}")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SecretsManager", "Stored broker account profile could not be decoded.", e)
+                    null
+                }
+            }
+            .sortedWith(compareBy<SavedBrokerAccountProfile> { it.specId }.thenBy { it.mode.name }.thenBy { it.accountId })
+            .toList()
+    }
+
+    /** Non-secret fingerprint of the registered cTrader application credentials. */
+    fun getCTraderCredentialGeneration(): String {
+        if (!isSecureStorageAvailable) return ""
+        val id = getCTraderClientId()
+        val secret = getCTraderClientSecret()
+        val redirect = getCTraderRedirectUri()
+        if (id.isBlank() || secret.isBlank() || redirect.isBlank()) return ""
+        return sha256Hex(id + "\u0000" + secret + "\u0000" + redirect)
+    }
+
+    /** Persist owner acceptance only for the exact verified DEMO account and credential generation. */
+    fun savePathDemoAcceptance(identity: ModeAccountIdentity, evidenceDigest: String): Boolean {
+        if (!isSecureStorageAvailable || identity.mode != com.example.data.broker.AccountMode.DEMO ||
+            !identity.isValid() || !evidenceDigest.matches(Regex("[0-9a-fA-F]{64}"))) return false
+        val value = org.json.JSONObject()
+            .put("path", identity.path.name)
+            .put("broker", identity.broker)
+            .put("account_id", identity.accountId)
+            .put("server", identity.server)
+            .put("mode", identity.mode.name)
+            .put("credential_generation", identity.credentialGeneration)
+            .put("accepted_at_ms", System.currentTimeMillis())
+            .put("evidence_digest", evidenceDigest.lowercase())
+        return prefs.edit().putString(MODE_DEMO_ACCEPTANCE_PREFIX + identity.acceptanceKey(), value.toString()).commit()
+    }
+
+    fun getPathDemoAcceptance(identity: ModeAccountIdentity): ModeDemoAcceptance? {
+        if (!isSecureStorageAvailable || identity.mode != com.example.data.broker.AccountMode.DEMO) return null
+        val raw = prefs.getString(MODE_DEMO_ACCEPTANCE_PREFIX + identity.acceptanceKey(), null) ?: return null
+        return runCatching {
+            val obj = org.json.JSONObject(raw)
+            val saved = ModeAccountIdentity(
+                path = com.example.data.broker.ModePath.valueOf(obj.getString("path")),
+                broker = obj.getString("broker"),
+                accountId = obj.getString("account_id"),
+                server = obj.optString("server"),
+                mode = com.example.data.broker.AccountMode.valueOf(obj.getString("mode")),
+                credentialGeneration = obj.getString("credential_generation")
+            )
+            if (saved != identity) return null
+            ModeDemoAcceptance(saved, obj.getLong("accepted_at_ms"), obj.getString("evidence_digest"))
+        }.getOrNull()
+    }
+
+    /** Permanently invalidates a prior owner DEMO acceptance when credentials are rotated. */
+    fun clearPathDemoAcceptance(identity: ModeAccountIdentity): Boolean {
+        if (!isSecureStorageAvailable || identity.mode != com.example.data.broker.AccountMode.DEMO) return false
+        return prefs.edit().remove(MODE_DEMO_ACCEPTANCE_PREFIX + identity.acceptanceKey()).commit()
+    }
+
+    /** Append-only local arming audit containing hashes and reason codes only. */
+    fun appendModeArmingAudit(event: ModeArmingAuditEvent): Boolean {
+        if (!isSecureStorageAvailable || !event.identityFingerprint.matches(Regex("[0-9a-f]{64}")) ||
+            event.event.isBlank() || event.path.isBlank() || event.mode !in setOf("DEMO", "LIVE") ||
+            event.reasonCode.any { !it.isLetterOrDigit() && it != '_' }) return false
+        synchronized(MODE_ARMING_AUDIT_LOCK) {
+            return runCatching {
+                val rows = org.json.JSONArray(prefs.getString(MODE_ARMING_AUDIT, "[]").orEmpty())
+                if (rows.length() >= 2048) return false
+                rows.put(org.json.JSONObject()
+                    .put("event", event.event.take(48))
+                    .put("path", event.path.take(32))
+                    .put("mode", event.mode)
+                    .put("identity_fingerprint", event.identityFingerprint)
+                    .put("timestamp_ms", event.timestampMs)
+                    .put("allowed", event.allowed)
+                    .put("reason_code", event.reasonCode.take(64)))
+                prefs.edit().putString(MODE_ARMING_AUDIT, rows.toString()).commit()
+            }.getOrDefault(false)
+        }
+    }
+
+    fun modeArmingAuditCount(): Int =
+        if (!isSecureStorageAvailable) 0 else runCatching {
+            org.json.JSONArray(prefs.getString(MODE_ARMING_AUDIT, "[]")).length()
+        }.getOrDefault(0)
+
+    fun saveCTraderRefreshedToken(accessToken: String, refreshToken: String, accessExpiresAtMs: Long): Boolean {
+        if (!isSecureStorageAvailable || accessToken.isBlank() || refreshToken.isBlank() || accessExpiresAtMs <= 0L) return false
+        return prefs.edit().putString(CTRADER_ACCESS_TOKEN, accessToken)
+            .putString(CTRADER_REFRESH_TOKEN, refreshToken)
+            .putLong(CTRADER_ACCESS_EXPIRES_AT_MS, accessExpiresAtMs).commit()
+    }
+
+    fun clearCTraderOAuth(): Boolean = isSecureStorageAvailable && prefs.edit()
+        .remove(CTRADER_CLIENT_ID).remove(CTRADER_CLIENT_SECRET).remove(CTRADER_REDIRECT_URI)
+        .remove(CTRADER_ACCESS_TOKEN).remove(CTRADER_REFRESH_TOKEN).remove(CTRADER_ACCESS_EXPIRES_AT_MS)
+        .commit()
 
 
     fun saveTelegramToken(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(TG_TOK, v).commit()
@@ -129,25 +324,74 @@ class SecretsManager internal constructor(
         ?.takeIf { it in setOf("System", "Light", "Dark") } ?: "System"
     fun saveThemeMode(mode: String): Boolean = mode in setOf("System", "Light", "Dark") &&
         botConfigPrefs.edit().putString("theme_mode", mode).commit()
+
+    /** Management API bearer token is opaque and isolated from trading/broker credentials. */
+    fun saveManagementAccessToken(token: String, expiresAtMs: Long): Boolean =
+        isSecureStorageAvailable && token.length in 32..256 && expiresAtMs > System.currentTimeMillis() &&
+            prefs.edit().putString(MANAGEMENT_ACCESS_TOKEN, token)
+                .putLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, expiresAtMs).commit()
+
+    fun getValidManagementAccessToken(nowMs: Long = System.currentTimeMillis()): String? {
+        if (!isSecureStorageAvailable) return null
+        val expiry = runCatching { prefs.getLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, 0L) }.getOrDefault(0L)
+        if (expiry <= nowMs) { clearManagementAccessToken(); return null }
+        return runCatching { prefs.getString(MANAGEMENT_ACCESS_TOKEN, null) }
+            .getOrNull()?.takeIf { it.length in 32..256 }
+    }
+
+    fun clearManagementAccessToken(): Boolean = isSecureStorageAvailable && prefs.edit()
+        .remove(MANAGEMENT_ACCESS_TOKEN).remove(MANAGEMENT_ACCESS_EXPIRES_AT_MS).commit()
+
     /** Deriv credentials are persisted only after encrypted Keystore storage is initialized. */
     fun saveDerivApiToken(v: String, mode: String = getDerivAccountMode()): Boolean {
         val normalizedMode = mode.trim().lowercase()
         if (!isSecureStorageAvailable || v.isBlank() || normalizedMode !in setOf("demo", "real")) return false
         invalidateDerivRealAuthorization()
         val key = if (normalizedMode == "real") DERIV_API_TOKEN_REAL else DERIV_API_TOKEN_DEMO
-        return prefs.edit().putString(key, v.trim()).remove(DERIV_API_TOKEN).commit()
+        return prefs.edit().putString(key, v.trim()).remove(DERIV_API_TOKEN)
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT).commit()
     }
+    fun saveDerivApiTokenIfAllowed(v: String, mode: String, save: Boolean): Boolean {
+        val normalizedMode = mode.trim().lowercase()
+        if (!isSecureStorageAvailable || v.isBlank() || normalizedMode !in setOf("demo", "real")) return false
+        invalidateDerivRealAuthorization()
+        val key = if (normalizedMode == "real") DERIV_API_TOKEN_REAL else DERIV_API_TOKEN_DEMO
+        val edit = prefs.edit().putBoolean(DERIV_SAVE_TOKEN, save)
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT)
+        if (save) edit.putString(key, v.trim()) else edit.remove(key)
+        return edit.remove(DERIV_API_TOKEN).commit()
+    }
+    fun isDerivApiTokenSaveEnabled(): Boolean = isSecureStorageAvailable && prefs.getBoolean(DERIV_SAVE_TOKEN, false)
     fun saveDerivAppId(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
         invalidateDerivRealAuthorization()
-        return prefs.edit().putString(DERIV_APP_ID, v.trim()).commit()
+        return prefs.edit().putString(DERIV_APP_ID, v.trim())
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT)
+            .remove(DERIV_DEMO_ACCEPTED_CURRENCY).remove(DERIV_DEMO_ACCEPTED_SESSION)
+            .remove(DERIV_DEMO_ACCEPTED_CREDENTIAL).remove(DERIV_DEMO_ACCEPTED_AT).commit()
     }
     /** Mode is explicit; selecting REAL is separate from arming live trading. */
     fun saveDerivAccountMode(v: String): Boolean {
         val mode = v.trim().lowercase()
         if (!isSecureStorageAvailable || mode !in setOf("demo", "real")) return false
         invalidateDerivRealAuthorization()
-        return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).commit()
+        return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).remove(DERIV_DEMO_ACCEPTED).commit()
+    }
+
+    fun saveDerivDemoAcceptance(accountId: String, currency: String, sessionId: String, credentialGeneration: String): Boolean {
+        if (!isSecureStorageAvailable || getDerivAccountMode() != "demo" || accountId.isBlank() || currency.isBlank() || sessionId.isBlank() || credentialGeneration.isBlank()) return false
+        return prefs.edit().putBoolean(DERIV_DEMO_ACCEPTED, true)
+            .putString(DERIV_DEMO_ACCEPTED_ACCOUNT, accountId.trim())
+            .putString(DERIV_DEMO_ACCEPTED_CURRENCY, currency.trim())
+            .putString(DERIV_DEMO_ACCEPTED_SESSION, sessionId.trim())
+            .putString(DERIV_DEMO_ACCEPTED_CREDENTIAL, credentialGeneration.trim())
+            .putLong(DERIV_DEMO_ACCEPTED_AT, System.currentTimeMillis()).commit()
+    }
+
+    fun hasCurrentDerivDemoAcceptance(accountId: String? = null, currency: String? = null, sessionId: String? = null, credentialGeneration: String? = null): Boolean {
+        if (!isSecureStorageAvailable || getDerivAccountMode() != "demo" || !prefs.getBoolean(DERIV_DEMO_ACCEPTED, false)) return false
+        return listOf(accountId to DERIV_DEMO_ACCEPTED_ACCOUNT, currency to DERIV_DEMO_ACCEPTED_CURRENCY, sessionId to DERIV_DEMO_ACCEPTED_SESSION, credentialGeneration to DERIV_DEMO_ACCEPTED_CREDENTIAL)
+            .all { (expected, key) -> expected == null || expected.isNotBlank() && expected == prefs.getString(key, "") }
     }
     fun enableDerivRealExecution(
         explicitConfirmation: Boolean,
@@ -219,7 +463,7 @@ class SecretsManager internal constructor(
         if (!isSecureStorageAvailable) return false
         invalidateDerivRealAuthorization()
         return prefs.edit().remove(DERIV_API_TOKEN).remove(DERIV_API_TOKEN_DEMO).remove(DERIV_API_TOKEN_REAL)
-            .remove(DERIV_APP_ID).remove(DERIV_ACCOUNT_MODE).commit()
+            .remove(DERIV_APP_ID).remove(DERIV_ACCOUNT_MODE).remove(DERIV_SAVE_TOKEN).commit()
     }
     fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
@@ -232,6 +476,20 @@ class SecretsManager internal constructor(
         if (origin.isBlank()) return false
         return prefs.edit().putString(MT5_MANAGED_SERVICE_URL, origin).commit()
     }
+
+    /** Cloudflare Access service credentials remain in encrypted preferences and are never logged. */
+    fun getCloudflareAccessClientId(): String = if (isSecureStorageAvailable) prefs.getString(CF_ACCESS_CLIENT_ID, "") ?: "" else ""
+    fun getCloudflareAccessClientSecret(): String = if (isSecureStorageAvailable) prefs.getString(CF_ACCESS_CLIENT_SECRET, "") ?: "" else ""
+    fun saveCloudflareAccessServiceToken(clientId: String, clientSecret: String): Boolean {
+        if (!isSecureStorageAvailable || clientId.isBlank() || clientSecret.isBlank() ||
+            clientId.length > 512 || clientSecret.length > 2048 ||
+            clientId.any { it.isISOControl() } || clientSecret.any { it.isISOControl() }
+        ) return false
+        return prefs.edit().putString(CF_ACCESS_CLIENT_ID, clientId.trim())
+            .putString(CF_ACCESS_CLIENT_SECRET, clientSecret.trim()).commit()
+    }
+    fun clearCloudflareAccessServiceToken(): Boolean = isSecureStorageAvailable &&
+        prefs.edit().remove(CF_ACCESS_CLIENT_ID).remove(CF_ACCESS_CLIENT_SECRET).commit()
 
     /** Bridge app credentials are persisted only when Android encrypted preferences initialized successfully. */
     private fun managedProfile(profile: String): String = profile.trim().uppercase().also { require(it == "DEMO" || it == "LIVE") { "Profile must be DEMO or LIVE" } }
@@ -374,6 +632,7 @@ class SecretsManager internal constructor(
             .putString("${prefix}_server", server.trim())
             .putString("${prefix}_access", accessType)
             .putBoolean("${prefix}_save_password", savePassword)
+            .putString("${prefix}_credential_generation", sha256Hex(login.trim() + "\u0000" + server.trim() + "\u0000" + password))
         if (savePassword) edit.putString("${prefix}_password", password)
         else edit.remove("${prefix}_password")
         return edit.commit()
@@ -389,13 +648,35 @@ class SecretsManager internal constructor(
     fun getManagedMT5AccountPassword(profileKey: String): String = mt5AccountValue("password", profileKey)
     fun isManagedMT5AccountPasswordSaveEnabled(profileKey: String): Boolean =
         isSecureStorageAvailable && prefs.getBoolean(mt5AccountKey("save_password", profileKey), false)
+    fun getManagedMT5CredentialGeneration(profileKey: String): String = mt5AccountValue("credential_generation", profileKey)
 
     fun clearManagedMT5AccountProfile(profileKey: String): Boolean {
         if (!isSecureStorageAvailable) return false
         val prefix = mt5AccountKey("profile", profileKey).removeSuffix("_profile")
         return prefs.edit().remove("${prefix}_login").remove("${prefix}_server")
             .remove("${prefix}_access").remove("${prefix}_password")
-            .remove("${prefix}_save_password").commit()
+            .remove("${prefix}_save_password").remove("${prefix}_credential_generation").commit()
+    }
+
+    /** Stable account slots. Each slot is an independent encrypted namespace; no DEMO/LIVE values are shared. */
+    fun getManagedMT5AccountRegistry(): List<com.example.data.mt5.MT5AccountSlot> {
+        val slots = listOf("FBS", "EXNESS", "HFM", "DERIV").flatMap { brand ->
+            listOf("DEMO", "LIVE").map { mode ->
+                val key = "${brand}_${mode}"
+                com.example.data.mt5.MT5AccountSlot(
+                    accountId = key,
+                    broker = brand,
+                    platform = "MT5",
+                    accountMode = mode,
+                    login = getManagedMT5AccountLogin(key),
+                    server = getManagedMT5AccountServer(key),
+                    accessType = getManagedMT5AccountAccessType(key),
+                    connected = false,
+                    passwordSaved = isManagedMT5AccountPasswordSaveEnabled(key)
+                )
+            }
+        }
+        return slots
     }
 
     fun saveMT5BridgeAccountPendingCommand(requestId: String, action: String, profileKey: String): Boolean {
@@ -534,8 +815,8 @@ class SecretsManager internal constructor(
     fun isDerivRealExecutionEnabled(nowMs: Long = System.currentTimeMillis()): Boolean =
         isSecureStorageAvailable && activeDerivRealLease(nowMs) != null
     /** A non-secret fingerprint changes when either the PAT or registered app ID changes. */
-    fun getDerivCredentialGeneration(): String {
-        val token = getDerivApiToken()
+    fun getDerivCredentialGeneration(mode: String = getDerivAccountMode()): String {
+        val token = getDerivApiToken(mode)
         val appId = getDerivAppId()
         if (token.isBlank() || appId.isBlank()) return ""
         return MessageDigest.getInstance("SHA-256")
@@ -571,6 +852,10 @@ class SecretsManager internal constructor(
 
     fun hasCredentials() = getMT5AccountNumber().isNotBlank()
     fun clearAll()       { invalidateDerivRealAuthorization(); prefs.edit().clear().apply() }
+
+    private fun sha256Hex(value: String): String =
+        MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     fun getBrokerSymbolOverrides(): Map<String, String> {
         val jsonStr = prefs.getString(BROKER_SYMBOL_OVERRIDES, "") ?: ""

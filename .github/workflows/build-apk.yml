@@ -3,9 +3,13 @@ name: Build APK
 on:
   push:
     branches: [ "**" ]
+    tags: [ "host-v*" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   python-tests:
@@ -17,12 +21,123 @@ jobs:
           python-version: "3.12"
       - name: Install bridge test dependencies
         run: python -m pip install -r bridge/requirements.txt
+      - name: Run shared MT5 login contract fixtures
+        run: python -m pytest -q scripts/test_login_contract.py
+      - name: Run offline Deriv DEMO smoke-harness tests
+        run: python -m pytest -q scripts/test_deriv_demo_smoke.py
+      - name: Run Linux MT5 host runtime and recovery tests
+        run: python -m pytest -q scripts/test_linux_host.py scripts/test_linux_worker.py scripts/test_linux_tools.py
       - name: Run bridge tests
         run: python -m pytest -q bridge
+      - name: Build and smoke-test the owner Docker bridge image
+        run: |
+          env BRIDGE_BASE_URL=https://bridge.ci.example.ts.net \
+            CREDENTIALS_FERNET_KEY=ci-placeholder WORKER_TOKEN=ci-placeholder \
+            TAILSCALE_IPV4=127.0.0.1 BRIDGE_HOST=bridge.ci.example.ts.net \
+            docker compose -f bridge/compose.owner.yaml config --quiet
+          docker build --file bridge/Dockerfile --tag destinedfx-bridge:ci bridge
+          docker run --rm --entrypoint python destinedfx-bridge:ci -c "import app, quantitative; print('Bridge image imports passed')"
+          docker run --rm -e BRIDGE_HOST=bridge.ci.example.ts.net \
+            -v "$GITHUB_WORKSPACE/bridge/Caddyfile.owner:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
       - name: Run managed-worker tests
-        run: python -m unittest discover -s managed-worker -p 'test_*.py' -v
+        run: |
+          python -m pytest -q managed-worker --junitxml=/tmp/managed-worker-junit.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = ET.parse('/tmp/managed-worker-junit.xml').getroot()
+          doctor = [case for case in root.iter('testcase') if 'test_doctor' in case.attrib.get('classname', '') or 'test_doctor' in case.attrib.get('file', '')]
+          executed = [case for case in doctor if case.find('skipped') is None]
+          if len(executed) < 9:
+              raise SystemExit(f'Expected at least 9 executed test_doctor.py cases, found {len(executed)}.')
+          print(f'test_doctor.py cases executed: {len(executed)}')
+          PY
       - name: Run MT5 EA source-contract and safety-math regressions
         run: python -m pytest -q mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py
+
+  backend-tests:
+    name: Application backend tests and PostgreSQL migration
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: app_management
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d app_management"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/app_management
+      ADMIN_EMAILS: ci-admin@example.org
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install backend test dependencies
+        run: python -m pip install --disable-pip-version-check -r backend/requirements-test.txt
+      - name: Run backend API and isolated migration tests
+        working-directory: backend
+        run: python -m pytest -q
+      - name: Apply real PostgreSQL migrations
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Verify runtime readiness and authenticated preference persistence on PostgreSQL
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from app.main import app
+          with TestClient(app) as client:
+              ready = client.get('/ready')
+              assert ready.status_code == 200, ready.text
+              assert ready.json() == {'status': 'ready', 'database': 'ok'}
+              created = client.post('/api/v1/auth/register', json={'email':'ci-user@example.org','password':'Correct horse battery staple 92!'})
+              assert created.status_code == 201, created.text
+              token = client.post('/api/v1/auth/login', json={'email':'ci-user@example.org','password':'Correct horse battery staple 92!'}).json()['access_token']
+              headers = {'Authorization': f'Bearer {token}'}
+              saved = client.put('/api/v1/preferences/theme', json={'value': {'mode':'dark'}}, headers=headers)
+              assert saved.status_code == 200, saved.text
+              assert client.get('/api/v1/preferences', headers=headers).json()['theme'] == {'mode':'dark'}
+          print('PostgreSQL readiness, auth, and preference persistence verified.')
+          PY
+      - name: Validate backend Compose configuration and build image
+        working-directory: backend
+        env:
+          POSTGRES_DB: app_management
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/app_management
+          APP_DOMAIN: api.example.test
+          CADDY_EMAIL: ci@example.test
+        run: |
+          docker compose -f compose.yaml config --quiet
+          docker build --tag destinedfx-app-backend:ci .
+      - name: Check pinned backend dependency vulnerabilities
+        run: |
+          python -m pip install --disable-pip-version-check pip-audit
+          pip-audit -r backend/requirements.txt
+
+  secret-scan:
+    name: Scan current tree for secrets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Install Gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
+      - name: Scan checked-out tree with redacted findings
+        run: |
+          "$(go env GOPATH)/bin/gitleaks" dir --redact=100 --exit-code 1 .
 
   mt5-ea-windows-compile:
     name: Compile MT5 EA with genuine MetaEditor
@@ -30,6 +145,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Parse Windows owner-stack PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            'managed-worker/windows/install-owner-stack.ps1',
+            'managed-worker/windows/run-owner-stack.ps1',
+            'managed-worker/windows/backup-bridge.ps1',
+            'managed-worker/launch-worker.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error }
+            Write-Host "PowerShell syntax valid: $file"
+          }
       - name: Install MetaTrader and compile the EA
         shell: pwsh
         run: ./scripts/compile-mt5-ea.ps1 -OutputDir "$env:RUNNER_TEMP\destinedfx-ea"
@@ -75,6 +206,8 @@ jobs:
             echo "::warning title=Fresh-install-only APK::DESTINEDFX_DEBUG_KEYSTORE_B64 is not configured; this build uses a new debug certificate and is not guaranteed to update an earlier APK."
             echo "Fresh debug keystore generated; configure the protected DESTINEDFX_DEBUG_KEYSTORE_B64 secret for upgrade-compatible builds." >> "$GITHUB_STEP_SUMMARY"
           fi
+          mkdir -p "$HOME/.android"
+          install -m 600 debug.keystore "$HOME/.android/debug.keystore"
       - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
       - name: Explain runtime bridge URL setup when no URL is embedded
@@ -176,13 +309,40 @@ jobs:
           aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
           test -n "$apksigner_path"
           test -n "$aapt_path"
-          "$apksigner_path" verify --verbose --print-certs "$apk"
+          signature="$({ "$apksigner_path" verify --verbose --print-certs "$apk"; } 2>&1)"
+          printf '%s\n' "$signature"
           metadata="$("$aapt_path" dump badging "$apk")"
-          printf '%s\n' "$metadata" | grep -F "package: name='com.aistudio.destinedfx.qwvzxp'"
+          python - "$metadata" "$signature" <<'PY'
+          import re, sys
+          from pathlib import Path
+          gradle = Path('app/build.gradle.kts').read_text()
+          def configured(pattern, label):
+              match = re.search(pattern, gradle)
+              if not match:
+                  raise SystemExit(f'Could not derive {label} from app/build.gradle.kts')
+              return match.group(1)
+          package = configured(r'applicationId\s*=\s*"([^"]+)"', 'application ID')
+          version_code = configured(r'versionCode\s*=\s*(\d+)', 'version code')
+          version_name = configured(r'versionName\s*=\s*"([^"]+)"', 'version name')
+          abi_block = re.search(r'abiFilters\s*\+=\s*listOf\(([^)]*)\)', gradle)
+          if not abi_block:
+              raise SystemExit('Could not derive configured ABI filters from app/build.gradle.kts')
+          abis = re.findall(r'"([^"]+)"', abi_block.group(1))
+          metadata, signature = sys.argv[1:]
+          expected = f"package: name='{package}' versionCode='{version_code}' versionName='{version_name}'"
+          if expected not in metadata:
+              raise SystemExit(f'APK metadata mismatch; expected {expected!r}')
+          native_line = next((line for line in metadata.splitlines() if line.startswith('native-code:')), '')
+          actual_abis = re.findall(r"'([^']+)'", native_line)
+          if not set(abis).issubset(actual_abis):
+              raise SystemExit(f'APK ABI mismatch: configured {abis}, package reports {actual_abis}')
+          if not re.search(r'certificate SHA-256 digest:\s*[0-9a-fA-F]{64}', signature):
+              raise SystemExit('apksigner output did not contain a signing-certificate SHA-256 fingerprint')
+          print(f'APK package/version validated against Gradle: {package} {version_name} ({version_code}); ABIs={abis}')
+          PY
           printf '%s\n' "$metadata" | grep -E "sdkVersion:|targetSdkVersion:|native-code:"
-          printf '%s\n' "$metadata" | grep -F "versionCode='10'"
-          printf '%s\n' "$metadata" | grep -F "versionName='1.0.10'"
-          unzip -l "$apk" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
+          zip_listing="$(unzip -l "$apk")"
+          printf '%s\n' "$zip_listing" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
             echo "Chaquopy native library listing was not found for configured ABIs." >&2
             exit 1
           }
@@ -190,8 +350,17 @@ jobs:
           {
             echo "### Debug APK verification"
             echo 'Package: `com.aistudio.destinedfx.qwvzxp`'
-            echo 'Version: `1.0.10` (code `10`)'
-            echo 'Signature verified by apksigner; supported ABI metadata and Chaquopy native payload inspected.'
+            python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('app/build.gradle.kts').read_text()
+          code=re.search(r'versionCode\s*=\s*(\d+)',text).group(1)
+          name=re.search(r'versionName\s*=\s*"([^"]+)"',text).group(1)
+          print(f'Version: `{name}` (code `{code}`)')
+          PY
+            echo 'Signature verified by apksigner; certificate fingerprint:'
+            printf '%s\n' "$signature" | grep -E 'certificate SHA-256 digest:'
+            echo 'Configured ABI metadata and Chaquopy Python native payload inspected.'
             echo 'SHA-256:'
             echo '```text'
             cat /tmp/apk-sha256.txt
@@ -292,21 +461,102 @@ jobs:
       - uses: actions/checkout@v4
       - name: Package Windows MT5 worker kit
         run: |
-          mkdir -p dist/DestinedFX-Windows-Worker-Kit
-          cp managed-worker/worker.py managed-worker/worker.example.toml managed-worker/README.md managed-worker/launch-worker.ps1 dist/DestinedFX-Windows-Worker-Kit/
-          cp mt5-ea/DestinedFXTraderEA.mq5 dist/DestinedFX-Windows-Worker-Kit/
+          kit="dist/DestinedFX-Windows-Worker-Kit"
+          mkdir -p "$kit/managed-worker" "$kit/managed-worker/windows" "$kit/bridge" "$kit/mt5-ea"
+          cp managed-worker/worker.py managed-worker/worker.example.toml managed-worker/README.md managed-worker/launch-worker.ps1 "$kit/managed-worker/"
+          cp -R managed-worker/windows/. "$kit/managed-worker/windows/"
+          cp bridge/app.py bridge/quantitative.py bridge/requirements.txt "$kit/bridge/"
+          cp mt5-ea/DestinedFXTraderEA.mq5 "$kit/mt5-ea/"
           cat > dist/DestinedFX-Windows-Worker-Kit/START-HERE.txt <<'EOF'
-          DestinedFX Windows MT5 worker kit
-          1. Extract all files to a private folder.
-          2. Install the broker MT5 desktop terminal and MetaEditor.
-          3. Run launch-worker.ps1 in PowerShell.
-          4. Enter the public HTTPS bridge URL, MT5 install folder, stable worker ID and generated WORKER_TOKEN.
-          5. Add the bridge URL to MT5 Tools > Options > Expert Advisors > Allow WebRequest for listed URL.
-          6. Select DEMO MASTER in the Android app for the first execution test.
-          Keep worker.toml and terminal data private. Worker start does not place trades without an app command.
+          DestinedFX owner-operated Windows kit
+          1. Read managed-worker/windows/OWNER-SETUP.md completely before setup.
+          2. Requires the owner's Windows PC to remain powered on, awake, connected, and signed in.
+          3. Use an authorized private Tailscale tailnet with Serve only; Android must join that same tailnet.
+          4. Run managed-worker/windows/install-owner-stack.ps1 only after reviewing the exact genuine broker install and account-issued server.
+          5. The bridge binds only to 127.0.0.1:8000. Never use Funnel, a LAN/public listener, or a public unauthenticated endpoint.
+          6. Begin with an authorized DEMO account. Verify account identity, fresh terminal heartbeat, worker READY, fills, SL/TP, history and STOP separately.
+          7. No LIVE order is authorized by this kit. A queued job or launched terminal is not terminal readiness.
+          8. Preserve ProgramData\DestinedFX, DPAPI secrets, SQLite, account directories and verified backups during recovery.
+          Tailscale commercial-use eligibility is the operator's responsibility; do not assume Personal plan rights.
           EOF
       - uses: actions/upload-artifact@v4
         with:
           name: DestinedFX-Windows-Worker-Kit
           path: dist/DestinedFX-Windows-Worker-Kit/
           if-no-files-found: error
+
+  package-host-v1-prerelease:
+    name: Package host-v1 prerelease
+    if: startsWith(github.ref, 'refs/tags/host-v')
+    needs: [mt5-ea-windows-compile, android-build-and-unit-tests, package-windows-worker-kit]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-MT5-EA-ex5
+          path: dist/incoming/ea
+      - uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-debug-apk
+          path: dist/incoming/apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-Windows-Worker-Kit
+          path: dist/incoming/worker-kit
+      - name: Assemble release assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/host-v1
+          ea="$(find dist/incoming/ea -type f -name 'DestinedFXTraderEA.ex5' -print -quit)"
+          apk="$(find dist/incoming/apk -type f -name 'app-debug.apk' -print -quit)"
+          test -s "$ea"; test -s "$apk"
+          cp "$ea" dist/host-v1/DestinedFXTraderEA.ex5
+          cp "$apk" dist/host-v1/DestinedFX-debug.apk
+          cp -R dist/incoming/worker-kit dist/host-v1/DestinedFX-Windows-Worker-Kit
+          (cd dist/host-v1 && zip -qr DestinedFX-Windows-Worker-Kit.zip DestinedFX-Windows-Worker-Kit && rm -rf DestinedFX-Windows-Worker-Kit)
+          (cd dist/host-v1 && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt)
+          cat > dist/host-v1/RELEASE-NOTES.txt <<'EOF'
+          DestinedFX host-v prerelease
+          This package is owner-operated and is not evidence of broker connectivity or trading readiness.
+          Verify SHA256SUMS.txt before installation. Start with DEMO and follow docs/deployment/GO_LIVE_CHECKLIST.md.
+          LIVE remains blocked until the existing ModeArmingPolicy and persistent-host requirements are independently satisfied.
+          EOF
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/host-v1/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --prerelease \
+            --title "DestinedFX ${GITHUB_REF_NAME} prerelease" \
+            --notes-file dist/host-v1/RELEASE-NOTES.txt
+
+  iac-validate:
+    name: Validate Azure for Students IaC
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Bicep without Azure credentials
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az bicep build --file deploy/azure-students/main.bicep --outfile /tmp/azuredeploy.json
+            python3 - <<'PY'
+            from pathlib import Path
+            import sys
+
+            generated = Path('/tmp/azuredeploy.json').read_bytes()
+            checked_in = Path('deploy/azure-students/azuredeploy.json').read_bytes()
+            if generated != checked_in:
+                print('Generated Bicep template differs from deploy/azure-students/azuredeploy.json', file=sys.stderr)
+                sys.exit(1)
+            PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Azure validation test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run Azure free-tier guard tests
+        run: python -m pytest -q deploy/azure-students/test_azure_students.py

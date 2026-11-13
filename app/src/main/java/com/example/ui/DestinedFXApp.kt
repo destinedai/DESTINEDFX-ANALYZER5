@@ -221,7 +221,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                         }
                     }
 
-                    // Workspace context keeps the six tabs understandable without opening a menu.
+                    // Workspace context keeps the primary tabs understandable without opening More.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -297,7 +297,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     .navigationBarsPadding()
                     .border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.8f)))
             ) {
-                // Keep the six daily-use trading workspaces visible without opening More.
+                // Keep the five owner-priority workspaces visible without opening another menu.
                 val bottomSelectedScreen = selectedScreen.takeIf { it in DestinedFXScreen.primaryScreens }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
@@ -348,13 +348,14 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedScreen) {
                     DestinedFXScreen.Home -> HomeDashboardTab(viewModel)
-                    DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel, onExportAnalysis = { showExportDialog = true })
+                    DestinedFXScreen.Analyzer -> SimplifiedAnalyzerTab(viewModel, onExportAnalysis = { showExportDialog = true })
                     DestinedFXScreen.ImageAnalyzer -> ChartImageAnalyzerTab(viewModel)
                     DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
                     DestinedFXScreen.Calendar -> CalendarTab(viewModel)
-                    DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
+                    DestinedFXScreen.Bot -> SimplifiedBotWorkstation(viewModel)
                     DestinedFXScreen.Watchlist -> WatchlistTab(viewModel)
                     DestinedFXScreen.More -> MoreTab(viewModel)
+                    DestinedFXScreen.Simulator -> DisconnectedSimulatorTab()
                     DestinedFXScreen.Chat -> ChatWorkstationTab(viewModel)
                     DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
                     DestinedFXScreen.Settings -> SettingsTab(viewModel)
@@ -933,6 +934,23 @@ private fun FullAnalysisReport(result: DynamicAnalysisInfo?) {
         InsightLine("Confluence score (not a win probability)", result.confidencePct.takeIf { it > 0 }?.let { "$it/100" } ?: "Not scored")
         InsightLine("Data source", result.dataSource.ifBlank { "UNKNOWN" })
         InsightLine("Ruleset version", result.strategyVersion.ifBlank { "Not supplied" })
+        HorizontalDivider(color = CardBorder)
+        Text("PYTHON QUANTITATIVE CANDIDATE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        val python = result.pythonAnalysis
+        InsightLine("Python state", python?.state ?: "UNAVAILABLE")
+        InsightLine("Python direction", if (python?.state == "CANDIDATE") python.direction else "WAIT")
+        InsightLine("Python entry", python?.entry?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python stop-loss", python?.stopLoss?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python take-profit", python?.takeProfit?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python R:R", python?.rewardToRisk?.let { "1:${String.format(Locale.US, "%.2f", it)}" } ?: "N/A")
+        InsightLine("Python candle", python?.candleTimestampMs?.takeIf { it > 0L }?.let { java.util.Date(it).toString() } ?: "N/A")
+        InsightLine("Python engine", python?.strategyId?.ifBlank { "Not initialized" } ?: "Not initialized")
+        InsightLine("Python ruleset", python?.strategyVersion?.ifBlank { "Not supplied" } ?: "Not supplied")
+        InsightLine("Parity", when { python == null -> "Not assessed"; python.conflict -> "CONFLICT"; else -> "Analysis only" })
+        Text(python?.reason?.ifBlank { "No Python candidate reason returned." } ?: "Python analysis not available.", fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+        python?.evidence.orEmpty().take(6).forEach { evidence ->
+            Text("• $evidence", color = TextPrimary, fontSize = 10.sp, lineHeight = 15.sp)
+        }
         InsightLine("MTF state", result.mtfStatus.ifBlank { "WAIT" })
         InsightLine("MTF summary", result.mtfSummary.ifBlank { "No summary returned" })
         InsightLine("Risk gate", result.riskNote.ifBlank { "No risk note returned" })
@@ -1224,6 +1242,7 @@ private fun MoreTab(viewModel: DestinedFXViewModel) {
                 DestinedFXScreen.Bot -> "Configure a broker connection, risk gates and automated scanning."
                 DestinedFXScreen.Watchlist -> "Follow available market quotes and jump into analysis."
                 DestinedFXScreen.Risk -> "Review account sizing, stop-loss and exposure constraints."
+                DestinedFXScreen.Simulator -> "Run fictional, disconnected DEMO/LIVE-labelled scenarios without broker or network access."
                 DestinedFXScreen.Settings -> "Manage account, broker and notification preferences."
                 DestinedFXScreen.About -> "Learn how analysis works and review the full risk disclosure."
                 DestinedFXScreen.Contact -> "Contact the support address published on the website."

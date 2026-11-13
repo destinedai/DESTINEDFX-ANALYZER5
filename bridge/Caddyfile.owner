@@ -1,0 +1,9 @@
+{$BRIDGE_HOST}:443 {
+    tls /etc/caddy/certs/bridge.crt /etc/caddy/certs/bridge.key
+
+    request_body {
+        max_size 64KB
+    }
+
+    reverse_proxy bridge:8000
+}

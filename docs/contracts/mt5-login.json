@@ -1,0 +1,51 @@
+{
+  "fixture": true,
+  "contract": "destinedfx.mt5-login.v1",
+  "request": {
+    "connector": "MT5_TERMINAL",
+    "broker_brand": "FBS",
+    "login": "123456",
+    "server": "Fixture-Demo",
+    "access_type": "INVESTOR",
+    "requested_mode": "DEMO"
+  },
+  "statuses": [
+    {"stage": "SENT", "failure_code": null},
+    {"stage": "TERMINAL_LOGGING_IN", "failure_code": null},
+    {"stage": "HEARTBEAT", "failure_code": null},
+    {"stage": "VERIFIED", "account_mode": "DEMO", "failure_code": null}
+  ],
+  "failures": [
+    "WRONG_CREDENTIALS", "ACCOUNT_OR_SERVER_MISMATCH", "NO_CONNECTION", "SERVER_NOT_FOUND",
+    "TERMINAL_OFFLINE", "EA_OFFLINE", "ALGO_TRADING_DISABLED", "WEBREQUEST_NOT_ALLOWED",
+    "ACCOUNT_DISABLED", "EPHEMERAL_HOST_LIVE_BLOCKED", "WAITING_FOR_SPOTWARE_APPROVAL",
+    "PROVIDER_AUTH_FAILED", "ACCOUNT_IDENTITY_MISMATCH", "PROVIDER_DATA_STALE",
+    "SECURE_STORAGE_UNAVAILABLE", "CONNECT_TIMEOUT", "FORM_INCOMPLETE",
+    "LOGIN_FAILED_UNCLASSIFIED", "BRIDGE_NEEDS_BROWSER_APPROVAL", "BRIDGE_URL_CHANGED"
+  ],
+  "bridge_worker_failures": [
+    "ACCOUNT_REVOKED",
+    "ACCOUNT_MODE_UNVERIFIED",
+    "TERMINAL_HEARTBEAT_STALE",
+    "TERMINAL_HEARTBEAT_RECOVERY_EXHAUSTED",
+    "TERMINAL_AUTH_TIMEOUT",
+    "TERMINAL_IDENTITY_MISMATCH"
+  ],
+  "linux_journal_failures": [
+    "WRONG_CREDENTIALS",
+    "NO_CONNECTION",
+    "SERVER_NOT_FOUND",
+    "ACCOUNT_DISABLED",
+    "TERMINAL_VERSION_UNSUPPORTED",
+    "LOGIN_FAILED_UNCLASSIFIED"
+  ],
+  "scenarios": [
+    {"name": "wrong_password", "journal_reason": "Invalid password", "failure_code": "WRONG_CREDENTIALS"},
+    {"name": "wrong_server", "journal_reason": "Server not found", "failure_code": "SERVER_NOT_FOUND"},
+    {"name": "no_connection", "journal_reason": "No connection", "failure_code": "NO_CONNECTION"},
+    {"name": "terminal_killed", "failure_code": "TERMINAL_OFFLINE"},
+    {"name": "ea_killed", "failure_code": "EA_OFFLINE"},
+    {"name": "stale_heartbeat", "failure_code": "EA_OFFLINE"},
+    {"name": "mode_mismatch", "account_mode": "LIVE", "failure_code": "LOGIN_FAILED_UNCLASSIFIED"}
+  ]
+}

@@ -1,0 +1,58 @@
+name: Codespaces deployment diagnostics
+
+on:
+  push:
+    paths:
+      - '.devcontainer/**'
+      - 'deploy/codespaces/**'
+      - 'scripts/linux-host/**'
+      - 'scripts/test_mt5_diagnostics.py'
+      - 'scripts/test_wine_guard.py'
+      - 'scripts/test_linux_host.py'
+      - 'bridge/app.py'
+      - 'bridge/test_app.py'
+      - 'app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt'
+      - '.github/workflows/codespaces-deployment.yml'
+  pull_request:
+    paths:
+      - '.devcontainer/**'
+      - 'deploy/codespaces/**'
+      - 'scripts/linux-host/**'
+      - 'scripts/test_mt5_diagnostics.py'
+      - 'scripts/test_wine_guard.py'
+      - 'scripts/test_linux_host.py'
+      - 'bridge/app.py'
+      - 'bridge/test_app.py'
+      - 'app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt'
+      - '.github/workflows/codespaces-deployment.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-codespaces-contract:
+    runs-on: ubuntu-24.04
+    env:
+      CODESPACE_NAME: ''
+      DESTINEDFX_APP_TOKEN: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install pytest -r bridge/requirements.txt
+      - name: Validate deployment shell syntax
+        run: |
+          bash -n .devcontainer/postCreate.sh deploy/codespaces/start.sh \
+            deploy/codespaces/stop.sh deploy/codespaces/gui.sh \
+            deploy/codespaces/first-run-check.sh scripts/linux-host/install-mt5.sh \
+            scripts/linux-host/launch-mt5.sh scripts/linux-host/check-wine-mt5-compat.sh \
+            scripts/linux-host/wine-guard.sh scripts/linux-host/wine-probe.sh
+      - name: Run offline MT5 diagnostic tests
+        run: python3 scripts/test_mt5_diagnostics.py
+      - name: Run Wine and Linux-host regression tests
+        run: pytest -q scripts/test_wine_guard.py scripts/test_linux_host.py bridge/test_app.py
+      - name: Run offline Codespaces shell contract
+        run: bash deploy/codespaces/test-codespaces.sh

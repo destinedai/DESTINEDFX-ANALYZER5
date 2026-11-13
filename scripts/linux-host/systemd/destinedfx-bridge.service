@@ -1,0 +1,25 @@
+[Unit]
+Description=DestinedFX FastAPI bridge
+After=destinedfx-host-agent.service network-online.target
+Requires=destinedfx-host-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=destinedfx
+Group=destinedfx
+WorkingDirectory=/opt/destinedfx/bridge
+EnvironmentFile=-/etc/destinedfx/bridge.env
+Environment=BRIDGE_HOST_MODE=linux-host
+Environment=HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
+ExecStart=/usr/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/destinedfx
+
+[Install]
+WantedBy=multi-user.target

@@ -30,6 +30,12 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     var savedMessage by remember { mutableStateOf("") }
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val secureStorageAvailable by viewModel.secureStorageAvailable.collectAsStateWithLifecycle()
+    val managementMessage by viewModel.managementMessage.collectAsStateWithLifecycle()
+    val managementBusy by viewModel.managementBusy.collectAsStateWithLifecycle()
+    val managementEmail by viewModel.managementEmail.collectAsStateWithLifecycle()
+    val managementServiceState by viewModel.managementServiceState.collectAsStateWithLifecycle()
+    var accountEmail by remember { mutableStateOf("") }
+    var accountPassword by remember { mutableStateOf("") }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(DarkBackground).padding(horizontal = 12.dp, vertical = 10.dp),
@@ -75,6 +81,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                                 onClick = {
                                     savedMessage = if (viewModel.setThemeMode(mode)) "${mode} appearance saved."
                                     else "Unable to save appearance preference."
+                                    if (savedMessage.endsWith("saved.")) viewModel.syncThemePreference(mode)
                                 },
                                 modifier = Modifier.weight(1f).testTag("theme_$mode"),
                                 label = { Text(mode, maxLines = 1, fontSize = 10.sp) }
@@ -82,6 +89,31 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         }
                     }
                     if (savedMessage.isNotBlank()) Text(savedMessage, fontSize = 9.sp, color = TextSecondary)
+                    HorizontalDivider(color = CardBorder, modifier = Modifier.padding(vertical = 4.dp))
+                    Text("ACCOUNT & MANAGEMENT SERVICE", fontSize = 9.sp, color = ElectricCyan,
+                        fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                    if (managementEmail == "Saved session") Text("Encrypted session is saved; account identity has not been refreshed yet.", fontSize = 10.sp, color = TextSecondary)
+                    else if (managementEmail.isNotBlank()) Text("Signed in as $managementEmail", fontSize = 10.sp, color = ProfitGreen)
+                    OutlinedTextField(value = accountEmail, onValueChange = { accountEmail = it },
+                        label = { Text("Account email") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("management_email"))
+                    OutlinedTextField(value = accountPassword, onValueChange = { accountPassword = it },
+                        label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth().testTag("management_password"))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedButton(enabled = !managementBusy && accountEmail.isNotBlank() && accountPassword.isNotEmpty(),
+                            onClick = { viewModel.managementRegister(accountEmail, accountPassword); accountPassword = "" }, modifier = Modifier.weight(1f)) { Text("Register", fontSize = 10.sp) }
+                        OutlinedButton(enabled = !managementBusy && accountEmail.isNotBlank() && accountPassword.isNotEmpty(),
+                            onClick = { viewModel.managementLogin(accountEmail, accountPassword); accountPassword = "" }, modifier = Modifier.weight(1f)) { Text("Sign in", fontSize = 10.sp) }
+                        OutlinedButton(enabled = !managementBusy && managementEmail.isNotBlank(),
+                            onClick = { viewModel.managementLogout() }, modifier = Modifier.weight(1f)) { Text("Sign out", fontSize = 10.sp) }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(enabled = !managementBusy, onClick = { viewModel.refreshManagementStatus() }) { Text("Check service status", fontSize = 10.sp) }
+                        if (managementBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    }
+                    if (managementServiceState.isNotBlank()) Text(managementServiceState, fontSize = 9.sp, color = TextSecondary)
+                    if (managementMessage.isNotBlank()) Text(managementMessage, fontSize = 9.sp, color = TextSecondary)
+                    Text("Theme is saved locally first; account sync requires sign-in. Offline changes stay on this device.", fontSize = 9.sp, color = TextMuted)
                     HorizontalDivider(color = CardBorder, modifier = Modifier.padding(vertical = 4.dp))
 
                     val scanningActive by viewModel.isBackgroundScanningActive.collectAsStateWithLifecycle()

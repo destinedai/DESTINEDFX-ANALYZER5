@@ -78,6 +78,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val reportContext = LocalContext.current
     var bridgeMode by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isNotBlank()) }
     var bridgeCode by remember(bridgeProfileKey) { mutableStateOf("") }
+    var ownerBootstrapCodeInput by remember(bridgeProfileKey) { mutableStateOf("") }
     var bridgeMessage by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.getMT5BridgeAccountPendingCommandId(bridgeProfileKey).let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
     var bridgeSnapshot by remember(bridgeProfileKey) { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
     var managedBridgeUrlInput by remember {
@@ -346,6 +347,21 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         supportingText = { Text("Enter the public service origin only. Never enter a token or password here.") }
                     )
+                    if (bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isBlank()) {
+                        OutlinedTextField(
+                            value = ownerBootstrapCodeInput,
+                            onValueChange = { ownerBootstrapCodeInput = it },
+                            modifier = Modifier.fillMaxWidth().testTag("managed_bridge_owner_bootstrap"),
+                            enabled = !bridgeBusy && !isConnectingBroker,
+                            label = { Text("One-time owner bootstrap code") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            supportingText = {
+                                Text("First pairing only. Expires in 10 minutes. Not saved.")
+                            }
+                        )
+                    }
                     if (managedBridgeUrlInput.contains(".trycloudflare.com", ignoreCase = true)) {
                         Text(
                             "DEMO / DEVELOPMENT ONLY — Cloudflare Quick Tunnel URLs are temporary and are not a production endpoint.",
@@ -1902,7 +1918,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             bridgeMode = true
                                             val snapshot = bridgeClient.registerManagedAccount(
                                                 mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent,
-                                                savePasswordChecked, selectedCostModel, selectedCommission, selectedCostEvidence
+                                                savePasswordChecked, selectedCostModel, selectedCommission, selectedCostEvidence,
+                                                ownerBootstrapCodeInput.trim()
                                             )
                                             bridgeMode = true
                                             runCatching { MT5AccountSessionService.start(reportContext) }
@@ -1917,6 +1934,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                 it.contains("encrypted storage")
                                         } ?: "Managed registration failed; check service availability and credentials."
                                     } finally {
+                                        ownerBootstrapCodeInput = ""
                                         mt5PasswordInput = ""
                                         mt5InvestorPasswordInput = ""
                                         managedCredentialConsent = false

@@ -20,6 +20,7 @@ import com.example.ui.chart.TradingViewLoadStatus
 import com.example.ui.chart.isTradingViewChartDocumentUrl
 import com.example.ui.chart.isSupportedTradingViewHost
 import com.example.ui.DestinedFXScreen
+import com.example.ui.deriveMarketReadiness
 import com.example.ui.mapTradeSignalToUiModel
 import com.example.ui.scanChartBitmap
 import com.example.ui.detectPairFromChartText
@@ -35,6 +36,31 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TradingViewAndMtfValidationTest {
+
+    @Test
+    fun chartReadinessNeverInfersRenderingFromCandlesOrWidgetPresence() {
+        val unverified = deriveMarketReadiness(
+            ticker = null,
+            candleSource = "verified-provider",
+            candlesAvailable = true,
+            chartDisplayed = false,
+            signal = null,
+            nowMs = 10_000L
+        )
+        assertTrue(unverified.candlesConfirmed)
+        assertFalse(unverified.chartDisplayed)
+        assertEquals("Chart candle rendering unverified", unverified.chartLabel)
+
+        val nativeRendered = deriveMarketReadiness(
+            ticker = null,
+            candleSource = "verified-provider",
+            candlesAvailable = true,
+            chartDisplayed = true,
+            signal = null,
+            nowMs = 10_000L
+        )
+        assertEquals("Native chart rendered", nativeRendered.chartLabel)
+    }
 
     private fun getSecretsManager(): SecretsManager {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -237,13 +263,13 @@ class TradingViewAndMtfValidationTest {
     }
 
     @Test
-    fun testMobileNavigationMatchesWebsitePrimaryTabsAndSecondaryRoutes() {
+    fun testMobileNavigationHasFivePrimaryTabsAndSecondaryRoutes() {
         assertEquals(
-            listOf("Analyzer", "Strategies", "Calendar", "Bot", "Risk", "Settings"),
+            listOf("Home", "Analyzer", "Bot", "Watchlist", "More"),
             DestinedFXScreen.primaryScreens.map { it.title }
         )
         assertTrue(DestinedFXScreen.moreScreens.map { it.title }.containsAll(
-            listOf("Home", "Image Analyzer", "Watchlist", "Chat", "About & Disclosure", "Contact")
+            listOf("Image Analyzer", "Strategies", "Calendar", "Risk", "Settings", "Chat", "About & Disclosure", "Contact")
         ))
         assertEquals(
             DestinedFXScreen.allScreens.toSet(),
@@ -251,11 +277,12 @@ class TradingViewAndMtfValidationTest {
         )
         assertEquals(DestinedFXScreen.allScreens.size, DestinedFXScreen.allScreens.distinct().size)
         assertTrue(DestinedFXScreen.allScreens.contains(DestinedFXScreen.Watchlist))
-        assertFalse("Watchlist belongs under More, not the primary bottom bar",
-            DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Watchlist))
+        assertTrue(DestinedFXScreen.primaryScreens.contains(DestinedFXScreen.Watchlist))
         assertTrue(DestinedFXScreen.primaryScreens.containsAll(
-            listOf(DestinedFXScreen.Bot, DestinedFXScreen.Risk, DestinedFXScreen.Settings)
+            listOf(DestinedFXScreen.Home, DestinedFXScreen.Analyzer, DestinedFXScreen.Bot,
+                DestinedFXScreen.Watchlist, DestinedFXScreen.More)
         ))
+        assertFalse(DestinedFXScreen.moreScreens.any { it in DestinedFXScreen.primaryScreens })
         assertEquals("nav_tab_more", DestinedFXScreen.More.tag)
     }
 

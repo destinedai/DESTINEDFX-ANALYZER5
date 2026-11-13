@@ -1,0 +1,29 @@
+flowchart TB
+  subgraph ANDROID[Android application]
+    direction TB
+    ACT[MainActivity and MyApplication]
+    UI["Home, Analyzer, Bot, Watchlist, More"]
+    VM[ViewModels and state]
+    DOMAIN[Analysis, risk and trade use cases]
+    REPO[Repository contracts]
+    PROVIDERS[Market, broker and persistence adapters]
+    DATA[Public feeds, authenticated APIs, Room]
+    MODE[ModeArmingPolicy and exact-account evidence]
+    ROUTE[Provider-specific DEMO or LIVE route]
+    ACT --> UI --> VM --> DOMAIN --> REPO --> PROVIDERS --> DATA
+    DOMAIN --> MODE --> ROUTE
+  end
+  PHONE[Android while running] -. optional configured HTTPS .-> BRIDGE[FastAPI bridge]
+  BRIDGE --> WORKER[Managed worker]
+  WORKER --> EA[MT5 Expert Advisor]
+  EA --> TERMINAL[MT5 terminal]
+  TERMINAL --> BROKER[Broker]
+  DERIV[Deriv Multiplier service] --> MODE
+  NOTE[Source presence does not prove account connectivity, fills or deployment]
+  ROUTE -. fresh identity and risk checks required .-> BROKER
+  classDef android fill:#102a3a,stroke:#19d3e3,color:#eaf9ff
+  classDef external fill:#152b22,stroke:#55c98a,color:#eefff5
+  classDef gated fill:#342817,stroke:#f3b544,color:#fff8e7
+  class ACT,UI,VM,DOMAIN,REPO,PROVIDERS,MODE android
+  class DATA,DERIV external
+  class ROUTE,BRIDGE,WORKER,EA,TERMINAL,BROKER gated

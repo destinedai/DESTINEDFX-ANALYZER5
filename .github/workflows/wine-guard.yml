@@ -1,0 +1,56 @@
+name: Wine guard regression tests
+
+on:
+  push:
+    paths:
+      - '.devcontainer/**'
+      - 'app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt'
+      - 'bridge/app.py'
+      - 'bridge/test_app.py'
+      - 'scripts/linux-host/wine-*.sh'
+      - 'scripts/linux-host/install-mt5.sh'
+      - 'scripts/linux-host/launch-mt5.sh'
+      - 'scripts/linux-host/check-wine-mt5-compat.sh'
+      - 'scripts/linux-host/host-agent.py'
+      - 'scripts/test_linux_host.py'
+      - 'scripts/test_wine_guard.py'
+      - '.github/workflows/wine-guard.yml'
+  pull_request:
+    paths:
+      - '.devcontainer/**'
+      - 'app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt'
+      - 'bridge/app.py'
+      - 'bridge/test_app.py'
+      - 'scripts/linux-host/wine-*.sh'
+      - 'scripts/linux-host/install-mt5.sh'
+      - 'scripts/linux-host/launch-mt5.sh'
+      - 'scripts/linux-host/check-wine-mt5-compat.sh'
+      - 'scripts/linux-host/host-agent.py'
+      - 'scripts/test_linux_host.py'
+      - 'scripts/test_wine_guard.py'
+      - '.github/workflows/wine-guard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wine-guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install pytest -r bridge/requirements.txt
+      - name: Validate Wine shell scripts
+        run: |
+          bash -n .devcontainer/postCreate.sh deploy/codespaces/gui.sh \
+            deploy/codespaces/start.sh scripts/linux-host/install-mt5.sh \
+            scripts/linux-host/launch-mt5.sh scripts/linux-host/check-wine-mt5-compat.sh \
+            scripts/linux-host/wine-guard.sh scripts/linux-host/wine-probe.sh
+      - name: Run Wine and readiness regressions
+        run: pytest -q scripts/test_wine_guard.py scripts/test_linux_host.py bridge/test_app.py
+      - name: Run Codespaces shell contract
+        run: bash deploy/codespaces/test-codespaces.sh

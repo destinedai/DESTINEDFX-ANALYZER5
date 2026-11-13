@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
   id("com.chaquo.python")
+  id("com.google.protobuf") version "0.10.1"
 }
 
 val mt5ManagedServiceUrlFromGradle = providers.gradleProperty("mt5ManagedServiceUrl").orNull.orEmpty().trim()
@@ -26,6 +27,15 @@ val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromGradle.takeIf { it.isNotBlank
 val mt5ManagedServiceUrlBuildValue = mt5ManagedServiceUrl.ifBlank { "__CONFIGURATION_REQUIRED__" }
   .replace("\\", "\\\\")
   .replace("\"", "\\\"")
+val managementApiOrigin = providers.gradleProperty("managementApiOrigin").orNull?.trim()
+  ?.takeIf { it.isNotBlank() }
+  ?: System.getenv("MANAGEMENT_API_ORIGIN")?.trim()?.takeIf { it.isNotBlank() }
+  ?: rootProject.file(".env").takeIf { it.isFile }?.readLines()
+    ?.firstOrNull { it.trim().startsWith("MANAGEMENT_API_ORIGIN=") }
+    ?.substringAfter("=")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'")
+    ?.takeIf { it.isNotBlank() }
+  ?: "__CONFIGURATION_REQUIRED__"
+val managementApiOriginBuildValue = managementApiOrigin.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
   namespace = "com.example"
@@ -35,12 +45,13 @@ android {
     applicationId = "com.aistudio.destinedfx.qwvzxp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 10
-    versionName = "1.0.10"
+    versionCode = 13
+    versionName = "1.0.13"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
+    buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
+    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
   signingConfigs {
@@ -51,17 +62,12 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
   }
 
   buildTypes {
     release {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
+      buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -69,7 +75,7 @@ android {
     }
     debug {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
-      signingConfig = signingConfigs.getByName("debugConfig")
+      buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
     }
   }
 
@@ -114,19 +120,25 @@ android {
   }
 }
 
+chaquopy {
+  defaultConfig {
+    version = "3.12"
+    buildPython("/usr/bin/python3.12")
+    pip { install("tzdata==2025.2") }
+  }
+  sourceSets {
+    getByName("main") {
+      setSrcDirs(listOf("../bridge"))
+      include("quantitative.py")
+    }
+  }
+}
+
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
-}
-
-chaquopy {
-  defaultConfig {
-    version = "3.13"
-    pip { install("tzdata==2025.2") }
-  }
-  sourceSets { getByName("main") { srcDir("src/main/python") } }
 }
 
 // Dependencies
@@ -158,6 +170,7 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation("com.google.protobuf:protobuf-kotlin-lite:4.28.3")
   implementation(libs.retrofit)
   // Bundled, offline on-device OCR for chart labels; no screenshots are sent to a service.
   implementation("com.google.mlkit:text-recognition:16.0.1")
@@ -177,4 +190,15 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+protobuf {
+  protoc { artifact = "com.google.protobuf:protoc:4.28.3" }
+  generateProtoTasks {
+    all().configureEach {
+      builtins {
+        create("java") { option("lite") }
+      }
+    }
+  }
 }
