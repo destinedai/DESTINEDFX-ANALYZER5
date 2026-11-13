@@ -36,10 +36,10 @@ grep -Fq -- 'wine-guard.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'Wine ver
 grep -Fq -- 'Wine version allowed' "$ROOT/deploy/codespaces/start.sh" || fail 'Wine version status line missing'
 grep -Fq -- 'wine64 cmd /c ver' "$ROOT/scripts/linux-host/wine-probe.sh" || fail 'Wine probe smoke command missing'
 grep -Fq -- 'winecfg -v win10' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'Windows 10 Wine prefix not configured'
-grep -Fq 'wine wine64 winetricks' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine packages missing'
+grep -Fq '"wine-staging=${WINE_STAGING_VERSION}"' "$ROOT/.devcontainer/Dockerfile" || fail 'Pinned Wine Staging package missing'
 grep -Eq '(^|[[:space:]])gh([[:space:]\\]|$)' "$ROOT/.devcontainer/Dockerfile" || fail 'GitHub CLI package missing from Codespaces image'
-grep -Fq '99-destinedfx-ubuntu-wine' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine apt preferences missing'
-grep -Fq 'apt-mark hold wine wine64 libwine' "$ROOT/.devcontainer/Dockerfile" || fail 'Ubuntu Wine package hold missing'
+grep -Fq '99-destinedfx-wine-staging' "$ROOT/.devcontainer/Dockerfile" || fail 'Wine Staging apt preferences missing'
+grep -Fq 'apt-mark hold wine-staging' "$ROOT/.devcontainer/Dockerfile" || fail 'Wine Staging package hold missing'
 grep -Fq 'WINEDEBUG=-all' "$ROOT/.devcontainer/Dockerfile" || fail 'non-interactive Wine debug environment missing'
 if grep -Fq 'WINE_PACKAGE_VERSION=' "$ROOT/.devcontainer/Dockerfile"; then fail 'Wine must not be pinned without a validated MT5 build combination'; fi
 grep -Fq 'no Wine version is established as compatible' "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" || fail 'Wine compatibility status must remain unverified'

@@ -318,6 +318,49 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     assert state['worker_status']=='LEASED' and state['status']!='READY'
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
 
+def test_worker_account_mode_unverified_failure_is_reported_safely(monkeypatch):
+    managed_env(monkeypatch)
+    p, ah = managed_pair()
+
+    registered = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'556677',
+        'server':'FBS-Demo-Server',
+        'password':'fixture-secret',
+        'access_type':'MASTER',
+        'account_mode':'DEMO',
+        'broker_brand':'FBS',
+        'consent':True
+    })
+    assert registered.status_code == 202
+
+    wh = {'Authorization':'Bearer ' + os.environ['WORKER_TOKEN']}
+    job = client.post('/v1/worker/jobs/claim', headers=wh, json={
+        'worker_id':'mode-unverified-worker'
+    })
+    assert job.status_code == 200
+    job_id = job.json()['job_id']
+
+    failed = client.patch(f'/v1/worker/jobs/{job_id}', headers=wh, json={
+        'worker_id':'mode-unverified-worker',
+        'status':'FAILED',
+        'error_code':'ACCOUNT_MODE_UNVERIFIED',
+        'error_message':'private diagnostic must not be exposed'
+    })
+    assert failed.status_code == 200
+
+    status = client.get(
+        f'/v1/worker/jobs/{job_id}/status?worker_id=mode-unverified-worker',
+        headers=wh
+    )
+    assert status.status_code == 200
+    result = status.json()
+    assert result['error_code'] == 'ACCOUNT_MODE_UNVERIFIED'
+    assert result['error_message'] == (
+        'The terminal could not verify whether this account is DEMO or LIVE'
+    )
+    assert 'private diagnostic' not in status.text
+
+
 def test_terminal_reported_mode_resolves_registration_not_mode_hint(monkeypatch):
     managed_env(monkeypatch)
     p, ah = managed_pair()
