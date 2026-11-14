@@ -248,6 +248,7 @@ def managed_env(monkeypatch):
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-' + '2026-very-long')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.destinedfx.internal')
+    monkeypatch.setenv('DESTINEDFX_PER_USER_TERMINAL_ISOLATION', 'true')
 
 def test_cloudflare_access_origin_validation_fails_closed(monkeypatch):
     monkeypatch.setenv('CF_ACCESS_TEAM_DOMAIN','https://team.cloudflareaccess.com')
@@ -302,6 +303,26 @@ def test_managed_missing_configuration(monkeypatch):
     r=client.post('/v1/app/managed-account',headers=ah,json={'login':'123','server':'S','password':'secret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
     assert r.status_code==503 and r.json()['detail']['code']=='CONFIGURATION_REQUIRED'
 
+def test_managed_account_requires_per_user_terminal_isolation(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.delenv('DESTINEDFX_PER_USER_TERMINAL_ISOLATION', raising=False)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'99881', 'server':'Broker', 'password':'synthetic-test-password',
+        'access_type':'MASTER', 'account_mode':'DEMO',
+        'broker_brand':'FBS', 'consent':True
+    })
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'PER_USER_TERMINAL_ISOLATION_REQUIRED'
+    with app.tx() as c:
+        assert c.execute(
+            'SELECT 1 FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)
+        ).fetchone() is None
+        assert c.execute(
+            'SELECT 1 FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)
+        ).fetchone() is None
+
+
 def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     managed_env(monkeypatch); p,ah=managed_pair()
     r=client.post('/v1/app/managed-account',headers=ah,json={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
@@ -309,11 +330,11 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     with app.tx() as c:
         row=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
         assert 'topsecret' not in str(dict(row)) and '99881' not in str(dict(row))
-        assert row['account_mode']=='UNVERIFIED'
+        assert row['account_mode']=='DEMO'
     assert client.post('/v1/worker/jobs/claim',json={'worker_id':'w1'}).status_code==401
     wh={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']}
     res=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'w1'})
-    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'UNVERIFIED','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
+    assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
     state=client.get('/v1/app/state',headers=ah).json()['managed_execution']
     assert state['worker_status']=='LEASED' and state['status']!='READY'
     assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
@@ -327,7 +348,6 @@ def test_worker_account_mode_unverified_failure_is_reported_safely(monkeypatch):
         'server':'FBS-Demo-Server',
         'password':'fixture-secret',
         'access_type':'MASTER',
-        'account_mode':'DEMO',
         'broker_brand':'FBS',
         'consent':True
     })
@@ -361,41 +381,73 @@ def test_worker_account_mode_unverified_failure_is_reported_safely(monkeypatch):
     assert 'private diagnostic' not in status.text
 
 
-def test_terminal_reported_mode_resolves_registration_not_mode_hint(monkeypatch):
+def test_explicit_registered_mode_is_pinned_and_mismatch_rejected(monkeypatch):
     managed_env(monkeypatch)
     p, ah = managed_pair()
     response = client.post('/v1/app/managed-account', headers=ah, json={
         'login':'556677', 'server':'FBS-Demo-Server', 'password':'fixture-secret',
-        'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS', 'consent':True
+        'access_type':'MASTER', 'account_mode':'LIVE',
+        'broker_brand':'FBS', 'consent':True
     })
     assert response.status_code == 202
-    job = client.post('/v1/worker/jobs/claim', headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
-                      json={'worker_id':'mode-neutral-worker'}).json()
-    assert job['account']['account_mode'] == 'UNVERIFIED'
-    assert client.get('/v1/app/state', headers=ah).json()['managed_execution']['account_mode'] == 'UNVERIFIED'
-    assert client.post('/v1/app/commands', headers=ah, json=command_req('START')).status_code == 409
 
-    actual = {'login':'556677', 'server':'FBS-Demo-Server', 'company':'FBS Markets Inc.',
-              'currency':'USD', 'account_mode':'DEMO'}
+    job = client.post(
+        '/v1/worker/jobs/claim',
+        headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+        json={'worker_id':'mode-pinned-worker'}
+    ).json()
+
+    assert job['account']['account_mode'] == 'LIVE'
+    assert client.get('/v1/app/state', headers=ah).json()[
+        'managed_execution'
+    ]['account_mode'] == 'LIVE'
+
+    actual = {
+        'login':'556677',
+        'server':'FBS-Demo-Server',
+        'company':'FBS Markets Inc.',
+        'currency':'USD',
+        'account_mode':'DEMO'
+    }
+
     wrong_server = {**actual, 'server':'FBS-Other-Server'}
     assert client.post('/v1/terminal/claim', json={
-        'pairing_code':job['pairing_code'], 'terminal_instance_id':'wrong-server-terminal', 'account':wrong_server
+        'pairing_code':job['pairing_code'],
+        'terminal_instance_id':'wrong-server-terminal',
+        'account':wrong_server
     }).status_code == 401
+
     wrong_login = {**actual, 'login':'999999'}
     assert client.post('/v1/terminal/claim', json={
-        'pairing_code':job['pairing_code'], 'terminal_instance_id':'wrong-login-terminal', 'account':wrong_login
+        'pairing_code':job['pairing_code'],
+        'terminal_instance_id':'wrong-login-terminal',
+        'account':wrong_login
     }).status_code == 401
+
+    assert client.post('/v1/terminal/claim', json={
+        'pairing_code':job['pairing_code'],
+        'terminal_instance_id':'demo-mode-terminal',
+        'account':actual
+    }).status_code == 401
+
     with app.tx() as c:
-        row=c.execute('SELECT account_mode FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
-    assert row['account_mode'] == 'UNVERIFIED'
+        row = c.execute(
+            'SELECT account_mode FROM managed_accounts WHERE pairing_id=?',
+            (p['pairing_id'],)
+        ).fetchone()
+    assert row['account_mode'] == 'LIVE'
+
+    actual_live = {**actual, 'account_mode':'LIVE'}
     claim = client.post('/v1/terminal/claim', json={
-        'pairing_code':job['pairing_code'], 'terminal_instance_id':'mode-report-terminal', 'account':actual
+        'pairing_code':job['pairing_code'],
+        'terminal_instance_id':'live-mode-terminal',
+        'account':actual_live
     })
     assert claim.status_code == 200
-    assert client.get('/v1/app/state', headers=ah).json()['managed_execution']['account_mode'] == 'DEMO'
-    with app.tx() as c:
-        row=c.execute('SELECT account_mode FROM managed_accounts WHERE pairing_id=?',(p['pairing_id'],)).fetchone()
-    assert row['account_mode'] == 'DEMO'
+    assert client.get('/v1/app/state', headers=ah).json()[
+        'managed_execution'
+    ]['account_mode'] == 'LIVE'
+
 
 def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypatch):
     managed_env(monkeypatch)
@@ -565,7 +617,7 @@ def test_bridge_claim_payload_validates_in_worker_for_all_canonical_brands_and_m
             assert claim.status_code == 200
             payload = claim.json()
             assert payload['account']['broker_brand'] == brand
-            assert payload['account']['account_mode'] == 'UNVERIFIED'
+            assert payload['account']['account_mode'] == mode
             assert worker.validate_job(payload)['account']['broker_brand'] == brand
 
 def test_only_supported_mt5_broker_brands_can_be_registered(monkeypatch):
@@ -829,8 +881,8 @@ def test_live_profile_rejects_demo_terminal_and_expired_authorization(monkeypatc
     job2=client.post('/v1/worker/jobs/claim',headers=wh2,json={'worker_id':'worker-live2'}).json()
     demo={**actual,'login':'700003','account_mode':'DEMO'}
     claim=client.post('/v1/terminal/claim',json={'pairing_code':job2['pairing_code'],'terminal_instance_id':'reported-demo-mode','account':demo})
-    assert claim.status_code==200
-    assert client.get('/v1/app/state',headers=ah2).json()['managed_execution']['account_mode']=='DEMO'
+    assert claim.status_code==401
+    assert client.get('/v1/app/state',headers=ah2).json()['managed_execution']['account_mode']=='LIVE'
     assert client.post('/v1/app/live-authorization',headers=ah2,json={'confirm_live_trading':True}).status_code==409
 
 def test_registration_does_not_require_mode_but_terminal_report_must_include_it(monkeypatch):

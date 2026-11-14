@@ -159,15 +159,20 @@ class MT5RemoteBridgeClient(
         }
         if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) pair(ownerBootstrapCode)
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
-            .put("access_type", accessType).put("broker_brand", brokerBrand).put("consent", consent)
+            .put("access_type", accessType).put("broker_brand", brokerBrand).put("account_mode", accountMode.uppercase()).put("consent", consent)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
         return state()
     }
 
+    fun hasEmbeddedOwnerBootstrapCode(): Boolean =
+        com.example.BuildConfig.MT5_OWNER_BOOTSTRAP_CODE.isNotBlank()
+
     suspend fun pair(ownerBootstrapCode: String = ""): Pairing {
         check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; pairing request was not sent." }
-        val bootstrap = ownerBootstrapCode.trim()
+        val bootstrap = ownerBootstrapCode.trim().ifBlank {
+            com.example.BuildConfig.MT5_OWNER_BOOTSTRAP_CODE.trim()
+        }
         require(bootstrap.length <= 200 && bootstrap.none { it.code < 32 || it.code == 127 }) {
             "Invalid owner bootstrap code."
         }

@@ -211,6 +211,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var login by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var server by remember { mutableStateOf("") }
+    var ownerBootstrapCode by remember { mutableStateOf("") }
     var accessType by remember { mutableStateOf("MASTER") }
     var derivToken by remember { mutableStateOf("") }
     var derivSaveToken by remember { mutableStateOf(false) }
@@ -275,7 +276,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         busy = false
     }
     LaunchedEffect(secrets) {
-        serviceUrl = secrets.getManagedMT5ServiceUrl()
+        serviceUrl = secrets.getManagedMT5ServiceUrl().ifBlank {
+            com.example.BuildConfig.MT5_MANAGED_SERVICE_URL
+                .takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty()
+        }
         cloudflareClientId = secrets.getCloudflareAccessClientId()
         cloudflareClientSecret = secrets.getCloudflareAccessClientSecret()
         derivMode = secrets.getDerivAccountMode()
@@ -482,10 +486,23 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             savePassword = secrets.isManagedMT5AccountPasswordSaveEnabled(mt5Profile)
             password = if (savePassword) secrets.getManagedMT5AccountPassword(mt5Profile) else ""
         }
-        if (broker.usesManagedMt5Terminal && bridge?.managedConfigured() == true && bridge.hasPairing()) {
+        val activeBridge = bridge
+        if (broker.usesManagedMt5Terminal && activeBridge != null &&
+            activeBridge.managedConfigured() && activeBridge.hasEmbeddedOwnerBootstrapCode() &&
+            !activeBridge.hasPairing()) {
+            try {
+                activeBridge.pair()
+                ownerBootstrapCode = ""
+                message = "PHONE APP PAIRED. Bridge token saved in encrypted Android storage; no broker credentials were submitted."
+            } catch (e: Exception) {
+                message = "Automatic phone pairing failed: " + (e.message ?: "No confirmed response.").take(180)
+            }
+        }
+        if (broker.usesManagedMt5Terminal && activeBridge != null &&
+            activeBridge.managedConfigured() && activeBridge.hasPairing()) {
             mt5Snapshot = null
             while (true) {
-                mt5Snapshot = runCatching { bridge.state() }.getOrNull() ?: mt5Snapshot?.copy(managedState = "OFFLINE", workerStatus = "OFFLINE", connected = false, terminalOnline = false, heartbeatFresh = false, state = "OFFLINE", liveAuthorized = false)
+                mt5Snapshot = runCatching { activeBridge.state() }.getOrNull() ?: mt5Snapshot?.copy(managedState = "OFFLINE", workerStatus = "OFFLINE", connected = false, terminalOnline = false, heartbeatFresh = false, state = "OFFLINE", liveAuthorized = false)
                 delay(5_000L)
             }
         } else {
@@ -742,7 +759,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         "CLOSE_POSITION_SELECTED", "CANCEL_PENDING_SELECTED" -> {
                             val target = ticket?.takeIf { it.isNotBlank() }
                                 ?: return@MetaTraderBrokerFlow "ACTION_BLOCKED: selected broker ticket is unavailable"
-                            val config = JSONObject().put("tickets", JSONArray().put(target))
+                            val fresh = client.state()
+                            val config = MT5RemoteBridgeClient.actionConfig(
+                                fresh, action, listOf(target)
+                            )
                             val result = client.command(UUID.randomUUID().toString(), action, config)
                             if (result.queued) "Action queued for broker confirmation." else result.detail
                         }
@@ -1404,6 +1424,37 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         }
                     }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("CHECK CONNECTION") }
                 }
+                if (bridge?.hasPairing() != true) {
+                    OutlinedTextField(
+                        value = ownerBootstrapCode,
+                        onValueChange = { ownerBootstrapCode = it.trim().take(200) },
+                        label = { Text("One-time owner pairing code") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                try {
+                                    val client = requireNotNull(bridge) { "Select an MT5 broker profile." }
+                                    require(client.managedConfigured()) { "Save the HTTPS bridge URL first." }
+                                    require(ownerBootstrapCode.isNotBlank()) { "Enter the one-time owner pairing code." }
+                                    client.pair(ownerBootstrapCode)
+                                    ownerBootstrapCode = ""
+                                    mt5Snapshot = runCatching { client.state() }.getOrNull()
+                                    message = "PHONE APP PAIRED. The bridge token is saved securely. No broker credentials were submitted."
+                                } catch (e: Exception) {
+                                    message = e.message?.take(220) ?: "Phone app pairing was not confirmed."
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        },
+                        enabled = !busy && bridge?.managedConfigured() == true && ownerBootstrapCode.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("PAIR PHONE APP ONLY") }
+                }
                 Text("Service: ${serviceReadiness?.serviceStatus ?: if (MT5RemoteBridgeClient.validServiceOrigin(serviceUrl).isNullOrBlank()) "CONFIGURATION_REQUIRED" else "not checked"} · HTTP ${serviceReadiness?.httpStatus ?: "-"}", color = WarningAmber, fontSize = 10.sp)
                 Text("Durable storage: ${serviceReadiness?.database ?: "not checked"} · Execution config: ${serviceReadiness?.managedExecution ?: "not checked"}", color = TextSecondary, fontSize = 10.sp)
                 serviceReadiness?.errorCode?.takeIf { it.isNotBlank() }?.let {
@@ -1733,6 +1784,14 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         }
                     }
                 }
+                if (broker.usesManagedMt5Terminal) {
+                    Text(
+                        "MT5 ACCOUNT SUBMISSION TEMPORARILY LOCKED: per-user terminal isolation must pass before broker credentials are sent.",
+                        color = WarningAmber,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 Button(
                     onClick = {
                         scope.launch {
@@ -1740,7 +1799,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             try {
                                 if (broker.usesManagedMt5Terminal) {
                                     require(selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Select an MT5 broker before connecting." }
-                                    val snapshot = requireNotNull(bridge) { "Select an MT5 broker." }.registerManagedAccount(login = login, password = password, server = server, accessType = accessType, consent = consent, savePasswordLocally = savePassword)
+                                    val snapshot = requireNotNull(bridge) { "Select an MT5 broker." }.registerManagedAccount(login = login, password = password, server = server, accessType = accessType, consent = consent, savePasswordLocally = savePassword, ownerBootstrapCode = ownerBootstrapCode.trim())
+                                    ownerBootstrapCode = ""
                                     mt5Snapshot = snapshot
                                     message = when {
                                         snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh && snapshot.accountVerified && snapshot.brokerIdentityVerified -> "Broker identity verified; account is connected."
@@ -1775,7 +1835,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             } catch (e: Exception) { message = e.message?.take(220) ?: "Connection failed." } finally { busy = false }
                         }
                     },
-                    enabled = !busy,
+                    enabled = !busy && !broker.usesManagedMt5Terminal,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
                 ) {

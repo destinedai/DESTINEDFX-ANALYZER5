@@ -14,11 +14,8 @@ class MT5BridgeConnectBackend(private val client: MT5RemoteBridgeClient) : Conne
     private var requestedForm: LoginForm? = null
 
     override suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm): String? {
-        if (form.mode == LoginMode.LIVE && form.type == AccessType.TRADE) {
-            val hostProfile = client.state().hostProfile
-            if (hostProfile != HostProfile.PERSISTENT) return "EPHEMERAL_HOST_LIVE_BLOCKED"
-        }
-        return null
+        // Block DEMO and LIVE until isolated per-pairing MT5 runtimes are verified.
+        return "PER_USER_TERMINAL_ISOLATION_REQUIRED"
     }
 
     override suspend fun submit(spec: BrokerLoginSpec, form: LoginForm) {

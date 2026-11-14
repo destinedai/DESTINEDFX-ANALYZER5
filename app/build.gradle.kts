@@ -12,6 +12,10 @@ plugins {
 
 val mt5ManagedServiceUrlFromGradle = providers.gradleProperty("mt5ManagedServiceUrl").orNull.orEmpty().trim()
 val mt5ManagedServiceUrlFromEnv = System.getenv("MT5_MANAGED_SERVICE_URL").orEmpty().trim()
+val mt5OwnerBootstrapCodeFromEnv = System.getenv("MT5_OWNER_BOOTSTRAP_CODE").orEmpty().trim()
+require(mt5OwnerBootstrapCodeFromEnv.isEmpty() || (mt5OwnerBootstrapCodeFromEnv.length in 16..200 && mt5OwnerBootstrapCodeFromEnv.none { it.code < 32 || it.code == 127 })) {
+  "Invalid one-time MT5 owner bootstrap configuration."
+}
 val mt5ManagedServiceUrlFromFile = rootProject.file(".env").takeIf { it.isFile }
   ?.readLines()
   ?.firstOrNull { it.trim().startsWith("MT5_MANAGED_SERVICE_URL=") }
@@ -25,6 +29,9 @@ val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromGradle.takeIf { it.isNotBlank
   ?: mt5ManagedServiceUrlFromFile.takeIf { it.isNotBlank() }
   ?: ""
 val mt5ManagedServiceUrlBuildValue = mt5ManagedServiceUrl.ifBlank { "__CONFIGURATION_REQUIRED__" }
+  .replace("\\", "\\\\")
+  .replace("\"", "\\\"")
+val mt5OwnerBootstrapCodeBuildValue = mt5OwnerBootstrapCodeFromEnv
   .replace("\\", "\\\\")
   .replace("\"", "\\\"")
 val managementApiOrigin = providers.gradleProperty("managementApiOrigin").orNull?.trim()
@@ -50,6 +57,7 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
+      buildConfigField("String", "MT5_OWNER_BOOTSTRAP_CODE", "\"\"")
     buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
     ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
@@ -67,6 +75,7 @@ android {
   buildTypes {
     release {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
+      buildConfigField("String", "MT5_OWNER_BOOTSTRAP_CODE", "\"\"")
       buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
       isCrunchPngs = false
       isMinifyEnabled = false
@@ -75,6 +84,7 @@ android {
     }
     debug {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
+      buildConfigField("String", "MT5_OWNER_BOOTSTRAP_CODE", "\"$mt5OwnerBootstrapCodeBuildValue\"")
       buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
     }
   }
