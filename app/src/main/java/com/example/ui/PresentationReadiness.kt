@@ -3,6 +3,7 @@ package com.example.ui
 import com.example.domain.model.MarketTicker
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
+import com.example.data.market.isCandleSnapshotFresh
 import java.util.Locale
 
 /** Distinguishes quote, candles, chart display, analysis, and execution readiness. */
@@ -25,18 +26,40 @@ fun deriveMarketReadiness(
     candlesAvailable: Boolean,
     chartDisplayed: Boolean,
     signal: TradeSignal?,
+    // Kept for callers/tests that provide a boolean freshness result. Production UI also
+    // supplies snapshot timestamps below, which are checked independently.
     candlesFresh: Boolean = candlesAvailable,
-    nowMs: Long = System.currentTimeMillis()
+    nowMs: Long = System.currentTimeMillis(),
+    candleRetrievedAtMs: Long = 0L,
+    latestClosedCandleAtMs: Long = 0L,
+    timeframe: String = "",
+    allowWeekendGap: Boolean = false
 ): MarketReadiness {
-    val quoteLive = ticker?.isLive == true && ticker.lastUpdateMillis > 0L &&
-        nowMs - ticker.lastUpdateMillis in 0..15_000L
-    val candlesConfirmed = candlesAvailable && candlesFresh && candleSource.isNotBlank()
+    val scannerSnapshot = ticker?.source?.contains(
+        "TradingView scanner snapshot", ignoreCase = true
+    ) == true
+    val quoteLive = !scannerSnapshot && ticker?.isLive == true &&
+        ticker.lastUpdateMillis > 0L && nowMs - ticker.lastUpdateMillis in 0..15_000L
+
+    // Require both a recent retrieval and a recent latest closed bar when snapshot
+    // metadata is available. Legacy callers can still provide candlesFresh explicitly.
+    val hasCandleSnapshotMetadata = timeframe.isNotBlank() ||
+        candleRetrievedAtMs > 0L || latestClosedCandleAtMs > 0L
+    val candleSnapshotFresh = !hasCandleSnapshotMetadata || isCandleSnapshotFresh(
+        snapshotRetrievedAtMs = candleRetrievedAtMs,
+        latestClosedCandleAtMs = latestClosedCandleAtMs,
+        nowMs = nowMs,
+        timeframe = timeframe,
+        allowWeekendGap = allowWeekendGap
+    )
+    val candlesConfirmed = candlesAvailable && candlesFresh &&
+        candleSnapshotFresh && candleSource.isNotBlank()
     val currentMarketDataReady = quoteLive && candlesConfirmed
     val signalFresh = signal?.timestamp?.let {
         it > 0L && it <= nowMs && nowMs - it <= 15_000L
     } == true
-    // A retained signal may describe an earlier candle/quote snapshot. It cannot imply
-    // current trading eligibility after its own scan timestamp or either data input expires.
+    // A retained signal cannot imply current trading eligibility after its own scan
+    // timestamp or either market-data input expires.
     val analysisCompleted = signal != null && signalFresh && currentMarketDataReady
     val tradingEligible = signal?.executable == true && signalFresh && currentMarketDataReady
     return MarketReadiness(
@@ -45,7 +68,12 @@ fun deriveMarketReadiness(
         chartDisplayed = chartDisplayed,
         analysisCompleted = analysisCompleted,
         tradingEligible = tradingEligible,
-        quoteLabel = if (quoteLive) "Live quote received" else "Quote unavailable or delayed",
+        quoteLabel = when {
+            scannerSnapshot ->
+                "Recent TradingView scanner snapshot • provider event time unavailable"
+            quoteLive -> "Live quote received"
+            else -> "Quote unavailable or delayed"
+        },
         candleLabel = if (candlesConfirmed) "Fresh OHLC candles confirmed" else "OHLC candles not confirmed",
         chartLabel = if (chartDisplayed) "Native chart rendered" else "Chart candle rendering unverified",
         analysisLabel = when {

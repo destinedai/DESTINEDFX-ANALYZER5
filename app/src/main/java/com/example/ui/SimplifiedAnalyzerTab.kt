@@ -96,12 +96,18 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         candlesAvailable = candles.isNotEmpty(),
         chartDisplayed = candles.isNotEmpty(),
         signal = currentSignal,
-        candlesFresh = viewModel.isDataFresh(symbol)
+        candleRetrievedAtMs = viewModel.candleSnapshotRetrievedAtMs(symbol, timeframe),
+        latestClosedCandleAtMs = candles.asSequence()
+            .filter { it.complete }
+            .maxOfOrNull { it.timestamp } ?: 0L,
+        timeframe = if (timeframe == "60") "H1" else timeframe,
+        allowWeekendGap = com.destinedfx.core.instrument.AssetClassifier.of(symbol) !=
+            com.destinedfx.core.marketdata.AssetClass.CRYPTO
     )
     val quoteAgeSeconds = activeTicker?.lastUpdateMillis?.takeIf { it > 0L }?.let {
         ((System.currentTimeMillis() - it).coerceAtLeast(0L) / 1000L)
     }
-    val canAnalyze = activeTicker?.isLive == true && viewModel.isDataFresh(symbol) &&
+    val canAnalyze = readiness.quoteLive && readiness.candlesConfirmed &&
         candles.isNotEmpty() && !scanning
     val stateColor = when (displayState) {
         "BUY" -> ProfitGreen
