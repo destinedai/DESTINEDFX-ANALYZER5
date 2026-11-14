@@ -9,6 +9,7 @@ import com.example.data.market.candleSourceKey
 import com.example.data.market.canMergeQuoteIntoCandle
 import com.example.data.market.canonicalTickerAfterRefresh
 import com.example.data.market.isExplicitDerivMt5Source
+import com.example.data.market.isCandleSnapshotFresh
 import com.example.data.market.scannerQuoteFromRow
 import com.example.data.market.processPollingItemsIndependently
 import com.example.data.market.resilientPollingLoop
@@ -200,6 +201,20 @@ class MarketDataSafetyTest {
         assertFalse(isExplicitDerivMt5Source("DERIV_MT5_DEMO"))
     }
 
+
+    @Test
+    fun candleSnapshotChecksRetrievalAgeAndLatestClosedBar() {
+        val now = 500_000_000L
+        assertTrue(isCandleSnapshotFresh(now - 1_000L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 30_000L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now + 1L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, 0L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now + 1L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now - 300_000L, now, "M1"))
+        assertTrue(isCandleSnapshotFresh(now - 1_000L, now - 48L * 60L * 60L * 1000L, now, "H1", allowWeekendGap = true))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now - 48L * 60L * 60L * 1000L, now, "H1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now - 60_000L, now, "UNKNOWN"))
+    }
 
     private fun quote(
         source: String,

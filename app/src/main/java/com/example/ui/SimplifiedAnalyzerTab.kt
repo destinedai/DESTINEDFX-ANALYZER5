@@ -92,7 +92,12 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         candleSource = viewModel.marketDataSource(symbol, timeframe),
         candlesAvailable = candles.isNotEmpty(),
         chartDisplayed = candles.isNotEmpty(),
-        signal = currentSignal
+        signal = currentSignal,
+        candleRetrievedAtMs = viewModel.candleSnapshotRetrievedAtMs(symbol, timeframe),
+        latestClosedCandleAtMs = candles.lastOrNull { it.complete }?.timestamp ?: 0L,
+        timeframe = timeframe,
+        allowWeekendGap = com.destinedfx.core.instrument.AssetClassifier.of(symbol) !=
+            com.destinedfx.core.marketdata.AssetClass.CRYPTO
     )
     val quoteAgeSeconds = activeTicker?.lastUpdateMillis?.takeIf { it > 0L }?.let {
         ((System.currentTimeMillis() - it).coerceAtLeast(0L) / 1000L)

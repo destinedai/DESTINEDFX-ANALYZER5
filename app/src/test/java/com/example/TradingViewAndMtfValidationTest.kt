@@ -45,8 +45,12 @@ class TradingViewAndMtfValidationTest {
             candlesAvailable = true,
             chartDisplayed = false,
             signal = null,
-            nowMs = 10_000L
-        )
+            nowMs = 3_610_000L,
+candleRetrievedAtMs = 3_610_000L,
+latestClosedCandleAtMs = 10_000L,
+timeframe = "H1",
+allowWeekendGap = false,
+)
         assertTrue(unverified.candlesConfirmed)
         assertFalse(unverified.chartDisplayed)
         assertEquals("Chart candle rendering unverified", unverified.chartLabel)
@@ -57,8 +61,12 @@ class TradingViewAndMtfValidationTest {
             candlesAvailable = true,
             chartDisplayed = true,
             signal = null,
-            nowMs = 10_000L
-        )
+            nowMs = 3_610_000L,
+candleRetrievedAtMs = 3_610_000L,
+latestClosedCandleAtMs = 10_000L,
+timeframe = "H1",
+allowWeekendGap = false,
+)
         assertEquals("Native chart rendered", nativeRendered.chartLabel)
     }
 

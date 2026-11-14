@@ -3,6 +3,7 @@ package com.example.ui
 import com.example.domain.model.MarketTicker
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
+import com.example.data.market.isCandleSnapshotFresh
 import java.util.Locale
 
 /** Distinguishes quote, candles, chart display, analysis, and execution readiness. */
@@ -25,11 +26,25 @@ fun deriveMarketReadiness(
     candlesAvailable: Boolean,
     chartDisplayed: Boolean,
     signal: TradeSignal?,
-    nowMs: Long = System.currentTimeMillis()
+    nowMs: Long = System.currentTimeMillis(),
+    candleRetrievedAtMs: Long = 0L,
+    latestClosedCandleAtMs: Long = 0L,
+    timeframe: String = "",
+    allowWeekendGap: Boolean = false
 ): MarketReadiness {
-    val quoteLive = ticker?.isLive == true && ticker.lastUpdateMillis > 0L &&
-        nowMs - ticker.lastUpdateMillis in 0..15_000L
-    val candlesConfirmed = candlesAvailable && candleSource.isNotBlank()
+    val scannerSnapshot = ticker?.source?.contains(
+        "TradingView scanner snapshot", ignoreCase = true
+    ) == true
+    val quoteLive = !scannerSnapshot && ticker?.isLive == true &&
+        ticker.lastUpdateMillis > 0L && nowMs - ticker.lastUpdateMillis in 0..15_000L
+    val candlesConfirmed = candlesAvailable && candleSource.isNotBlank() &&
+        isCandleSnapshotFresh(
+            snapshotRetrievedAtMs = candleRetrievedAtMs,
+            latestClosedCandleAtMs = latestClosedCandleAtMs,
+            nowMs = nowMs,
+            timeframe = timeframe,
+            allowWeekendGap = allowWeekendGap
+        )
     val analysisCompleted = signal != null
     val tradingEligible = signal?.executable == true
     return MarketReadiness(
@@ -38,8 +53,13 @@ fun deriveMarketReadiness(
         chartDisplayed = chartDisplayed,
         analysisCompleted = analysisCompleted,
         tradingEligible = tradingEligible,
-        quoteLabel = if (quoteLive) "Live quote received" else "Quote unavailable or delayed",
-        candleLabel = if (candlesConfirmed) "Fresh OHLC candles confirmed" else "OHLC candles not confirmed",
+        quoteLabel = when {
+            scannerSnapshot ->
+                "Recent TradingView scanner snapshot • provider event time unavailable"
+            quoteLive -> "Live quote received"
+            else -> "Quote unavailable or delayed"
+        },
+        candleLabel = if (candlesConfirmed) "Recent OHLC snapshot retrieved" else "OHLC snapshot stale or unverified",
         chartLabel = if (chartDisplayed) "Native chart rendered" else "Chart candle rendering unverified",
         analysisLabel = when {
             signal == null -> "Analysis not completed"

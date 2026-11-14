@@ -369,6 +369,14 @@ open class DestinedFXViewModel(
     fun candlesForChart(symbol: String, timeframe: String): List<Candle> =
         candlestickHistoryByTimeframe[symbol + "-" + (if (timeframe == "60") "H1" else timeframe)].orEmpty()
 
+    fun candleSnapshotRetrievedAtMs(symbol: String, timeframe: String): Long {
+        if (isPreview) return 0L
+        val normalized = if (timeframe == "60") "H1" else timeframe
+        return app.marketDataRepository.candleRetrievedAtMs[
+            com.example.data.market.candleSourceKey(symbol, normalized)
+        ] ?: 0L
+    }
+
     fun refreshMarketData(symbol: String = selectedTicker.value, timeframe: String = selectedTimeframe.value) {
         if (isPreview) return
         viewModelScope.launch {
