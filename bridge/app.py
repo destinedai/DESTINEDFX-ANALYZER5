@@ -45,10 +45,16 @@ CONNECT_JOB_TTL_SECONDS=600
 def _isolation_evidence_verified():
     """Return whether an approved worker has supplied independently verified slot evidence.
 
-    The production default is deliberately fail-closed.  This hook is replaced only by
-    isolated test fixtures until the worker attestation protocol is implemented.
+    The production default is deliberately fail-closed.  Test fixtures may replace this
+    hook to exercise legacy downstream flows without claiming production isolation.
     """
     return False
+
+
+def _attestation_signature(secret, evidence):
+    payload = {key: evidence[key] for key in sorted(evidence) if key != "signature"}
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
 NEWS_BEFORE=int(os.getenv('NEWS_BLACKOUT_BEFORE_SECONDS','1800'))
 NEWS_AFTER=int(os.getenv('NEWS_BLACKOUT_AFTER_SECONDS','1800'))
 NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
@@ -154,6 +160,7 @@ def db():
     CREATE TABLE IF NOT EXISTS request_rate(token_hash TEXT PRIMARY KEY, window INTEGER NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED', broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN');
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS worker_attestations(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), worker_id TEXT NOT NULL, slot_id TEXT NOT NULL, linux_uid INTEGER NOT NULL, wine_prefix TEXT NOT NULL, terminal_path TEXT NOT NULL, process_identity TEXT NOT NULL, ea_identity TEXT NOT NULL, broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, account_mode TEXT NOT NULL, host_generation TEXT NOT NULL, issued_at REAL NOT NULL, expires_at REAL NOT NULL, nonce TEXT NOT NULL UNIQUE, signature TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0, job_id TEXT REFERENCES worker_jobs(id) ON DELETE SET NULL);
     CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
     CREATE TABLE IF NOT EXISTS trade_ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, created REAL NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);
@@ -334,11 +341,31 @@ class ManagedAccount(BaseModel):
     cost_model:str=Field(default='OBSERVED_ROUND_TURN',min_length=1,max_length=40)
     commission_per_lot:float=Field(default=0.0,ge=0,allow_inf_nan=False)
     cost_evidence:str=Field(default='',max_length=512)
+    isolation_attestation_id:str|None=Field(default=None,min_length=1,max_length=128)
 class WorkerClaim(BaseModel):
     model_config=ConfigDict(extra='forbid')
     worker_id:str=Field(min_length=1,max_length=128)
     active_terminals:int=Field(default=0,ge=0,le=16)
     max_terminals:int=Field(default=1,ge=1,le=16)
+class WorkerAttestation(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    pairing_id:str=Field(min_length=1,max_length=128)
+    worker_id:str=Field(min_length=1,max_length=128)
+    slot_id:str=Field(min_length=1,max_length=128)
+    linux_uid:int=Field(gt=0)
+    wine_prefix:str=Field(min_length=1,max_length=512)
+    terminal_path:str=Field(min_length=1,max_length=512)
+    process_identity:str=Field(min_length=1,max_length=512)
+    ea_identity:str=Field(min_length=1,max_length=256)
+    broker_brand:str=Field(min_length=1,max_length=20)
+    login:str=Field(pattern=r'^[0-9]{1,20}$')
+    server:str=Field(min_length=1,max_length=128)
+    account_mode:str=Field(pattern=r'^(DEMO|LIVE)$')
+    host_generation:str=Field(min_length=1,max_length=128)
+    issued_at:float=Field(gt=0)
+    expires_at:float=Field(gt=0)
+    nonce:str=Field(min_length=16,max_length=128)
+    signature:str=Field(pattern=r'^[0-9a-f]{64}$')
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
     status:str; worker_id:str=Field(min_length=1,max_length=128); error_code:str|None=Field(default=None,max_length=64); error_message:str|None=Field(default=None,max_length=200)
@@ -580,7 +607,10 @@ def _showmytrades_news(symbol):
 
 def provider_news(symbol):
     symbol_key=(symbol or '').strip().upper()
-    key=(NEWS_PROVIDER_URL, symbol_key, id(urllib.request.urlopen))
+    opener=urllib.request.urlopen
+    code=getattr(opener,'__code__',None)
+    cache_identity=(getattr(code,'co_filename',None),getattr(code,'co_firstlineno',None),getattr(opener,'__qualname__',None))
+    key=(NEWS_PROVIDER_URL, symbol_key, cache_identity)
     cached=_NEWS_CACHE.get(key)
     if cached and time.time()-cached[0] <= NEWS_CACHE_TTL:
         return dict(cached[1])
@@ -884,12 +914,7 @@ def heartbeat_news_clear(beat, symbols=None):
 @app.post('/v1/app/managed-account',status_code=202)
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
     require_durable_execution()
-    p=auth(authorization,'app'); fernet,_=managed_config()
-    if not _isolation_evidence_verified():
-        raise HTTPException(503, detail={
-            'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED',
-            'message':'Managed account registration requires verified per-user terminal isolation evidence',
-        })
+    p=auth(authorization,'app'); fernet,worker_secret=managed_config()
     if not x.consent or x.access_type not in ('MASTER','INVESTOR') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or not x.server.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, server, and valid access_type are required')
     brand=x.broker_brand.strip().upper()
     if brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
@@ -902,13 +927,70 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
         if x.commission_per_lot!=0 or len(evidence)<8: raise HTTPException(422,'Zero-commission mode requires a zero commission value and an official broker pricing evidence reference')
     elif x.commission_per_lot<=0 or len(evidence)<8:
         raise HTTPException(422,'Configured commission models require a finite positive account-currency amount per standard lot and a broker evidence reference')
+    attestation=None
+    if x.isolation_attestation_id:
+        with tx() as c:
+            attestation=c.execute('SELECT * FROM worker_attestations WHERE id=? AND pairing_id=? AND used=0',
+                                  (x.isolation_attestation_id,p['id'])).fetchone()
+        if not attestation:
+            raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Isolation attestation is missing, consumed or not bound to this pairing'})
+        if attestation['expires_at'] <= time.time() or attestation['issued_at'] > time.time()+30:
+            raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Isolation attestation is stale or has an invalid issue time'})
+        if any((
+            attestation['broker_brand'] != brand,
+            attestation['login'] != x.login,
+            attestation['server'] != x.server,
+            attestation['account_mode'] != (x.account_mode or ''),
+        )):
+            raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Isolation attestation does not match the selected account'})
+    elif not _isolation_evidence_verified():
+        raise HTTPException(503, detail={
+            'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED',
+            'message':'Managed account registration requires verified per-user terminal isolation evidence',
+        })
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
         c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,'UNVERIFIED',brand,x.cost_model,float(x.commission_per_lot),evidence))
         c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+CONNECT_JOB_TTL_SECONDS,p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) VALUES(?,?,'PROVISION','QUEUED',?)",(job_id,p['id'],t))
+        if attestation:
+            updated=c.execute("UPDATE worker_attestations SET used=1,job_id=? WHERE id=? AND used=0",
+                              (job_id,attestation['id']))
+            if updated.rowcount != 1:
+                raise HTTPException(409,'Isolation attestation was consumed concurrently')
     return {'job_id':job_id,'status':'QUEUED'}
+
+
+@app.post('/v1/worker/attestations',status_code=201)
+def worker_attestation(x:WorkerAttestation, authorization:str|None=Header(default=None)):
+    require_durable_execution()
+    worker_auth(authorization)
+    _,worker_secret=managed_config()
+    evidence=x.model_dump()
+    if not hmac.compare_digest(x.signature,_attestation_signature(worker_secret,evidence)):
+        raise HTTPException(401,'Invalid worker attestation signature')
+    now_epoch=time.time()
+    if x.issued_at > now_epoch + 30 or x.expires_at <= now_epoch or x.expires_at > now_epoch + 900:
+        raise HTTPException(422,'Worker attestation expiry is invalid')
+    if x.host_generation != HOST_GENERATION:
+        raise HTTPException(409,detail={'code':'HOST_GENERATION_MISMATCH','message':'Worker attestation belongs to a different host generation'})
+    if x.account_mode == 'LIVE' and HOST_PROFILE == 'EPHEMERAL':
+        raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE isolation attestations are unavailable on ephemeral hosts'})
+    with tx(True) as c:
+        if not c.execute('SELECT 1 FROM pairings WHERE id=? AND expires>?',(x.pairing_id,now_epoch)).fetchone():
+            raise HTTPException(404,'Pairing not found or expired')
+        if c.execute('SELECT 1 FROM worker_attestations WHERE nonce=?',(x.nonce,)).fetchone():
+            raise HTTPException(409,'Worker attestation nonce was already used')
+        c.execute('''INSERT INTO worker_attestations
+            (id,pairing_id,worker_id,slot_id,linux_uid,wine_prefix,terminal_path,process_identity,ea_identity,
+             broker_brand,login,server,account_mode,host_generation,issued_at,expires_at,nonce,signature)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (str(uuid.uuid4()),x.pairing_id,x.worker_id,x.slot_id,x.linux_uid,x.wine_prefix,x.terminal_path,
+             x.process_identity,x.ea_identity,x.broker_brand.upper(),x.login,x.server,x.account_mode,
+             x.host_generation,x.issued_at,x.expires_at,x.nonce,x.signature))
+        row=c.execute('SELECT id FROM worker_attestations WHERE nonce=?',(x.nonce,)).fetchone()
+    return {'attestation_id':row['id'],'status':'AVAILABLE','expires_at':x.expires_at}
 
 @app.post('/v1/worker/jobs/claim')
 def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
@@ -930,6 +1012,10 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
         if not r: return {'job':None}
         c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=?,lease_started=? WHERE id=?",(x.worker_id,t+120,t,r['id']))
         if r['kind']=='REVOKE': return {'job_id':r['id'],'kind':'REVOKE','pairing_id':r['pairing_id'],'worker_id':x.worker_id}
+        attestation=c.execute('SELECT worker_id,slot_id,linux_uid,wine_prefix,terminal_path,process_identity,ea_identity,host_generation,expires_at FROM worker_attestations WHERE job_id=? AND worker_id=? AND used=1',(r['id'],x.worker_id)).fetchone()
+        if (not attestation or attestation['expires_at'] < t) and not _isolation_evidence_verified():
+            c.execute("UPDATE worker_jobs SET status='FAILED',error_code='PER_USER_TERMINAL_ISOLATION_REQUIRED',error_message='Fresh slot isolation evidence is required' WHERE id=?",(r['id'],))
+            return {'job':None}
         p=c.execute('SELECT * FROM pairings WHERE id=?',(r['pairing_id'],)).fetchone()
         m=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=? AND revoked=0',(r['pairing_id'],)).fetchone()
         if not m:
@@ -947,7 +1033,7 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
         # Existing plaintext code is intentionally not persisted; generate a fresh one for the worker and rotate hash.
         code=secrets.token_urlsafe(18); c.execute('UPDATE pairings SET code_hash=?,expires=? WHERE id=?',(digest(code),t+CONNECT_JOB_TTL_SECONDS,r['pairing_id']))
         bridge_url=os.getenv('BRIDGE_BASE_URL','').strip() or os.getenv('RENDER_EXTERNAL_URL','').strip()
-        return {'job_id':r['id'],'kind':'PROVISION','worker_id':x.worker_id,'pairing_id':r['pairing_id'],'pairing_code':code,'bridge_url':bridge_url,'account':account}
+        return {'job_id':r['id'],'kind':'PROVISION','worker_id':x.worker_id,'pairing_id':r['pairing_id'],'pairing_code':code,'bridge_url':bridge_url,'account':account,'isolation_evidence':dict(attestation) if attestation else None}
 
 @app.patch('/v1/worker/jobs/{job_id}')
 def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(default=None)):

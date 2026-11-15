@@ -242,6 +242,7 @@ from cryptography.fernet import Fernet
 
 def managed_env(monkeypatch):
     with app.tx(True) as c:
+        c.execute('DELETE FROM worker_attestations')
         c.execute('DELETE FROM worker_jobs')
         c.execute('DELETE FROM managed_accounts')
         c.execute('DELETE FROM rate')
@@ -261,6 +262,63 @@ def test_managed_registration_requires_verified_per_user_isolation(monkeypatch):
     })
     assert response.status_code == 503
     assert response.json()['detail']['code'] == 'PER_USER_TERMINAL_ISOLATION_REQUIRED'
+
+def test_worker_attestation_is_signed_bound_and_single_use(monkeypatch):
+    managed_env(monkeypatch)
+    p, ah = managed_pair()
+    now = time.time()
+    evidence = {
+        'pairing_id': p['pairing_id'], 'worker_id': 'worker-a', 'slot_id': 'slot-a',
+        'linux_uid': 2001, 'wine_prefix': '/srv/slots/slot-a/wine',
+        'terminal_path': '/srv/slots/slot-a/terminal/terminal64.exe',
+        'process_identity': 'pid=1234;start=4567;exe=/srv/slots/slot-a/terminal/terminal64.exe',
+        'ea_identity': 'DestinedFXEA|build=2026.05.01',
+        'broker_brand': 'FBS', 'login': '123456', 'server': 'Demo-Server',
+        'account_mode': 'DEMO', 'host_generation': app.HOST_GENERATION,
+        'issued_at': now, 'expires_at': now + 300, 'nonce': uuid.uuid4().hex,
+    }
+    evidence['signature'] = app._attestation_signature(os.environ['WORKER_TOKEN'], evidence)
+    response = client.post('/v1/worker/attestations',
+                           headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+                           json=evidence)
+    assert response.status_code == 201
+    attestation_id = response.json()['attestation_id']
+    registered = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123456', 'server':'Demo-Server', 'password':'secret',
+        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS',
+        'consent':True, 'isolation_attestation_id':attestation_id,
+    })
+    assert registered.status_code == 202
+    assert client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123456', 'server':'Demo-Server', 'password':'secret',
+        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS',
+        'consent':True, 'isolation_attestation_id':attestation_id,
+    }).status_code == 503
+
+def test_worker_attestation_rejects_client_auth_and_replay(monkeypatch):
+    managed_env(monkeypatch)
+    p, _ = managed_pair()
+    now = time.time()
+    evidence = {
+        'pairing_id': p['pairing_id'], 'worker_id': 'worker-a', 'slot_id': 'slot-a',
+        'linux_uid': 2001, 'wine_prefix': '/srv/slots/slot-a/wine',
+        'terminal_path': '/srv/slots/slot-a/terminal/terminal64.exe',
+        'process_identity': 'pid=1234', 'ea_identity': 'DestinedFXEA',
+        'broker_brand': 'FBS', 'login': '123456', 'server': 'Demo-Server',
+        'account_mode': 'DEMO', 'host_generation': app.HOST_GENERATION,
+        'issued_at': now, 'expires_at': now + 300, 'nonce': uuid.uuid4().hex,
+    }
+    evidence['signature'] = app._attestation_signature(os.environ['WORKER_TOKEN'], evidence)
+    assert client.post('/v1/worker/attestations',
+                       headers={'Authorization':'Bearer '+p['app_token']},
+                       json=evidence).status_code == 401
+    first = client.post('/v1/worker/attestations',
+                        headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+                        json=evidence)
+    assert first.status_code == 201
+    assert client.post('/v1/worker/attestations',
+                       headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+                       json=evidence).status_code == 409
 
 def test_cloudflare_access_origin_validation_fails_closed(monkeypatch):
     monkeypatch.setenv('CF_ACCESS_TEAM_DOMAIN','https://team.cloudflareaccess.com')
