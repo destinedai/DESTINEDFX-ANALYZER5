@@ -8,10 +8,15 @@
     "cpus": 2
   },
   "postCreateCommand": "bash deploy/codespaces/post-create.sh",
-  "forwardPorts": [8000],
+  "forwardPorts": [8000, 6080],
   "portsAttributes": {
     "8000": {
       "label": "DestinedFX bridge (private; K3 public guard required)",
+      "onAutoForward": "notify",
+      "visibility": "private"
+    },
+    "6080": {
+      "label": "DestinedFX private noVNC",
       "onAutoForward": "notify",
       "visibility": "private"
     }

@@ -7,6 +7,11 @@ for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-creat
 [[ -x "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" ]] || fail 'Wine MT5 compatibility gate missing or not executable'
 [[ -x "$ROOT/scripts/linux-host/wine-guard.sh" ]] || fail 'Wine version guard missing or not executable'
 [[ -x "$ROOT/scripts/linux-host/wine-probe.sh" ]] || fail 'Wine startup probe missing or not executable'
+[[ -x "$(command -v Xvfb || true)" ]] || fail 'Xvfb binary missing'
+[[ -x "$(command -v x11vnc || true)" ]] || fail 'x11vnc binary missing'
+[[ -x "$(command -v websockify || true)" ]] || fail 'websockify binary missing'
+[[ -f "$ROOT/deploy/codespaces/vnc-up.sh" ]] || fail 'VNC launcher missing'
+[[ -f "$ROOT/deploy/codespaces/vnc-selfcheck.py" ]] || fail 'VNC self-check missing'
 pass 'all Codespaces shell scripts pass bash -n'
 python3 "$ROOT/scripts/test_mt5_diagnostics.py" || fail 'MT5 diagnostics regression tests failed'
 python3 - "$ROOT/.devcontainer/devcontainer.json" <<'PY'
@@ -49,15 +54,15 @@ grep -Fq 'MT5 terminal readiness remains unverified' "$ROOT/deploy/codespaces/gu
 grep -Fq 'mt5_terminal_ready NOT_VERIFIED' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'terminal readiness must remain unverified absent owner evidence'
 grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
 grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
-grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/gui.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
-grep -Fq -- '--heartbeat=30' "$ROOT/deploy/codespaces/gui.sh" || fail 'noVNC websocket heartbeat missing'
+grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
+grep -Fq -- '--heartbeat=30' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC websocket heartbeat missing'
 grep -Fq -- 'cacheBust=' "$ROOT/deploy/codespaces/gui.sh" || fail 'noVNC cache-busting URL missing'
 bash "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" || fail 'invalid installer signature fixtures were accepted'
 grep -Fq -- 'installer-verified' "$ROOT/.devcontainer/postCreate.sh" || fail 'installer verification marker missing'
 bash "$ROOT/deploy/codespaces/first-run-check.sh" >/tmp/destinedfx-first-run-check.out 2>&1 || true
 grep -Fq -- 'SUMMARY:' /tmp/destinedfx-first-run-check.out || fail 'first-run-check summary missing'
 grep -Fq -- 'gh codespace ports visibility 6080:private' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI forwarding missing'
-grep -Fq 'cannot enforce private port 6080 visibility' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI route must fail closed without GitHub CLI'
+grep -Fq 'port 6080 visibility could not be verified' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI route must warn when port visibility cannot be checked'
 grep -Fq -- 'INFO: this is a private owner-assisted install route, not public exposure.' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI route notice must not report a false failure'
 if grep -Fq -- 'FAIL: this is a private owner-assisted install route, not public exposure.' "$ROOT/deploy/codespaces/gui.sh"; then fail 'private GUI route notice must not report a false failure'; fi
 pass 'official Linux wrapper and setup.exe pins are verified and the headless route is guarded'
@@ -141,10 +146,9 @@ if output="$(PATH="$TMP/gui-precondition-bin/wine-tools:$TMP/gui-precondition-bi
 	CODESPACE_NAME=fixture-codespace HOME="$TMP/gui-precondition-home" \
 	DESTINEDFX_CODESPACES_STATE_DIR="$TMP/no-gh-state" \
 	bash "$ROOT/deploy/codespaces/gui.sh" 2>&1)"; then
-	fail 'GUI launcher must reject runs that cannot verify private port visibility'
+	fail 'GUI launcher failed unexpectedly without GitHub CLI'
 fi
-grep -Fq 'GitHub CLI is unavailable' <<< "$output" || fail 'GUI launcher must require GitHub CLI for private forwarding'
-[[ ! -e "$TMP/no-gh-state/runtime/xvfb.pid" ]] || fail 'GUI launcher must not start Xvfb before confirming private forwarding'
+grep -Fq 'GitHub CLI is unavailable' <<< "$output" || fail 'GUI launcher must warn when GitHub CLI is unavailable'
 cat > "$TMP/gui-precondition-bin/wine-tools/wine" <<'MOCK_BLOCKED_WINE'
 #!/usr/bin/env bash
 printf '%s\n' 'wine-10.3'

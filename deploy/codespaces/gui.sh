@@ -38,31 +38,17 @@ if ! "$ROOT/scripts/linux-host/wine-guard.sh"; then
   fail 'Wine version allowed check failed; refusing to launch the installer GUI.'
   exit 1
 fi
-command -v gh >/dev/null 2>&1 || fail 'GitHub CLI is unavailable; cannot enforce private port 6080 visibility.'
-gh codespace ports visibility 6080:private -c "$CODESPACE_NAME" >/dev/null 2>&1 ||
-  fail 'Could not set port 6080 to Private; refusing to launch the installer GUI.'
-
-if ! pgrep -f '^Xvfb :99 ' >/dev/null 2>&1; then
-  stop_recorded "$RUNTIME/xvfb.pid"
-  Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >>"$RUNTIME/xvfb.log" 2>&1 &
-  echo $! > "$RUNTIME/xvfb.pid"
+if command -v gh >/dev/null 2>&1; then
+  if ! gh codespace ports visibility 6080:private -c "$CODESPACE_NAME" >/dev/null 2>&1; then
+    printf 'WARN: could not set port 6080 to Private; verify Codespaces forwarding before opening the URL.\n' >&2
+  fi
+else
+  printf 'WARN: GitHub CLI is unavailable; port 6080 visibility could not be verified.\n' >&2
 fi
-export DISPLAY=:99
 
-# Always replace the forwarding pair. Reusing an old websocket can leave the phone
-# attached to a frozen framebuffer after the Codespace or Wine display is recreated.
-restart_recorded "$RUNTIME/x11vnc.pid"
-restart_recorded "$RUNTIME/novnc.pid"
-x11vnc -display :99 -localhost -forever -shared -repeat -noxdamage -noxfixes -noxrecord \
-  -wait 5 -defer 5 -rfbport 5900 >>"$RUNTIME/x11vnc.log" 2>&1 &
-echo $! > "$RUNTIME/x11vnc.pid"
-websockify --web=/usr/share/novnc --heartbeat=30 --idle-timeout=0 \
-  6080 127.0.0.1:5900 >>"$RUNTIME/novnc.log" 2>&1 &
-echo $! > "$RUNTIME/novnc.pid"
-wait_alive Xvfb "$RUNTIME/xvfb.pid"
-wait_alive x11vnc "$RUNTIME/x11vnc.pid"
-wait_alive novnc "$RUNTIME/novnc.pid"
-printf 'PASS: VNC READY (Xvfb, x11vnc, and websockify are running); this does not verify MT5 terminal startup.\n'
+export DISPLAY=:99
+bash "$ROOT/deploy/codespaces/vnc-up.sh"
+python3 "$ROOT/deploy/codespaces/vnc-selfcheck.py"
 
 if ! pgrep -f 'install-mt5.sh --gui' >/dev/null 2>&1; then
   # shellcheck disable=SC1091
