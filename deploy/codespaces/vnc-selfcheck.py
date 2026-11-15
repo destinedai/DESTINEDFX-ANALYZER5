@@ -31,5 +31,8 @@ for port in (5900, 6080):
                 time.sleep(0.1)
     if not ready:
         failures.append(f"port_{port}")
-print("PASS: " + ("VNC stack is ready" if not failures else "VNC self-check failed: " + ",".join(failures)))
+if failures:
+    print("FAIL: VNC self-check failed: " + ",".join(failures))
+else:
+    print("PASS: VNC stack is ready")
 raise SystemExit(bool(failures))

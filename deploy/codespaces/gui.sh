@@ -38,6 +38,9 @@ if ! "$ROOT/scripts/linux-host/wine-guard.sh"; then
   fail 'Wine version allowed check failed; refusing to launch the installer GUI.'
   exit 1
 fi
+export DISPLAY=:99
+bash "$ROOT/deploy/codespaces/vnc-up.sh"
+python3 "$ROOT/deploy/codespaces/vnc-selfcheck.py"
 if command -v gh >/dev/null 2>&1; then
   if ! gh codespace ports visibility 6080:private -c "$CODESPACE_NAME" >/dev/null 2>&1; then
     printf 'WARN: could not set port 6080 to Private; verify Codespaces forwarding before opening the URL.\n' >&2
@@ -45,10 +48,6 @@ if command -v gh >/dev/null 2>&1; then
 else
   printf 'WARN: GitHub CLI is unavailable; port 6080 visibility could not be verified.\n' >&2
 fi
-
-export DISPLAY=:99
-bash "$ROOT/deploy/codespaces/vnc-up.sh"
-python3 "$ROOT/deploy/codespaces/vnc-selfcheck.py"
 
 if ! pgrep -f 'install-mt5.sh --gui' >/dev/null 2>&1; then
   # shellcheck disable=SC1091

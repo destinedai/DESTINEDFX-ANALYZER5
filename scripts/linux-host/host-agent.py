@@ -185,6 +185,12 @@ def report():
     low_memory = mem_available > 0 and mem_available < int(
         os.getenv("HOST_AGENT_MIN_AVAILABLE_BYTES", str(256 * 1024 * 1024))
     )
+    host_ready = bool(wine_ok and terminal and not low_memory)
+    account_ready = bool(
+        host_ready
+        and heartbeat.get("fresh")
+        and heartbeat.get("terminal_connected")
+    )
     return {
         "schema": "destinedfx.host-agent.v1",
         "timestamp": time.time(),
@@ -197,7 +203,9 @@ def report():
         "uptime_seconds": uptime,
         "journal": journal_classification(),
         "ea_heartbeat": heartbeat,
-        "healthy": bool(wine_ok and terminal and not low_memory),
+        "host_ready": host_ready,
+        "account_ready": account_ready,
+        "healthy": account_ready,
     }
 
 

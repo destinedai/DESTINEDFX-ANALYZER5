@@ -9,15 +9,18 @@ chmod 700 "$STATE" "$RUNTIME"
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 stop_recorded() {
-  local file="$1" pid
+  local file="$1" expected="$2" pid cmdline
   [[ -s "$file" ]] || return 0
   pid="$(cat "$file" 2>/dev/null || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] || { rm -f "$file"; return 0; }
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-  fi
-  rm -f "$file"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || { rm -f "$file"; return 0; }
+  cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  [[ "$cmdline" == *"$expected"* ]] || return 1
+  kill "$pid" 2>/dev/null || return 1
+  for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || { rm -f "$file"; return 0; }; sleep 0.1; done
+  kill -KILL "$pid" 2>/dev/null || true
+  for _ in {1..10}; do kill -0 "$pid" 2>/dev/null || { rm -f "$file"; return 0; }; sleep 0.1; done
+  return 1
 }
 wait_alive() {
   local name="$1" file="$2"
@@ -42,7 +45,7 @@ fi
 chmod 600 "$PASSWORD_FILE"
 
 if ! pgrep -f '^Xvfb :99 ' >/dev/null 2>&1; then
-  stop_recorded "$RUNTIME/xvfb.pid"
+  stop_recorded "$RUNTIME/xvfb.pid" "Xvfb :99" || fail 'refusing to stop an unrelated Xvfb process'
   Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >>"$RUNTIME/xvfb.log" 2>&1 &
   echo $! >"$RUNTIME/xvfb.pid"
 fi
@@ -53,8 +56,8 @@ for _ in {1..30}; do
 done
 [[ -S /tmp/.X11-unix/X99 ]] || fail 'X display socket :99 did not appear'
 
-stop_recorded "$RUNTIME/x11vnc.pid"
-stop_recorded "$RUNTIME/novnc.pid"
+stop_recorded "$RUNTIME/x11vnc.pid" "x11vnc" || fail 'refusing to stop an unrelated x11vnc process'
+stop_recorded "$RUNTIME/novnc.pid" "websockify" || fail 'refusing to stop an unrelated websockify process'
 x11vnc -display :99 -localhost -forever -shared -repeat -noxdamage -noxfixes -noxrecord \
   -wait 5 -defer 5 -passwdfile "$PASSWORD_FILE" -rfbport 5900 \
   >>"$RUNTIME/x11vnc.log" 2>&1 &

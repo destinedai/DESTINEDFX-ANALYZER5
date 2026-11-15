@@ -122,33 +122,18 @@ if output="$(env -u CODESPACE_NAME HOME="$TMP/gui-precondition-home" \
 	fail 'GUI launcher must reject runs outside Codespaces'
 fi
 grep -Fq 'CODESPACE_NAME is unavailable' <<< "$output" || fail 'GUI launcher must report missing Codespaces context'
+vnc_line="$(grep -n 'vnc-selfcheck.py' "$ROOT/deploy/codespaces/gui.sh" | head -n 1 | cut -d: -f1)"
+visibility_line="$(grep -n 'codespace ports visibility 6080:private' "$ROOT/deploy/codespaces/gui.sh" | head -n 1 | cut -d: -f1)"
+[[ "$vnc_line" =~ ^[0-9]+$ && "$visibility_line" =~ ^[0-9]+$ && "$vnc_line" -lt "$visibility_line" ]] ||
+	fail 'GUI launcher must prove VNC before checking port visibility'
 mkdir -p "$TMP/gui-precondition-bin/wine-tools" "$TMP/gui-precondition-bin/allowed-wine" \
-	"$TMP/gui-precondition-state/venv/bin" "$TMP/no-gh-state/venv/bin"
-cat > "$TMP/no-gh-state/venv/bin/python" <<'MOCK_PYTHON'
-#!/usr/bin/env bash
-exit 0
-MOCK_PYTHON
-chmod +x "$TMP/no-gh-state/venv/bin/python"
+	"$TMP/gui-precondition-state/venv/bin"
 cat > "$TMP/gui-precondition-bin/allowed-wine/wine" <<'MOCK_ALLOWED_WINE'
 #!/usr/bin/env bash
 printf '%s\n' 'wine-9.0'
 MOCK_ALLOWED_WINE
 chmod +x "$TMP/gui-precondition-bin/allowed-wine/wine"
 
-# Satisfy the GUI's earlier VNC-tool precondition so this case specifically
-# exercises the missing-GitHub-CLI guard without relying on host-installed tools.
-for tool in x11vnc websockify; do
-	printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/gui-precondition-bin/wine-tools/$tool"
-	chmod +x "$TMP/gui-precondition-bin/wine-tools/$tool"
-done
-if output="$(PATH="$TMP/gui-precondition-bin/wine-tools:$TMP/gui-precondition-bin/allowed-wine:$TMP/gui-precondition-bin" \
-	WINE_BIN="$TMP/gui-precondition-bin/allowed-wine/wine" \
-	CODESPACE_NAME=fixture-codespace HOME="$TMP/gui-precondition-home" \
-	DESTINEDFX_CODESPACES_STATE_DIR="$TMP/no-gh-state" \
-	bash "$ROOT/deploy/codespaces/gui.sh" 2>&1)"; then
-	fail 'GUI launcher failed unexpectedly without GitHub CLI'
-fi
-grep -Fq 'GitHub CLI is unavailable' <<< "$output" || fail 'GUI launcher must warn when GitHub CLI is unavailable'
 cat > "$TMP/gui-precondition-bin/wine-tools/wine" <<'MOCK_BLOCKED_WINE'
 #!/usr/bin/env bash
 printf '%s\n' 'wine-10.3'

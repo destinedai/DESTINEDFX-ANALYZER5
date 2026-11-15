@@ -108,6 +108,20 @@ def test_report_is_blocked_when_terminal_dead_or_memory_low(monkeypatch):
     assert host_agent.report()["healthy"] is False
 
 
+def test_report_requires_fresh_authenticated_heartbeat_for_health(monkeypatch):
+    monkeypatch.setattr(host_agent, "terminal_process_alive", lambda: True)
+    monkeypatch.setattr(host_agent, "wine_report", lambda: ("wine-9.0", True))
+    monkeypatch.setattr(
+        host_agent,
+        "heartbeat_report",
+        lambda: {"fresh": False, "terminal_connected": False},
+    )
+    result = host_agent.report()
+    assert result["host_ready"] is True
+    assert result["account_ready"] is False
+    assert result["healthy"] is False
+
+
 def test_host_report_exposes_and_blocks_disallowed_wine(monkeypatch):
     monkeypatch.setattr(host_agent, "terminal_process_alive", lambda: True)
     monkeypatch.setattr(host_agent, "wine_report", lambda: ("wine-10.3", False))
