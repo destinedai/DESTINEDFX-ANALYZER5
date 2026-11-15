@@ -160,6 +160,7 @@ class MT5RemoteBridgeClient(
         if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) pair(ownerBootstrapCode)
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
             .put("access_type", accessType).put("broker_brand", brokerBrand).put("consent", consent)
+            .put("account_mode", accountMode)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
         return state()

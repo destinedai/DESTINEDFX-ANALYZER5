@@ -491,6 +491,13 @@ def run_once(settings: dict, *,
     )
     if not job or job.get("job") is None and not job.get("job_id"):
         return "NO_JOB"
+    if job.get("status") == "ATTESTATION_REQUIRED":
+        # This runner still controls one shared service-oriented terminal. Never
+        # claim a pending account until a genuine per-slot Linux implementation
+        # can reserve and finalize its own process evidence.
+        LOG.error("Linux worker cannot claim account %s without isolated slot support",
+                  job.get("job_id", "unknown"))
+        return "ISOLATED_SLOT_REQUIRED"
     if job.get("kind") == "REVOKE":
         return execute_revoke_job(job, settings, systemctl=systemctl)
     if job.get("kind") != "PROVISION":
@@ -501,6 +508,9 @@ def run_once(settings: dict, *,
         except (worker.ProvisionError, ValueError):
             pass
         return "INVALID_JOB"
+    if job.get("isolation_evidence") and os.environ.get("DESTINEDFX_LINUX_ISOLATED_SLOTS", "").lower() != "true":
+        LOG.error("Linux worker refused shared-terminal provisioning for job %s", job.get("job_id", "unknown"))
+        return "ISOLATED_SLOT_REQUIRED"
     if active:
         try:
             worker.post_state(settings["control_plane_url"], settings["worker_token"],

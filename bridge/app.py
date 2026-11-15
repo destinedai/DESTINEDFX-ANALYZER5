@@ -159,8 +159,8 @@ def db():
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS request_rate(token_hash TEXT PRIMARY KEY, window INTEGER NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED', broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN');
-    CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL);
-    CREATE TABLE IF NOT EXISTS worker_attestations(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), worker_id TEXT NOT NULL, slot_id TEXT NOT NULL, linux_uid INTEGER NOT NULL, wine_prefix TEXT NOT NULL, terminal_path TEXT NOT NULL, process_identity TEXT NOT NULL, ea_identity TEXT NOT NULL, broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, account_mode TEXT NOT NULL, host_generation TEXT NOT NULL, issued_at REAL NOT NULL, expires_at REAL NOT NULL, nonce TEXT NOT NULL UNIQUE, signature TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0, job_id TEXT REFERENCES worker_jobs(id) ON DELETE SET NULL);
+    CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL, requested_account_mode TEXT);
+    CREATE TABLE IF NOT EXISTS worker_attestations(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), worker_id TEXT NOT NULL, slot_id TEXT NOT NULL, linux_uid INTEGER NOT NULL, wine_prefix TEXT NOT NULL, terminal_path TEXT NOT NULL, process_identity TEXT NOT NULL, ea_identity TEXT NOT NULL, broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, account_mode TEXT NOT NULL, host_generation TEXT NOT NULL, issued_at REAL NOT NULL, expires_at REAL NOT NULL, nonce TEXT NOT NULL UNIQUE, signature TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, job_id TEXT REFERENCES worker_jobs(id) ON DELETE SET NULL);
     CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
     CREATE TABLE IF NOT EXISTS trade_ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, created REAL NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);
@@ -183,10 +183,13 @@ def db():
     if 'broker_brand' not in managed_columns: c.execute("ALTER TABLE managed_accounts ADD COLUMN broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN'")
     for name, definition in (('cost_model',"TEXT NOT NULL DEFAULT 'OBSERVED_ROUND_TURN'"),('commission_per_lot','REAL NOT NULL DEFAULT 0.0'),('cost_evidence',"TEXT NOT NULL DEFAULT ''")):
         if name not in managed_columns: c.execute(f'ALTER TABLE managed_accounts ADD COLUMN {name} {definition}')
-    columns={r['name'] for r in c.execute('PRAGMA table_info(worker_jobs)').fetchall()}
-    if 'lease_started' not in columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN lease_started REAL')
-    if 'stale_since' not in columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN stale_since REAL')
-    if 'recovery_deadline' not in columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN recovery_deadline REAL')
+    job_columns={r['name'] for r in c.execute('PRAGMA table_info(worker_jobs)').fetchall()}
+    if 'lease_started' not in job_columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN lease_started REAL')
+    if 'stale_since' not in job_columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN stale_since REAL')
+    if 'recovery_deadline' not in job_columns: c.execute('ALTER TABLE worker_jobs ADD COLUMN recovery_deadline REAL')
+    if 'requested_account_mode' not in job_columns: c.execute("ALTER TABLE worker_jobs ADD COLUMN requested_account_mode TEXT")
+    attestation_columns={r['name'] for r in c.execute('PRAGMA table_info(worker_attestations)').fetchall()}
+    if 'finalized' not in attestation_columns: c.execute('ALTER TABLE worker_attestations ADD COLUMN finalized INTEGER NOT NULL DEFAULT 0')
     return c
 @contextmanager
 def tx(immediate=False):
@@ -347,6 +350,7 @@ class WorkerClaim(BaseModel):
     worker_id:str=Field(min_length=1,max_length=128)
     active_terminals:int=Field(default=0,ge=0,le=16)
     max_terminals:int=Field(default=1,ge=1,le=16)
+    attestation:dict|None=None
 class WorkerAttestation(BaseModel):
     model_config=ConfigDict(extra='forbid')
     pairing_id:str=Field(min_length=1,max_length=128)
@@ -365,6 +369,14 @@ class WorkerAttestation(BaseModel):
     issued_at:float=Field(gt=0)
     expires_at:float=Field(gt=0)
     nonce:str=Field(min_length=16,max_length=128)
+    signature:str=Field(pattern=r'^[0-9a-f]{64}$')
+class WorkerAttestationFinalize(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    attestation_id:str=Field(min_length=1,max_length=128)
+    worker_id:str=Field(min_length=1,max_length=128)
+    terminal_path:str=Field(min_length=1,max_length=512)
+    process_identity:str=Field(min_length=1,max_length=512)
+    ea_identity:str=Field(min_length=1,max_length=256)
     signature:str=Field(pattern=r'^[0-9a-f]{64}$')
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -928,6 +940,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     elif x.commission_per_lot<=0 or len(evidence)<8:
         raise HTTPException(422,'Configured commission models require a finite positive account-currency amount per standard lot and a broker evidence reference')
     attestation=None
+    isolation_pending=False
     if x.isolation_attestation_id:
         with tx() as c:
             attestation=c.execute('SELECT * FROM worker_attestations WHERE id=? AND pairing_id=? AND used=0',
@@ -944,22 +957,20 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
         )):
             raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Isolation attestation does not match the selected account'})
     elif not _isolation_evidence_verified():
-        raise HTTPException(503, detail={
-            'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED',
-            'message':'Managed account registration requires verified per-user terminal isolation evidence',
-        })
+        isolation_pending=True
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
         c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,'UNVERIFIED',brand,x.cost_model,float(x.commission_per_lot),evidence))
         c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+CONNECT_JOB_TTL_SECONDS,p['id']))
-        c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) VALUES(?,?,'PROVISION','QUEUED',?)",(job_id,p['id'],t))
+        c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created,requested_account_mode) VALUES(?,?,'PROVISION',?,?,?)",
+                  (job_id, p['id'], 'QUEUED' if attestation or _isolation_evidence_verified() else 'AWAITING_ATTESTATION', t, x.account_mode))
         if attestation:
             updated=c.execute("UPDATE worker_attestations SET used=1,job_id=? WHERE id=? AND used=0",
                               (job_id,attestation['id']))
             if updated.rowcount != 1:
                 raise HTTPException(409,'Isolation attestation was consumed concurrently')
-    return {'job_id':job_id,'status':'QUEUED'}
+    return {'job_id':job_id,'status':'AWAITING_WORKER_ATTESTATION' if isolation_pending else 'QUEUED'}
 
 
 @app.post('/v1/worker/attestations',status_code=201)
@@ -992,10 +1003,33 @@ def worker_attestation(x:WorkerAttestation, authorization:str|None=Header(defaul
         row=c.execute('SELECT id FROM worker_attestations WHERE nonce=?',(x.nonce,)).fetchone()
     return {'attestation_id':row['id'],'status':'AVAILABLE','expires_at':x.expires_at}
 
+@app.post('/v1/worker/attestations/finalize')
+def worker_attestation_finalize(x:WorkerAttestationFinalize, authorization:str|None=Header(default=None)):
+    require_durable_execution()
+    worker_auth(authorization)
+    _,worker_secret=managed_config()
+    evidence=x.model_dump()
+    if not hmac.compare_digest(x.signature,_attestation_signature(worker_secret,evidence)):
+        raise HTTPException(401,'Invalid worker attestation finalization signature')
+    with tx(True) as c:
+        row=c.execute('SELECT * FROM worker_attestations WHERE id=? AND worker_id=? AND used=1',
+                      (x.attestation_id,x.worker_id)).fetchone()
+        if not row:
+            raise HTTPException(404,'Worker attestation not found')
+        if row['expires_at'] <= time.time():
+            raise HTTPException(409,'Worker attestation expired')
+        updated=c.execute('''UPDATE worker_attestations
+                             SET terminal_path=?, process_identity=?, ea_identity=?, finalized=1
+                             WHERE id=? AND worker_id=? AND used=1 AND finalized=0''',
+                          (x.terminal_path,x.process_identity,x.ea_identity,x.attestation_id,x.worker_id))
+        if updated.rowcount != 1:
+            raise HTTPException(409,'Worker attestation was already finalized')
+    return {'attestation_id':x.attestation_id,'status':'FINALIZED'}
+
 @app.post('/v1/worker/jobs/claim')
 def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
     require_durable_execution()
-    worker_auth(authorization); fernet,_=managed_config(); t=time.time()
+    worker_auth(authorization); fernet,worker_secret=managed_config(); t=time.time()
     with tx(True) as c:
         # Include in-flight provision leases as well as worker-reported terminal processes.
         # This closes the race where two simultaneous requests claim before either terminal
@@ -1008,18 +1042,55 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
         if at_capacity:
             r=c.execute("SELECT * FROM worker_jobs WHERE kind='REVOKE' AND (status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?)) ORDER BY created LIMIT 1",(t,)).fetchone()
         else:
-            r=c.execute("SELECT * FROM worker_jobs WHERE status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
+            r=c.execute("SELECT * FROM worker_jobs WHERE status IN ('QUEUED','AWAITING_ATTESTATION') OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
         if not r: return {'job':None}
-        c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=?,lease_started=? WHERE id=?",(x.worker_id,t+120,t,r['id']))
-        if r['kind']=='REVOKE': return {'job_id':r['id'],'kind':'REVOKE','pairing_id':r['pairing_id'],'worker_id':x.worker_id}
-        attestation=c.execute('SELECT worker_id,slot_id,linux_uid,wine_prefix,terminal_path,process_identity,ea_identity,host_generation,expires_at FROM worker_attestations WHERE job_id=? AND worker_id=? AND used=1',(r['id'],x.worker_id)).fetchone()
-        if (not attestation or attestation['expires_at'] < t) and not _isolation_evidence_verified():
-            c.execute("UPDATE worker_jobs SET status='FAILED',error_code='PER_USER_TERMINAL_ISOLATION_REQUIRED',error_message='Fresh slot isolation evidence is required' WHERE id=?",(r['id'],))
-            return {'job':None}
+        if r['kind']=='REVOKE':
+            c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=?,lease_started=? WHERE id=?",(x.worker_id,t+120,t,r['id']))
+            return {'job_id':r['id'],'kind':'REVOKE','pairing_id':r['pairing_id'],'worker_id':x.worker_id}
         p=c.execute('SELECT * FROM pairings WHERE id=?',(r['pairing_id'],)).fetchone()
         m=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=? AND revoked=0',(r['pairing_id'],)).fetchone()
-        if not m:
+        if not p or not m:
             c.execute("UPDATE worker_jobs SET status='FAILED',error_code='ACCOUNT_REVOKED',error_message='Account was revoked before provisioning' WHERE id=?",(r['id'],))
+            return {'job':None}
+        if r['status']=='AWAITING_ATTESTATION' and not x.attestation and not _isolation_evidence_verified():
+            account_identity={'account_mode':r['requested_account_mode'] or 'UNVERIFIED','broker_brand':m['broker_brand']}
+            account_identity['login']=fernet.decrypt(m['login_enc'].encode()).decode()
+            account_identity['server']=fernet.decrypt(m['server_enc'].encode()).decode()
+            return {'status':'ATTESTATION_REQUIRED','job_id':r['id'],'pairing_id':r['pairing_id'],
+                    'worker_id':x.worker_id,'host_generation':HOST_GENERATION,'account_identity':account_identity}
+        if x.attestation and not _isolation_evidence_verified():
+            try:
+                submitted=WorkerAttestation.model_validate(x.attestation)
+            except ValidationError:
+                raise HTTPException(422,'Invalid worker attestation')
+            evidence=submitted.model_dump()
+            if not hmac.compare_digest(submitted.signature,_attestation_signature(worker_secret,evidence)):
+                raise HTTPException(401,'Invalid worker attestation signature')
+            if submitted.pairing_id != r['pairing_id'] or submitted.worker_id != x.worker_id:
+                raise HTTPException(409,'Worker attestation is not bound to this job and worker')
+            if submitted.host_generation != HOST_GENERATION or submitted.expires_at <= t or submitted.issued_at > t+30:
+                raise HTTPException(409,'Worker attestation is stale or belongs to another host generation')
+            expected_login=fernet.decrypt(m['login_enc'].encode()).decode()
+            expected_server=fernet.decrypt(m['server_enc'].encode()).decode()
+            if any((submitted.login != expected_login,submitted.server != expected_server,
+                    submitted.broker_brand != m['broker_brand'],submitted.account_mode != (r['requested_account_mode'] or ''))):
+                raise HTTPException(409,'Worker attestation does not match the registered account')
+            attestation_id=str(uuid.uuid4())
+            c.execute('''INSERT INTO worker_attestations
+                (id,pairing_id,worker_id,slot_id,linux_uid,wine_prefix,terminal_path,process_identity,ea_identity,
+                 broker_brand,login,server,account_mode,host_generation,issued_at,expires_at,nonce,signature,used,job_id)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)''',
+                (attestation_id,submitted.pairing_id,submitted.worker_id,submitted.slot_id,submitted.linux_uid,
+                 submitted.wine_prefix,submitted.terminal_path,submitted.process_identity,submitted.ea_identity,
+                 submitted.broker_brand,submitted.login,submitted.server,submitted.account_mode,
+                 submitted.host_generation,submitted.issued_at,submitted.expires_at,submitted.nonce,
+                 submitted.signature,r['id']))
+        elif x.attestation and _isolation_evidence_verified():
+            attestation_id=None
+        c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=?,lease_started=? WHERE id=?",(x.worker_id,t+120,t,r['id']))
+        attestation=c.execute('SELECT id,worker_id,slot_id,linux_uid,wine_prefix,terminal_path,process_identity,ea_identity,host_generation,expires_at,finalized FROM worker_attestations WHERE job_id=? AND worker_id=? AND used=1',(r['id'],x.worker_id)).fetchone()
+        if (not attestation or attestation['expires_at'] < t) and not _isolation_evidence_verified():
+            c.execute("UPDATE worker_jobs SET status='FAILED',error_code='PER_USER_TERMINAL_ISOLATION_REQUIRED',error_message='Fresh slot isolation evidence is required' WHERE id=?",(r['id'],))
             return {'job':None}
         account={k:fernet.decrypt(m[k+'_enc'].encode()).decode() for k in ('login','server','password')}; account['access_type']=m['access_type']; account['account_mode']=m['account_mode']; account['broker_brand']=m['broker_brand']
         account['cost_model']=m['cost_model']; account['commission_per_lot']=float(m['commission_per_lot']); account['cost_evidence']=m['cost_evidence']
@@ -1051,6 +1122,10 @@ def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(defaul
         if r['lease_until'] is None or r['lease_until']<time.time(): raise HTTPException(409,'Worker job lease expired; reclaim the job before continuing')
         if r['kind']=='REVOKE' and x.status not in ('REVOKED','FAILED'): raise HTTPException(422,'Revocation job must be acknowledged as REVOKED or FAILED')
         if r['kind']!='REVOKE' and x.status=='REVOKED': raise HTTPException(422,'Only a revocation job can be marked REVOKED')
+        if x.status=='READY' and not _isolation_evidence_verified():
+            evidence=c.execute('SELECT finalized,expires_at FROM worker_attestations WHERE job_id=? AND worker_id=? AND used=1',(job_id,x.worker_id)).fetchone()
+            if not evidence or not evidence['finalized'] or evidence['expires_at'] <= time.time():
+                raise HTTPException(409,'Finalized worker isolation evidence is required before READY')
         if r['status']=='READY' and x.status in ('PROVISIONING','AUTHENTICATING'): return {'updated':True}
         if r['status'] not in ('LEASED','PROVISIONING','AUTHENTICATING'): raise HTTPException(409,'Job is not active')
         lease=time.time()+120 if x.status in ('PROVISIONING','AUTHENTICATING','LEASED') else r['lease_until']

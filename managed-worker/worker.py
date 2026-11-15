@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import hmac
 import ipaddress
 import math
 import json
@@ -531,6 +533,67 @@ def request_json(url: str, token: str, method: str, payload: dict | None = None,
         raise ProvisionError("CONTROL_PLANE_UNAVAILABLE") from None
 
 
+def _attestation_signature(secret: str, evidence: dict[str, Any]) -> str:
+    payload = {key: evidence[key] for key in sorted(evidence) if key != "signature"}
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
+
+
+def build_slot_attestation(job: dict[str, Any], settings: dict[str, Any], worker_id: str,
+                           token: str) -> dict[str, Any]:
+    """Create reservation evidence before credentials are released to this worker."""
+    identity = job.get("account_identity") or {}
+    job_id = str(job.get("job_id", ""))
+    if not SAFE_ID.fullmatch(job_id) or not LOGIN.fullmatch(str(identity.get("login", ""))):
+        raise ProvisionError("INVALID_ATTESTATION_CONTEXT")
+    root = Path(settings["data_root"]).resolve()
+    terminal_path = (root / job_id / "terminal" / Path(settings["terminal_exe"]).name).resolve()
+    evidence = {
+        "pairing_id": str(job.get("pairing_id", "")),
+        "worker_id": worker_id,
+        "slot_id": f"{worker_id}-{job_id}",
+        "linux_uid": int(settings.get("slot_uid", os.getuid() if hasattr(os, "getuid") else 1)),
+        "wine_prefix": str((root / job_id / "wine").resolve()),
+        "terminal_path": str(terminal_path),
+        "process_identity": f"planned:{terminal_path}",
+        "ea_identity": "DestinedFXTraderEA",
+        "broker_brand": str(identity.get("broker_brand", "")).upper(),
+        "login": str(identity["login"]),
+        "server": str(identity.get("server", "")),
+        "account_mode": str(identity.get("account_mode", "")),
+        "host_generation": str(settings.get("host_generation") or os.environ.get("HOST_GENERATION", "persistent-default")),
+        "issued_at": time.time(),
+        "expires_at": time.time() + 300,
+        "nonce": uuid.uuid4().hex,
+    }
+    if not (evidence["pairing_id"] and SAFE_ID.fullmatch(evidence["slot_id"]) and
+            SAFE_SERVER.fullmatch(evidence["server"]) and evidence["account_mode"] in {"DEMO", "LIVE"}):
+        raise ProvisionError("INVALID_ATTESTATION_CONTEXT")
+    evidence["signature"] = _attestation_signature(token, evidence)
+    return evidence
+
+
+def finalize_slot_attestation(base: str, token: str, worker_id: str, attestation_id: str,
+                              marker: Path) -> None:
+    try:
+        record = json.loads(marker.read_text(encoding="utf-8"))
+        executable = recorded_terminal_executable(marker, record)
+        pid = int(record.get("pid", 0) or 0)
+    except (OSError, ValueError, TypeError, ProvisionError):
+        raise ProvisionError("TERMINAL_OWNERSHIP_UNVERIFIED") from None
+    if process_is_owned(pid, executable) != ProcessState.OWNED_RUNNING:
+        raise ProvisionError("TERMINAL_OWNERSHIP_UNVERIFIED")
+    evidence = {
+        "attestation_id": attestation_id,
+        "worker_id": worker_id,
+        "terminal_path": str(executable),
+        "process_identity": f"pid={pid};exe={executable}",
+        "ea_identity": "DestinedFXTraderEA",
+    }
+    evidence["signature"] = _attestation_signature(token, evidence)
+    request_json(f"{base.rstrip('/')}/v1/worker/attestations/finalize", token, "POST", evidence)
+
+
 def post_state(base: str, token: str, job_id: str, worker_id: str, state: str, code: str = "", message: str = "") -> None:
     if state not in {"PROVISIONING", "AUTHENTICATING", "READY", "FAILED"}:
         raise ProvisionError("INVALID_STATE")
@@ -905,6 +968,17 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
     job_id = job.get("job_id") if isinstance(job, dict) else None
     if not isinstance(job_id, str) or not SAFE_ID.fullmatch(job_id):
         raise ProvisionError("INVALID_JOB")
+    if job.get("status") == "ATTESTATION_REQUIRED":
+        attestation = build_slot_attestation(job, settings, worker_id, operator_token)
+        job = request_json(f"{base}/v1/worker/jobs/claim", operator_token, "POST", {
+            "worker_id": worker_id,
+            "active_terminals": occupied,
+            "max_terminals": capacity,
+            "attestation": attestation,
+        })
+        if job.get("job") is None or not job.get("account"):
+            raise ProvisionError("ATTESTATION_CLAIM_FAILED")
+        job_id = job.get("job_id", job_id)
     if job.get("kind") == "REVOKE":
         try:
             revoke_pairing(settings, job.get("pairing_id", ""))
@@ -923,6 +997,11 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
         attempt_started_at = time.time()
         post_state(base, operator_token, job_id, worker_id, "PROVISIONING")
         provision(job, broker_settings)
+        attestation = job.get("isolation_evidence") or {}
+        attestation_id = attestation.get("id")
+        if isinstance(attestation_id, str) and attestation_id:
+            marker = safe_child(Path(settings["data_root"]), job_id) / "terminal" / ".destinedfx-worker.json"
+            finalize_slot_attestation(base, operator_token, worker_id, attestation_id, marker)
         # A process launch/authentication attempt is not evidence of a fresh EA
         # heartbeat, so READY is only for a server-observed authenticated state.
         post_state(base, operator_token, job_id, worker_id, "AUTHENTICATING")

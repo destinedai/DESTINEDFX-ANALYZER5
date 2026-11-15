@@ -12,16 +12,21 @@ Legacy records created before explicit profile mode was persisted are not automa
 
 ## Managed provisioning
 
-Before an app can enqueue a provisioning job, an authenticated worker submits
-`POST /v1/worker/attestations` with an HMAC-signed evidence document. The document is
+Account registration may initially return `AWAITING_WORKER_ATTESTATION`; this is an
+enrollment state and never means that execution is available. The worker first polls
+the pending job and receives only non-secret account identity metadata. It then submits
+the slot reservation evidence in its authenticated job claim (or through
+`POST /v1/worker/attestations`) with an HMAC-signed evidence document. The document is
 bound to the pairing and exact broker login/server/mode and includes the worker ID,
 slot ID, restricted Linux UID, Wine prefix, terminal path, process identity, EA
 identity, host generation, nonce, issue time, and expiry. The signature covers every
 field except `signature` using the server-side worker secret. The bridge rejects
 ordinary app bearer tokens, invalid signatures, stale/future evidence, mismatched host
 generations, duplicate nonces, expired pairings, and LIVE evidence on an ephemeral host.
-An attestation is single-use: registration consumes it and links it to the resulting
-provisioning job. Provision jobs cannot be claimed without a fresh linked attestation;
+An attestation is single-use: the claim consumes it and links it to the provisioning
+job. After the worker launches the terminal, it must finalize the evidence through
+`POST /v1/worker/attestations/finalize` with the verified process identity and EA
+identity. Provision jobs cannot be marked READY without finalized, unexpired evidence;
 the synthetic verifier used by unit tests is not enabled in production.
 
 `POST /v1/worker/jobs/claim` requires the operator-only worker bearer and `{ "worker_id":"…", "active_terminals":0, "max_terminals":1 }`. The count fields are bounded integers: `active_terminals` is 0..16 and `max_terminals` is 1..16 (the server defaults are 0 and 1 for older clients). The bridge atomically counts unexpired PROVISION leases owned by the same worker ID as well as the worker-reported active terminals. At capacity it leaves new PROVISION jobs queued but still permits REVOKE jobs. It returns `{ "job_id":"…", "kind":"PROVISION", "worker_id":"…", "pairing_id":"…", "pairing_code":"…", "bridge_url":"https://…", "account":{"login":"…","server":"…","password":"…","access_type":"MASTER|INVESTOR","account_mode":"DEMO|LIVE","broker_brand":"FBS|EXNESS|HFM|DERIV"} }`, or `{ "job":null }` when no eligible job is available. An explicitly configured cost model carries `cost_model` (`OBSERVED_ROUND_TURN`, `CONFIGURED_ROUND_TURN`, `CONFIGURED_PER_SIDE`, or `ZERO_COMMISSION_SPREAD_ONLY`), `commission_per_lot`, and non-secret `cost_evidence`; round-turn and per-side models require finite positive values, while observed and zero-commission modes require commission exactly zero and their respective evidence rules. The default observed model remains strict and requires representative broker history in the EA. Revocation jobs use `kind=REVOKE` and contain no credentials. A job is claimed at most once per lease. The worker writes expected login, exact server name, profile mode, and validated cost settings into the EA configuration. The managed profile's cost model and evidence reference are carried from the Android form through the bridge's managed-account record and authenticated worker claim into the generated EA `.set` file. The reference string is not independently verified. The EA recomputes actual spread and slippage costs before each candidate order and blocks entries if those calculations fail. The EA independently reads the actual terminal login/server and MT5 `ACCOUNT_TRADE_MODE`; it must match all three before claiming or executing. The worker provisions a user-isolated MT5 data directory, starts the terminal with its account settings and an auto-start EA profile, and deletes transient plaintext configuration files after launch where possible. The decrypted worker-claim account includes the registered `broker_brand`; the worker rejects `UNKNOWN` and uses only that brand's explicit installation from `broker_terminals` (or a single explicitly declared `single_broker_brand`). The exact registered server is pinned and checked at terminal claim, not inferred from a brand name. Persisted terminal credentials still require encrypted host storage and restrictive per-user ACLs.

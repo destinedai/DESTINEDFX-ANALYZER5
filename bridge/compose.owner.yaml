@@ -7,6 +7,9 @@ services:
     environment:
       PORT: "8000"
       BRIDGE_DB_PATH: /data/bridge.sqlite3
+      BRIDGE_HOST_PROFILE: PERSISTENT
+      EXECUTION_STORAGE_DURABLE: "true"
+      HOST_GENERATION: ${HOST_GENERATION:?Set a unique generation ID for this host}
       BRIDGE_BASE_URL: ${BRIDGE_BASE_URL:?Set the exact private HTTPS origin}
       ALLOW_LOOPBACK_HTTP: "false"
       TRUSTED_PROXY_IPS: 172.30.250.2
@@ -23,6 +26,11 @@ services:
       - "8000"
     volumes:
       - bridge-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       owner-bridge:
         ipv4_address: 172.30.250.3
