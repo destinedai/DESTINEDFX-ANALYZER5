@@ -248,6 +248,19 @@ def managed_env(monkeypatch):
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-' + '2026-very-long')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.destinedfx.internal')
+    monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: True)
+
+def test_managed_registration_requires_verified_per_user_isolation(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: False)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123456', 'server':'Demo-Server', 'password':'secret',
+        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS',
+        'consent':True,
+    })
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'PER_USER_TERMINAL_ISOLATION_REQUIRED'
 
 def test_cloudflare_access_origin_validation_fails_closed(monkeypatch):
     monkeypatch.setenv('CF_ACCESS_TEAM_DOMAIN','https://team.cloudflareaccess.com')

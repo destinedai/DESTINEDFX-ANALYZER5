@@ -42,6 +42,13 @@ LOOPBACK_HOSTS=('127.0.0.1','::1','localhost')
 STALE=int(os.getenv('HEARTBEAT_STALE_SECONDS','15'))
 RECOVERY_GRACE=int(os.getenv('HEARTBEAT_RECOVERY_GRACE_SECONDS','120'))
 CONNECT_JOB_TTL_SECONDS=600
+def _isolation_evidence_verified():
+    """Return whether an approved worker has supplied independently verified slot evidence.
+
+    The production default is deliberately fail-closed.  This hook is replaced only by
+    isolated test fixtures until the worker attestation protocol is implemented.
+    """
+    return False
 NEWS_BEFORE=int(os.getenv('NEWS_BLACKOUT_BEFORE_SECONDS','1800'))
 NEWS_AFTER=int(os.getenv('NEWS_BLACKOUT_AFTER_SECONDS','1800'))
 NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
@@ -878,6 +885,11 @@ def heartbeat_news_clear(beat, symbols=None):
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
     require_durable_execution()
     p=auth(authorization,'app'); fernet,_=managed_config()
+    if not _isolation_evidence_verified():
+        raise HTTPException(503, detail={
+            'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED',
+            'message':'Managed account registration requires verified per-user terminal isolation evidence',
+        })
     if not x.consent or x.access_type not in ('MASTER','INVESTOR') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or not x.server.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, server, and valid access_type are required')
     brand=x.broker_brand.strip().upper()
     if brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
