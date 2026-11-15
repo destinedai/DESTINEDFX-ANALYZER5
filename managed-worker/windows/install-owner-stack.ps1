@@ -97,11 +97,14 @@ if ($resume) {
         try { $secretJson = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
         $secretObject = $secretJson | ConvertFrom-Json
         if ([string]::IsNullOrWhiteSpace($secretObject.fernet_key) -or [string]::IsNullOrWhiteSpace($secretObject.worker_token)) { throw 'Secret bundle fields are missing.' }
+        if ($null -eq $secretObject.PSObject.Properties['worker_bootstrap_token'] -or [string]::IsNullOrWhiteSpace($secretObject.worker_bootstrap_token)) {
+            $secretObject | Add-Member -NotePropertyName worker_bootstrap_token -NotePropertyValue (& $venvPython -c 'import secrets; print(secrets.token_urlsafe(48))')
+        }
         if ($null -eq $secretObject.PSObject.Properties['cf_access_client_id']) { $secretObject | Add-Member -NotePropertyName cf_access_client_id -NotePropertyValue '' }
         if ($null -eq $secretObject.PSObject.Properties['cf_access_client_secret']) { $secretObject | Add-Member -NotePropertyName cf_access_client_secret -NotePropertyValue '' }
     } catch { throw 'Existing owner-secrets.dpapi could not be decrypted or validated under this Windows user; stop and perform manual recovery without deleting state.' }
 } else {
-    $generated = & $venvPython -c 'import json,secrets; from cryptography.fernet import Fernet; print(json.dumps({"fernet_key":Fernet.generate_key().decode(),"worker_token":secrets.token_urlsafe(48),"cf_access_client_id":"","cf_access_client_secret":""}))'
+    $generated = & $venvPython -c 'import json,secrets; from cryptography.fernet import Fernet; print(json.dumps({"fernet_key":Fernet.generate_key().decode(),"worker_bootstrap_token":secrets.token_urlsafe(48),"worker_token":secrets.token_urlsafe(48),"cf_access_client_id":"","cf_access_client_secret":""}))'
     if ($LASTEXITCODE -ne 0) { throw 'Secret generation failed.' }
     $secretObject = $generated | ConvertFrom-Json
     $secretJson = $generated
@@ -145,7 +148,7 @@ metaeditor_exe = $(TomlString $brokerTerminals[$broker].metaeditor_exe)
     [IO.File]::WriteAllText($identityPath,$workerId,[Text.UTF8Encoding]::new($false))
 }
 if (-not $resume) {
-    $secretJson = @{fernet_key=$secretObject.fernet_key;worker_token=$secretObject.worker_token;cf_access_client_id=[string]$secretObject.cf_access_client_id;cf_access_client_secret=[string]$secretObject.cf_access_client_secret} | ConvertTo-Json -Compress
+    $secretJson = @{fernet_key=$secretObject.fernet_key;worker_bootstrap_token=$secretObject.worker_bootstrap_token;worker_token=$secretObject.worker_token;cf_access_client_id=[string]$secretObject.cf_access_client_id;cf_access_client_secret=[string]$secretObject.cf_access_client_secret} | ConvertTo-Json -Compress
     $secureSecret = ConvertTo-SecureString $secretJson -AsPlainText -Force
     $encrypted = ConvertFrom-SecureString $secureSecret
     [IO.File]::WriteAllText($secretsPath,$encrypted,[Text.UTF8Encoding]::new($false))

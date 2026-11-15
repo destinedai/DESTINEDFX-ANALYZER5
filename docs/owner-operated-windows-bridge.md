@@ -92,7 +92,7 @@ This sandbox did not have the owner's Windows PC, Tailscale tailnet, MT5 termina
 After the installer and terminal setup, run the doctor from the worker kit; it never places orders, changes terminal settings, or prints passwords:
 
 ```powershell
-$env:DESTINEDFX_WORKER_TOKEN = '<worker token from the owner secret store>'
+$env:DESTINEDFX_WORKER_TOKEN = '<one-time credential provisioned for this stable worker ID>'
 .\managed-worker\windows\doctor.ps1 -Config 'C:\ProgramData\DestinedFX\worker.toml' -Broker FBS -PythonCheck -Login '<login>' -Server '<exact broker server>'
 ```
 

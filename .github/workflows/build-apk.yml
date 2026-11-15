@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   python-tests:
@@ -32,7 +32,7 @@ jobs:
       - name: Build and smoke-test the owner Docker bridge image
         run: |
           env BRIDGE_BASE_URL=https://bridge.ci.example.ts.net \
-            CREDENTIALS_FERNET_KEY=ci-placeholder WORKER_TOKEN=ci-placeholder \
+            CREDENTIALS_FERNET_KEY=ci-placeholder WORKER_BOOTSTRAP_TOKEN=ci-placeholder \
             TAILSCALE_IPV4=127.0.0.1 BRIDGE_HOST=bridge.ci.example.ts.net \
             docker compose -f bridge/compose.owner.yaml config --quiet
           docker build --file bridge/Dockerfile --tag destinedfx-bridge:ci bridge

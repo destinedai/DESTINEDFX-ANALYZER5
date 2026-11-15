@@ -19,7 +19,7 @@ $secure=ConvertTo-SecureString ([IO.File]::ReadAllText($secretFile).Trim())
 $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try {$json=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr);$secrets=$json|ConvertFrom-Json}
 finally {[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr);$secure.Dispose();$json=$null}
-if(-not $secrets.fernet_key -or -not $secrets.worker_token){throw 'DPAPI owner secrets are incomplete.'}
+if(-not $secrets.fernet_key -or -not $secrets.worker_bootstrap_token -or -not $secrets.worker_token){throw 'DPAPI owner secrets are incomplete.'}
 $env:CF_ACCESS_CLIENT_ID=[string]$secrets.cf_access_client_id
 $env:CF_ACCESS_CLIENT_SECRET=[string]$secrets.cf_access_client_secret
 $workerId=[IO.File]::ReadAllText($workerIdFile).Trim()
@@ -28,7 +28,7 @@ $env:BRIDGE_DB_PATH=Join-Path (Join-Path $base 'data') 'bridge.sqlite3'
 $env:BRIDGE_BASE_URL=$bridgeOrigin.Trim()
 $env:ALLOW_LOOPBACK_HTTP='true'
 $env:CREDENTIALS_FERNET_KEY=$secrets.fernet_key
-$env:WORKER_TOKEN=$secrets.worker_token
+$env:WORKER_BOOTSTRAP_TOKEN=$secrets.worker_bootstrap_token
 $env:DESTINEDFX_WORKER_TOKEN=$secrets.worker_token
 $env:DESTINEDFX_WORKER_ID=$workerId
 $env:PYTHONUNBUFFERED='1'
@@ -56,6 +56,6 @@ try {
     }
 } finally {
     foreach($proc in @($worker,$bridge)){if($proc -and -not $proc.HasExited){Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue}}
-    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','CREDENTIALS_FERNET_KEY','WORKER_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
-    $env:CREDENTIALS_FERNET_KEY=$null;$env:WORKER_TOKEN=$null;$env:DESTINEDFX_WORKER_TOKEN=$null
+    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','CREDENTIALS_FERNET_KEY','WORKER_BOOTSTRAP_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
+    $env:CREDENTIALS_FERNET_KEY=$null;$env:WORKER_BOOTSTRAP_TOKEN=$null;$env:DESTINEDFX_WORKER_TOKEN=$null
 }

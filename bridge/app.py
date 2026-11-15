@@ -159,6 +159,7 @@ def db():
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS request_rate(token_hash TEXT PRIMARY KEY, window INTEGER NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED', broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN');
+    CREATE TABLE IF NOT EXISTS worker_identities(worker_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'ACTIVE', created REAL NOT NULL, expires_at REAL NOT NULL, last_seen REAL, generation INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL, requested_account_mode TEXT);
     CREATE TABLE IF NOT EXISTS worker_attestations(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), worker_id TEXT NOT NULL, slot_id TEXT NOT NULL, linux_uid INTEGER NOT NULL, wine_prefix TEXT NOT NULL, terminal_path TEXT NOT NULL, process_identity TEXT NOT NULL, ea_identity TEXT NOT NULL, broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, account_mode TEXT NOT NULL, host_generation TEXT NOT NULL, issued_at REAL NOT NULL, expires_at REAL NOT NULL, nonce TEXT NOT NULL UNIQUE, signature TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, job_id TEXT REFERENCES worker_jobs(id) ON DELETE SET NULL);
     CREATE TABLE IF NOT EXISTS trade_ledger(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, identity TEXT NOT NULL, account_mode TEXT NOT NULL, position_id TEXT, order_ticket TEXT, deal_ticket TEXT, symbol TEXT NOT NULL, direction TEXT, status TEXT NOT NULL, payload TEXT NOT NULL, first_seen REAL NOT NULL, updated REAL NOT NULL, PRIMARY KEY(pairing_id,identity));
@@ -351,6 +352,10 @@ class WorkerClaim(BaseModel):
     active_terminals:int=Field(default=0,ge=0,le=16)
     max_terminals:int=Field(default=1,ge=1,le=16)
     attestation:dict|None=None
+class WorkerProvision(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    worker_id:str=Field(pattern=r'^[A-Za-z0-9._-]{1,128}$')
+    expires_in_seconds:int=Field(default=86400,ge=300,le=90*86400)
 class WorkerAttestation(BaseModel):
     model_config=ConfigDict(extra='forbid')
     pairing_id:str=Field(min_length=1,max_length=128)
@@ -702,11 +707,11 @@ def validate_origin(raw, allow_loopback=False):
 
 def managed_config():
     key=os.getenv('CREDENTIALS_FERNET_KEY','')
-    worker=os.getenv('WORKER_TOKEN','')
+    bootstrap=os.getenv('WORKER_BOOTSTRAP_TOKEN','') or os.getenv('WORKER_TOKEN','')
     bridge_url=os.getenv('BRIDGE_BASE_URL','').strip() or os.getenv('RENDER_EXTERNAL_URL','').strip()
-    if not key or len(worker)<32 or len(worker)>512 or not validate_origin(bridge_url, allow_loopback=ALLOW_LOOPBACK):
+    if not key or len(bootstrap)<32 or len(bootstrap)>512 or not validate_origin(bridge_url, allow_loopback=ALLOW_LOOPBACK):
         raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
-    try: return Fernet(key.encode()), worker
+    try: return Fernet(key.encode()), ''
     except Exception: raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
 def durable_execution_enabled():
     return os.getenv('EXECUTION_STORAGE_DURABLE','true').lower() == 'true'
@@ -810,8 +815,33 @@ def require_durable_execution():
     if not durable_execution_enabled():
         raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution-sensitive operations are disabled on non-durable storage'})
 def worker_auth(header):
-    _, secret=managed_config()
-    if not header or not header.startswith('Bearer ') or not hmac.compare_digest(header[7:],secret): raise HTTPException(401,'Unauthorized')
+    managed_config()
+    if not header or not header.startswith('Bearer '):
+        raise HTTPException(401,'Unauthorized')
+    presented=header[7:].strip()
+    if not presented or len(presented)>512:
+        raise HTTPException(401,'Unauthorized')
+    with tx(True) as c:
+        row=c.execute('SELECT worker_id,status,expires_at FROM worker_identities WHERE token_hash=?',
+                      (digest(presented),)).fetchone()
+        if row and row['status']=='ACTIVE' and row['expires_at'] > time.time():
+            c.execute('UPDATE worker_identities SET last_seen=? WHERE worker_id=?',(time.time(),row['worker_id']))
+            return {'worker_id':row['worker_id'],'token':presented}
+    # Test fixtures may opt into the legacy shared token. Production deployments
+    # must provision named worker identities and leave this disabled.
+    legacy=os.getenv('WORKER_TOKEN','')
+    if os.getenv('ALLOW_LEGACY_WORKER_TOKEN','false').lower()=='true' and legacy and hmac.compare_digest(presented,legacy):
+        return {'worker_id':None,'token':presented}
+    raise HTTPException(401,'Unauthorized')
+
+def require_worker_identity(context, worker_id):
+    if context.get('worker_id') is not None and not hmac.compare_digest(context['worker_id'],worker_id):
+        raise HTTPException(403, detail={'code':'WORKER_IDENTITY_MISMATCH','message':'Worker credential is not authorized for this worker'})
+
+def operator_auth(header):
+    bootstrap=os.getenv('WORKER_BOOTSTRAP_TOKEN','').strip()
+    if not bootstrap or not header or not header.startswith('Bearer ') or not hmac.compare_digest(header[7:].strip(),bootstrap):
+        raise HTTPException(401,'Unauthorized')
 def fresh_heartbeat(p):
     if not p or not p['heartbeat']: return None
     try:
@@ -973,11 +1003,49 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     return {'job_id':job_id,'status':'AWAITING_WORKER_ATTESTATION' if isolation_pending else 'QUEUED'}
 
 
+@app.post('/v1/operator/workers',status_code=201)
+def provision_worker(x:WorkerProvision, authorization:str|None=Header(default=None)):
+    require_durable_execution()
+    operator_auth(authorization)
+    worker_token=f'{x.worker_id}.{secrets.token_urlsafe(48)}'
+    now_epoch=time.time()
+    with tx(True) as c:
+        if c.execute('SELECT 1 FROM worker_identities WHERE worker_id=?',(x.worker_id,)).fetchone():
+            raise HTTPException(409,detail={'code':'WORKER_EXISTS','message':'Worker identity already exists'})
+        c.execute('INSERT INTO worker_identities(worker_id,token_hash,created,expires_at) VALUES(?,?,?,?)',
+                  (x.worker_id,digest(worker_token),now_epoch,now_epoch+x.expires_in_seconds))
+    return {'worker_id':x.worker_id,'credential':worker_token,'expires_at':now_epoch+x.expires_in_seconds}
+
+@app.post('/v1/operator/workers/{worker_id}/rotate')
+def rotate_worker(worker_id:str, x:WorkerProvision|None=None, authorization:str|None=Header(default=None)):
+    require_durable_execution()
+    operator_auth(authorization)
+    expires_in=x.expires_in_seconds if x else 86400
+    worker_token=f'{worker_id}.{secrets.token_urlsafe(48)}'
+    now_epoch=time.time()
+    with tx(True) as c:
+        row=c.execute('SELECT generation FROM worker_identities WHERE worker_id=?',(worker_id,)).fetchone()
+        if not row: raise HTTPException(404,'Worker identity not found')
+        c.execute('UPDATE worker_identities SET token_hash=?,status="ACTIVE",expires_at=?,last_seen=NULL,generation=? WHERE worker_id=?',
+                  (digest(worker_token),now_epoch+expires_in,row['generation']+1,worker_id))
+    return {'worker_id':worker_id,'credential':worker_token,'expires_at':now_epoch+expires_in}
+
+@app.post('/v1/operator/workers/{worker_id}/revoke')
+def revoke_worker(worker_id:str, authorization:str|None=Header(default=None)):
+    require_durable_execution()
+    operator_auth(authorization)
+    with tx(True) as c:
+        updated=c.execute('UPDATE worker_identities SET status="REVOKED" WHERE worker_id=?',(worker_id,))
+        if updated.rowcount != 1: raise HTTPException(404,'Worker identity not found')
+        c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE worker_id=? AND status IN ('LEASED','PROVISIONING','AUTHENTICATING','READY')",(worker_id,))
+    return {'worker_id':worker_id,'status':'REVOKED'}
+
 @app.post('/v1/worker/attestations',status_code=201)
 def worker_attestation(x:WorkerAttestation, authorization:str|None=Header(default=None)):
     require_durable_execution()
-    worker_auth(authorization)
-    _,worker_secret=managed_config()
+    worker=worker_auth(authorization)
+    require_worker_identity(worker,x.worker_id)
+    worker_secret=worker['token']
     evidence=x.model_dump()
     if not hmac.compare_digest(x.signature,_attestation_signature(worker_secret,evidence)):
         raise HTTPException(401,'Invalid worker attestation signature')
@@ -1006,8 +1074,9 @@ def worker_attestation(x:WorkerAttestation, authorization:str|None=Header(defaul
 @app.post('/v1/worker/attestations/finalize')
 def worker_attestation_finalize(x:WorkerAttestationFinalize, authorization:str|None=Header(default=None)):
     require_durable_execution()
-    worker_auth(authorization)
-    _,worker_secret=managed_config()
+    worker=worker_auth(authorization)
+    require_worker_identity(worker,x.worker_id)
+    worker_secret=worker['token']
     evidence=x.model_dump()
     if not hmac.compare_digest(x.signature,_attestation_signature(worker_secret,evidence)):
         raise HTTPException(401,'Invalid worker attestation finalization signature')
@@ -1029,7 +1098,9 @@ def worker_attestation_finalize(x:WorkerAttestationFinalize, authorization:str|N
 @app.post('/v1/worker/jobs/claim')
 def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
     require_durable_execution()
-    worker_auth(authorization); fernet,worker_secret=managed_config(); t=time.time()
+    worker=worker_auth(authorization)
+    require_worker_identity(worker,x.worker_id)
+    fernet,_=managed_config(); worker_secret=worker['token']; t=time.time()
     with tx(True) as c:
         # Include in-flight provision leases as well as worker-reported terminal processes.
         # This closes the race where two simultaneous requests claim before either terminal
@@ -1109,7 +1180,8 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
 @app.patch('/v1/worker/jobs/{job_id}')
 def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(default=None)):
     require_durable_execution()
-    worker_auth(authorization)
+    worker=worker_auth(authorization)
+    require_worker_identity(worker,x.worker_id)
     if x.status not in ('PROVISIONING','AUTHENTICATING','READY','FAILED','REVOKED'): raise HTTPException(422,'Invalid provisioning status')
     # Only expose constrained operational codes; never reflect arbitrary worker text.
     code=(x.error_code or '')[:64]
@@ -1135,7 +1207,8 @@ def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(defaul
 @app.get('/v1/worker/jobs/{job_id}/status')
 def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128),authorization:str|None=Header(default=None)):
     require_durable_execution()
-    worker_auth(authorization)
+    worker=worker_auth(authorization)
+    require_worker_identity(worker,worker_id)
     with tx(True) as c:
         job=c.execute('SELECT * FROM worker_jobs WHERE id=?',(job_id,)).fetchone()
         if not job: raise HTTPException(404,'Job not found')

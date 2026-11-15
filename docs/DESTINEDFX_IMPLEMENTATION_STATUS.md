@@ -6,7 +6,8 @@ Updated: 2026-11-15
 
 - **Implemented:** per-pairing encrypted credentials, broker/login/server checks, DEMO/LIVE mode checks, fail-closed commands, fresh EA heartbeat requirements, signed worker attestation, nonce replay protection, expiry, host-generation binding, single-use job linkage, process/EA finalization, and READY gating.
 - **Tested:** pending enrollment to worker reservation, signed claim, finalization, and READY transition; cross-authentication and replay rejection.
-- **Not production-proven:** the worker bearer is currently a deployment-level shared secret rather than independently provisioned per-worker credentials.
+- **Implemented in this stage:** workers now use independently provisioned credentials keyed to a stable worker ID, with one-time issuance, short expiry, rotation, revocation, last-seen tracking, and claim/attestation/finalization/status worker-ID binding. The legacy shared-token path is disabled by default and is enabled only by explicit test fixtures.
+- **Not production-proven:** credential provisioning, rotation, and revocation have not yet been exercised on a persistent owner host.
 
 ## Execution workers
 
@@ -35,4 +36,4 @@ Updated: 2026-11-15
 
 - **DEMO:** implementation is incomplete until a persistent isolated worker and a real broker DEMO lifecycle are verified.
 - **LIVE:** server-enforced and blocked on ephemeral hosts; not enabled.
-- **APK:** build attempted but could not resolve the configured Android Gradle plugin in the current network environment; no fresh APK hash is claimed.
+- **APK:** dependency resolution was attempted with Gradle 9.3.1/JDK 21, but the environment could not resolve Google Maven DNS; no fresh APK hash is claimed. GitHub Actions runs for `db9cd2a` were `action_required` with no jobs, so they are not build evidence.

@@ -14,7 +14,7 @@ services:
       ALLOW_LOOPBACK_HTTP: "false"
       TRUSTED_PROXY_IPS: 172.30.250.2
       CREDENTIALS_FERNET_KEY: ${CREDENTIALS_FERNET_KEY:?Load from the owner host secret store}
-      WORKER_TOKEN: ${WORKER_TOKEN:?Load from the owner host secret store}
+      WORKER_BOOTSTRAP_TOKEN: ${WORKER_BOOTSTRAP_TOKEN:?Load from the owner host secret store}
       NEWS_PROVIDER_URL: ${NEWS_PROVIDER_URL:-}
       NEWS_PROVIDER_TOKEN: ${NEWS_PROVIDER_TOKEN:-}
       NEWS_BLACKOUT_BEFORE_SECONDS: "1800"

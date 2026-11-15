@@ -56,7 +56,7 @@ Create the local Compose environment from the protected host secret store; never
 The Compose environment must set:
 
 - `BRIDGE_BASE_URL=https://<exact-windows-host>.ts.net` (no path/query/fragment)
-- `CREDENTIALS_FERNET_KEY` and `WORKER_TOKEN` from the host secret store, not source control
+- `CREDENTIALS_FERNET_KEY` and `WORKER_BOOTSTRAP_TOKEN` from the host secret store, not source control
 - `BRIDGE_DB_PATH=/data/bridge.sqlite3`
 - `ALLOW_LOOPBACK_HTTP=false`
 - `TRUSTED_PROXY_IPS=172.30.250.2` (or the exact fixed Caddy container IP selected)

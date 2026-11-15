@@ -248,6 +248,7 @@ def managed_env(monkeypatch):
         c.execute('DELETE FROM rate')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-' + '2026-very-long')
+    monkeypatch.setenv('ALLOW_LEGACY_WORKER_TOKEN', 'true')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.destinedfx.internal')
     monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: True)
 
@@ -262,6 +263,34 @@ def test_managed_registration_waits_for_verified_per_user_isolation(monkeypatch)
     })
     assert response.status_code == 202
     assert response.json()['status'] == 'AWAITING_WORKER_ATTESTATION'
+
+def test_worker_credentials_are_independent_rotatable_and_revocable(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setenv('WORKER_BOOTSTRAP_TOKEN','bootstrap-secret-for-worker-provisioning-2026')
+    operator={'Authorization':'Bearer '+os.environ['WORKER_BOOTSTRAP_TOKEN']}
+    a=client.post('/v1/operator/workers',headers=operator,json={'worker_id':'worker-a'}).json()
+    b=client.post('/v1/operator/workers',headers=operator,json={'worker_id':'worker-b'}).json()
+    assert a['credential'] != b['credential']
+    p, ah = managed_pair()
+    assert client.post('/v1/app/managed-account',headers=ah,json={
+        'login':'123456','server':'Demo-Server','password':'secret',
+        'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+    }).status_code == 202
+    a_headers={'Authorization':'Bearer '+a['credential']}
+    b_headers={'Authorization':'Bearer '+b['credential']}
+    assert client.post('/v1/worker/jobs/claim',headers=a_headers,
+                       json={'worker_id':'worker-b'}).status_code == 403
+    claimed=client.post('/v1/worker/jobs/claim',headers=a_headers,
+                        json={'worker_id':'worker-a'}).json()
+    assert claimed['worker_id']=='worker-a'
+    assert client.patch('/v1/worker/jobs/'+claimed['job_id'],headers=b_headers,
+                        json={'worker_id':'worker-a','status':'PROVISIONING'}).status_code == 403
+    rotated=client.post('/v1/operator/workers/worker-a/rotate',headers=operator).json()
+    assert client.post('/v1/worker/jobs/claim',headers=a_headers,
+                       json={'worker_id':'worker-a'}).status_code == 401
+    assert client.post('/v1/operator/workers/worker-a/revoke',headers=operator).json()['status']=='REVOKED'
+    assert client.post('/v1/worker/jobs/claim',headers={'Authorization':'Bearer '+rotated['credential']},
+                       json={'worker_id':'worker-a'}).status_code == 401
 
 def test_worker_attestation_is_signed_bound_and_single_use(monkeypatch):
     managed_env(monkeypatch)
