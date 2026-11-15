@@ -117,6 +117,8 @@ if ($resume) {
 }
 function TomlString([string]$Value) { '"' + $Value.Replace('\','\\').Replace('"','\"') + '"' }
 function Write-DpapiSecretBundle([object]$Bundle) {
+    if($null -eq $Bundle.PSObject.Properties['worker_id']){$Bundle|Add-Member -NotePropertyName worker_id -NotePropertyValue $workerId}
+    if($Bundle.worker_id -ne $workerId){throw 'Refusing to persist a different worker identity.'}
     $json = $Bundle | ConvertTo-Json -Compress
     $secure = ConvertTo-SecureString $json -AsPlainText -Force
     $encrypted = ConvertFrom-SecureString $secure
@@ -126,7 +128,16 @@ function Write-DpapiSecretBundle([object]$Bundle) {
         # existing valid bundles remain recoverable until validation succeeds.
         [IO.File]::WriteAllText($temporary,$encrypted,[Text.UTF8Encoding]::new($false))
         $check = ConvertTo-SecureString ([IO.File]::ReadAllText($temporary))
-        if (-not $check) { throw 'DPAPI validation failed.' }
+        $checkPtr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($check)
+        try {
+            $checkJson=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($checkPtr)
+            $checkBundle=$checkJson|ConvertFrom-Json
+        } finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($checkPtr)
+            $check.Dispose()
+            $checkJson=$null
+        }
+        if (-not $checkBundle.fernet_key -or -not $checkBundle.worker_bootstrap_token -or $checkBundle.worker_id -ne $workerId) { throw 'DPAPI semantic validation failed.' }
         Move-Item -LiteralPath $temporary -Destination $secretsPath -Force
     } catch {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
