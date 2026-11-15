@@ -40,14 +40,60 @@ def _num(path, key):
     return 0
 
 
-def terminal_process_alive():
-    for entry in Path("/proc").glob("[0-9]*"):
+def _norm_path(value):
+    return os.path.normcase(os.path.realpath(os.path.expanduser(str(value))))
+
+
+def _norm_arg(value):
+    return value.replace("\\", "/").rstrip("/").lower()
+
+
+def _expected_terminal_args(exe, prefix):
+    exe_path = Path(exe).expanduser()
+    exe_norm = _norm_path(exe_path)
+    expected = {_norm_arg(exe_norm)}
+    if prefix:
+        prefix_path = Path(prefix).expanduser()
         try:
-            cmd = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "ignore")
+            relative = exe_path.resolve().relative_to((prefix_path / "drive_c").resolve())
+        except (OSError, ValueError):
+            relative = None
+        if relative is not None:
+            expected.add(_norm_arg("c:/" + str(relative)))
+        expected.add(_norm_arg("z:/" + exe_norm.lstrip("/")))
+    return expected
+
+
+def terminal_process_alive(exe=None, prefix=None, proc_root=None):
+    """Return true only when the configured terminal and Wine prefix are proven."""
+    exe_value = exe if exe is not None else os.getenv("MT5_TERMINAL_EXE", "")
+    if not exe_value:
+        return False
+    prefix_value = prefix if prefix is not None else os.getenv("WINEPREFIX", "")
+    expected = _expected_terminal_args(exe_value, prefix_value)
+    root = Path(proc_root) if proc_root is not None else Path("/proc")
+    prefix_norm = _norm_path(prefix_value) if prefix_value else None
+    for entry in root.glob("[0-9]*"):
+        try:
+            raw = (entry / "cmdline").read_bytes()
         except OSError:
             continue
-        if re.search(TERMINAL_PATTERN, cmd):
-            return True
+        args = [a.decode("utf-8", "ignore") for a in raw.split(b"\0") if a]
+        if not any(_norm_arg(arg) in expected for arg in args):
+            continue
+        if prefix_norm is not None:
+            try:
+                values = (entry / "environ").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            actual = next(
+                (value[len(b"WINEPREFIX="):].decode("utf-8", "ignore")
+                 for value in values if value.startswith(b"WINEPREFIX=")),
+                None,
+            )
+            if actual is None or _norm_path(actual) != prefix_norm:
+                continue
+        return True
     return False
 
 

@@ -135,3 +135,51 @@ def test_recent_journal_reader_honors_byte_limit_and_discards_partial_line(tmp_p
     result = mt5_journal.read_recent_mt5_journal(path, max_bytes=32)
     assert result == "FRESH"
     assert len(result.encode("utf-16-le")) <= 32
+
+
+def _fake_proc(root, pid, args, environ=None):
+    entry = root / str(pid)
+    entry.mkdir()
+    (entry / "cmdline").write_bytes(b"\0".join(a.encode() for a in args) + b"\0")
+    if environ is not None:
+        (entry / "environ").write_bytes(
+            b"\0".join(f"{key}={value}".encode() for key, value in environ.items()) + b"\0"
+        )
+
+
+def test_terminal_health_requires_configured_executable_and_prefix(tmp_path):
+    prefix = tmp_path / ".mt5"
+    exe = prefix / "drive_c" / "Program Files" / "MetaTrader 5" / "terminal64.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"x")
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    _fake_proc(proc, 1, [r"C:\Program Files\MetaTrader 5\terminal64.exe"], {"WINEPREFIX": str(prefix)})
+    assert host_agent.terminal_process_alive(exe, prefix, proc)
+    wrong_proc = tmp_path / "wrong-proc"
+    wrong_proc.mkdir()
+    _fake_proc(
+        wrong_proc,
+        2,
+        [r"C:\Program Files\MetaTrader 5\terminal64.exe"],
+        {"WINEPREFIX": str(tmp_path / "wrong-prefix")},
+    )
+    assert not host_agent.terminal_process_alive(exe, prefix, wrong_proc)
+    unreadable_proc = tmp_path / "unreadable-proc"
+    unreadable_proc.mkdir()
+    _fake_proc(unreadable_proc, 3, [r"C:\Program Files\MetaTrader 5\terminal64.exe"], None)
+    assert not host_agent.terminal_process_alive(exe, prefix, unreadable_proc)
+
+
+def test_terminal_health_supports_unix_and_z_paths_and_fails_closed(tmp_path):
+    prefix = tmp_path / ".mt5"
+    exe = prefix / "drive_c" / "Program Files" / "MetaTrader 5" / "terminal64.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"x")
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    _fake_proc(proc, 4, ["wine", str(exe)], {"WINEPREFIX": str(prefix)})
+    _fake_proc(proc, 5, ["wine", "Z:" + str(exe).replace("/", "\\")], {"WINEPREFIX": str(prefix)})
+    assert host_agent.terminal_process_alive(exe, prefix, proc)
+    assert not host_agent.terminal_process_alive(tmp_path / "other.exe", prefix, proc)
+    assert not host_agent.terminal_process_alive(None, None, proc)
