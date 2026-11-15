@@ -292,6 +292,26 @@ def test_worker_credentials_are_independent_rotatable_and_revocable(monkeypatch)
     assert client.post('/v1/worker/jobs/claim',headers={'Authorization':'Bearer '+rotated['credential']},
                        json={'worker_id':'worker-a'}).status_code == 401
 
+def test_worker_identity_status_and_handshake_survive_database_reopen(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setenv('WORKER_BOOTSTRAP_TOKEN','bootstrap-secret-for-worker-provisioning-2026')
+    operator={'Authorization':'Bearer '+os.environ['WORKER_BOOTSTRAP_TOKEN']}
+    provisioned=client.post('/v1/operator/workers',headers=operator,
+                            json={'worker_id':'persistent-worker'}).json()
+    status=client.get('/v1/operator/workers/persistent-worker',headers=operator)
+    assert status.status_code == 200 and status.json()['status']=='ACTIVE'
+    handshake=client.get('/v1/worker/identity',
+                         headers={'Authorization':'Bearer '+provisioned['credential']})
+    assert handshake.status_code == 200
+    assert handshake.json()['worker_id']=='persistent-worker'
+
+def test_configuration_health_is_distinct_from_terminal_readiness(monkeypatch):
+    managed_env(monkeypatch)
+    configured=client.get('/health/config')
+    assert configured.status_code == 200
+    assert configured.json()['managed_execution']=='configured'
+    assert client.get('/health/ready').status_code == 503
+
 def test_worker_attestation_is_signed_bound_and_single_use(monkeypatch):
     managed_env(monkeypatch)
     p, ah = managed_pair()

@@ -7,7 +7,8 @@ Updated: 2026-11-15
 - **Implemented:** per-pairing encrypted credentials, broker/login/server checks, DEMO/LIVE mode checks, fail-closed commands, fresh EA heartbeat requirements, signed worker attestation, nonce replay protection, expiry, host-generation binding, single-use job linkage, process/EA finalization, and READY gating.
 - **Tested:** pending enrollment to worker reservation, signed claim, finalization, and READY transition; cross-authentication and replay rejection.
 - **Implemented in this stage:** workers now use independently provisioned credentials keyed to a stable worker ID, with one-time issuance, short expiry, rotation, revocation, last-seen tracking, and claim/attestation/finalization/status worker-ID binding. The legacy shared-token path is disabled by default and is enabled only by explicit test fixtures.
-- **Not production-proven:** credential provisioning, rotation, and revocation have not yet been exercised on a persistent owner host.
+- **Implemented in this stage:** the Windows supervisor now verifies the stored credential against the local Bridge before starting the worker, provisions the exact stable identity when absent, rotates only when rejected or near expiry, and persists the new credential through an atomic DPAPI rewrite. Legacy bundles receive missing fields through the same validated migration path.
+- **Not production-proven:** this lifecycle has not yet been exercised on a persistent owner host.
 
 ## Execution workers
 

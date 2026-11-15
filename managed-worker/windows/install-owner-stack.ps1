@@ -25,6 +25,7 @@ $venvDir = Join-Path $base 'venv'
 $resume = Test-Path $secretsPath
 $workerConfig = Join-Path $configDir 'worker.toml'
 $identityPath = Join-Path $configDir 'worker-id.txt'
+$secretNeedsWrite = $false
 if ($AddBroker -and (-not $resume -or -not (Test-Path $workerConfig) -or -not (Test-Path $identityPath))) { throw '-AddBroker requires a complete existing owner stack.' }
 if ((Test-Path $workerConfig) -and -not $AddBroker) { throw 'Existing config found. Use -AddBroker; reinstall will not replace worker config or identity.' }
 New-Item -ItemType Directory -Force -Path $dataDir,$backupDir,$configDir,$logDir,$workerData | Out-Null
@@ -96,12 +97,17 @@ if ($resume) {
         $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureExisting)
         try { $secretJson = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
         $secretObject = $secretJson | ConvertFrom-Json
-        if ([string]::IsNullOrWhiteSpace($secretObject.fernet_key) -or [string]::IsNullOrWhiteSpace($secretObject.worker_token)) { throw 'Secret bundle fields are missing.' }
+        if ([string]::IsNullOrWhiteSpace($secretObject.fernet_key)) { throw 'Secret bundle Fernet key is missing.' }
+        if ($null -eq $secretObject.PSObject.Properties['worker_token']) {
+            $secretObject | Add-Member -NotePropertyName worker_token -NotePropertyValue ''
+            $secretNeedsWrite = $true
+        }
         if ($null -eq $secretObject.PSObject.Properties['worker_bootstrap_token'] -or [string]::IsNullOrWhiteSpace($secretObject.worker_bootstrap_token)) {
             $secretObject | Add-Member -NotePropertyName worker_bootstrap_token -NotePropertyValue (& $venvPython -c 'import secrets; print(secrets.token_urlsafe(48))')
+            $secretNeedsWrite = $true
         }
-        if ($null -eq $secretObject.PSObject.Properties['cf_access_client_id']) { $secretObject | Add-Member -NotePropertyName cf_access_client_id -NotePropertyValue '' }
-        if ($null -eq $secretObject.PSObject.Properties['cf_access_client_secret']) { $secretObject | Add-Member -NotePropertyName cf_access_client_secret -NotePropertyValue '' }
+        if ($null -eq $secretObject.PSObject.Properties['cf_access_client_id']) { $secretObject | Add-Member -NotePropertyName cf_access_client_id -NotePropertyValue ''; $secretNeedsWrite = $true }
+        if ($null -eq $secretObject.PSObject.Properties['cf_access_client_secret']) { $secretObject | Add-Member -NotePropertyName cf_access_client_secret -NotePropertyValue ''; $secretNeedsWrite = $true }
     } catch { throw 'Existing owner-secrets.dpapi could not be decrypted or validated under this Windows user; stop and perform manual recovery without deleting state.' }
 } else {
     $generated = & $venvPython -c 'import json,secrets; from cryptography.fernet import Fernet; print(json.dumps({"fernet_key":Fernet.generate_key().decode(),"worker_bootstrap_token":secrets.token_urlsafe(48),"worker_token":secrets.token_urlsafe(48),"cf_access_client_id":"","cf_access_client_secret":""}))'
@@ -110,6 +116,25 @@ if ($resume) {
     $secretJson = $generated
 }
 function TomlString([string]$Value) { '"' + $Value.Replace('\','\\').Replace('"','\"') + '"' }
+function Write-DpapiSecretBundle([object]$Bundle) {
+    $json = $Bundle | ConvertTo-Json -Compress
+    $secure = ConvertTo-SecureString $json -AsPlainText -Force
+    $encrypted = ConvertFrom-SecureString $secure
+    $temporary = "$secretsPath.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        # Fresh installs formerly used [IO.File]::WriteAllText($secretsPath,...); stage first so
+        # existing valid bundles remain recoverable until validation succeeds.
+        [IO.File]::WriteAllText($temporary,$encrypted,[Text.UTF8Encoding]::new($false))
+        $check = ConvertTo-SecureString ([IO.File]::ReadAllText($temporary))
+        if (-not $check) { throw 'DPAPI validation failed.' }
+        Move-Item -LiteralPath $temporary -Destination $secretsPath -Force
+    } catch {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        throw
+    } finally {
+        $secure.Dispose()
+    }
+}
 if ($AddBroker -and -not $brokerAlreadyConfigured) {
     $existingConfig = [IO.File]::ReadAllText($workerConfig)
     $currentCapacity = [int]((& $venvPython -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["max_terminals"])' $workerConfig).Trim())
@@ -147,12 +172,10 @@ metaeditor_exe = $(TomlString $brokerTerminals[$broker].metaeditor_exe)
     [IO.File]::WriteAllText($workerConfig,$toml,[Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($identityPath,$workerId,[Text.UTF8Encoding]::new($false))
 }
-if (-not $resume) {
-    $secretJson = @{fernet_key=$secretObject.fernet_key;worker_bootstrap_token=$secretObject.worker_bootstrap_token;worker_token=$secretObject.worker_token;cf_access_client_id=[string]$secretObject.cf_access_client_id;cf_access_client_secret=[string]$secretObject.cf_access_client_secret} | ConvertTo-Json -Compress
-    $secureSecret = ConvertTo-SecureString $secretJson -AsPlainText -Force
-    $encrypted = ConvertFrom-SecureString $secureSecret
-    [IO.File]::WriteAllText($secretsPath,$encrypted,[Text.UTF8Encoding]::new($false))
-    $secureSecret.Dispose()
+# Equivalent to the original fresh-install branch `if (-not $resume)`, with
+# migration persistence added for older DPAPI bundles.
+if (-not $resume -or $secretNeedsWrite) {
+    Write-DpapiSecretBundle $secretObject
 }
 $secretJson=$null; $secretObject=$null; $generated=$null
 $supervisor = Join-Path $PSScriptRoot 'run-owner-stack.ps1'

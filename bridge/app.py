@@ -1040,6 +1040,30 @@ def revoke_worker(worker_id:str, authorization:str|None=Header(default=None)):
         c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE worker_id=? AND status IN ('LEASED','PROVISIONING','AUTHENTICATING','READY')",(worker_id,))
     return {'worker_id':worker_id,'status':'REVOKED'}
 
+@app.get('/v1/operator/workers/{worker_id}')
+def worker_identity_status(worker_id:str, authorization:str|None=Header(default=None)):
+    require_durable_execution()
+    operator_auth(authorization)
+    with tx(True) as c:
+        row=c.execute('SELECT worker_id,status,created,expires_at,last_seen,generation FROM worker_identities WHERE worker_id=?',
+                      (worker_id,)).fetchone()
+    if not row:
+        raise HTTPException(404,'Worker identity not found')
+    return dict(row)
+
+@app.get('/v1/worker/identity')
+def worker_identity(authorization:str|None=Header(default=None)):
+    require_durable_execution()
+    worker=worker_auth(authorization)
+    if worker['worker_id'] is None:
+        raise HTTPException(403, detail={'code':'NAMED_WORKER_REQUIRED','message':'A named worker credential is required'})
+    with tx(True) as c:
+        row=c.execute('SELECT worker_id,status,expires_at,generation FROM worker_identities WHERE worker_id=?',
+                      (worker['worker_id'],)).fetchone()
+    if not row or row['status'] != 'ACTIVE' or row['expires_at'] <= time.time():
+        raise HTTPException(401,'Unauthorized')
+    return dict(row)
+
 @app.post('/v1/worker/attestations',status_code=201)
 def worker_attestation(x:WorkerAttestation, authorization:str|None=Header(default=None)):
     require_durable_execution()
@@ -1246,6 +1270,16 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
 def live_health(): return {'status':'ok'}
 @app.get('/health')
 def health(): return {'status':'ok','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
+@app.get('/health/config')
+def configuration_health():
+    require_durable_execution()
+    managed_config()
+    try:
+        with tx(True) as c:
+            c.execute('SELECT 1').fetchone()
+    except Exception as error:
+        raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'}) from error
+    return {'status':'configured','database':'ok','managed_execution':'configured','host_profile':HOST_PROFILE}
 @app.get('/health/ready')
 def readiness():
     """Report whether the bridge can safely accept managed-execution work."""
