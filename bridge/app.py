@@ -933,6 +933,71 @@ def terminal_identity_matches(p, account_mode, beat):
 def execution_state_eligible(beat):
     return bool(beat and beat.get('state') in ('READY','RUNNING','PAUSED','STOPPED'))
 
+def live_risk_controls(beat):
+    """Derive LIVE risk evidence only from the current authenticated MT5 EA heartbeat."""
+    config = beat.get('configuration') if isinstance(beat, dict) else None
+    if not isinstance(config, dict):
+        config = {}
+
+    risk = config.get('risk_percent')
+    daily_limit = config.get('max_daily_loss_percent')
+    concurrent = config.get('max_concurrent_positions')
+    daily_status = str(config.get('daily_risk_status', 'UNKNOWN')).upper()
+    daily_used = config.get('daily_loss_used_percent')
+
+    def finite_number(value):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(float(value)))
+
+    risk_valid = finite_number(risk) and 0.0 < float(risk) <= 1.0
+    daily_limit_valid = finite_number(daily_limit) and 0.0 < float(daily_limit) <= 2.0
+    concurrent_valid = (isinstance(concurrent, int) and not isinstance(concurrent, bool)
+                        and 1 <= concurrent <= 2)
+    risk_caps_clear = risk_valid and daily_limit_valid and concurrent_valid
+
+    daily_used_valid = finite_number(daily_used) and 0.0 <= float(daily_used) < 100.0
+    daily_status_clear = daily_status in ('NORMAL', 'WARNING_80', 'WARNING_90')
+    daily_loss_clear = daily_status_clear and daily_used_valid
+
+    reasons = []
+    if not risk_valid:
+        reasons.append('TRADE_RISK_PERCENT_MISSING_OR_ABOVE_1_PERCENT')
+    if not daily_limit_valid:
+        reasons.append('DAILY_LOSS_CAP_MISSING_OR_ABOVE_2_PERCENT')
+    if not concurrent_valid:
+        reasons.append('MAX_CONCURRENT_POSITIONS_MISSING_OR_ABOVE_2')
+    if not daily_status_clear:
+        reasons.append('DAILY_RISK_STATUS_NOT_CLEAR')
+    if not daily_used_valid:
+        reasons.append('DAILY_LOSS_USAGE_MISSING_INVALID_OR_BREACHED')
+
+    return {
+        'source': 'authenticated_mt5_ea_heartbeat',
+        'observed_at': beat.get('timestamp') if isinstance(beat, dict) else None,
+        'risk_percent': float(risk) if risk_valid else None,
+        'max_daily_loss_percent': float(daily_limit) if daily_limit_valid else None,
+        'max_concurrent_positions': concurrent if concurrent_valid else None,
+        'daily_risk_status': daily_status,
+        'daily_loss_used_percent': float(daily_used) if finite_number(daily_used) else None,
+        'daily_loss_clear': daily_loss_clear,
+        'risk_caps_clear': risk_caps_clear,
+        'authorized': daily_loss_clear and risk_caps_clear,
+        'reasons': reasons,
+    }
+
+
+def require_live_risk_evidence(beat):
+    evidence = live_risk_controls(beat)
+    if not evidence['authorized']:
+        raise HTTPException(409, detail={
+            'code': 'LIVE_RISK_EVIDENCE_INVALID',
+            'message': 'Fresh EA daily-risk telemetry and conservative risk caps are required for LIVE authorization',
+            'daily_loss_clear': evidence['daily_loss_clear'],
+            'risk_caps_clear': evidence['risk_caps_clear'],
+            'reasons': evidence['reasons'],
+        })
+    return evidence
+
 def live_authorization_valid(p, managed, beat, now_epoch=None):
     """Require the current LIVE lease and its exact, currently valid DEMO profile association."""
     now_epoch = time.time() if now_epoch is None else now_epoch
@@ -943,6 +1008,8 @@ def live_authorization_valid(p, managed, beat, now_epoch=None):
     if not execution_state_eligible(beat) or not beat.get('terminal_connected') or not beat.get('trade_allowed'):
         return False
     if not terminal_identity_matches(p, 'LIVE', beat):
+        return False
+    if not live_risk_controls(beat)['authorized']:
         return False
     account = beat.get('account') or {}
     if not (
@@ -1665,6 +1732,7 @@ def state(authorization:str|None=Header(default=None)):
         job=c.execute('SELECT status,error_code,error_message FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1',(p['id'],)).fetchone()
     managed=None
     identity_verified=False
+    actual=None
     if m:
         actual=fresh_heartbeat(p); worker_ready=bool(job and job['status']=='READY')
         claimed=json.loads(p['account']) if p['account'] else {}
@@ -1677,7 +1745,8 @@ def state(authorization:str|None=Header(default=None)):
         managed={'status':app_status,'worker_status':job['status'] if job else 'NOT_CONFIGURED','access_type':m['access_type'],'account_mode':m['account_mode'],'broker_brand':m['broker_brand'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
         if actual:
             with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
-    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+    risk_controls=live_risk_controls(actual)
+    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
 
@@ -1939,6 +2008,7 @@ def create_live_challenge(authorization:str|None=Header(default=None)):
     managed,job,worker,beat=_current_ready_context(p,'LIVE')
     if managed['access_type']!='MASTER':
         raise HTTPException(409,'LIVE authorization requires a MASTER profile')
+    require_live_risk_evidence(beat)
     with tx() as c:
         link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
     if not link:
@@ -1985,6 +2055,7 @@ def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=Non
             c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
         raise HTTPException(409,detail={'code':'LIVE_CONTEXT_CHANGED','message':'The authorization context changed; obtain a new challenge'})
     managed,job,worker,beat=_current_ready_context(p,'LIVE')
+    require_live_risk_evidence(beat)
     with tx() as c:
         link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
     if (not link or link['demo_pairing_id'] != challenge['demo_pairing_id'] or
@@ -2262,6 +2333,11 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
         seq=c.execute('SELECT heartbeat_seq FROM pairings WHERE id=?',(p['id'],)).fetchone()['heartbeat_seq']
         managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
+        if (managed and not managed['revoked'] and managed['account_mode']=='LIVE'
+            and not live_risk_controls(payload)['authorized']):
+            # Risk evidence loss or a breached EA daily-loss guard immediately removes the lease.
+            c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
+            c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
         if (managed and not managed['revoked'] and managed['access_type']=='MASTER' and managed['account_mode']==x.account.account_mode
             and broker_company_matches(managed['broker_brand'],x.account.company)
             and job and job['status']=='READY' and x.terminal_connected and terminal_identity_matches(p,managed['account_mode'],payload)):
