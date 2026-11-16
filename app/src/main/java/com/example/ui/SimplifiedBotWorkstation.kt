@@ -346,7 +346,16 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             delay(10_000L)
         }
     }
-    val bridge = remember(mt5Profile) { if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) MT5RemoteBridgeClient(secrets, mt5Profile, { AppSecurityGuard.authorizeSensitiveAction() }, accountMode = mt5Mode, brokerBrand = selectedMt5Broker, modeArmingPolicy = viewModel.app.modeArmingPolicy) else null }
+    val bridge = remember(mt5Profile, selectedMt5Broker, mt5Mode) {
+        if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) {
+            MT5RemoteBridgeClient(
+                secrets, mt5Profile, { AppSecurityGuard.authorizeSensitiveAction() },
+                accountMode = mt5Mode, brokerBrand = selectedMt5Broker,
+                modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                managementIdentityAssertionProvider = { viewModel.issueBridgeIdentityAssertion() }
+            )
+        } else null
+    }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val reason = if (granted) "BOT NOT RUNNING — notifications are enabled. Tap Start again to begin the foreground service."
         else "BOT NOT RUNNING — notification permission was denied. Allow DestinedFX notifications in Android Settings, then tap Start again."
@@ -1009,58 +1018,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             onArmLive = { spec, loginForm, typedConfirmation, minimumLot ->
                 when (spec.connector) {
                     LoginConnector.MT5_TERMINAL -> {
-                        val brand = spec.id.removeSuffix("_MT5")
-                        val profile = "${brand}_LIVE"
-                        require(loginForm.mode == LoginMode.LIVE) { "LIVE_PROFILE_REQUIRED" }
-                        val client = MT5RemoteBridgeClient(
-                            secrets, profile, { AppSecurityGuard.authorizeSensitiveAction() },
-                            accountMode = "LIVE", brokerBrand = brand, modeArmingPolicy = viewModel.app.modeArmingPolicy,
+                        throw IllegalStateException(
+                            "LIVE_REAUTHENTICATION_REQUIRED: use the primary MT5 authorization dialog to obtain a fresh server challenge."
                         )
-                        val snapshot = client.state()
-                        val path = com.example.data.broker.ModePath.valueOf("${brand}_MT5")
-                        val liveIdentity = com.example.data.broker.ModeAccountIdentity(
-                            path, brand, snapshot.actualLogin, snapshot.actualServer,
-                            com.example.data.broker.AccountMode.LIVE, secrets.getManagedMT5CredentialGeneration(profile),
-                        )
-                        val demoProfile = "${brand}_DEMO"
-                        val demoIdentity = com.example.data.broker.ModeAccountIdentity(
-                            path, brand,
-                            secrets.getManagedMT5AccountLogin(demoProfile),
-                            secrets.getManagedMT5AccountServer(demoProfile),
-                            com.example.data.broker.AccountMode.DEMO,
-                            secrets.getManagedMT5CredentialGeneration(demoProfile),
-                        )
-                        val risk = snapshot.raw.optJSONObject("risk_controls")
-                        val firstLot = minimumLot.toDoubleOrNull()
-                        val verification = com.example.data.broker.ModeReadOnlyVerification(
-                            liveIdentity, System.currentTimeMillis(),
-                            authenticatedSession = snapshot.connected && snapshot.terminalConnected,
-                            freshAccountData = snapshot.snapshotsValid,
-                            freshQuote = false,
-                            freshHeartbeat = snapshot.heartbeatFresh,
-                            accountIdentityMatched = snapshot.accountVerified && snapshot.brokerIdentityVerified &&
-                                snapshot.actualLogin == loginForm.login && snapshot.actualServer == loginForm.server &&
-                                snapshot.actualAccountMode == "LIVE" && snapshot.accessType == "MASTER",
-                        )
-                        val lease = viewModel.app.modeArmingPolicy.armLive(com.example.data.broker.LiveArmRequest(
-                            identity = liveIdentity,
-                            demoAcceptance = secrets.getPathDemoAcceptance(demoIdentity),
-                            currentDemoCredentialGeneration = demoIdentity.credentialGeneration,
-                            liveVerification = verification,
-                            typedConfirmation = typedConfirmation,
-                            ownerReauthenticated = AppSecurityGuard.authorizeSensitiveAction(),
-                            firstMinimumSizeVerified = firstLot != null && firstLot.isFinite() && firstLot > 0.0,
-                            dailyRiskClear = risk?.optBoolean("daily_loss_clear", false) == true,
-                            riskCapsClear = risk?.optBoolean("risk_caps_clear", false) == true,
-                            hostProfile = snapshot.hostProfile,
-                        )).getOrElse { throw it }
-                        try {
-                            val expiry = client.authorizeLiveSession()
-                            "LIVE_ARMED: local lease until ${lease.expiresAtMs}; bridge lease until $expiry"
-                        } catch (error: Exception) {
-                            viewModel.app.modeArmingPolicy.disarm(liveIdentity, "BRIDGE_LIVE_AUTH_FAILED")
-                            throw error
-                        }
                     }
                     LoginConnector.DERIV_OPTIONS -> {
                         require(loginForm.mode == LoginMode.LIVE) { "LIVE_PROFILE_REQUIRED" }
@@ -1972,39 +1932,6 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 livePath, selectedMt5Broker, snapshot.actualLogin, snapshot.actualServer,
                                 com.example.data.broker.AccountMode.LIVE, secrets.getManagedMT5CredentialGeneration(mt5Profile)
                             )
-                            val demoIdentity = com.example.data.broker.ModeAccountIdentity(
-                                livePath, selectedMt5Broker,
-                                secrets.getManagedMT5AccountLogin(selectedMt5Broker + "_DEMO"),
-                                secrets.getManagedMT5AccountServer(selectedMt5Broker + "_DEMO"),
-                                com.example.data.broker.AccountMode.DEMO,
-                                secrets.getManagedMT5CredentialGeneration(selectedMt5Broker + "_DEMO")
-                            )
-                            val demoPass = secrets.getPathDemoAcceptance(demoIdentity)
-                            val risk = snapshot.raw.optJSONObject("risk_controls")
-                            val firstLot = liveMinimumLot.toDoubleOrNull()
-                            val verification = com.example.data.broker.ModeReadOnlyVerification(
-                                liveIdentity, System.currentTimeMillis(),
-                                authenticatedSession = snapshot.connected && snapshot.terminalConnected,
-                                freshAccountData = snapshot.snapshotsValid,
-                                freshQuote = false,
-                                freshHeartbeat = snapshot.heartbeatFresh,
-                                accountIdentityMatched = snapshot.accountVerified && snapshot.brokerIdentityVerified &&
-                                    snapshot.actualLogin == secrets.getManagedMT5AccountLogin(mt5Profile) &&
-                                    snapshot.actualServer == secrets.getManagedMT5AccountServer(mt5Profile) &&
-                                    snapshot.actualAccountMode == "LIVE" && snapshot.accessType == "MASTER"
-                            )
-                            val lease = viewModel.app.modeArmingPolicy.armLive(com.example.data.broker.LiveArmRequest(
-                                identity = liveIdentity,
-                                demoAcceptance = demoPass,
-                                currentDemoCredentialGeneration = demoIdentity.credentialGeneration,
-                                liveVerification = verification,
-                                typedConfirmation = liveTypedConfirmation,
-                                ownerReauthenticated = AppSecurityGuard.authorizeSensitiveAction(),
-                                firstMinimumSizeVerified = firstLot != null && firstLot.isFinite() && firstLot > 0.0,
-                                dailyRiskClear = risk?.optBoolean("daily_loss_clear", false) == true,
-                                riskCapsClear = risk?.optBoolean("risk_caps_clear", false) == true,
-                                hostProfile = snapshot.hostProfile
-                            )).getOrElse { throw it }
                             try {
                                 val liveChallenge = requireNotNull(bridge).liveChallenge()
                                 require(liveTypedConfirmation == liveChallenge.typedConfirmation) {
@@ -2023,12 +1950,46 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 val expiry = requireNotNull(bridge).authorizeLiveSession(
                                     liveChallenge.challengeId, liveTypedConfirmation, stepUp
                                 )
+                                val demoIdentity = com.example.data.broker.ModeAccountIdentity(
+                                    livePath, selectedMt5Broker,
+                                    secrets.getManagedMT5AccountLogin(selectedMt5Broker + "_DEMO"),
+                                    secrets.getManagedMT5AccountServer(selectedMt5Broker + "_DEMO"),
+                                    com.example.data.broker.AccountMode.DEMO,
+                                    secrets.getManagedMT5CredentialGeneration(selectedMt5Broker + "_DEMO")
+                                )
+                                val risk = snapshot.raw.optJSONObject("risk_controls")
+                                val firstLot = liveMinimumLot.toDoubleOrNull()
+                                val localLease = viewModel.app.modeArmingPolicy.armLive(com.example.data.broker.LiveArmRequest(
+                                    identity = liveIdentity,
+                                    demoAcceptance = secrets.getPathDemoAcceptance(demoIdentity),
+                                    currentDemoCredentialGeneration = demoIdentity.credentialGeneration,
+                                    liveVerification = com.example.data.broker.ModeReadOnlyVerification(
+                                        liveIdentity, System.currentTimeMillis(),
+                                        authenticatedSession = snapshot.connected && snapshot.terminalConnected,
+                                        freshAccountData = snapshot.snapshotsValid,
+                                        freshQuote = false,
+                                        freshHeartbeat = snapshot.heartbeatFresh,
+                                        accountIdentityMatched = snapshot.accountVerified && snapshot.brokerIdentityVerified &&
+                                            snapshot.actualLogin == secrets.getManagedMT5AccountLogin(mt5Profile) &&
+                                            snapshot.actualServer == secrets.getManagedMT5AccountServer(mt5Profile) &&
+                                            snapshot.actualAccountMode == "LIVE" && snapshot.accessType == "MASTER"
+                                    ),
+                                    typedConfirmation = liveTypedConfirmation,
+                                    ownerReauthenticated = true,
+                                    firstMinimumSizeVerified = firstLot != null && firstLot.isFinite() && firstLot > 0.0,
+                                    dailyRiskClear = risk?.optBoolean("daily_loss_clear", false) == true,
+                                    riskCapsClear = risk?.optBoolean("risk_caps_clear", false) == true,
+                                    hostProfile = snapshot.hostProfile
+                                )).getOrElse {
+                                    requireNotNull(bridge).clearLiveAuthorization()
+                                    throw it
+                                }
                                 liveAuthorizationExpiry = expiry
                                 mt5Snapshot = bridge.state()
                                 liveTypedConfirmation = ""
                                 liveReauthenticationPassword = ""
                                 liveMinimumLot = ""
-                                message = "MT5 LIVE local lease armed until " + lease.expiresAtMs + " and the bridge lease until " + expiry + "."
+                                message = "MT5 LIVE bridge lease issued until $expiry; local lease until ${localLease.expiresAtMs}."
                             } catch (error: Exception) {
                                 viewModel.app.modeArmingPolicy.disarm(liveIdentity, "BRIDGE_LIVE_AUTH_FAILED")
                                 throw error

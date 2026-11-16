@@ -72,7 +72,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             bridgeSecrets, bridgeProfileKey,
             { AppSecurityGuard.authorizeSensitiveAction() },
             accountMode = selectedAccountMode,
-            brokerBrand = selectedBrokerBrand
+            brokerBrand = selectedBrokerBrand,
+            managementIdentityAssertionProvider = { viewModel.issueBridgeIdentityAssertion() }
         )
     }
     val reportContext = LocalContext.current
@@ -419,7 +420,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             onDismissRequest = { showLiveAuthorizationDialog = false },
                             title = { Text("Authorize LIVE trading?") },
                             text = { Text("This confirms LIVE profile ${bridgeSecrets.getManagedMT5AccountLogin("${selectedBrokerBrand}_LIVE")} at ${bridgeSecrets.getManagedMT5AccountServer("${selectedBrokerBrand}_LIVE")} for up to 15 minutes. The connected MT5 terminal must independently report this exact account as LIVE with MASTER access and fresh readiness. This permits real-money entries after all risk checks; it does not liquidate positions or guarantee outcomes.") },
-                            confirmButton = { TextButton(onClick = { showLiveAuthorizationDialog = false; coroutineScope.launch { bridgeBusy = true; try { val expiry = bridgeClient.authorizeLiveSession(); bridgeSnapshot = bridgeClient.state(); bridgeMessage = "LIVE authorization confirmed until $expiry." } catch (e: Exception) { bridgeMessage = e.message ?: "LIVE authorization failed closed." }; bridgeBusy = false } }) { Text("AUTHORIZE LIVE") } },
+                            confirmButton = { TextButton(onClick = { showLiveAuthorizationDialog = false; bridgeMessage = "LIVE authorization requires the server challenge, exact typed phrase, and management reauthentication in the primary MT5 workspace." }) { Text("OPEN PRIMARY WORKSPACE") } },
                             dismissButton = { TextButton(onClick = { showLiveAuthorizationDialog = false }) { Text("CANCEL") } }
                         )
                     }

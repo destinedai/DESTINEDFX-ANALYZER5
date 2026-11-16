@@ -30,6 +30,9 @@ services:
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-2592000}
       MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-32768}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      STEP_UP_PRIVATE_KEY_PEM: ${STEP_UP_PRIVATE_KEY_PEM:?Load the Ed25519 private key from the owner host secret store}
+      STEP_UP_ISSUER: ${STEP_UP_ISSUER:-destinedfx-management}
+      STEP_UP_AUDIENCE: ${STEP_UP_AUDIENCE:-destinedfx-bridge}
     depends_on:
       db:
         condition: service_healthy

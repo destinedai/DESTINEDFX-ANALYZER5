@@ -31,7 +31,8 @@ class MT5RemoteBridgeClient(
     private val sensitiveActionAuthorized: () -> Boolean = { false },
     accountMode: String,
     brokerBrand: String,
-    private val modeArmingPolicy: ModeArmingPolicy? = null
+    private val modeArmingPolicy: ModeArmingPolicy? = null,
+    private val managementIdentityAssertionProvider: (suspend () -> String)? = null
 ) {
     /** Legacy mode-keyed storage namespace; neutral identity migration is still pending. */
     val profile: String = profile.trim().uppercase().also {
@@ -158,7 +159,10 @@ class MT5RemoteBridgeClient(
         if (previousLogin.isNotBlank() && previousLogin != login.trim()) {
             modeArmingPolicy?.onAccountSwitch(modePath, brokerBrand, login.trim())
         }
-        if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) pair(ownerBootstrapCode)
+        if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) {
+            val identityAssertion = managementIdentityAssertionProvider?.invoke().orEmpty()
+            pair(ownerBootstrapCode, identityAssertion)
+        }
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
             .put("access_type", accessType).put("broker_brand", brokerBrand).put("consent", consent)
             .put("account_mode", accountMode)
@@ -448,11 +452,6 @@ class MT5RemoteBridgeClient(
         return result.optString("expires_at").takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("Bridge returned no LIVE lease expiry.")
     }
-
-    /** Boolean-only LIVE authorization is intentionally unavailable. */
-    @Deprecated("Use liveChallenge() and authorizeLiveSession(challengeId, typedConfirmation, stepUpAssertion)")
-    suspend fun authorizeLiveSession(): String =
-        throw IllegalStateException("LIVE_CHALLENGE_REQUIRED: obtain a fresh server challenge and signed reauthentication.")
 
     suspend fun clearLiveAuthorization() {
         if (accountMode == "LIVE" && hasPairing()) request("DELETE", "/v1/app/live-authorization")

@@ -784,6 +784,10 @@ open class DestinedFXViewModel(
         )
     }
 
+    suspend fun issueBridgeIdentityAssertion(): String = withContext(Dispatchers.IO) {
+        managementClient.bridgeIdentityAssertion()
+    }
+
     private fun managementAction(action: suspend () -> Unit) {
         if (isPreview || managementBusy.value) return
         viewModelScope.launch {
