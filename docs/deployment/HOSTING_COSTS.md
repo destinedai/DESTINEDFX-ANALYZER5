@@ -1,5 +1,7 @@
 # Windows hosting cost comparison
 
+**Current repository decision:** no Windows PC, VPS, cloud credit, or broker host is accessible from this development environment. The repository therefore implements the existing-owner Windows PC path only and does not purchase or provision infrastructure. The first host remains single-account DEMO, interactive-logon, private-tailnet, and fail-closed until the owner supplies actual host and broker evidence.
+
 Prices checked 2026-11-06 from official vendor pages. USD monthly figures are displayed monthly costs, excluding tax unless the vendor specifies otherwise. No service was purchased, rented, or enrolled. Prices can change; recheck the provider's checkout page and exact Windows licence SKU before any purchase. Written owner approval is required before spending.
 
 | Provider and plan | Sizing | Published monthly compute | Windows licence | Recurring total with licence | First-month offer | Notes |
@@ -16,6 +18,8 @@ Prices checked 2026-11-06 from official vendor pages. USD monthly figures are di
 Start with one broker terminal only. Use a 4 GB plan for the initial MT5 DEMO build. MassiveGRID's published Windows total is $22.20/month with a permanent Windows licence; Raff's MT5-specific 4 GB plan is $37.99/month after its first-month offer. A 2 GB configuration is a floor for a single light terminal, not the preferred MT5 baseline for this app. The provider must confirm sustained RAM and CPU requirements for the selected terminal, EA, bridge, worker, logs, and restart tests.
 
 Do not provision four broker terminals at the start. Only after each preceding broker passes its own stages may the owner assess a separate 8 GB host. MassiveGRID's 8 GB plan totals $44.40/month with a permanent licence. Raff's 8 GB plan is $55.99/month after the first-month offer. Neither vendor's public page proves that four isolated MT5 terminals with this workload will remain stable; perform resource and restart testing before adding brokers.
+
+**Recommendation:** if the owner already has a suitable Windows PC, use it for the first single-account DEMO because it adds no compute bill and preserves direct interactive MT5 access. Its limitations are uptime, power, sleep, Windows sign-in, residential network reliability, and owner-managed recovery. If continuous availability is required and the owner approves spending, use a 4 GB Windows VPS with explicit Windows licensing; MassiveGRID's published estimate is $22.20/month, while Raff's MT5-specific plan is $37.99/month after its introductory month. These are planning figures, not authorization or proof of capacity, latency, backup quality, or broker compatibility.
 
 A broker-provided VPS is not a guaranteed free substitute. HFM and Exness publish account-specific balance and/or volume conditions. Check them in the broker portal. Never open excess trades or maintain an unnecessary balance only to retain hosting.
 

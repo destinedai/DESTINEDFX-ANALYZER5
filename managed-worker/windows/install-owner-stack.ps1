@@ -191,7 +191,8 @@ if (-not $resume -or $secretNeedsWrite) {
 $secretJson=$null; $secretObject=$null; $generated=$null
 $supervisor = Join-Path $PSScriptRoot 'run-owner-stack.ps1'
 $backupScript = Join-Path $PSScriptRoot 'backup-bridge.ps1'
-if (-not (Test-Path $supervisor) -or -not (Test-Path $backupScript)) { throw 'Owner stack support scripts are missing.' }
+$healthScript = Join-Path $PSScriptRoot 'health-monitor.py'
+if (-not (Test-Path $supervisor) -or -not (Test-Path $backupScript) -or -not (Test-Path $healthScript)) { throw 'Owner stack support scripts are missing.' }
 if (-not $AddBroker) {
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$supervisor`" -ProjectRoot `"$project`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $owner
@@ -201,6 +202,9 @@ Register-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -Action $a
 $backupAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$backupScript`""
 $backupTrigger = New-ScheduledTaskTrigger -Daily -At '3:00AM'
 Register-ScheduledTask -TaskName 'DestinedFX Bridge SQLite Backup' -Action $backupAction -Trigger $backupTrigger -Settings $settings -Principal $principal -Force | Out-Null
+$healthAction = New-ScheduledTaskAction -Execute $venvPython -Argument "`"$healthScript`" --url http://127.0.0.1:8000 --state-file `"$base\logs\health.json`""
+$healthTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+Register-ScheduledTask -TaskName 'DestinedFX Owner Bridge Health Monitor' -Action $healthAction -Trigger $healthTrigger -Settings $settings -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker'
 } else { Write-Host 'Existing scheduled tasks and running worker are left untouched; the new broker mapping takes effect on the next normal stack start.' }
 $env:DESTINEDFX_HEALTH_URL="$origin/health/ready"
@@ -227,7 +231,7 @@ for($attempt=0;$attempt -lt 12;$attempt++){
 }
 Remove-Item Env:DESTINEDFX_HEALTH_URL -ErrorAction SilentlyContinue
 if(-not $ready){if (-not $AddBroker) { Stop-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -ErrorAction SilentlyContinue };throw 'Owner bridge did not pass the private HTTPS configuration check. Do not submit broker credentials; inspect Tailscale Serve status and local logs.'}
-& $venvPython (Join-Path $PSScriptRoot 'backup-bridge.py')
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript
 if($LASTEXITCODE -ne 0){Write-Warning 'Initial database backup failed; check ProgramData\DestinedFX\backups before using this setup.'}
 Write-Host "$(if($AddBroker){'Added broker'}elseif($resume){'Resumed/repaired'}else{'Installed'}) for $owner. Durable bridge configuration is live. /health/ready remains blocked until a real terminal pairing has a fresh authenticated EA heartbeat."
 Write-Host "Bridge binds only to 127.0.0.1:8000; private HTTPS origin: $origin"

@@ -152,6 +152,8 @@ jobs:
             'managed-worker/windows/install-owner-stack.ps1',
             'managed-worker/windows/run-owner-stack.ps1',
             'managed-worker/windows/backup-bridge.ps1',
+            'managed-worker/windows/protect-backup.ps1',
+            'managed-worker/windows/restore-bridge.ps1',
             'managed-worker/launch-worker.ps1'
           )
           foreach ($file in $files) {

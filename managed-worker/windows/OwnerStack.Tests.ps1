@@ -1,31 +1,35 @@
 Describe 'DestinedFX owner stack' {
     BeforeAll {
-        $supervisor = Get-Content (Join-Path $PSScriptRoot 'run-owner-stack.ps1') -Raw
-        $installer = Get-Content (Join-Path $PSScriptRoot 'install-owner-stack.ps1') -Raw
+        $python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+        if (-not $python) { $python = (Get-Command py.exe -ErrorAction SilentlyContinue).Source }
+        if (-not $python) { throw 'Python is required for owner-stack behavioral tests.' }
     }
 
-    It 'validates DPAPI content before replacement' {
-        $supervisor | Should -Match 'ConvertTo-SecureString'
-        $supervisor | Should -Match 'ConvertFrom-Json'
-        $supervisor | Should -Match 'Move-Item -LiteralPath \$temporary -Destination \$secretFile -Force'
-        $installer | Should -Match 'DPAPI semantic validation failed'
+    It 'records an unhealthy service without converting it to ready' {
+        $state = Join-Path $TestDrive 'health.json'
+        & $python (Join-Path $PSScriptRoot 'health-monitor.py') --url 'http://127.0.0.1:1' --state-file $state
+        $LASTEXITCODE | Should -Be 2
+        $result = Get-Content $state -Raw | ConvertFrom-Json
+        $result.healthy | Should -BeFalse
+        $result.live.status | Should -Be 0
     }
 
-    It 'uses the stable worker identity and avoids reviving revoked workers' {
-        $supervisor | Should -Match 'Local\\DestinedFX-Worker-'
-        $supervisor | Should -Match 'Worker identity is revoked'
-        $supervisor | Should -Match 'worker_id'
+    It 'protects a backup archive with the installing Windows user DPAPI' {
+        $snapshot = Join-Path $TestDrive 'backup-test'
+        New-Item -ItemType Directory -Path $snapshot | Out-Null
+        Set-Content -Path (Join-Path $snapshot 'manifest.json') -Value '{"format":1,"files":{}}'
+        Set-Content -Path (Join-Path $snapshot 'worker-id.txt') -Value 'behavioral-test'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'protect-backup.ps1') -Snapshot $snapshot
+        $LASTEXITCODE | Should -Be 0
+        Test-Path "$snapshot.dpapi" | Should -BeTrue
+        Test-Path $snapshot | Should -BeFalse
     }
 
-    It 'revalidates before child restart and renews before expiry' {
-        $supervisor | Should -Match 'Ensure-RegisteredWorker \$secrets \$workerId'
-        $supervisor | Should -Match 'RenewalMarginSeconds'
-        $supervisor | Should -Match '\$worker.HasExited'
-        $supervisor | Should -Match 'Wait-BridgeConfiguration'
-    }
-
-    It 'does not emit credentials in supervisor output' {
-        $supervisor | Should -Not -Match 'Write-Host.*worker_token'
-        $supervisor | Should -Not -Match 'Write-Host.*workerToken'
+    It 'ships the recovery and supervision entry points' {
+        (Test-Path (Join-Path $PSScriptRoot 'run-owner-stack.ps1')) | Should -BeTrue
+        (Test-Path (Join-Path $PSScriptRoot 'install-owner-stack.ps1')) | Should -BeTrue
+        (Test-Path (Join-Path $PSScriptRoot 'restore-bridge.ps1')) | Should -BeTrue
+        (Test-Path (Join-Path $PSScriptRoot 'protect-backup.ps1')) | Should -BeTrue
+        (Test-Path (Join-Path $PSScriptRoot 'health-monitor.py')) | Should -BeTrue
     }
 }

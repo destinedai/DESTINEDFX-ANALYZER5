@@ -18,6 +18,16 @@ The installer currently provisions one account/terminal at a time and sets `max_
 
 ## Recovery and backups
 
-The scheduled backup copies the SQLite database and validates the backup integrity. Before upgrades or recovery, stop the stack and preserve `%ProgramData%\DestinedFX` including `data`, `accounts`, `config`, and `backups`. Restore only from a verified backup using the supplied recovery procedure; do not replace the active database or owner secrets blindly. Never share the DPAPI file, Fernet key, worker token, account passwords, or logs containing sensitive data.
+The scheduled backup creates an integrity-checked SQLite snapshot, writes a checksum manifest, and wraps the complete snapshot in a Windows-user DPAPI protected archive. The unprotected staging directory and temporary archive are removed only after the protected file has been validated. Before upgrades or recovery, stop the stack and preserve `%ProgramData%\DestinedFX` including `data`, `accounts`, `config`, and `backups`.
+
+Test a recovery into a separate directory before replacing live state:
+
+```powershell
+.\managed-worker\windows\restore-bridge.ps1 `
+  -Backup 'C:\ProgramData\DestinedFX\backups\backup-YYYYMMDD-HHMMSS.dpapi' `
+  -TargetRoot 'C:\ProgramData\DestinedFX-recovery-test'
+```
+
+The restore validates the DPAPI archive, every checksum, SQLite integrity, and the stable worker ID. It refuses to overwrite an existing target unless `-Replace` is explicitly supplied. Do not replace active state blindly. Never share the DPAPI file, Fernet key, worker token, account passwords, or logs containing sensitive data.
 
 This kit does not establish a production release signature, commercial Tailscale rights, a live broker connection, or genuine DEMO acceptance. Verify the actual Windows host and broker account locally before relying on it.

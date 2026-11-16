@@ -1,6 +1,8 @@
 """Create a consistent SQLite online backup of the owner-operated bridge DB."""
 from __future__ import annotations
 import datetime as dt
+import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -30,6 +32,18 @@ for name in ("config/owner-secrets.dpapi", "config/worker-id.txt", "config/worke
         shutil.rmtree(snapshot_dir, ignore_errors=True)
         raise SystemExit(f"Required recovery file missing: {item}")
     shutil.copy2(item, snapshot_dir / item.name)
+manifest = {
+    "format": 1,
+    "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    "files": {},
+}
+for item in sorted(snapshot_dir.iterdir()):
+    if item.is_file():
+        manifest["files"][item.name] = hashlib.sha256(item.read_bytes()).hexdigest()
+(snapshot_dir / "manifest.json").write_text(
+    json.dumps(manifest, sort_keys=True, indent=2) + "\n",
+    encoding="utf-8",
+)
 for old in sorted(target_dir.glob("backup-*"), key=lambda p: p.stat().st_mtime, reverse=True)[14:]:
     if old.is_dir():
         shutil.rmtree(old, ignore_errors=True)
