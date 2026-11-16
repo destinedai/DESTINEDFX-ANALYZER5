@@ -125,7 +125,7 @@ class GlobalMarketMatrixEngine(
                                 snapshot.price,
                                 0.0,
                                 0.0,
-                                "LIVE DATA ONLY: ${snapshot.source}; no risk-gated trade plan emitted."
+                                "LIVE DATA ONLY: verified quote received; no risk-gated trade plan emitted."
                             )
                             evaluateSignal(symbol)
                         }
