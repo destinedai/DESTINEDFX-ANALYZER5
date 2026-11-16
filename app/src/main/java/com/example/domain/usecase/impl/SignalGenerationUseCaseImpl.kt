@@ -204,8 +204,7 @@ class SignalGenerationUseCaseImpl(
             if (ticker != null &&
                 (primaryCandleSource.isBlank() || !canMergeQuoteIntoCandle(primaryCandleSource, ticker.source))
             ) {
-                val candleLabel = primaryCandleSource.ifBlank { "unknown OHLC provider" }
-                blockers += "QUOTE/CANDLE SOURCE MISMATCH: quote source '${ticker.source}', OHLC source '$candleLabel'; use a matching provider before execution."
+                blockers += "QUOTE/CANDLE DATA MISMATCH: the live quote and OHLC history do not come from the same verified feed; execution is blocked."
                 state = SignalState.BLOCKED
             }
             val requiresCompleteMtf = strategyId == "smc-confluence-1.0.0" ||
@@ -358,7 +357,7 @@ class SignalGenerationUseCaseImpl(
                 executable = health == MarketDataHealth.LIVE && spread != null && blockers.isEmpty() && signalDirection != SignalDirection.WAIT && finalPlan != null,
                 blockReasons = blockers,
                 reasons = finalReport.reasons,
-                dataSource = quote?.source ?: "",
+                dataSource = quote?.let { "Live market data" } ?: "",
                 dataHealth = health.name,
                 mtfSummary = finalReport.mtf?.summary ?: "",
                 mtfState = finalReport.mtf?.state?.name ?: "DATA_UNAVAILABLE",
