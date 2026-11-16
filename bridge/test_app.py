@@ -254,7 +254,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
+    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 
@@ -1093,7 +1093,7 @@ def test_managed_account_registration_requires_current_pairing_owner(monkeypatch
     assert client.post('/v1/app/managed-account',headers=bearer_only,json=payload).status_code==401
     wrong_owner={
         'Authorization':headers['Authorization'],
-        'X-Management-Identity':management_identity_assertion('another-user','another-tenant'),
+        'X-Management-Identity':management_identity_assertion('another-user','another-user'),
     }
     mismatch=client.post('/v1/app/managed-account',headers=wrong_owner,json=payload)
     assert mismatch.status_code==403
@@ -1108,23 +1108,31 @@ def test_demo_acceptance_server_rejects_forged_or_mismatched_pass_documents(monk
     job,terminal_headers,actual=_ready_test_profile(
         pairing,headers,worker,'worker-demo-evidence','600001','Broker-Demo','DEMO','demo-test-password'
     )
-    invalid_documents=[
+    semantic_mismatches=[
         demo_pass_document(broker='EXNESS'),
         demo_pass_document(login='999999'),
         demo_pass_document(server='Wrong-Server'),
-        demo_pass_document(soak_days=4),
         demo_pass_document(order_lifecycle_pass=False),
         demo_pass_document(daily_reconciliation_pass=False),
         demo_pass_document(restart_test_pass=False),
         demo_pass_document(risk_controls_pass=False),
-        demo_pass_document(evidence_paths=[]),
     ]
-    for document in invalid_documents:
+    for document in semantic_mismatches:
         response=client.post('/v1/app/demo-acceptance',headers=headers,json={
             'confirm_demo':True,'evidence_document':document,
         })
         assert response.status_code==409, response.text
         assert response.json()['detail']['code']=='DEMO_PASS_EVIDENCE_MISMATCH'
+    schema_invalid_documents=[
+        demo_pass_document(soak_days=4),
+        demo_pass_document(evidence_paths=[]),
+    ]
+    for document in schema_invalid_documents:
+        response=client.post('/v1/app/demo-acceptance',headers=headers,json={
+            'confirm_demo':True,'evidence_document':document,
+        })
+        assert response.status_code==422, response.text
+        assert response.json()['detail']['code']=='DEMO_PASS_EVIDENCE_INVALID'
     malformed=client.post('/v1/app/demo-acceptance',headers=headers,json={
         'confirm_demo':True,'evidence_document':'{"broker":"FBS"}',
     })
