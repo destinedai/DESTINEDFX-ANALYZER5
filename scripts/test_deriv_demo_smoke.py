@@ -174,11 +174,16 @@ def test_source_has_no_trade_endpoint_actions():
         assert action not in source
 
 
-def test_verification_does_not_change_selected_chart_source():
+def test_demo_verification_does_not_mutate_the_analyzer_market_source():
     ui = (MODULE_PATH.parent.parent / "app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt").read_text(encoding="utf-8")
     market = (MODULE_PATH.parent.parent / "app/src/main/java/com/example/data/market/MarketDataRepositoryImpl.kt").read_text(encoding="utf-8")
     start = ui.index("LOGIN · VERIFY DEMO READ ONLY")
     verification_region = ui[ui.rfind("Button(", 0, start):ui.index("val matchingDerivAccounts", start)]
     assert "marketDataRepository.refreshSymbol" not in verification_region
     assert "selectedApiSource" not in verification_region
-    assert 'override val selectedApiSource = MutableStateFlow("TRADINGVIEW")' in market
+
+    # Public market data is a distinct read-only feed; verifying a DEMO broker login
+    # must not switch it or couple analyzer data to an execution account.
+    assert 'override val selectedApiSource = MutableStateFlow("DERIV_PUBLIC")' in market
+    assert "PublicRestMarketFeed" not in market
+    assert "BinanceProvider" not in market
