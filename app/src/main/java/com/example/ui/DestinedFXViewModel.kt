@@ -384,8 +384,6 @@ open class DestinedFXViewModel(
                     candlestickHistoryByTimeframe[symbol + "-" + timeframe] = candles
                     marketDataStatus.value = "LIVE DATA • " + candles.size + " candles"
                 } else {
-                    val reason = app.marketDataRepository.getCandleError(symbol, timeframe)
-                        ?: "The public feed returned no OHLC candles for this symbol/timeframe."
                     marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe
                 }
                 runSignalScan(symbol, timeframe)
