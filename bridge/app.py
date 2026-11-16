@@ -861,6 +861,26 @@ def terminal_identity_matches(p, account_mode, beat):
 def execution_state_eligible(beat):
     return bool(beat and beat.get('state') in ('READY','RUNNING','PAUSED','STOPPED'))
 
+def live_authorization_valid(p, managed, beat, now_epoch=None):
+    """Require the current LIVE lease and the current terminal identity."""
+    now_epoch = time.time() if now_epoch is None else now_epoch
+    if not p or not managed or managed['revoked'] or managed['access_type'] != 'MASTER':
+        return False
+    if managed['account_mode'] != 'LIVE' or not beat:
+        return False
+    if not execution_state_eligible(beat) or not beat.get('terminal_connected') or not beat.get('trade_allowed'):
+        return False
+    if not terminal_identity_matches(p, 'LIVE', beat):
+        return False
+    account = beat.get('account') or {}
+    return bool(
+        p['live_authorized_until'] is not None
+        and p['live_authorized_until'] > now_epoch
+        and p['live_authorized_login'] == account.get('login')
+        and p['live_authorized_server'] == account.get('server')
+        and account.get('account_mode') == 'LIVE'
+    )
+
 def verified_terminal_pairing_exists():
     """Require a real fresh EA heartbeat and a worker-owned READY job."""
     with tx() as c:
@@ -957,7 +977,7 @@ def heartbeat_news_clear(beat, symbols=None):
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
     require_durable_execution()
     p=auth(authorization,'app'); fernet,worker_secret=managed_config()
-    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or not x.server.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, server, and valid access_type are required')
+    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in (None,'DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or not x.server.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, server, account mode, and valid access_type are required')
     brand=x.broker_brand.strip().upper()
     if brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
     evidence=x.cost_evidence.strip()
@@ -991,7 +1011,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     with tx(True) as c:
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
-        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,'UNVERIFIED',brand,x.cost_model,float(x.commission_per_lot),evidence))
+        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode or 'UNVERIFIED',brand,x.cost_model,float(x.commission_per_lot),evidence))
         c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+CONNECT_JOB_TTL_SECONDS,p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created,requested_account_mode) VALUES(?,?,'PROVISION',?,?,?)",
                   (job_id, p['id'], 'QUEUED' if attestation or _isolation_evidence_verified() else 'AWAITING_ATTESTATION', t, x.account_mode))
@@ -1331,11 +1351,14 @@ def claim(x:Claim):
             reported_mode=x.account.get('account_mode')
             if (reported_mode not in ('DEMO','LIVE') or x.account['login']!=expected_login or
                 not broker_server_matches(managed['broker_brand'],expected_server,x.account['server']) or
-                (managed['account_mode'] in ('DEMO','LIVE') and reported_mode!=managed['account_mode']) or
                 not broker_company_matches(managed['broker_brand'],x.account.get('company'))):
                 raise HTTPException(401,'Terminal-reported broker, login, server or mode does not match the managed account')
             if managed['account_mode']=='UNVERIFIED':
-                c.execute("UPDATE managed_accounts SET account_mode=? WHERE pairing_id=? AND account_mode='UNVERIFIED'",(reported_mode,found['id']))
+                if reported_mode != 'DEMO':
+                    raise HTTPException(401,'An unverified profile may only be enrolled as DEMO')
+                c.execute("UPDATE managed_accounts SET account_mode='DEMO' WHERE pairing_id=? AND account_mode='UNVERIFIED'",(found['id'],))
+            elif reported_mode != managed['account_mode']:
+                raise HTTPException(401,'Terminal-reported broker, login, server or mode does not match the managed account')
         c.execute('UPDATE pairings SET consumed=1,terminal_hash=?,terminal_id=?,instance_id=?,account=? WHERE id=? AND consumed=0',(digest(terminal_token),terminal_id,x.terminal_instance_id,json.dumps(x.account,separators=(',',':')),found['id']))
         if c.total_changes<1: raise HTTPException(409,'Pairing code already consumed')
     return {'terminal_id':terminal_id,'terminal_token':terminal_token,'poll_seconds':2}
@@ -1547,7 +1570,7 @@ def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=Non
         job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
     beat=fresh_heartbeat(p)
     if not m or m['revoked'] or m['account_mode']!='LIVE' or m['access_type']!='MASTER': raise HTTPException(409,'LIVE authorization requires a non-revoked LIVE MASTER profile')
-    if not beat or beat.get('state') not in ('READY','STOPPED','PAUSED') or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY':
+    if not beat or not job or job['status']!='READY' or not execution_state_eligible(beat) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,'LIVE',beat) or not heartbeat_news_clear(beat):
         raise HTTPException(409,'LIVE authorization requires a fresh, ready terminal whose verified identity matches the LIVE profile')
     until=time.time()+900
     account=beat['account']
@@ -1685,7 +1708,7 @@ def command(x:Command,authorization:str|None=Header(default=None)):
         beat=fresh_heartbeat(p)
         with tx() as c: job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
         account=beat.get('account',{}) if beat else {}
-        live_ok=(m['account_mode']!='LIVE' or (p['live_authorized_until'] is not None and p['live_authorized_until']>time.time() and p['live_authorized_login']==account.get('login') and p['live_authorized_server']==account.get('server')))
+        live_ok=(m['account_mode']!='LIVE' or live_authorization_valid(p,m,beat))
         symbols=x.config.get('symbols',[]) if isinstance(x.config,dict) else []
         if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or not heartbeat_news_clear(beat,symbols) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, eligible EA state, verified identity/mode, fresh CLEAR news verdict, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
     serialized=json.dumps(x.config,separators=(',',':'),allow_nan=False)
