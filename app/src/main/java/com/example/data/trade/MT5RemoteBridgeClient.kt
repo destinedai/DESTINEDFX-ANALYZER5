@@ -53,6 +53,14 @@ class MT5RemoteBridgeClient(
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     data class Pairing(val pairingId: String, val code: String, val expiresAt: String)
+    data class DemoAcceptance(
+        val acceptanceId: String,
+        val pairingId: String,
+        val identity: ModeAccountIdentity,
+        val acceptedAtMs: Long,
+        val expiresAtMs: Long,
+        val evidenceDigest: String
+    )
     data class LiveChallenge(val pairingId: String, val challengeId: String, val typedConfirmation: String, val expiresAt: String)
     data class ServiceReadiness(
         val httpReachable: Boolean, val httpStatus: Int?, val serviceStatus: String,
@@ -120,6 +128,10 @@ class MT5RemoteBridgeClient(
     ): Snapshot {
         check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; managed account registration was not attempted." }
         require(managedConfigured()) { "CONFIGURATION_REQUIRED" }
+        val managementIdentityAssertion = managementIdentityAssertionProvider?.invoke().orEmpty()
+        require(managementIdentityAssertion.length >= 100) {
+            "MANAGEMENT_SIGN_IN_REQUIRED: sign in to the DestinedFX management account before registering broker credentials."
+        }
         require(accessType == "MASTER" || accessType == "INVESTOR")
         require(brokerBrand in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
         require(consent) { "Explicit consent is required before sending broker credentials." }
@@ -159,21 +171,30 @@ class MT5RemoteBridgeClient(
         if (previousLogin.isNotBlank() && previousLogin != login.trim()) {
             modeArmingPolicy?.onAccountSwitch(modePath, brokerBrand, login.trim())
         }
+        if (secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()) {
+            val existing = state()
+            if (!existing.raw.optBoolean("management_identity_bound", false)) {
+                revoke()
+            }
+        }
         if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) {
-            val identityAssertion = managementIdentityAssertionProvider?.invoke().orEmpty()
-            pair(ownerBootstrapCode, identityAssertion)
+            pair(ownerBootstrapCode, managementIdentityAssertion)
         }
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
             .put("access_type", accessType).put("broker_brand", brokerBrand).put("consent", consent)
             .put("account_mode", accountMode)
             .put("credential_generation", nextGeneration)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
-        request("POST", "/v1/app/managed-account", payload)
+        request("POST", "/v1/app/managed-account", payload,
+            managementIdentityAssertion = managementIdentityAssertion)
         return state()
     }
 
     suspend fun pair(ownerBootstrapCode: String = "", managementIdentityAssertion: String = ""): Pairing {
         check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; pairing request was not sent." }
+        require(managementIdentityAssertion.length >= 100) {
+            "MANAGEMENT_SIGN_IN_REQUIRED: a signed management identity assertion is required for MT5 pairing."
+        }
         val bootstrap = ownerBootstrapCode.trim()
         require(bootstrap.length <= 200 && bootstrap.none { it.code < 32 || it.code == 127 }) {
             "Invalid owner bootstrap code."
@@ -417,6 +438,166 @@ class MT5RemoteBridgeClient(
         )
     }
 
+    /** Returns the pairing identity reported by the Bridge for this exact broker/mode slot. */
+    suspend fun pairingId(): String {
+        val id = state().raw.optString("pairing_id")
+        require(id.isNotBlank()) { "Bridge did not return this profile's pairing identity." }
+        return id
+    }
+
+    /** Records validated, broker-specific DEMO PASS evidence at the Bridge for this exact DEMO pairing. */
+    suspend fun acceptDemo(evidenceDigest: String, evidenceDocument: String): DemoAcceptance {
+        require(accountMode == "DEMO") { "DEMO acceptance can only be recorded by the DEMO profile." }
+        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate before accepting this DEMO profile." }
+        require(evidenceDocument.isNotBlank() && evidenceDocument.toByteArray(Charsets.UTF_8).size in 1..65536) {
+            "The original DEMO PASS document is required and must be at most 64 KiB."
+        }
+        val documentDigest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(evidenceDocument.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        require(evidenceDigest.equals(documentDigest, ignoreCase = true)) {
+            "The DEMO PASS document changed after its original file digest was calculated."
+        }
+        val fresh = state()
+        require(fresh.hostProfile == HostProfile.PERSISTENT &&
+            fresh.managedState == "READY" && fresh.workerStatus == "READY" &&
+            fresh.accountVerified && fresh.brokerIdentityVerified && fresh.heartbeatFresh &&
+            fresh.actualAccountMode == "DEMO" && fresh.accessType == "MASTER"
+        ) { "DEMO_ACCEPTANCE_BLOCKED: a fresh identity-matched MASTER DEMO terminal is required." }
+        val managementIdentity = managementIdentityAssertionProvider?.invoke().orEmpty()
+        require(managementIdentity.length >= 100) {
+            "MANAGEMENT_SIGN_IN_REQUIRED: sign in again before accepting this DEMO profile."
+        }
+        val result = request("POST", "/v1/app/demo-acceptance", JSONObject()
+            .put("confirm_demo", true)
+            .put("evidence_document", evidenceDocument),
+            managementIdentityAssertion = managementIdentity)
+        val accepted = requireNotNull(demoAcceptance()) {
+            "Bridge DEMO acceptance could not be read back after it was recorded."
+        }
+        require(accepted.acceptanceId == result.optString("acceptance_id") &&
+            accepted.identity.accountId == fresh.actualLogin &&
+            accepted.identity.server == fresh.actualServer &&
+            accepted.identity.credentialGeneration == secrets.getManagedMT5CredentialGeneration(profile) &&
+            accepted.evidenceDigest.equals(evidenceDigest, ignoreCase = true)
+        ) { "Bridge DEMO acceptance did not match the exact current account, credential generation and PASS digest." }
+        return accepted
+    }
+
+    /** Reads and validates the current server-side acceptance for this exact DEMO pairing. */
+    suspend fun demoAcceptance(): DemoAcceptance? {
+        require(accountMode == "DEMO") { "DEMO acceptance can only be read from a DEMO profile." }
+        val result = request("GET", "/v1/app/demo-acceptance")
+        if (!result.optBoolean("accepted", false)) return null
+        val pairingId = result.optString("pairing_id")
+        val acceptanceId = result.optString("id")
+        val brand = result.optString("broker_brand").uppercase()
+        val login = result.optString("login")
+        val server = result.optString("server")
+        val mode = result.optString("account_mode").uppercase()
+        val generation = result.optString("credential_generation")
+        val digest = result.optString("pass_evidence_digest").lowercase()
+        val acceptedAt = parseServerTimeMillis(result.optString("accepted_at"))
+        val expiresAt = parseServerTimeMillis(result.optString("expires_at"))
+        val path = modePath(brand) ?: return null
+        val identity = ModeAccountIdentity(
+            path, brand, login, server, AccountMode.DEMO, generation
+        )
+        if (pairingId.isBlank() || acceptanceId.isBlank() || mode != "DEMO" ||
+            !identity.isValid() || acceptedAt <= 0L || expiresAt <= System.currentTimeMillis() ||
+            !digest.matches(Regex("[0-9a-f]{64}")) ||
+            brand != brokerBrand || generation != secrets.getManagedMT5CredentialGeneration(profile) ||
+            login != secrets.getManagedMT5AccountLogin(profile) ||
+            server != secrets.getManagedMT5AccountServer(profile)
+        ) return null
+        return DemoAcceptance(acceptanceId, pairingId, identity, acceptedAt, expiresAt, digest)
+    }
+
+    /**
+     * Links this LIVE pairing to a different DEMO pairing. The Bridge independently checks
+     * signed tenant ownership, broker, both account identities and DEMO worker/credential generations.
+     */
+    suspend fun associateDemoProfile(
+        demoPairingId: String,
+        acceptance: DemoAcceptance
+    ): com.example.data.broker.VerifiedDemoProfileAssociation {
+        require(accountMode == "LIVE") { "DEMO association must be initiated from the LIVE profile." }
+        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate before linking account profiles." }
+        require(demoPairingId.isNotBlank() && acceptance.pairingId == demoPairingId &&
+            acceptance.identity.mode == AccountMode.DEMO &&
+            acceptance.identity.broker.equals(brokerBrand, ignoreCase = true) &&
+            acceptance.expiresAtMs > System.currentTimeMillis()
+        ) { "DEMO_PROFILE_ASSOCIATION_INVALID: the DEMO acceptance does not match the selected broker profile." }
+        val fresh = state()
+        require(fresh.hostProfile == HostProfile.PERSISTENT &&
+            fresh.managedState == "READY" && fresh.workerStatus == "READY" &&
+            fresh.accountVerified && fresh.brokerIdentityVerified && fresh.heartbeatFresh &&
+            fresh.actualAccountMode == "LIVE" && fresh.accessType == "MASTER"
+        ) { "LIVE_PROFILE_NOT_READY: fresh identity-matched MASTER LIVE terminal evidence is required." }
+        val livePairingId = fresh.raw.optString("pairing_id")
+        require(livePairingId.isNotBlank() && livePairingId != demoPairingId) {
+            "DEMO and LIVE must be independently paired profiles."
+        }
+        val managementIdentity = managementIdentityAssertionProvider?.invoke().orEmpty()
+        require(managementIdentity.length >= 100) {
+            "MANAGEMENT_SIGN_IN_REQUIRED: sign in again before linking DEMO and LIVE profiles."
+        }
+        val result = request("POST", "/v1/app/live-profile-association", JSONObject()
+            .put("demo_pairing_id", demoPairingId)
+            .put("demo_acceptance_id", acceptance.acceptanceId)
+            .put("confirm_association", true),
+            managementIdentityAssertion = managementIdentity)
+        val associatedAt = parseServerTimeMillis(result.optString("associated_at"))
+        val expiresAt = parseServerTimeMillis(result.optString("expires_at"))
+        val proof = com.example.data.broker.VerifiedDemoProfileAssociation(
+            demoIdentity = acceptance.identity,
+            liveIdentity = modeIdentity(fresh),
+            demoPairingId = result.optString("demo_pairing_id"),
+            livePairingId = result.optString("live_pairing_id"),
+            associatedAtMs = associatedAt,
+            expiresAtMs = expiresAt,
+            evidenceDigest = result.optString("evidence_digest").lowercase()
+        )
+        val localAcceptance = com.example.data.broker.ModeDemoAcceptance(
+            acceptance.identity, acceptance.acceptedAtMs, acceptance.evidenceDigest
+        )
+        require(result.optBoolean("associated", false) &&
+            proof.demoPairingId == demoPairingId && proof.livePairingId == livePairingId &&
+            result.optString("demo_acceptance_id") == acceptance.acceptanceId &&
+            result.optString("broker_brand").equals(brokerBrand, ignoreCase = true) &&
+            result.optString("demo_login") == acceptance.identity.accountId &&
+            result.optString("demo_server") == acceptance.identity.server &&
+            result.optString("demo_credential_generation") == acceptance.identity.credentialGeneration &&
+            result.optString("live_login") == fresh.actualLogin &&
+            result.optString("live_server") == fresh.actualServer &&
+            result.optString("live_credential_generation") == secrets.getManagedMT5CredentialGeneration(profile) &&
+            proof.matches(localAcceptance, modeIdentity(fresh), System.currentTimeMillis())
+        ) { "Bridge rejected or returned an inconsistent DEMO-to-LIVE profile association." }
+        return proof
+    }
+
+    private fun modePath(brand: String): ModePath? = when (brand.uppercase()) {
+        "FBS" -> ModePath.FBS_MT5
+        "EXNESS" -> ModePath.EXNESS_MT5
+        "HFM" -> ModePath.HFM_MT5
+        "DERIV" -> ModePath.DERIV_MT5
+        else -> null
+    }
+
+    private fun parseServerTimeMillis(value: String): Long {
+        val match = Regex("""^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$""")
+            .matchEntire(value.trim()) ?: return 0L
+        val fraction = match.groupValues[2]
+        val millis = if (fraction.isBlank()) "" else "." + fraction.padEnd(3, '0').take(3)
+        val normalized = match.groupValues[1] + millis + match.groupValues[3]
+        val pattern = if (millis.isEmpty()) "yyyy-MM-dd'T'HH:mm:ssXXX" else "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"
+        return runCatching {
+            SimpleDateFormat(pattern, Locale.US).apply {
+                isLenient = false
+                timeZone = TimeZone.getTimeZone("UTC")
+            }.parse(normalized)?.time ?: 0L
+        }.getOrDefault(0L)
+    }
+
     suspend fun liveChallenge(): LiveChallenge {
         require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
         require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
@@ -492,7 +673,7 @@ class MT5RemoteBridgeClient(
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
         addOptionalAccessHeaders(builder)
         addOwnerBootstrapHeader(builder, method, path, ownerBootstrapCode)
-        managementIdentityAssertion?.let { builder.header("X-Management-Identity", it) }
+        addManagementIdentityHeader(builder, method, path, managementIdentityAssertion)
         secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->
@@ -539,6 +720,26 @@ class MT5RemoteBridgeClient(
                 }
                 builder.header("X-Owner-Bootstrap", ownerBootstrapCode)
             }
+        }
+
+        internal fun addManagementIdentityHeader(
+            builder: Request.Builder,
+            method: String,
+            path: String,
+            assertion: String?
+        ) {
+            if (assertion == null) return
+            require(method == "POST" && path in setOf(
+                "/v1/pairings",
+                "/v1/app/managed-account",
+                "/v1/app/demo-acceptance",
+                "/v1/app/live-profile-association"
+            )) { "Management identity assertions are permitted only for pairing and owner-controlled profile changes." }
+            require(assertion.length in 100..8192 &&
+                assertion.matches(Regex("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"))) {
+                "A valid signed management identity assertion is required."
+            }
+            builder.header("X-Management-Identity", assertion)
         }
 
         internal val TRADE_ACTIONS = setOf("CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")

@@ -176,18 +176,21 @@ def db():
         broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, company TEXT NOT NULL,
         currency TEXT NOT NULL, account_mode TEXT NOT NULL, heartbeat_seq INTEGER NOT NULL,
         evidence_digest TEXT NOT NULL, accepted_at REAL NOT NULL, expires_at REAL NOT NULL,
-        revoked INTEGER NOT NULL DEFAULT 0
+        credential_generation TEXT NOT NULL DEFAULT '', worker_id TEXT NOT NULL DEFAULT '',
+        worker_generation INTEGER NOT NULL DEFAULT 0, host_generation TEXT NOT NULL DEFAULT '',
+        pass_evidence_digest TEXT NOT NULL DEFAULT '', revoked INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS live_challenges(
         id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE,
         challenge_hash TEXT NOT NULL UNIQUE, demo_acceptance_id TEXT NOT NULL REFERENCES demo_acceptances(id),
-        broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, company TEXT NOT NULL,
+        demo_pairing_id TEXT, broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, company TEXT NOT NULL,
         worker_id TEXT NOT NULL, worker_generation INTEGER NOT NULL, host_generation TEXT NOT NULL, credential_generation TEXT NOT NULL DEFAULT '',
         expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
     );''')
     c.execute('''CREATE TABLE IF NOT EXISTS live_profile_links(
         pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE,
         demo_acceptance_id TEXT NOT NULL REFERENCES demo_acceptances(id),
+        demo_pairing_id TEXT,
         broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL,
         credential_generation TEXT NOT NULL, created_at REAL NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
     )''')
@@ -200,8 +203,20 @@ def db():
     if 'owner_tenant' not in pairing_columns: c.execute("ALTER TABLE pairings ADD COLUMN owner_tenant TEXT")
     managed_columns={r['name'] for r in c.execute('PRAGMA table_info(managed_accounts)').fetchall()}
     if 'credential_generation' not in managed_columns: c.execute("ALTER TABLE managed_accounts ADD COLUMN credential_generation TEXT NOT NULL DEFAULT ''")
+    demo_columns={r['name'] for r in c.execute('PRAGMA table_info(demo_acceptances)').fetchall()}
+    for name, definition in (
+        ('credential_generation',"TEXT NOT NULL DEFAULT ''"),
+        ('worker_id',"TEXT NOT NULL DEFAULT ''"),
+        ('worker_generation','INTEGER NOT NULL DEFAULT 0'),
+        ('host_generation',"TEXT NOT NULL DEFAULT ''"),
+        ('pass_evidence_digest',"TEXT NOT NULL DEFAULT ''"),
+    ):
+        if name not in demo_columns: c.execute(f'ALTER TABLE demo_acceptances ADD COLUMN {name} {definition}')
     challenge_columns={r['name'] for r in c.execute('PRAGMA table_info(live_challenges)').fetchall()}
-    if 'credential_generation' not in challenge_columns: c.execute("ALTER TABLE live_challenges ADD COLUMN credential_generation TEXT NOT NULL DEFAULT ''")
+    for name, definition in (('credential_generation',"TEXT NOT NULL DEFAULT ''"),('demo_pairing_id','TEXT')):
+        if name not in challenge_columns: c.execute(f'ALTER TABLE live_challenges ADD COLUMN {name} {definition}')
+    link_columns={r['name'] for r in c.execute('PRAGMA table_info(live_profile_links)').fetchall()}
+    if 'demo_pairing_id' not in link_columns: c.execute('ALTER TABLE live_profile_links ADD COLUMN demo_pairing_id TEXT')
     command_columns={r['name'] for r in c.execute('PRAGMA table_info(commands)').fetchall()}
     for name, definition in (('expires_at','REAL'),('request_config','TEXT'),('host_generation','TEXT')):
         if name not in command_columns: c.execute(f'ALTER TABLE commands ADD COLUMN {name} {definition}')
@@ -426,11 +441,27 @@ class LiveAuthorization(BaseModel):
     challenge_id:str=Field(min_length=1,max_length=128)
     typed_confirmation:str=Field(min_length=8,max_length=256)
     step_up_assertion:str=Field(min_length=100,max_length=8192)
+class DemoPassEvidence(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    broker:StrictStr=Field(min_length=1,max_length=20)
+    mode:StrictStr=Field(min_length=1,max_length=16)
+    status:StrictStr=Field(min_length=1,max_length=16)
+    account_login:StrictStr=Field(pattern=r'^[0-9]{1,20}$')
+    server:StrictStr=Field(min_length=1,max_length=128)
+    soak_days:StrictInt=Field(ge=5,le=7)
+    order_lifecycle_pass:StrictBool
+    daily_reconciliation_pass:StrictBool
+    restart_test_pass:StrictBool
+    risk_controls_pass:StrictBool
+    evidence_paths:list[StrictStr]=Field(min_length=1,max_length=128)
+
 class DemoAcceptanceRequest(BaseModel):
     model_config=ConfigDict(extra='forbid')
     confirm_demo:StrictBool
+    evidence_document:StrictStr=Field(min_length=1,max_length=65536)
 class LiveProfileAssociationRequest(BaseModel):
     model_config=ConfigDict(extra='forbid')
+    demo_pairing_id:str=Field(min_length=1,max_length=128)
     demo_acceptance_id:str=Field(min_length=1,max_length=128)
     confirm_association:StrictBool
 class CloseAllConfirmation(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_close_all:StrictBool
@@ -903,7 +934,7 @@ def execution_state_eligible(beat):
     return bool(beat and beat.get('state') in ('READY','RUNNING','PAUSED','STOPPED'))
 
 def live_authorization_valid(p, managed, beat, now_epoch=None):
-    """Require the current LIVE lease and the current terminal identity."""
+    """Require the current LIVE lease and its exact, currently valid DEMO profile association."""
     now_epoch = time.time() if now_epoch is None else now_epoch
     if not p or not managed or managed['revoked'] or managed['access_type'] != 'MASTER':
         return False
@@ -914,13 +945,23 @@ def live_authorization_valid(p, managed, beat, now_epoch=None):
     if not terminal_identity_matches(p, 'LIVE', beat):
         return False
     account = beat.get('account') or {}
-    return bool(
+    if not (
         p['live_authorized_until'] is not None
         and p['live_authorized_until'] > now_epoch
         and p['live_authorized_login'] == account.get('login')
         and p['live_authorized_server'] == account.get('server')
         and account.get('account_mode') == 'LIVE'
-    )
+    ):
+        return False
+    try:
+        with tx() as c:
+            link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
+            live_managed=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        _verified_live_demo_association(p,link,live_managed,beat,now_epoch)
+        return True
+    except Exception:
+        return False
+
 
 def _management_step_up_claims(assertion):
     if not MANAGEMENT_STEP_UP_PUBLIC_KEY:
@@ -971,6 +1012,50 @@ def _current_ready_context(p, expected_mode):
     if expected_mode=='LIVE' and (not beat.get('trade_allowed') or not heartbeat_news_clear(beat)):
         raise HTTPException(409,detail={'code':'LIVE_EVIDENCE_NOT_READY','message':'LIVE terminal permission and clear news evidence are required'})
     return managed,job,worker,beat
+
+def _verified_live_demo_association(p, link, live_managed, live_beat, now_epoch=None):
+    """Validate separately paired DEMO and LIVE accounts under the same signed management tenant."""
+    now_epoch = time.time() if now_epoch is None else now_epoch
+    if not p or not p['owner_subject'] or not p['owner_tenant']:
+        raise HTTPException(409,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'The LIVE pairing must have a verified management identity'})
+    if not link or not link['demo_pairing_id']:
+        raise HTTPException(409,detail={'code':'DEMO_PROFILE_ASSOCIATION_REQUIRED','message':'A separately paired, accepted DEMO profile must be associated'})
+    live_account=live_beat.get('account') or {}
+    if any((
+        link['broker_brand'] != live_managed['broker_brand'],
+        link['login'] != live_account.get('login'),
+        link['server'] != live_account.get('server'),
+        link['credential_generation'] != live_managed['credential_generation'],
+        not live_managed['credential_generation'],
+    )):
+        raise HTTPException(409,detail={'code':'LIVE_PROFILE_CHANGED','message':'The LIVE account or credential generation changed; associate it again'})
+    with tx() as c:
+        demo_pair=c.execute('SELECT * FROM pairings WHERE id=?',(link['demo_pairing_id'],)).fetchone()
+        acceptance=c.execute(
+            'SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=? AND revoked=0 AND expires_at>?',
+            (link['demo_acceptance_id'],link['demo_pairing_id'],now_epoch)
+        ).fetchone()
+    if not demo_pair or not demo_pair['consumed'] or not acceptance:
+        raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_INVALID','message':'The selected DEMO pairing or server acceptance is unavailable'})
+    if (not demo_pair['owner_subject'] or not demo_pair['owner_tenant'] or
+        demo_pair['owner_subject'] != p['owner_subject'] or demo_pair['owner_tenant'] != p['owner_tenant']):
+        raise HTTPException(403,detail={'code':'DEMO_PROFILE_TENANT_MISMATCH','message':'The DEMO and LIVE profiles must belong to the same authenticated management tenant'})
+    demo_managed,demo_job,demo_worker,demo_beat=_current_ready_context(dict(demo_pair),'DEMO')
+    demo_account=demo_beat.get('account') or {}
+    if (demo_managed['access_type'] != 'MASTER' or
+        demo_managed['broker_brand'] != live_managed['broker_brand'] or
+        acceptance['broker_brand'] != live_managed['broker_brand'] or
+        acceptance['account_mode'] != 'DEMO' or
+        not re.fullmatch(r'[0-9a-fA-F]{64}',acceptance['pass_evidence_digest'] or '') or
+        not demo_managed['credential_generation'] or
+        acceptance['credential_generation'] != demo_managed['credential_generation'] or
+        acceptance['worker_id'] != demo_job['worker_id'] or
+        acceptance['worker_generation'] != demo_worker['generation'] or
+        acceptance['host_generation'] != HOST_GENERATION or
+        any(acceptance[k] != demo_account.get(k) for k in ('login','server','company','currency')) or
+        not heartbeat_news_clear(demo_beat)):
+        raise HTTPException(409,detail={'code':'DEMO_PROFILE_CHANGED','message':'The accepted DEMO profile no longer matches its current account, PASS evidence, credentials, worker, host or news evidence'})
+    return acceptance,demo_managed,demo_pair
 
 def verified_terminal_pairing_exists():
     """Require a real fresh EA heartbeat and a worker-owned READY job."""
@@ -1065,9 +1150,17 @@ def heartbeat_news_clear(beat, symbols=None):
     return ok
 
 @app.post('/v1/app/managed-account',status_code=202)
-def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None)):
+def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None),
+                    x_management_identity:str|None=Header(default=None)):
     require_durable_execution()
-    p=auth(authorization,'app'); fernet,worker_secret=managed_config()
+    p=auth(authorization,'app')
+    if not x_management_identity:
+        raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate to the DestinedFX management account before registering broker credentials'})
+    identity=_management_identity_claims(x_management_identity)
+    if (not p['owner_subject'] or not p['owner_tenant'] or
+        identity['sub']!=p['owner_subject'] or identity['tenant_id']!=p['owner_tenant']):
+        raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'The current management user does not own this account pairing'})
+    fernet,worker_secret=managed_config()
     if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in (None,'DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or not x.server.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, server, account mode, and valid access_type are required')
     brand=x.broker_brand.strip().upper()
     if brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
@@ -1103,6 +1196,12 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
         # A pairing may transition from DEMO to LIVE only after the DEMO acceptance
         # is recorded; the active managed profile remains the single current execution
         # profile while the acceptance/link preserve the prior profile identity.
+        # Re-enrolling a profile invalidates its prior acceptance, cross-profile links and LIVE challenges.
+        c.execute("""UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL
+                     WHERE id=? OR id IN (SELECT pairing_id FROM live_profile_links WHERE demo_pairing_id=?)""",(p['id'],p['id']))
+        c.execute('UPDATE live_profile_links SET revoked=1 WHERE pairing_id=? OR demo_pairing_id=?',(p['id'],p['id']))
+        c.execute('UPDATE demo_acceptances SET revoked=1 WHERE pairing_id=?',(p['id'],))
+        c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? OR demo_pairing_id=?',(p['id'],p['id']))
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
         values=(fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode or 'UNVERIFIED',brand,x.cost_model,float(x.commission_per_lot),evidence,x.credential_generation,p['id'])
         if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone():
@@ -1419,10 +1518,13 @@ def readiness():
 @app.post('/v1/pairings',status_code=201)
 def create_pair(request:Request, x_owner_bootstrap:str|None=Header(default=None), x_management_identity:str|None=Header(default=None)):
     require_durable_execution()
-    # On a public port pairing creation is gated by the owner's one-time 10-minute code.
+    # Validate the short-lived signed tenant identity before consuming the owner's one-time code.
+    if not x_management_identity:
+        raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'A signed management identity is required for MT5 pairing'})
+    identity=_management_identity_claims(x_management_identity)
+    # Public pairing additionally requires the owner's one-time 10-minute bootstrap code.
     if PUBLIC_EXPOSURE and not consume_owner_bootstrap_code(x_owner_bootstrap or ''):
         raise HTTPException(401,'Owner bootstrap code required')
-    identity=_management_identity_claims(x_management_identity) if x_management_identity else None
     ip=client_ip(request); t=time.time()
     with tx(True) as c:
         row=c.execute('SELECT * FROM rate WHERE ip=?',(ip,)).fetchone()
@@ -1559,7 +1661,7 @@ def state(authorization:str|None=Header(default=None)):
                 items=c.execute('SELECT ticket,ack_status,message,operational_status,remaining_volume,target_volume FROM command_items WHERE command_id=? ORDER BY rowid',(cmd['id'],)).fetchall()
             last_command['results']=[{'ticket':i['ticket'],'status':'REJECTED' if i['ack_status']=='REJECTED' else ('APPLIED' if i['operational_status']=='CONFIRMED' else ('PARTIAL' if i['operational_status']=='PARTIAL' else ('UNKNOWN' if i['ack_status']=='UNKNOWN' else 'PENDING'))),'ack_status':i['ack_status'] or 'PENDING','operational_status':i['operational_status'],'target_volume':i['target_volume'],'remaining_volume':i['remaining_volume'],'message':('Target absence confirmed by subsequent terminal evidence' if i['operational_status']=='CONFIRMED' else ('Partial result reconciled against fresh terminal volume' if i['operational_status']=='PARTIAL' else i['message']))} for i in items]
     with tx() as c:
-        m=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        m=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc,credential_generation FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute('SELECT status,error_code,error_message FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1',(p['id'],)).fetchone()
     managed=None
     identity_verified=False
@@ -1571,11 +1673,11 @@ def state(authorization:str|None=Header(default=None)):
         expected_server=fernet.decrypt(m['server_enc']).decode()
         broker_identity_verified=bool(actual and actual.get('account') and broker_company_matches(m['broker_brand'], actual['account'].get('company','')) and broker_server_matches(m['broker_brand'], expected_server, actual['account'].get('server','')))
         app_status='READY' if identity_verified and worker_ready and execution_state_eligible(actual) and heartbeat_news_clear(actual) else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
-        live_auth=bool(m['account_mode']=='LIVE' and identity_verified and p['live_authorized_until'] and p['live_authorized_until']>time.time() and p['live_authorized_login']==actual['account'].get('login') and p['live_authorized_server']==actual['account'].get('server'))
+        live_auth=live_authorization_valid(p,m,actual) if m['account_mode']=='LIVE' else False
         managed={'status':app_status,'worker_status':job['status'] if job else 'NOT_CONFIGURED','access_type':m['access_type'],'account_mode':m['account_mode'],'broker_brand':m['broker_brand'],'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
         if actual:
             with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
-    result={'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
 
@@ -1660,70 +1762,172 @@ def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=
     return {'cursor':next_cursor,'watermark':watermark,'trades':[{'id':r['id'],'identity':r['identity'],'account_mode':r['account_mode'],'position_id':r['position_id'],'order_ticket':r['order_ticket'],'deal_ticket':r['deal_ticket'],'symbol':r['symbol'],'direction':r['direction'],'status':r['status'],'payload':json.loads(r['payload']),'updated_at':iso(datetime.fromtimestamp(r['created'],timezone.utc))} for r in rows]}
 
 @app.post('/v1/app/demo-acceptance')
-def accept_demo(x:DemoAcceptanceRequest,authorization:str|None=Header(default=None)):
+def accept_demo(x:DemoAcceptanceRequest,authorization:str|None=Header(default=None),
+                x_management_identity:str|None=Header(default=None)):
     require_durable_execution()
     p=auth(authorization,'app')
+    if not x_management_identity:
+        raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate before accepting this DEMO profile'})
+    identity=_management_identity_claims(x_management_identity)
+    if (not p['owner_subject'] or not p['owner_tenant'] or
+        identity['sub']!=p['owner_subject'] or identity['tenant_id']!=p['owner_tenant']):
+        raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'The current management user does not own this DEMO pairing'})
     if not x.confirm_demo:
         raise HTTPException(422,'Explicit DEMO acceptance is required')
     managed,job,worker,beat=_current_ready_context(p,'DEMO')
     if managed['access_type']!='MASTER' or not heartbeat_news_clear(beat):
         raise HTTPException(409,'DEMO acceptance requires a MASTER account and fresh clear evidence')
+    if not managed['credential_generation']:
+        raise HTTPException(409,detail={'code':'CREDENTIAL_GENERATION_REQUIRED','message':'The DEMO credential generation must be recorded before acceptance'})
+    try:
+        evidence=DemoPassEvidence.model_validate_json(x.evidence_document)
+    except Exception as exc:
+        raise HTTPException(422,detail={'code':'DEMO_PASS_EVIDENCE_INVALID','message':'The submitted DEMO PASS document is malformed or incomplete'}) from exc
+    if any((
+        evidence.broker.strip().upper() != managed['broker_brand'],
+        evidence.mode.strip().upper() != 'DEMO',
+        evidence.status.strip().upper() != 'PASS',
+        evidence.account_login != beat['account'].get('login'),
+        evidence.server != beat['account'].get('server'),
+        evidence.soak_days not in range(5,8),
+        evidence.order_lifecycle_pass is not True,
+        evidence.daily_reconciliation_pass is not True,
+        evidence.restart_test_pass is not True,
+        evidence.risk_controls_pass is not True,
+        any(not item.strip() or len(item)>512 or any(ord(ch)<32 or ord(ch)==127 for ch in item) for item in evidence.evidence_paths),
+    )):
+        raise HTTPException(409,detail={'code':'DEMO_PASS_EVIDENCE_MISMATCH','message':'The submitted DEMO PASS does not prove the current broker, account, soak duration and required test gates'})
+    # Hash the exact UTF-8 JSON document received by the Bridge; never trust a client-supplied digest.
+    pass_evidence_digest=hashlib.sha256(x.evidence_document.encode('utf-8')).hexdigest()
     account=beat['account']
     raw=json.dumps({'pairing_id':p['id'],'broker_brand':managed['broker_brand'],'account':account,
+                    'credential_generation':managed['credential_generation'],
+                    'pass_evidence_digest':pass_evidence_digest,
                     'heartbeat_seq':p['heartbeat_seq'],'worker_id':job['worker_id'],
                     'worker_generation':worker['generation'],'host_generation':HOST_GENERATION},
                    sort_keys=True,separators=(',',':'))
     acceptance_id=str(uuid.uuid4()); now_epoch=time.time(); expires=now_epoch+86400
     with tx(True) as c:
-        c.execute('UPDATE demo_acceptances SET revoked=1 WHERE pairing_id=? AND revoked=0',(p['id'],))
-        c.execute('''INSERT INTO demo_acceptances
-            (id,pairing_id,broker_brand,login,server,company,currency,account_mode,heartbeat_seq,
-             evidence_digest,accepted_at,expires_at,revoked)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)''',
-            (acceptance_id,p['id'],managed['broker_brand'],account['login'],account['server'],
-             account['company'],account['currency'],'DEMO',p['heartbeat_seq'],digest(raw),
-             now_epoch,expires))
-    return {'accepted':True,'acceptance_id':acceptance_id,'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc))}
+        # Update/reacceptance revokes all dependent LIVE leases and challenges first.
+        c.execute("""UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL
+                     WHERE id IN (SELECT pairing_id FROM live_profile_links WHERE demo_pairing_id=?)""",(p['id'],))
+        c.execute('UPDATE live_profile_links SET revoked=1 WHERE demo_pairing_id=?',(p['id'],))
+        c.execute('UPDATE live_challenges SET used=1 WHERE demo_pairing_id=? AND used=0',(p['id'],))
+        previous=c.execute('SELECT id FROM demo_acceptances WHERE pairing_id=?',(p['id'],)).fetchone()
+        if previous:
+            acceptance_id=previous['id']
+            c.execute('''UPDATE demo_acceptances SET broker_brand=?,login=?,server=?,company=?,currency=?,
+                         account_mode='DEMO',heartbeat_seq=?,evidence_digest=?,accepted_at=?,expires_at=?,
+                         credential_generation=?,worker_id=?,worker_generation=?,host_generation=?,
+                         pass_evidence_digest=?,revoked=0 WHERE id=? AND pairing_id=?''',
+                (managed['broker_brand'],account['login'],account['server'],account['company'],
+                 account['currency'],p['heartbeat_seq'],digest(raw),now_epoch,expires,
+                 managed['credential_generation'],job['worker_id'],worker['generation'],
+                 HOST_GENERATION,pass_evidence_digest,acceptance_id,p['id']))
+        else:
+            c.execute('''INSERT INTO demo_acceptances
+                (id,pairing_id,broker_brand,login,server,company,currency,account_mode,heartbeat_seq,
+                 evidence_digest,accepted_at,expires_at,credential_generation,worker_id,worker_generation,
+                 host_generation,pass_evidence_digest,revoked)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)''',
+                (acceptance_id,p['id'],managed['broker_brand'],account['login'],account['server'],
+                 account['company'],account['currency'],'DEMO',p['heartbeat_seq'],digest(raw),
+                 now_epoch,expires,managed['credential_generation'],job['worker_id'],worker['generation'],
+                 HOST_GENERATION,pass_evidence_digest))
+    return {'accepted':True,'acceptance_id':acceptance_id,'pairing_id':p['id'],
+            'broker_brand':managed['broker_brand'],'login':account['login'],'server':account['server'],
+            'credential_generation':managed['credential_generation'],'evidence_digest':pass_evidence_digest,
+            'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc))}
 
 @app.post('/v1/app/live-profile-association')
-def associate_live_profile(x:LiveProfileAssociationRequest, authorization:str|None=Header(default=None)):
+def associate_live_profile(x:LiveProfileAssociationRequest, authorization:str|None=Header(default=None),
+                            x_management_identity:str|None=Header(default=None)):
     require_durable_execution()
     p=auth(authorization,'app')
+    if not x_management_identity:
+        raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate before linking DEMO and LIVE profiles'})
+    identity=_management_identity_claims(x_management_identity)
+    if (not p['owner_subject'] or not p['owner_tenant'] or
+        identity['sub']!=p['owner_subject'] or identity['tenant_id']!=p['owner_tenant']):
+        raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'The current management user does not own this LIVE pairing'})
     if not x.confirm_association:
         raise HTTPException(422,'Explicit DEMO-to-LIVE association is required')
     managed,job,worker,beat=_current_ready_context(p,'LIVE')
-    with tx() as c:
-        acceptance=c.execute('SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=? AND revoked=0 AND expires_at>?',(x.demo_acceptance_id,p['id'],time.time())).fetchone()
-    if not acceptance or acceptance['broker_brand'] != managed['broker_brand']:
-        raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_INVALID','message':'The DEMO acceptance is not valid for this pairing and broker'})
-    if not managed['credential_generation']:
-        raise HTTPException(409,detail={'code':'CREDENTIAL_GENERATION_REQUIRED','message':'The LIVE credential generation must be recorded before association'})
+    live_account=beat.get('account') or {}
+    if managed['access_type']!='MASTER' or not managed['credential_generation']:
+        raise HTTPException(409,detail={'code':'LIVE_PROFILE_NOT_ELIGIBLE','message':'A verified MASTER LIVE profile with a credential generation is required'})
+    link={
+        'pairing_id':p['id'],'demo_pairing_id':x.demo_pairing_id,
+        'demo_acceptance_id':x.demo_acceptance_id,'broker_brand':managed['broker_brand'],
+        'login':live_account.get('login'),'server':live_account.get('server'),
+        'credential_generation':managed['credential_generation'],'revoked':0,
+    }
+    acceptance,demo_managed,demo_pair=_verified_live_demo_association(p,link,managed,beat)
+    associated_at=time.time()
     with tx(True) as c:
+        # Re-linking a LIVE profile revokes its earlier lease/challenges before replacing the association.
+        c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
+        c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
         c.execute('''INSERT INTO live_profile_links
-            (pairing_id,demo_acceptance_id,broker_brand,login,server,credential_generation,created_at,revoked)
-            VALUES(?,?,?,?,?,?,?,0)
+            (pairing_id,demo_acceptance_id,demo_pairing_id,broker_brand,login,server,credential_generation,created_at,revoked)
+            VALUES(?,?,?,?,?,?,?,?,0)
             ON CONFLICT(pairing_id) DO UPDATE SET demo_acceptance_id=excluded.demo_acceptance_id,
-              broker_brand=excluded.broker_brand,login=excluded.login,server=excluded.server,
-              credential_generation=excluded.credential_generation,created_at=excluded.created_at,revoked=0''',
-            (p['id'],x.demo_acceptance_id,managed['broker_brand'],beat['account']['login'],
-             beat['account']['server'],managed['credential_generation'],time.time()))
-    return {'associated':True,'demo_acceptance_id':x.demo_acceptance_id}
+              demo_pairing_id=excluded.demo_pairing_id,broker_brand=excluded.broker_brand,
+              login=excluded.login,server=excluded.server,credential_generation=excluded.credential_generation,
+              created_at=excluded.created_at,revoked=0''',
+            (p['id'],x.demo_acceptance_id,x.demo_pairing_id,managed['broker_brand'],
+             live_account['login'],live_account['server'],managed['credential_generation'],associated_at))
+        pair_check=c.execute('SELECT owner_subject,owner_tenant FROM pairings WHERE id=?',(x.demo_pairing_id,)).fetchone()
+        acceptance_check=c.execute('''SELECT credential_generation,worker_id,worker_generation,host_generation,
+                                      pass_evidence_digest,revoked,expires_at
+                                      FROM demo_acceptances WHERE id=? AND pairing_id=?''',
+                                   (x.demo_acceptance_id,x.demo_pairing_id)).fetchone()
+        live_check=c.execute('SELECT credential_generation FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        demo_check=c.execute('SELECT credential_generation FROM managed_accounts WHERE pairing_id=?',(x.demo_pairing_id,)).fetchone()
+        job_check=c.execute("SELECT worker_id,status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",
+                             (x.demo_pairing_id,)).fetchone()
+        worker_check=c.execute("SELECT generation,status,expires_at FROM worker_identities WHERE worker_id=?",
+                               (job_check['worker_id'],)).fetchone() if job_check and job_check['worker_id'] else None
+        if (not pair_check or pair_check['owner_subject']!=p['owner_subject'] or pair_check['owner_tenant']!=p['owner_tenant'] or
+            not acceptance_check or acceptance_check['revoked'] or acceptance_check['expires_at']<=associated_at or
+            not re.fullmatch(r'[0-9a-fA-F]{64}',acceptance_check['pass_evidence_digest'] or '') or
+            not live_check or live_check['credential_generation']!=managed['credential_generation'] or
+            not demo_check or demo_check['credential_generation']!=acceptance_check['credential_generation'] or
+            not job_check or job_check['status']!='READY' or job_check['worker_id']!=acceptance_check['worker_id'] or
+            not worker_check or worker_check['status']!='ACTIVE' or worker_check['expires_at']<=associated_at or
+            worker_check['generation']!=acceptance_check['worker_generation'] or
+            acceptance_check['host_generation']!=HOST_GENERATION):
+            raise HTTPException(409,detail={'code':'PROFILE_ASSOCIATION_CHANGED','message':'Profile ownership, PASS evidence, worker or credentials changed during association'})
+    return {'associated':True,'demo_pairing_id':x.demo_pairing_id,'demo_acceptance_id':x.demo_acceptance_id,
+            'live_pairing_id':p['id'],'broker_brand':managed['broker_brand'],
+            'demo_login':acceptance['login'],'demo_server':acceptance['server'],
+            'demo_credential_generation':acceptance['credential_generation'],
+            'live_login':live_account['login'],'live_server':live_account['server'],
+            'live_credential_generation':managed['credential_generation'],
+            'evidence_digest':acceptance['pass_evidence_digest'],
+            'expires_at':iso(datetime.fromtimestamp(acceptance['expires_at'],timezone.utc)),
+            'associated_at':iso(datetime.fromtimestamp(associated_at,timezone.utc))}
 
 @app.get('/v1/app/demo-acceptance')
 def demo_acceptance(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app')
     with tx() as c:
-        row=c.execute('SELECT id,broker_brand,login,server,company,currency,accepted_at,expires_at,revoked FROM demo_acceptances WHERE pairing_id=? ORDER BY accepted_at DESC LIMIT 1',(p['id'],)).fetchone()
+        row=c.execute('''SELECT id,broker_brand,login,server,company,currency,account_mode,credential_generation,
+                         pass_evidence_digest,accepted_at,expires_at,revoked
+                         FROM demo_acceptances WHERE pairing_id=? ORDER BY accepted_at DESC LIMIT 1''',(p['id'],)).fetchone()
     if not row or row['revoked'] or row['expires_at']<=time.time():
         return {'accepted':False}
-    return {'accepted':True,**dict(row)}
+    return {'accepted':True,'pairing_id':p['id'],**dict(row)}
 
 @app.delete('/v1/app/demo-acceptance')
 def revoke_demo_acceptance(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app')
     with tx(True) as c:
+        c.execute("""UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL
+                     WHERE id IN (SELECT pairing_id FROM live_profile_links WHERE demo_pairing_id=?)""",(p['id'],))
+        c.execute('UPDATE live_profile_links SET revoked=1 WHERE demo_pairing_id=?',(p['id'],))
+        c.execute('UPDATE live_challenges SET used=1 WHERE demo_pairing_id=? AND used=0',(p['id'],))
         c.execute('UPDATE demo_acceptances SET revoked=1 WHERE pairing_id=?',(p['id'],))
-        c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
     return {'revoked':True}
 
 @app.post('/v1/app/live-challenge')
@@ -1737,17 +1941,17 @@ def create_live_challenge(authorization:str|None=Header(default=None)):
         raise HTTPException(409,'LIVE authorization requires a MASTER profile')
     with tx() as c:
         link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
-        acceptance=c.execute('SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=? AND revoked=0 AND expires_at>?',(link['demo_acceptance_id'],p['id'],time.time())).fetchone() if link else None
-    if not acceptance:
-        raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_REQUIRED','message':'A fresh server-validated DEMO acceptance is required before LIVE authorization'})
+    if not link:
+        raise HTTPException(409,detail={'code':'DEMO_PROFILE_ASSOCIATION_REQUIRED','message':'Associate a separately paired DEMO profile before LIVE authorization'})
+    acceptance,demo_managed,demo_pair=_verified_live_demo_association(p,link,managed,beat)
     challenge_id=secrets.token_urlsafe(24); now_epoch=time.time(); expires=now_epoch+120
     with tx(True) as c:
         c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
         c.execute('''INSERT INTO live_challenges
-            (id,pairing_id,challenge_hash,demo_acceptance_id,broker_brand,login,server,company,
+            (id,pairing_id,challenge_hash,demo_acceptance_id,demo_pairing_id,broker_brand,login,server,company,
              worker_id,worker_generation,host_generation,credential_generation,expires_at,used,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)''',
-            (challenge_id,p['id'],digest(challenge_id),acceptance['id'],managed['broker_brand'],
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)''',
+            (challenge_id,p['id'],digest(challenge_id),acceptance['id'],link['demo_pairing_id'],managed['broker_brand'],
              beat['account']['login'],beat['account']['server'],beat['account']['company'],
              job['worker_id'],worker['generation'],HOST_GENERATION,managed['credential_generation'] or '',expires,now_epoch))
     return {'pairing_id':p['id'],'challenge_id':challenge_id,'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc)),
@@ -1781,6 +1985,14 @@ def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=Non
             c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
         raise HTTPException(409,detail={'code':'LIVE_CONTEXT_CHANGED','message':'The authorization context changed; obtain a new challenge'})
     managed,job,worker,beat=_current_ready_context(p,'LIVE')
+    with tx() as c:
+        link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
+    if (not link or link['demo_pairing_id'] != challenge['demo_pairing_id'] or
+        link['demo_acceptance_id'] != challenge['demo_acceptance_id']):
+        with tx(True) as c:
+            c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
+        raise HTTPException(409,detail={'code':'DEMO_PROFILE_ASSOCIATION_CHANGED','message':'The DEMO association changed after the LIVE challenge was issued'})
+    acceptance,demo_managed,demo_pair=_verified_live_demo_association(p,link,managed,beat)
     expected=f'ARM LIVE {managed["broker_brand"]} {beat["account"]["login"]}'
     if x.typed_confirmation != expected:
         raise HTTPException(422,'Typed LIVE confirmation does not match the current account')
@@ -1797,7 +2009,10 @@ def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=Non
             c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
         raise HTTPException(409,detail={'code':'LIVE_CONTEXT_CHANGED','message':'The authorization context changed; obtain a new challenge'})
     with tx(True) as c:
-        acceptance=c.execute('SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=? AND revoked=0 AND expires_at>?',(challenge['demo_acceptance_id'],p['id'],time.time())).fetchone()
+        acceptance=c.execute('''SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=?
+                                 AND credential_generation=? AND revoked=0 AND expires_at>?''',
+                              (challenge['demo_acceptance_id'],challenge['demo_pairing_id'],
+                               demo_managed['credential_generation'],time.time())).fetchone()
         if not acceptance:
             raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_REQUIRED','message':'DEMO acceptance is missing or expired'})
         changed=c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0 AND expires_at>?',(x.challenge_id,time.time()))

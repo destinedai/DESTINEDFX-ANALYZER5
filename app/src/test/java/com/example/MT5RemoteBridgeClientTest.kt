@@ -33,6 +33,28 @@ class MT5RemoteBridgeClientTest {
         assertTrue(failure?.message.orEmpty().contains("Secure storage is unavailable"))
     }
 
+
+    @Test fun managementIdentityHeaderIsLimitedToSignedProfileLifecycleRequests() {
+        val validAssertion = "header.payload.signature_" + "x".repeat(120)
+        val builder = Request.Builder().url("https://bridge.example.com")
+        MT5RemoteBridgeClient.addManagementIdentityHeader(
+            builder, "POST", "/v1/pairings", validAssertion
+        )
+        assertEquals(validAssertion, builder.build().header("X-Management-Identity"))
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.addManagementIdentityHeader(
+                Request.Builder().url("https://bridge.example.com"),
+                "GET", "/v1/app/state", validAssertion
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.addManagementIdentityHeader(
+                Request.Builder().url("https://bridge.example.com"),
+                "POST", "/v1/app/demo-acceptance", "not-a-signed-assertion"
+            )
+        }
+    }
+
     @Test fun allFourRequestedBrokerBrandsAreValidForTheirMT5AccountRoute() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }

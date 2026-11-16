@@ -60,6 +60,34 @@ data class ModeDemoAcceptance(
     val evidenceDigest: String
 )
 
+/**
+ * Server-issued proof linking two independently paired broker profiles under one management tenant.
+ * This permits different DEMO/LIVE account numbers only when the Bridge returns the exact link.
+ */
+data class VerifiedDemoProfileAssociation(
+    val demoIdentity: ModeAccountIdentity,
+    val liveIdentity: ModeAccountIdentity,
+    val demoPairingId: String,
+    val livePairingId: String,
+    val associatedAtMs: Long,
+    val expiresAtMs: Long,
+    val evidenceDigest: String
+) {
+    fun matches(acceptance: ModeDemoAcceptance, live: ModeAccountIdentity, nowMs: Long): Boolean =
+        acceptance.identity == demoIdentity &&
+            liveIdentity == live &&
+            demoIdentity.mode == AccountMode.DEMO &&
+            live.mode == AccountMode.LIVE &&
+            demoIdentity.path == live.path &&
+            demoIdentity.broker.equals(live.broker, ignoreCase = true) &&
+            demoPairingId.isNotBlank() && livePairingId.isNotBlank() &&
+            demoPairingId != livePairingId &&
+            associatedAtMs > 0L && associatedAtMs <= nowMs &&
+            expiresAtMs > nowMs &&
+            evidenceDigest.matches(Regex("[0-9a-f]{64}")) &&
+            evidenceDigest.equals(acceptance.evidenceDigest, ignoreCase = true)
+}
+
 data class ModeDecision(val allowed: Boolean, val status: String, val reason: String)
 data class ModeLiveLease(val identity: ModeAccountIdentity, val armedAtMs: Long, val expiresAtMs: Long)
 data class ModeArmingAuditEvent(
@@ -82,7 +110,8 @@ data class LiveArmRequest(
     val firstMinimumSizeVerified: Boolean,
     val dailyRiskClear: Boolean,
     val riskCapsClear: Boolean,
-    val hostProfile: HostProfile = HostProfile.PERSISTENT
+    val hostProfile: HostProfile = HostProfile.PERSISTENT,
+    val demoProfileAssociation: VerifiedDemoProfileAssociation? = null
 )
 
 /**
@@ -134,7 +163,8 @@ class ModeArmingPolicy(
             !identity.isValid() -> "LIVE_ACCOUNT_IDENTITY_INCOMPLETE"
             request.demoAcceptance == null -> "MATCHING_DEMO_PASS_REQUIRED"
             request.demoAcceptance.identity.mode != AccountMode.DEMO -> "DEMO_PASS_MODE_INVALID"
-            !request.demoAcceptance.identity.sameLogicalAccount(identity) -> "DEMO_PASS_ACCOUNT_MISMATCH"
+            !(request.demoAcceptance.identity.sameLogicalAccount(identity) ||
+                request.demoProfileAssociation?.matches(request.demoAcceptance, identity, now) == true) -> "DEMO_PASS_ACCOUNT_MISMATCH"
             request.currentDemoCredentialGeneration.isBlank() ||
                 request.currentDemoCredentialGeneration != request.demoAcceptance.identity.credentialGeneration -> "DEMO_CREDENTIAL_GENERATION_CHANGED"
             request.demoAcceptance.acceptedAtMs <= 0L || request.demoAcceptance.acceptedAtMs > now -> "DEMO_ACCEPTANCE_TIMESTAMP_INVALID"

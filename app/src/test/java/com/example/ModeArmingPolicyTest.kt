@@ -7,6 +7,7 @@ import com.example.data.broker.ModeArmingPolicy
 import com.example.data.broker.ModeDemoAcceptance
 import com.example.data.broker.ModePath
 import com.example.data.broker.ModeReadOnlyVerification
+import com.example.data.broker.VerifiedDemoProfileAssociation
 import com.example.data.broker.HostProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -70,6 +71,43 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request(currentDemoGeneration = "rotated")).isSuccess)
         assertFalse(policy.armLive(request(liveVerified = verified(identity(mode = AccountMode.LIVE).copy(accountId = "999999")))).isSuccess)
         assertFalse(policy.armLive(request(liveVerified = verified(good.identity.copy(credentialGeneration = "rotated")))).isSuccess)
+    }
+
+
+    @Test fun separateDemoAndLiveLoginsRequireAnExactVerifiedBridgeAssociation() {
+        val now = 1_000_000L
+        val policy = ModeArmingPolicy(nowMs = { now })
+        val demo = identity(account = "600001", generation = "demo-generation", server = "Broker-Demo")
+        val live = identity(mode = AccountMode.LIVE, account = "700001", generation = "live-generation", server = "Broker-Live")
+        val acceptance = accepted(demo, now - 10_000L)
+        val proof = VerifiedDemoProfileAssociation(
+            demoIdentity = demo,
+            liveIdentity = live,
+            demoPairingId = "demo-pairing-1",
+            livePairingId = "live-pairing-1",
+            associatedAtMs = now - 1_000L,
+            expiresAtMs = now + 60_000L,
+            evidenceDigest = acceptance.evidenceDigest
+        )
+        val request = LiveArmRequest(
+            identity = live,
+            demoAcceptance = acceptance,
+            currentDemoCredentialGeneration = demo.credentialGeneration,
+            liveVerification = verified(live, now),
+            typedConfirmation = "ARM LIVE ${live.broker} ${live.accountId}",
+            ownerReauthenticated = true,
+            firstMinimumSizeVerified = true,
+            dailyRiskClear = true,
+            riskCapsClear = true,
+            hostProfile = HostProfile.PERSISTENT,
+            demoProfileAssociation = proof
+        )
+        assertTrue(policy.armLive(request).isSuccess)
+        assertFalse(policy.armLive(request.copy(demoProfileAssociation = null)).isSuccess)
+        assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(livePairingId = proof.demoPairingId))).isSuccess)
+        assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(evidenceDigest = "b".repeat(64)))).isSuccess)
+        assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(expiresAtMs = now))).isSuccess)
+        assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(demoIdentity = demo.copy(accountId = "600002")))).isSuccess)
     }
 
     @Test fun ephemeralHostCannotArmOrDecideLiveButDemoPolicyRemainsAvailable() {
