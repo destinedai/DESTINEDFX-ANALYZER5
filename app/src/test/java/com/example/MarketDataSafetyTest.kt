@@ -40,7 +40,7 @@ class MarketDataSafetyTest {
         val streamThatWasDemotedButHasStickyBoolean = MarketTicker(
             symbol = "EUR/USD", price = 1.1, changePercent = 0.0, high = 0.0, low = 0.0,
             spread = 0.0, bias = "NEUTRAL", confidence = 0, lastUpdateMillis = 95_000L,
-            isLive = true, source = "Deriv WebSocket", kind = "STALE"
+            isLive = true, source = "Deriv public WebSocket", kind = "STALE"
         )
         assertEquals(QuoteFreshness.STALE, classifyQuoteFreshness(streamThatWasDemotedButHasStickyBoolean, 100_000L))
         assertEquals(QuoteFreshness.STALE, classifyQuoteFreshness(
@@ -132,11 +132,10 @@ class MarketDataSafetyTest {
 
     @Test
     fun quoteUpdatesCannotBeMixedIntoAnotherVenueCandleHistory() {
-        assertTrue(canMergeQuoteIntoCandle("Binance Spot OHLC candles", "Unverified crypto venue"))
-        assertTrue(canMergeQuoteIntoCandle("Deriv WebSocket", "Deriv WebSocket"))
+        assertTrue(canMergeQuoteIntoCandle("Deriv public OHLC", "Deriv public WebSocket"))
         assertTrue(canMergeQuoteIntoCandle("OANDA", "OANDA Pricing stream"))
-        assertFalse(canMergeQuoteIntoCandle("Deriv WebSocket", "TradingView scanner snapshot"))
-        assertFalse(canMergeQuoteIntoCandle("OANDA", "Binance Spot (USDT pairs)"))
+        assertFalse(canMergeQuoteIntoCandle("Deriv public OHLC", "Unverified external chart snapshot"))
+        assertFalse(canMergeQuoteIntoCandle("OANDA", "Deriv public WebSocket"))
         assertFalse(canMergeQuoteIntoCandle("", "OANDA"))
     }
 
@@ -171,7 +170,7 @@ class MarketDataSafetyTest {
     @Test
     fun arbiterRejectsPolledQuoteWhenStreamIsFresh() {
         val existing = quote("Deriv WebSocket", "STREAM", 99_000L)
-        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
+        val incoming = quote("Unverified external polled quote", "POLLED_BIDASK", 100_000L)
         val result = QuoteArbiter.accept(
             existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
         )
@@ -184,7 +183,7 @@ class MarketDataSafetyTest {
         val invalid = quote("Deriv WebSocket", "STREAM", 100_000L, bid = -1.0, ask = 1.1)
         assertTrue(QuoteArbiter.accept(existing, invalid, "Deriv WebSocket", 95_000L, 2_500L, 100_000L) is Decision.Reject)
 
-        val wrongSource = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
+        val wrongSource = quote("Unverified external chart snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
         assertTrue(QuoteArbiter.accept(
             existing, wrongSource, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
