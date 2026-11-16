@@ -192,6 +192,23 @@ open class DestinedFXViewModel(
     val tickers = MutableStateFlow<Map<String, MarketTicker>>(emptyMap())
     val quoteDiagnostics: StateFlow<Map<String, String>>
         get() = if (isPreview) MutableStateFlow(emptyMap()) else app.marketDataRepository.quoteDiagnostics
+
+    /** User-facing freshness text deliberately omits upstream vendor, venue and socket details. */
+    fun quoteDiagnosticForUi(symbol: String): String? {
+        if (isPreview) return null
+        val detail = app.marketDataRepository.quoteDiagnostics.value[symbol]
+            ?.trim()?.uppercase(java.util.Locale.ROOT).orEmpty()
+        if (detail.isBlank()) return null
+        return when {
+            "TICK RECEIVED" in detail || "QUOTE RECEIVED" in detail -> "Live quote received"
+            "SUBSCRIB" in detail || "CONNECTING" in detail -> "Connecting to live market data"
+            "STALE" in detail -> "Last quote is stale"
+            "ERROR" in detail || "FAILED" in detail || "REJECTED" in detail ->
+                "Live quote connection failed"
+            "DISCONNECTED" in detail -> "Live data connection disconnected"
+            else -> "No verified live quote currently available"
+        }
+    }
     val _feedItems = MutableStateFlow<List<MarketTicker>>(emptyList())
     val feedItems: StateFlow<List<MarketTicker>> = _feedItems
 
@@ -390,7 +407,7 @@ open class DestinedFXViewModel(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                marketDataStatus.value = "UNAVAILABLE • " + (e.message ?: e.javaClass.simpleName)
+                marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe
                 Log.w("DestinedFXViewModel", "Manual market refresh failed: " + e.javaClass.simpleName)
             }
         }
@@ -954,7 +971,7 @@ open class DestinedFXViewModel(
                 throw e
             } catch (e: Exception) {
                 if (generation == signalScanGeneration) {
-                    marketDataStatus.value = "UNAVAILABLE • Analysis failed: " + (e.message ?: e.javaClass.simpleName)
+                    marketDataStatus.value = "ANALYSIS BLOCKED • " + symbol + " " + timeframe
                     currentDynamicAnalysis.value = null
                     currentTradeSignal.value = null
                 }
