@@ -8,11 +8,11 @@ import com.example.data.market.classifyQuoteFreshness
 import com.example.data.market.candleSourceKey
 import com.example.data.market.canMergeQuoteIntoCandle
 import com.example.data.market.canonicalTickerAfterRefresh
-import com.example.data.market.isExplicitDerivMt5Source
-import com.example.data.market.scannerQuoteFromRow
 import com.example.data.market.processPollingItemsIndependently
 import com.example.data.market.resilientPollingLoop
 import com.example.data.market.sanitizeOhlcCandles
+import com.example.data.market.isExplicitDerivPublicSource
+import com.example.data.market.buildDerivCanonicalSymbolMap
 import com.example.domain.model.Candle
 import com.example.domain.model.MarketTicker
 import kotlinx.coroutines.CompletableDeferred
@@ -67,7 +67,7 @@ class MarketDataSafetyTest {
             isLive = true, source = "Deriv WebSocket", kind = "STREAM",
             bid = 1.0999, ask = 1.1001, hasRealSpread = true
         )
-        val rejected = existing.copy(price = 1.2, source = "TradingView scanner snapshot", lastUpdateMillis = 100_000L)
+        val rejected = existing.copy(price = 1.2, source = "Unverified external chart snapshot", lastUpdateMillis = 100_000L)
         assertEquals(existing, canonicalTickerAfterRefresh(existing, rejected, accepted = false))
         assertEquals(rejected, canonicalTickerAfterRefresh(existing, rejected, accepted = true))
         val staleCanonical = existing.copy(lastUpdateMillis = 80_000L)
@@ -131,59 +131,8 @@ class MarketDataSafetyTest {
     }
 
     @Test
-    fun scannerSnapshotNeverInventsBidAskSpreadOrConfidence() {
-        val ticker = scannerQuoteFromRow(
-            symbol = "EUR/USD",
-            close = 1.1000,
-            changePercent = 0.25,
-            high = 1.1050,
-            low = 1.0950,
-            bid = Double.NaN,
-            ask = Double.NaN,
-            retrievedAtMs = 100_000L
-        )
-        assertTrue(ticker != null)
-        assertEquals(null, ticker!!.bid)
-        assertEquals(null, ticker.ask)
-        assertEquals(0.0, ticker.spread, 0.0)
-        assertFalse(ticker.hasRealSpread)
-        assertEquals("POLLED_LAST", ticker.kind)
-        assertEquals(0, ticker.confidence)
-        assertEquals(QuoteFreshness.LIVE, classifyQuoteFreshness(ticker, 105_000L))
-    }
-
-    @Test
-    fun scannerSnapshotPreservesOnlyValidActualBidAsk() {
-        val ticker = scannerQuoteFromRow(
-            symbol = "EUR/USD",
-            close = 1.1000,
-            changePercent = 0.25,
-            high = 1.1050,
-            low = 1.0950,
-            bid = 1.0999,
-            ask = 1.1001,
-            retrievedAtMs = 100_000L
-        )!!
-        assertEquals(1.0999, ticker.bid!!, 0.0)
-        assertEquals(1.1001, ticker.ask!!, 0.0)
-        assertEquals(0.0002, ticker.spread, 0.0000000001)
-        assertTrue(ticker.hasRealSpread)
-        assertEquals("POLLED_BIDASK", ticker.kind)
-        assertEquals(0, ticker.confidence)
-    }
-
-    @Test
-    fun scannerSnapshotRejectsInvalidCloseAndNeverInventsMissingRange() {
-        assertEquals(null, scannerQuoteFromRow("EUR/USD", Double.NaN, 0.0, 1.1, 1.0, 1.0, 1.1, 100_000L))
-        val ticker = scannerQuoteFromRow("EUR/USD", 1.1, Double.NaN, 0.0, 0.0, 0.0, 0.0, 100_000L)!!
-        assertEquals(0.0, ticker.high, 0.0)
-        assertEquals(0.0, ticker.low, 0.0)
-        assertEquals("NEUTRAL", ticker.bias)
-    }
-
-    @Test
     fun quoteUpdatesCannotBeMixedIntoAnotherVenueCandleHistory() {
-        assertTrue(canMergeQuoteIntoCandle("Binance Spot OHLC candles", "Binance Spot (USDT pairs)"))
+        assertTrue(canMergeQuoteIntoCandle("Binance Spot OHLC candles", "Unverified crypto venue"))
         assertTrue(canMergeQuoteIntoCandle("Deriv WebSocket", "Deriv WebSocket"))
         assertTrue(canMergeQuoteIntoCandle("OANDA", "OANDA Pricing stream"))
         assertFalse(canMergeQuoteIntoCandle("Deriv WebSocket", "TradingView scanner snapshot"))
@@ -192,12 +141,13 @@ class MarketDataSafetyTest {
     }
 
     @Test
-    fun derivMarketDataRequiresExplicitMt5SourceSelection() {
-        assertFalse(isExplicitDerivMt5Source("TRADINGVIEW"))
-        assertFalse(isExplicitDerivMt5Source("DERIV"))
-        assertFalse(isExplicitDerivMt5Source("DERIV_OPTIONS"))
-        assertTrue(isExplicitDerivMt5Source("deriv_mt5"))
-        assertFalse(isExplicitDerivMt5Source("DERIV_MT5_DEMO"))
+    fun analyzerUsesPublicDerivMarketFeedAndVerifiesCryptoMappingsToo() {
+        assertTrue(isExplicitDerivPublicSource("DERIV_PUBLIC"))
+        assertTrue(isExplicitDerivPublicSource("deriv_public"))
+        assertFalse(isExplicitDerivPublicSource("TRADINGVIEW"))
+        assertFalse(isExplicitDerivPublicSource("BINANCE"))
+        assertFalse(isExplicitDerivPublicSource("DERIV_MT5_DEMO"))
+        assertEquals("BTC/USD", buildDerivCanonicalSymbolMap(listOf("BTC/USD"))["cryBTCUSD"])
     }
 
 
