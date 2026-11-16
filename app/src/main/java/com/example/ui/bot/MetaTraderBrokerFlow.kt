@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -121,6 +122,7 @@ fun MetaTraderBrokerFlow(
     var showInfoSheet by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val loginScrollState = rememberScrollState()
     val rows = remember { BrokerCatalog.rows() }
     val filtered = BrokerCatalog.search(rows, query)
     val securePolicy = LoginRules.savePasswordPolicy(secrets.isSecureStorageAvailable)
@@ -208,7 +210,12 @@ fun MetaTraderBrokerFlow(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Color.Black).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(
+        Modifier.fillMaxSize().background(Color.Black)
+            .then(if (page == FlowPage.LOGIN) Modifier.imePadding().verticalScroll(loginScrollState) else Modifier)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
                 "‹",
@@ -350,8 +357,18 @@ fun MetaTraderBrokerFlow(
             }
             FlowPage.LOGIN -> {
                 val spec = selected ?: return@Column
-                Text("Open a demo account", color = TextPrimary, modifier = Modifier.fillMaxWidth().height(48.dp).clickable { openUrl(spec.demoSignupUrl) }.testTag("open_demo"))
-                Text("Open a real account", color = TextSecondary, modifier = Modifier.fillMaxWidth().height(48.dp).clickable { openUrl(spec.realAccountUrl) }.testTag("open_real"))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = { openUrl(spec.demoSignupUrl) },
+                        modifier = Modifier.weight(1f).height(48.dp).testTag("open_demo"),
+                        colors = ButtonDefaults.buttonColors(containerColor = LoginBlue),
+                    ) { Text("Open a demo account") }
+                    Button(
+                        onClick = { openUrl(spec.realAccountUrl) },
+                        modifier = Modifier.weight(1f).height(48.dp).testTag("open_real"),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant),
+                    ) { Text("Open a real account", color = TextPrimary) }
+                }
                 Text("Login to an existing account", color = TextPrimary, fontSize = 18.sp)
                 if (spec.connector == LoginConnector.MT5_TERMINAL) {
                     Text(
@@ -359,6 +376,12 @@ fun MetaTraderBrokerFlow(
                         color = WarningAmber,
                         fontSize = 12.sp,
                         modifier = Modifier.testTag("mt5_mode_hint_notice"),
+                    )
+                    Text(
+                        "MT5 uses the broker account Login number, Password and exact Server. A Client ID is not part of standard MT5 sign-in.",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier.testTag("mt5_login_fields_help"),
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         LoginMode.values().forEach { mode ->
@@ -391,7 +414,8 @@ fun MetaTraderBrokerFlow(
                     OutlinedTextField(
                         form.server,
                         { server -> form = form.copy(server = server) },
-                        modifier = Modifier.fillMaxWidth().clickable { serverMenu = true }.testTag("server_field"),
+                        modifier = Modifier.fillMaxWidth().testTag("server_field"),
+                        trailingIcon = { TextButton(onClick = { serverMenu = true }) { Text("LIST") } },
                         label = { Text("Server") },
                         singleLine = true,
                         textStyle = TextStyle(fontSize = 16.sp),
