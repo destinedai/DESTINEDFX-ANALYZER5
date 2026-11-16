@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install Authenticode verifier
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y osslsigncode
+      - name: Install Codespaces contract binaries and Authenticode verifier
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y osslsigncode xvfb x11vnc novnc websockify
       - name: Download and compare both official artifact pins
         shell: bash
         run: |

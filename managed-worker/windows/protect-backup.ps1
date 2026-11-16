@@ -2,20 +2,64 @@
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$Snapshot)
 $ErrorActionPreference='Stop'
-$snapshotPath=(Resolve-Path $Snapshot).Path
-$archive="$snapshotPath.zip"
+
+function Set-PrivateAcl {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$UserSid,
+        [switch]$Directory,
+        [switch]$Recursive
+    )
+    $right = if($Directory) { '(OI)(CI)F' } else { 'F' }
+    $grants = @(
+        "*${UserSid}:$right",
+        "*S-1-5-18:$right",
+        "*S-1-5-32-544:$right"
+    )
+    $arguments = @($Path, '/inheritance:r')
+    if($Recursive) { $arguments += @('/T', '/C') }
+    $arguments += '/grant:r'
+    $arguments += $grants
+    & icacls.exe @arguments | Out-Null
+    if($LASTEXITCODE -ne 0) { throw "Could not restrict backup ACLs for $Path." }
+}
+
+$snapshotPath=(Resolve-Path -LiteralPath $Snapshot).Path
+if(-not (Test-Path -LiteralPath $snapshotPath -PathType Container)) {
+    throw 'Backup snapshot must be an existing directory.'
+}
+$parent=Split-Path -Parent $snapshotPath
 $protected="$snapshotPath.dpapi"
-$temporary="$protected.$([guid]::NewGuid().ToString('N')).tmp"
+if(Test-Path -LiteralPath $protected) {
+    throw 'A protected backup already exists at the destination; refusing to overwrite it.'
+}
+$workDirectory=Join-Path $parent ".destinedfx-protect-$([guid]::NewGuid().ToString('N'))"
+$archive=Join-Path $workDirectory 'backup.zip'
+$temporary=Join-Path $workDirectory 'backup.dpapi.tmp'
+$secure=$null
+$check=$null
+$base64=$null
+$roundTrip=$null
+
 try {
-    & icacls.exe $snapshotPath /inheritance:r /grant:r "$env:USERDOMAIN\$env:USERNAME`:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
-    if($LASTEXITCODE -ne 0){throw 'Could not restrict backup staging ACLs.'}
+    $currentSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    if([string]::IsNullOrWhiteSpace($currentSid)) { throw 'The current Windows user SID is unavailable.' }
+
+    New-Item -ItemType Directory -Path $workDirectory -Force | Out-Null
+    Set-PrivateAcl -Path $workDirectory -UserSid $currentSid -Directory
+
+    # Restrict every existing staging file before creating or reading any backup archive.
+    Set-PrivateAcl -Path $snapshotPath -UserSid $currentSid -Recursive
+
     Compress-Archive -Path (Join-Path $snapshotPath '*') -DestinationPath $archive -CompressionLevel Optimal -Force
+    Set-PrivateAcl -Path $archive -UserSid $currentSid
+
     $base64=[Convert]::ToBase64String([IO.File]::ReadAllBytes($archive))
     $secure=ConvertTo-SecureString $base64 -AsPlainText -Force
     $cipher=ConvertFrom-SecureString $secure
     [IO.File]::WriteAllText($temporary,$cipher,[Text.UTF8Encoding]::new($false))
-    & icacls.exe $temporary /inheritance:r /grant:r "$env:USERDOMAIN\$env:USERNAME:F" '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
-    if($LASTEXITCODE -ne 0){throw 'Could not restrict protected backup ACLs.'}
+    Set-PrivateAcl -Path $temporary -UserSid $currentSid
+
     $check=ConvertTo-SecureString ([IO.File]::ReadAllText($temporary))
     $checkPtr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($check)
     try {
@@ -23,16 +67,21 @@ try {
     } finally {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($checkPtr)
     }
-    if($roundTrip -ne $base64){throw 'DPAPI protected backup round-trip validation failed.'}
-    Move-Item -LiteralPath $temporary -Destination $protected -Force
-    Remove-Item -LiteralPath $archive -Force
+    if($roundTrip -ne $base64) { throw 'DPAPI protected backup round-trip validation failed.' }
+
+    # The destination is new and on the same volume, so rename preserves the
+    # already-restricted file DACL without exposing a plaintext intermediate.
+    Move-Item -LiteralPath $temporary -Destination $protected
     Remove-Item -LiteralPath $snapshotPath -Recurse -Force
     Write-Output "Protected backup: $protected"
 } catch {
-    Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+    # Keep the original staging snapshot available for owner recovery/review.
+    # If the protected rename already succeeded, retain that valid DPAPI backup too.
     throw
 } finally {
-    if($secure){$secure.Dispose()}
-    if($check){$check.Dispose()}
+    Remove-Item -LiteralPath $workDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    if($secure) { $secure.Dispose() }
+    if($check) { $check.Dispose() }
+    $base64=$null
+    $roundTrip=$null
 }

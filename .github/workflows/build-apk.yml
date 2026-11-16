@@ -32,7 +32,10 @@ jobs:
       - name: Build and smoke-test the owner Docker bridge image
         run: |
           env BRIDGE_BASE_URL=https://bridge.ci.example.ts.net \
-            CREDENTIALS_FERNET_KEY=ci-placeholder WORKER_BOOTSTRAP_TOKEN=ci-placeholder \
+            HOST_GENERATION=ci-compose-validation-only \
+            CREDENTIALS_FERNET_KEY=ci-compose-validation-only \
+            WORKER_BOOTSTRAP_TOKEN=ci-compose-validation-only \
+            MANAGEMENT_STEP_UP_PUBLIC_KEY=ci-compose-validation-only-not-a-real-key \
             TAILSCALE_IPV4=127.0.0.1 BRIDGE_HOST=bridge.ci.example.ts.net \
             docker compose -f bridge/compose.owner.yaml config --quiet
           docker build --file bridge/Dockerfile --tag destinedfx-bridge:ci bridge
@@ -117,6 +120,7 @@ jobs:
           DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/app_management
           APP_DOMAIN: api.example.test
           CADDY_EMAIL: ci@example.test
+          STEP_UP_PRIVATE_KEY_PEM: ci-compose-validation-only-not-a-real-key
         run: |
           docker compose -f compose.yaml config --quiet
           docker build --tag destinedfx-app-backend:ci .

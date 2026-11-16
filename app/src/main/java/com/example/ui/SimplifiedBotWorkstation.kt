@@ -1411,34 +1411,41 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     if (pendingMt5DemoPassDigest != null && mt5Mode == "DEMO") {
                         Text("Read-only PASS evidence validated for the current saved DEMO identity/generation. Confirming records that this owner accepts this exact account; it does not authorize LIVE.", color = WarningAmber, fontSize = 9.sp)
                         OutlinedButton(onClick = {
-                            runCatching {
-                                val expectedLogin = secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_DEMO")
-                                val expectedServer = secrets.getManagedMT5AccountServer("${selectedMt5Broker}_DEMO")
-                                val fresh = mt5Snapshot ?: error("Current DEMO terminal snapshot is unavailable; reconnect and verify again.")
-                                require(isVerifiedMt5Connection(fresh.connected, fresh.workerStatus == "READY", fresh.terminalOnline, fresh.heartbeatFresh, fresh.accountVerified, fresh.brokerIdentityVerified, fresh.actualAccountMode, "DEMO", fresh.actualLogin, expectedLogin, fresh.actualServer, expectedServer) && fresh.snapshotsValid) { "Current read-only DEMO identity/heartbeat/snapshot check no longer passes; verify again." }
-                                val generation = secrets.getManagedMT5CredentialGeneration("${selectedMt5Broker}_DEMO")
-                                require(generation.isNotBlank()) { "Current credential generation unavailable; reconnect DEMO." }
-                                val identity = com.example.data.broker.ModeAccountIdentity(com.example.data.broker.ModePath.valueOf("${selectedMt5Broker}_MT5"), selectedMt5Broker, expectedLogin, expectedServer, com.example.data.broker.AccountMode.DEMO, generation)
-                                require(identity == pendingMt5DemoPassIdentity) { "Account identity or credential generation changed after PASS validation; import and verify again." }
-                                val passDigest = requireNotNull(pendingMt5DemoPassDigest)
-                                val demoClient = mt5Client("${selectedMt5Broker}_DEMO", "DEMO", selectedMt5Broker)
-                                val passDocument = requireNotNull(pendingMt5DemoPassDocument) {
-                                    "The original validated DEMO PASS document is no longer available; import it again."
+                            busy = true
+                            scope.launch {
+                                try {
+                                    runCatching {
+                                        val expectedLogin = secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_DEMO")
+                                        val expectedServer = secrets.getManagedMT5AccountServer("${selectedMt5Broker}_DEMO")
+                                        val fresh = mt5Snapshot ?: error("Current DEMO terminal snapshot is unavailable; reconnect and verify again.")
+                                        require(isVerifiedMt5Connection(fresh.connected, fresh.workerStatus == "READY", fresh.terminalOnline, fresh.heartbeatFresh, fresh.accountVerified, fresh.brokerIdentityVerified, fresh.actualAccountMode, "DEMO", fresh.actualLogin, expectedLogin, fresh.actualServer, expectedServer) && fresh.snapshotsValid) { "Current read-only DEMO identity/heartbeat/snapshot check no longer passes; verify again." }
+                                        val generation = secrets.getManagedMT5CredentialGeneration("${selectedMt5Broker}_DEMO")
+                                        require(generation.isNotBlank()) { "Current credential generation unavailable; reconnect DEMO." }
+                                        val identity = com.example.data.broker.ModeAccountIdentity(com.example.data.broker.ModePath.valueOf("${selectedMt5Broker}_MT5"), selectedMt5Broker, expectedLogin, expectedServer, com.example.data.broker.AccountMode.DEMO, generation)
+                                        require(identity == pendingMt5DemoPassIdentity) { "Account identity or credential generation changed after PASS validation; import and verify again." }
+                                        val passDigest = requireNotNull(pendingMt5DemoPassDigest)
+                                        val demoClient = mt5Client("${selectedMt5Broker}_DEMO", "DEMO", selectedMt5Broker)
+                                        val passDocument = requireNotNull(pendingMt5DemoPassDocument) {
+                                            "The original validated DEMO PASS document is no longer available; import it again."
+                                        }
+                                        val serverAcceptance = demoClient.acceptDemo(passDigest, passDocument)
+                                        require(serverAcceptance.identity == identity &&
+                                            serverAcceptance.evidenceDigest.equals(passDigest, ignoreCase = true)) {
+                                            "Bridge DEMO acceptance did not match the exact imported PASS identity."
+                                        }
+                                        require(secrets.savePathDemoAcceptance(identity, passDigest)) {
+                                            "Encrypted owner acceptance could not be saved for this exact identity and generation."
+                                        }
+                                        demoPassDigests = demoPassDigests + (selectedMt5Broker to passDigest)
+                                        pendingMt5DemoPassDigest = null
+                                        pendingMt5DemoPassDocument = null
+                                        pendingMt5DemoPassIdentity = null
+                                        message = "Owner DEMO acceptance saved for the exact verified identity and credential generation. LIVE remains separately blocked."
+                                    }.onFailure { message = "Owner DEMO acceptance blocked: ${it.message ?: "verification unavailable"}. LIVE remains locked." }
+                                } finally {
+                                    busy = false
                                 }
-                                val serverAcceptance = demoClient.acceptDemo(passDigest, passDocument)
-                                require(serverAcceptance.identity == identity &&
-                                    serverAcceptance.evidenceDigest.equals(passDigest, ignoreCase = true)) {
-                                    "Bridge DEMO acceptance did not match the exact imported PASS identity."
-                                }
-                                require(secrets.savePathDemoAcceptance(identity, passDigest)) {
-                                    "Encrypted owner acceptance could not be saved for this exact identity and generation."
-                                }
-                                demoPassDigests = demoPassDigests + (selectedMt5Broker to passDigest)
-                                pendingMt5DemoPassDigest = null
-                                pendingMt5DemoPassDocument = null
-                                pendingMt5DemoPassIdentity = null
-                                message = "Owner DEMO acceptance saved for the exact verified identity and credential generation. LIVE remains separately blocked."
-                            }.onFailure { message = "Owner DEMO acceptance blocked: ${it.message ?: "verification unavailable"}. LIVE remains locked." }
+                            }
                         }, enabled = !busy && mt5Snapshot != null) { Text("OWNER ACCEPT VERIFIED DEMO PASS") }
                     }
                     com.example.data.broker.BrokerLoginSpecs.all
