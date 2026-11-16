@@ -87,7 +87,6 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     var showExportDialog by remember { mutableStateOf(false) }
     val dynamicAnalysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
-    val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val currentTicker = tickers[activeSymbol]
     val hasFreshQuote = currentTicker?.let { it.isLive && it.price.isFinite() && it.price > 0.0 } == true &&
@@ -97,17 +96,24 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     val candlesAvailable = marketDataStatus.startsWith("READY", ignoreCase = true)
     val feedStatusColor = when {
         hasFreshQuote -> ProfitGreen
-        marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> LossRed
+        (marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) ||
+            marketDataStatus.startsWith("NO VERIFIED LIVE DATA", ignoreCase = true) ||
+            marketDataStatus.startsWith("ANALYSIS BLOCKED", ignoreCase = true)) -> LossRed
         else -> WarningAmber
     }
     val feedStatusLabel = when {
         hasFreshQuote && candlesAvailable -> "Fresh live quote • OHLC history available"
-        hasFreshQuote && marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "Fresh live quote • OHLC unavailable"
+        hasFreshQuote && (marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) ||
+            marketDataStatus.startsWith("NO VERIFIED LIVE DATA", ignoreCase = true) ||
+            marketDataStatus.startsWith("ANALYSIS BLOCKED", ignoreCase = true)) -> "Fresh live quote • OHLC unavailable"
         hasFreshQuote -> "Fresh live quote • OHLC history pending"
-        candlesAvailable -> quoteDiagnostics[activeSymbol]?.let { "Candle history available • $it" }
+        candlesAvailable -> viewModel.quoteDiagnosticForUi(activeSymbol)?.let { "Candle history available • $it" }
             ?: "Candle history available • no fresh quote"
-        quoteDiagnostics[activeSymbol] != null -> quoteDiagnostics.getValue(activeSymbol)
-        marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "No fresh quote • candle history unavailable"
+        viewModel.quoteDiagnosticForUi(activeSymbol) != null ->
+            viewModel.quoteDiagnosticForUi(activeSymbol).orEmpty()
+        (marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) ||
+            marketDataStatus.startsWith("NO VERIFIED LIVE DATA", ignoreCase = true) ||
+            marketDataStatus.startsWith("ANALYSIS BLOCKED", ignoreCase = true)) -> "No fresh quote • candle history unavailable"
         else -> "Checking quote • candle history pending"
     }
 
@@ -742,7 +748,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
         }
         item {
             QuoteFreshnessIndicator(ticker, connecting = marketDataStatus.startsWith("WAIT"),
-                diagnostic = quoteDiagnostics[activeSymbol])
+                diagnostic = viewModel.quoteDiagnosticForUi(activeSymbol))
         }
         item {
             val result = analysis
@@ -932,7 +938,7 @@ private fun FullAnalysisReport(result: DynamicAnalysisInfo?) {
         InsightLine("Signal state", result.signalState.ifBlank { "UNKNOWN" })
         InsightLine("Direction", result.direction.ifBlank { "WAIT" })
         InsightLine("Confluence score (not a win probability)", result.confidencePct.takeIf { it > 0 }?.let { "$it/100" } ?: "Not scored")
-        InsightLine("Data source", result.dataSource.ifBlank { "UNKNOWN" })
+        InsightLine("Market data", result.dataSource.ifBlank { "Not verified" })
         InsightLine("Ruleset version", result.strategyVersion.ifBlank { "Not supplied" })
         HorizontalDivider(color = CardBorder)
         Text("PYTHON QUANTITATIVE CANDIDATE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
@@ -1310,7 +1316,7 @@ private fun PythonQuantitativeAnalysisPanel(result: com.example.domain.model.Pyt
         InsightLine("Strategy", result.strategyId)
         InsightLine("Ruleset version", result.strategyVersion)
         InsightLine("Python state / direction", "${result.state} / ${result.direction}")
-        InsightLine("Provider source", result.source.ifBlank { "UNKNOWN" })
+        InsightLine("Market data validation", if (result.source.isBlank()) "Not supplied" else "Verified provider snapshot")
         InsightLine("Closed-candle timestamp", if (result.candleTimestampMs > 0L)
             java.time.Instant.ofEpochMilli(result.candleTimestampMs).toString() else "Unavailable")
         InsightLine("Snapshot retrieved at", if (result.retrievedAtMs > 0L)
