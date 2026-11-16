@@ -58,7 +58,7 @@ def claimed(p):
     r=client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'test-terminal-1','account':ACCOUNT}); assert r.status_code==200; return r.json()
 def heartbeat_data(**kwargs):
     now_ms=int(time.time()*1000)
-    x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo'},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[]}; x.update(kwargs); return x
+    x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,'max_concurrent_positions':2,'daily_risk_status':'NORMAL','daily_loss_used_percent':10.0},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[]}; x.update(kwargs); return x
 
 def analysis_payload(request_id='analysis-1'):
     return {'request_id':request_id,'symbol':'EUR/USD','timeframe':'M1','strategy_id':'smc-confluence-1.0.0'}
@@ -254,7 +254,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
+    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 
@@ -2108,3 +2108,72 @@ def test_oversized_body_is_refused_in_public_mode(monkeypatch):
     monkeypatch.setattr(app,'MAX_BODY',10)
     r=pub.post('/v1/pairings',content=b'x'*50,headers={'Host':'fixture-codespace-8000.app.github.dev'})
     assert r.status_code==413
+
+
+def test_live_state_exposes_validated_ea_risk_controls(monkeypatch):
+    pairing,headers,worker,job,terminal_headers,actual=live_ready(monkeypatch)
+    state=client.get('/v1/app/state',headers=headers).json()
+    controls=state['risk_controls']
+    assert controls['source']=='authenticated_mt5_ea_heartbeat'
+    assert controls['daily_loss_clear'] is True
+    assert controls['risk_caps_clear'] is True
+    assert controls['authorized'] is True
+    assert controls['risk_percent']==0.25
+    assert controls['max_daily_loss_percent']==2.0
+    assert state['managed_execution']['live_authorized'] is False
+    authorized=authorize_live_fixture(pairing,headers,job,actual)
+    assert authorized.status_code==200, authorized.text
+    assert client.get('/v1/app/state',headers=headers).json()['managed_execution']['live_authorized'] is True
+
+
+def test_live_challenge_rejects_missing_breached_or_out_of_policy_risk_evidence(monkeypatch):
+    pairing,headers,worker,job,terminal_headers,actual=live_ready(monkeypatch)
+    account={**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100}
+    invalid_configurations=[
+        {'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,
+         'max_concurrent_positions':2,'daily_risk_status':'DATA_UNAVAILABLE',
+         'daily_loss_used_percent':-1.0},
+        {'strategy':'demo','risk_percent':1.01,'max_daily_loss_percent':2.0,
+         'max_concurrent_positions':2,'daily_risk_status':'NORMAL',
+         'daily_loss_used_percent':10.0},
+        {'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.01,
+         'max_concurrent_positions':2,'daily_risk_status':'NORMAL',
+         'daily_loss_used_percent':10.0},
+        {'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,
+         'max_concurrent_positions':3,'daily_risk_status':'NORMAL',
+         'daily_loss_used_percent':10.0},
+        {'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,
+         'max_concurrent_positions':2,'daily_risk_status':'BREACHED_LOCKED',
+         'daily_loss_used_percent':100.0},
+    ]
+    for config in invalid_configurations:
+        posted=client.post('/v1/terminal/heartbeat',headers=terminal_headers,
+                           json=heartbeat_data(account=account,configuration=config))
+        assert posted.status_code==200, posted.text
+        challenge=client.post('/v1/app/live-challenge',headers=headers)
+        assert challenge.status_code==409, challenge.text
+        assert challenge.json()['detail']['code']=='LIVE_RISK_EVIDENCE_INVALID'
+
+
+def test_live_daily_loss_breach_revokes_existing_server_lease(monkeypatch):
+    pairing,headers,worker,job,terminal_headers,actual=live_ready(monkeypatch)
+    authorized=authorize_live_fixture(pairing,headers,job,actual)
+    assert authorized.status_code==200, authorized.text
+    account={**actual,'balance':10000,'equity':9500,'margin':0,'free_margin':9500,'margin_level':0,'leverage':100}
+    breached={
+        'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,
+        'max_concurrent_positions':2,'daily_risk_status':'BREACHED_LOCKED',
+        'daily_loss_used_percent':100.0,
+    }
+    posted=client.post('/v1/terminal/heartbeat',headers=terminal_headers,
+                       json=heartbeat_data(state='STOPPED',account=account,configuration=breached))
+    assert posted.status_code==200, posted.text
+    state=client.get('/v1/app/state',headers=headers).json()
+    assert state['risk_controls']['daily_loss_clear'] is False
+    assert state['risk_controls']['authorized'] is False
+    assert state['managed_execution']['live_authorized'] is False
+    with app.tx() as c:
+        row=c.execute('SELECT live_authorized_until FROM pairings WHERE id=?',
+                      (pairing['pairing_id'],)).fetchone()
+    assert row['live_authorized_until'] is None
+    assert client.post('/v1/app/commands',headers=headers,json=command_req('START')).status_code==409
