@@ -2,7 +2,7 @@
 
 **Current repository decision:** no Windows PC, VPS, cloud credit, or broker host is accessible from this development environment. The repository therefore implements the existing-owner Windows PC path only and does not purchase or provision infrastructure. The first host remains single-account DEMO, interactive-logon, private-tailnet, and fail-closed until the owner supplies actual host and broker evidence.
 
-Prices checked 2026-11-06 from official vendor pages. USD monthly figures are displayed monthly costs, excluding tax unless the vendor specifies otherwise. No service was purchased, rented, or enrolled. Prices can change; recheck the provider's checkout page and exact Windows licence SKU before any purchase. Written owner approval is required before spending.
+Prices were rechecked 2026-11-16 from provider pages/search results. USD monthly figures are displayed monthly costs, excluding tax unless the vendor specifies otherwise. A planning conversion of **$1 = NGN 1,354.97** was checked 2026-11-16 against a published CBN-sourced rate; card FX, spread, tax and add-ons are extra. No service was purchased, rented, or enrolled. Prices can change; recheck the provider's checkout page and exact Windows licence SKU before any purchase. Written owner approval is required before spending.
 
 | Provider and plan | Sizing | Published monthly compute | Windows licence | Recurring total with licence | First-month offer | Notes |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
@@ -12,6 +12,8 @@ Prices checked 2026-11-06 from official vendor pages. USD monthly figures are di
 | Raff Forex VM | 4 vCPU, 8 GB RAM, 120 GB NVMe | $55.99 | Included | **$55.99/month** | $40.99 first month on first server billed monthly | Provider describes two or three terminals or backtesting. Annual billing is displayed as $49.16/month. For four terminals, confirm capacity and load with the vendor before sizing this as sufficient. |
 | Hostwinds Windows VPS | 2 GB plan | $22.09 displayed reduced / $33.99 standard | Included / vendor automatically licenses Windows | **$22.09 reduced or $33.99 standard** | The page does not state how long the reduction lasts | The same official page says the Windows VPS requires 2 GB RAM minimum. Check renewal price at checkout. |
 | Hostwinds Windows VPS | 4 GB plan | $33.79 displayed reduced / $51.99 standard | Included / vendor automatically licenses Windows | **$33.79 reduced or $51.99 standard** | The page does not state how long the reduction lasts | Locations listed separately by the vendor include Seattle, Dallas, and Amsterdam. The plan page does not assign a location to a particular quote. |
+
+Planning conversion at NGN 1,354.97/USD: MassiveGRID 4 vCPU/8 GB licensed **$44.40 ≈ NGN 60,161/month**; MassiveGRID 2 vCPU/4 GB licensed **$22.20 ≈ NGN 30,080/month**. These are not checkout totals and exclude tax, backups, RDP add-ons, FX spread and provider-specific fees. Current Raff pricing must be confirmed in the live configurator; its current published material separates compute and Windows licensing, so the older $37.99/$55.99 figures are not treated as current.
 
 ## Sizing recommendation
 

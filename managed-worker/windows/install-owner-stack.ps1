@@ -202,7 +202,7 @@ Register-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -Action $a
 $backupAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$backupScript`""
 $backupTrigger = New-ScheduledTaskTrigger -Daily -At '3:00AM'
 Register-ScheduledTask -TaskName 'DestinedFX Bridge SQLite Backup' -Action $backupAction -Trigger $backupTrigger -Settings $settings -Principal $principal -Force | Out-Null
-$healthAction = New-ScheduledTaskAction -Execute $venvPython -Argument "`"$healthScript`" --url http://127.0.0.1:8000 --state-file `"$base\logs\health.json`""
+$healthAction = New-ScheduledTaskAction -Execute $venvPython -Argument "`"$healthScript`" --url http://127.0.0.1:8000 --state-file `"$base\logs\health.json`" --data-root `"$workerData`" --backup-root `"$backupDir`""
 $healthTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
 Register-ScheduledTask -TaskName 'DestinedFX Owner Bridge Health Monitor' -Action $healthAction -Trigger $healthTrigger -Settings $settings -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker'

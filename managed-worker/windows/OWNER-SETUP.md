@@ -30,4 +30,6 @@ Test a recovery into a separate directory before replacing live state:
 
 The restore validates the DPAPI archive, every checksum, SQLite integrity, and the stable worker ID. It refuses to overwrite an existing target unless `-Replace` is explicitly supplied. Do not replace active state blindly. Never share the DPAPI file, Fernet key, worker token, account passwords, or logs containing sensitive data.
 
+This restore is supported only on the same Windows host under the same Windows user profile that created the DPAPI backup. A new host or different user must use a separately designed owner-controlled migration envelope; copying the `.dpapi` ciphertext is not migration and is intentionally rejected as unsupported.
+
 This kit does not establish a production release signature, commercial Tailscale rights, a live broker connection, or genuine DEMO acceptance. Verify the actual Windows host and broker account locally before relying on it.
