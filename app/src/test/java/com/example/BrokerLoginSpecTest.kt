@@ -70,6 +70,21 @@ class BrokerLoginSpecTest {
     }
 
     @Test
+    fun derivServerSuggestionsAreClearlyUnverifiedAndMt5DoesNotAskForClientId() {
+        val deriv = BrokerLoginSpecs.byId("DERIV_MT5")!!
+        assertEquals(
+            setOf("Deriv-Demo", "Deriv-Server", "Deriv-Server-02", "Deriv-Server-03"),
+            deriv.serverSuggestions.filter { it.value.isNotBlank() }.map { it.value }.toSet(),
+        )
+        assertTrue(deriv.serverSuggestions.filter { it.value.isNotBlank() }
+            .all { it.source == ServerSuggestionSource.USER_SUPPLIED_REFERENCE })
+        BrokerLoginSpecs.all.filter { it.connector == LoginConnector.MT5_TERMINAL }.forEach { spec ->
+            assertEquals(listOf(LoginField.LOGIN, LoginField.PASSWORD, LoginField.SERVER), spec.fields)
+            assertFalse(spec.fields.contains(LoginField.APP_ID))
+        }
+    }
+
+    @Test
     fun mt5ServerSuggestionsAreNeverInventedAndCarryProvenance() {
         BrokerLoginSpecs.all.filter { it.connector == LoginConnector.MT5_TERMINAL }.forEach { spec ->
             assertTrue(spec.serverSuggestions.any { it.source == ServerSuggestionSource.OWNER_HISTORY })
