@@ -7,7 +7,7 @@ package com.example.data.broker
 enum class LoginConnector { DERIV_OPTIONS, CTRADER, MT5_TERMINAL }
 enum class LoginField { LOGIN, PASSWORD, SERVER, APP_ID, TOKEN, GRANT_ACCESS }
 enum class LoginMode { DEMO, LIVE }
-enum class ServerSuggestionSource { OWNER_HISTORY, HOST_REPORTED, OFFICIAL_PAGE }
+enum class ServerSuggestionSource { OWNER_HISTORY, HOST_REPORTED, OFFICIAL_PAGE, USER_SUPPLIED_REFERENCE }
 
 data class ServerSuggestion(
     val value: String,
@@ -91,10 +91,23 @@ object BrokerLoginSpecs {
         "EXNESS" to listOf("Exness", "Exness Technologies Ltd", "Exness (SC) Ltd"),
         "HFM" to listOf("HFM", "HF Markets", "HF Markets (SV) Ltd", "HF Markets (Seychelles) Ltd"),
     )
-    private fun mt5Servers(brand: String): List<ServerSuggestion> = listOf(
-        ServerSuggestion("", ServerSuggestionSource.OWNER_HISTORY),
-        ServerSuggestion("", ServerSuggestionSource.HOST_REPORTED),
-    )
+    private fun mt5Servers(brand: String): List<ServerSuggestion> {
+        val references = when (brand.uppercase()) {
+            // These are suggestions only. Deriv's exact server depends on the account's
+            // issuing company and must still be confirmed by the live MT5 terminal.
+            "DERIV" -> listOf(
+                "Deriv-Demo",
+                "Deriv-Server",
+                "Deriv-Server-02",
+                "Deriv-Server-03",
+            ).map { ServerSuggestion(it, ServerSuggestionSource.USER_SUPPLIED_REFERENCE) }
+            else -> emptyList()
+        }
+        return listOf(
+            ServerSuggestion("", ServerSuggestionSource.OWNER_HISTORY),
+            ServerSuggestion("", ServerSuggestionSource.HOST_REPORTED),
+        ) + references
+    }
     private fun mt5Aliases(brand: String): List<String> = mt5Aliases[brand].orEmpty()
     private val noServers = emptyList<ServerSuggestion>()
     private val noAliases = listOf("Deriv", "cTrader", "Spotware")
