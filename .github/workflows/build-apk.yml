@@ -21,6 +21,10 @@ jobs:
           python-version: "3.12"
       - name: Install bridge test dependencies
         run: python -m pip install -r bridge/requirements.txt
+      - name: Check pinned Bridge dependency vulnerabilities
+        run: |
+          python -m pip install --disable-pip-version-check pip-audit
+          pip-audit -r bridge/requirements.txt
       - name: Run shared MT5 login contract fixtures
         run: python -m pytest -q scripts/test_login_contract.py
       - name: Run offline Deriv DEMO smoke-harness tests
