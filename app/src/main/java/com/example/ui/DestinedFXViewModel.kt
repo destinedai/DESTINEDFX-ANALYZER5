@@ -768,6 +768,22 @@ open class DestinedFXViewModel(
         managementMessage.value = "$mode appearance saved locally and synced to your account."
     }
 
+    suspend fun issueLiveStepUpAssertion(
+        password: String,
+        pairingId: String,
+        challengeId: String,
+        typedConfirmation: String,
+        brokerBrand: String,
+        login: String,
+        server: String,
+        credentialGeneration: String
+    ): String = withContext(Dispatchers.IO) {
+        managementClient.liveStepUpAssertion(
+            password, pairingId, challengeId, typedConfirmation,
+            brokerBrand, login, server, credentialGeneration
+        )
+    }
+
     private fun managementAction(action: suspend () -> Unit) {
         if (isPreview || managementBusy.value) return
         viewModelScope.launch {

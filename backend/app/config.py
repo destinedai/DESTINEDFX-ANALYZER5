@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     max_request_bytes: int = 32_768
     rate_limit_per_minute: int = 120
     cors_origins: str = ""
+    step_up_private_key_pem: SecretStr = SecretStr("")
+    step_up_issuer: str = "destinedfx-management"
+    step_up_audience: str = "destinedfx-bridge"
 
     @field_validator("database_url")
     @classmethod

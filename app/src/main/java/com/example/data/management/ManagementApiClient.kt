@@ -51,6 +51,36 @@ class ManagementApiClient(
 
     fun currentUser(): ManagementUser = userFrom(execute("GET", "/api/v1/auth/me", auth = true))
 
+    fun bridgeIdentityAssertion(): String =
+        execute("POST", "/api/v1/auth/bridge-identity", auth = true).optString("assertion")
+            .takeIf { it.length >= 100 } ?: throw ManagementException(ManagementFailure.INVALID_RESPONSE)
+
+    fun liveStepUpAssertion(
+        password: String,
+        pairingId: String,
+        challengeId: String,
+        typedConfirmation: String,
+        brokerBrand: String,
+        login: String,
+        server: String,
+        credentialGeneration: String
+    ): String {
+        require(password.isNotBlank()) { "Reauthentication is required." }
+        val body = JSONObject()
+            .put("password", password)
+            .put("pairing_id", pairingId)
+            .put("challenge_id", challengeId)
+            .put("typed_confirmation", typedConfirmation)
+            .put("broker_brand", brokerBrand)
+            .put("login", login)
+            .put("server", server)
+            .put("account_mode", "LIVE")
+            .put("credential_generation", credentialGeneration)
+        return execute("POST", "/api/v1/auth/live-step-up", body, auth = true)
+            .optString("assertion").takeIf { it.length >= 100 }
+            ?: throw ManagementException(ManagementFailure.INVALID_RESPONSE)
+    }
+
     fun status(): ManagementStatus {
         val service = execute("GET", "/api/v1/service-status")
         val health = execute("GET", "/health")

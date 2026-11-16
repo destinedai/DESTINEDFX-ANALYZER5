@@ -46,3 +46,31 @@ def test_service_status_reports_database_failure(client, monkeypatch):
     assert response.json()["status"] == "degraded"
     assert response.json()["database"] == "unavailable"
     monkeypatch.setattr(Session, "execute", original_execute)
+
+
+def test_live_step_up_requires_reauthentication_and_returns_signed_assertion(client, monkeypatch):
+    from app import main
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+    monkeypatch.setattr(main.settings, "step_up_private_key_pem", type(main.settings.step_up_private_key_pem)(pem))
+    register(client)
+    token = login(client).json()["access_token"]
+    headers = {"Authorization": "Bearer " + token}
+    body = {
+        "password": "Correct horse battery staple 92!",
+        "pairing_id": "pairing-1",
+        "challenge_id": "challenge-1",
+        "typed_confirmation": "ARM LIVE FBS 700001",
+        "broker_brand": "FBS",
+        "login": "700001",
+        "server": "FBS-Live",
+        "account_mode": "LIVE",
+        "credential_generation": "generation-1",
+    }
+    response = client.post("/api/v1/auth/live-step-up", json=body, headers=headers)
+    assert response.status_code == 200
+    assert len(response.json()["assertion"]) >= 100
+    body["password"] = "wrong password"
+    assert client.post("/api/v1/auth/live-step-up", json=body, headers=headers).status_code == 401

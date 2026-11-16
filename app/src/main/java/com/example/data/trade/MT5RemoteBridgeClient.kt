@@ -51,7 +51,8 @@ class MT5RemoteBridgeClient(
         .addInterceptor(BridgeGateway.interceptor).build()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
-    data class Pairing(val code: String, val expiresAt: String)
+    data class Pairing(val pairingId: String, val code: String, val expiresAt: String)
+    data class LiveChallenge(val pairingId: String, val challengeId: String, val typedConfirmation: String, val expiresAt: String)
     data class ServiceReadiness(
         val httpReachable: Boolean, val httpStatus: Int?, val serviceStatus: String,
         val database: String, val managedExecution: String, val errorCode: String = ""
@@ -161,12 +162,13 @@ class MT5RemoteBridgeClient(
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
             .put("access_type", accessType).put("broker_brand", brokerBrand).put("consent", consent)
             .put("account_mode", accountMode)
+            .put("credential_generation", nextGeneration)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
         request("POST", "/v1/app/managed-account", payload)
         return state()
     }
 
-    suspend fun pair(ownerBootstrapCode: String = ""): Pairing {
+    suspend fun pair(ownerBootstrapCode: String = "", managementIdentityAssertion: String = ""): Pairing {
         check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; pairing request was not sent." }
         val bootstrap = ownerBootstrapCode.trim()
         require(bootstrap.length <= 200 && bootstrap.none { it.code < 32 || it.code == 127 }) {
@@ -174,12 +176,15 @@ class MT5RemoteBridgeClient(
         }
         val body = request(
             "POST", "/v1/pairings", JSONObject(),
-            ownerBootstrapCode = bootstrap.takeIf { it.isNotEmpty() }
+            ownerBootstrapCode = bootstrap.takeIf { it.isNotEmpty() },
+            managementIdentityAssertion = managementIdentityAssertion.takeIf { it.isNotBlank() }
         )
         val code = body.optString("pairing_code"); val token = body.optString("app_token")
         require(code.isNotBlank() && token.isNotBlank()) { "Bridge returned an incomplete pairing response." }
+        val pairingId = body.optString("pairing_id")
+        require(pairingId.isNotBlank()) { "Bridge returned an incomplete pairing identity." }
         check(secrets.saveMT5BridgeAccountAppToken(profile, token)) { "Bridge app token could not be durably stored in encrypted preferences." }
-        return Pairing(code, body.optString("expires_at"))
+        return Pairing(pairingId, code, body.optString("expires_at"))
     }
 
     suspend fun state(): Snapshot {
@@ -408,19 +413,46 @@ class MT5RemoteBridgeClient(
         )
     }
 
-    suspend fun authorizeLiveSession(): String {
+    suspend fun liveChallenge(): LiveChallenge {
         require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
         require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
         val fresh = state()
-        val policy = modeArmingPolicy ?: throw IllegalStateException("MODE_POLICY_NOT_CONFIGURED: LIVE is blocked.")
         require(fresh.hostProfile == HostProfile.PERSISTENT) { "MODE_ARMING_BLOCKED: EPHEMERAL_HOST_LIVE_BLOCKED" }
-        val decision = policy.liveDecision(modeIdentity(fresh), hostProfile = fresh.hostProfile)
-        require(decision.allowed) { "MODE_ARMING_BLOCKED: " + decision.reason }
         val reason = gateFailure(fresh, requireLiveAuthorization = false)
         require(reason == null) { reason ?: "LIVE profile is not ready." }
-        val result = request("POST", "/v1/app/live-authorization", JSONObject().put("confirm_live_trading", true))
-        return result.optString("expires_at")
+        val result = request("POST", "/v1/app/live-challenge")
+        val pairingId = result.optString("pairing_id")
+        val challengeId = result.optString("challenge_id")
+        val phrase = result.optString("typed_confirmation")
+        val expiresAt = result.optString("expires_at")
+        require(pairingId.isNotBlank() && challengeId.isNotBlank() && phrase.isNotBlank() && expiresAt.isNotBlank()) {
+            "Bridge returned an incomplete LIVE challenge."
+        }
+        return LiveChallenge(pairingId, challengeId, phrase, expiresAt)
     }
+
+    suspend fun authorizeLiveSession(
+        challengeId: String,
+        typedConfirmation: String,
+        stepUpAssertion: String
+    ): String {
+        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
+        require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
+        require(challengeId.isNotBlank() && typedConfirmation.isNotBlank() && stepUpAssertion.length >= 100) {
+            "LIVE authorization requires the server challenge, exact typed confirmation, and signed reauthentication."
+        }
+        val result = request("POST", "/v1/app/live-authorization", JSONObject()
+            .put("challenge_id", challengeId)
+            .put("typed_confirmation", typedConfirmation)
+            .put("step_up_assertion", stepUpAssertion))
+        return result.optString("expires_at").takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Bridge returned no LIVE lease expiry.")
+    }
+
+    /** Boolean-only LIVE authorization is intentionally unavailable. */
+    @Deprecated("Use liveChallenge() and authorizeLiveSession(challengeId, typedConfirmation, stepUpAssertion)")
+    suspend fun authorizeLiveSession(): String =
+        throw IllegalStateException("LIVE_CHALLENGE_REQUIRED: obtain a fresh server challenge and signed reauthentication.")
 
     suspend fun clearLiveAuthorization() {
         if (accountMode == "LIVE" && hasPairing()) request("DELETE", "/v1/app/live-authorization")
@@ -456,11 +488,12 @@ class MT5RemoteBridgeClient(
         }
     }
 
-    private suspend fun request(method: String, path: String, body: JSONObject? = null, ownerBootstrapCode: String? = null): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun request(method: String, path: String, body: JSONObject? = null, ownerBootstrapCode: String? = null, managementIdentityAssertion: String? = null): JSONObject = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException(if (!managedConfigured()) "CONFIGURATION_REQUIRED" else "Managed service URL is invalid; HTTPS is required.")
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
         addOptionalAccessHeaders(builder)
         addOwnerBootstrapHeader(builder, method, path, ownerBootstrapCode)
+        managementIdentityAssertion?.let { builder.header("X-Management-Identity", it) }
         secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->

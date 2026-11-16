@@ -233,6 +233,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var showPairingRevokeDialog by remember(mt5Profile) { mutableStateOf(false) }
     var showLiveAuthorizationDialog by remember(mt5Profile) { mutableStateOf(false) }
     var liveTypedConfirmation by remember(mt5Profile) { mutableStateOf("") }
+    var liveReauthenticationPassword by remember(mt5Profile) { mutableStateOf("") }
     var liveMinimumLot by remember(mt5Profile) { mutableStateOf("") }
     var derivLiveTypedConfirmation by remember { mutableStateOf("") }
     var derivMinimumStake by remember { mutableStateOf("") }
@@ -1955,6 +1956,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Requires a DEMO PASS for the same broker and login, a fresh LIVE EA heartbeat, explicit re-authentication, typed confirmation and clear daily-risk and risk-cap evidence from the bridge. Lease: 15 minutes. The first minimum lot must be read from the broker's contract specification.")
                     OutlinedTextField(value = liveTypedConfirmation, onValueChange = { liveTypedConfirmation = it }, label = { Text("Type ARM LIVE " + selectedMt5Broker + " " + secrets.getManagedMT5AccountLogin(mt5Profile)) }, singleLine = true)
+                    OutlinedTextField(value = liveReauthenticationPassword, onValueChange = { liveReauthenticationPassword = it }, label = { Text("Management password (reauthentication)") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
                     OutlinedTextField(value = liveMinimumLot, onValueChange = { liveMinimumLot = it }, label = { Text("Broker minimum lot from symbol specification") }, singleLine = true)
                 }
             },
@@ -2004,10 +2006,27 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 hostProfile = snapshot.hostProfile
                             )).getOrElse { throw it }
                             try {
-                                val expiry = requireNotNull(bridge).authorizeLiveSession()
+                                val liveChallenge = requireNotNull(bridge).liveChallenge()
+                                require(liveTypedConfirmation == liveChallenge.typedConfirmation) {
+                                    "The typed confirmation does not match the fresh server challenge."
+                                }
+                                val stepUp = viewModel.issueLiveStepUpAssertion(
+                                    liveReauthenticationPassword,
+                                    liveChallenge.pairingId,
+                                    liveChallenge.challengeId,
+                                    liveTypedConfirmation,
+                                    selectedMt5Broker,
+                                    snapshot.actualLogin,
+                                    snapshot.actualServer,
+                                    secrets.getManagedMT5CredentialGeneration(mt5Profile)
+                                )
+                                val expiry = requireNotNull(bridge).authorizeLiveSession(
+                                    liveChallenge.challengeId, liveTypedConfirmation, stepUp
+                                )
                                 liveAuthorizationExpiry = expiry
                                 mt5Snapshot = bridge.state()
                                 liveTypedConfirmation = ""
+                                liveReauthenticationPassword = ""
                                 liveMinimumLot = ""
                                 message = "MT5 LIVE local lease armed until " + lease.expiresAtMs + " and the bridge lease until " + expiry + "."
                             } catch (error: Exception) {

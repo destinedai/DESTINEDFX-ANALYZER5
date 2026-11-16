@@ -61,7 +61,9 @@ NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
 NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
-LIVE_STEP_UP_SECRET=os.getenv('LIVE_STEP_UP_SECRET','').strip()
+MANAGEMENT_STEP_UP_PUBLIC_KEY=os.getenv('MANAGEMENT_STEP_UP_PUBLIC_KEY','').strip()
+MANAGEMENT_STEP_UP_ISSUER=os.getenv('MANAGEMENT_STEP_UP_ISSUER','destinedfx-management').strip()
+MANAGEMENT_STEP_UP_AUDIENCE=os.getenv('MANAGEMENT_STEP_UP_AUDIENCE','destinedfx-bridge').strip()
 LINUX_HOST_MODE=os.getenv('BRIDGE_HOST_MODE','').strip().lower()=='linux-host'
 HOST_AGENT_URL=os.getenv('HOST_AGENT_URL','http://127.0.0.1:8787/health/ready').strip()
 ANALYSIS_CLOCK_SKEW_MS=max(0,int(os.getenv('ANALYSIS_CLOCK_SKEW_SECONDS','120')))*1000
@@ -153,13 +155,13 @@ def db():
     c=sqlite3.connect(DB_PATH, timeout=10, isolation_level=None)
     c.row_factory=sqlite3.Row
     c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA foreign_keys=ON'); c.execute('PRAGMA busy_timeout=10000')
-    c.executescript('''CREATE TABLE IF NOT EXISTS pairings(id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, app_hash TEXT NOT NULL, terminal_hash TEXT, expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, terminal_id TEXT, instance_id TEXT, account TEXT, heartbeat TEXT, created REAL NOT NULL, live_authorized_until REAL, live_authorized_login TEXT, live_authorized_server TEXT, heartbeat_seq INTEGER NOT NULL DEFAULT 0);
+    c.executescript('''        CREATE TABLE IF NOT EXISTS pairings(id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, app_hash TEXT NOT NULL, terminal_hash TEXT, expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, terminal_id TEXT, instance_id TEXT, account TEXT, heartbeat TEXT, created REAL NOT NULL, live_authorized_until REAL, live_authorized_login TEXT, live_authorized_server TEXT, heartbeat_seq INTEGER NOT NULL DEFAULT 0, owner_subject TEXT, owner_tenant TEXT);
     CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id), request_id TEXT NOT NULL, action TEXT NOT NULL, config TEXT NOT NULL, ack TEXT, expires_at REAL, request_config TEXT, host_generation TEXT, UNIQUE(pairing_id,request_id));
     CREATE TABLE IF NOT EXISTS close_all_confirmations(token_hash TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, account_mode TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS command_items(command_id INTEGER NOT NULL REFERENCES commands(id) ON DELETE CASCADE, ticket TEXT NOT NULL, target_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_volume REAL NOT NULL DEFAULT 0.0, remaining_volume REAL, ack_status TEXT, message TEXT NOT NULL DEFAULT '', operational_status TEXT NOT NULL DEFAULT 'PENDING', ack_heartbeat_seq INTEGER, PRIMARY KEY(command_id,ticket));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS request_rate(token_hash TEXT PRIMARY KEY, window INTEGER NOT NULL, count INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED', broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN');
+    CREATE TABLE IF NOT EXISTS managed_accounts(pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE, login_enc TEXT NOT NULL, server_enc TEXT NOT NULL, password_enc TEXT NOT NULL, access_type TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, account_mode TEXT NOT NULL DEFAULT 'UNVERIFIED', broker_brand TEXT NOT NULL DEFAULT 'UNKNOWN', credential_generation TEXT NOT NULL DEFAULT '');
     CREATE TABLE IF NOT EXISTS worker_identities(worker_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'ACTIVE', created REAL NOT NULL, expires_at REAL NOT NULL, last_seen REAL, generation INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE IF NOT EXISTS worker_jobs(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), kind TEXT NOT NULL DEFAULT 'PROVISION', status TEXT NOT NULL, worker_id TEXT, lease_until REAL, lease_started REAL, stale_since REAL, recovery_deadline REAL, error_code TEXT, error_message TEXT, created REAL NOT NULL, requested_account_mode TEXT);
     CREATE TABLE IF NOT EXISTS worker_attestations(id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id), worker_id TEXT NOT NULL, slot_id TEXT NOT NULL, linux_uid INTEGER NOT NULL, wine_prefix TEXT NOT NULL, terminal_path TEXT NOT NULL, process_identity TEXT NOT NULL, ea_identity TEXT NOT NULL, broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, account_mode TEXT NOT NULL, host_generation TEXT NOT NULL, issued_at REAL NOT NULL, expires_at REAL NOT NULL, nonce TEXT NOT NULL UNIQUE, signature TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, job_id TEXT REFERENCES worker_jobs(id) ON DELETE SET NULL);
@@ -180,14 +182,26 @@ def db():
         id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE,
         challenge_hash TEXT NOT NULL UNIQUE, demo_acceptance_id TEXT NOT NULL REFERENCES demo_acceptances(id),
         broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, company TEXT NOT NULL,
-        worker_id TEXT NOT NULL, worker_generation INTEGER NOT NULL, host_generation TEXT NOT NULL,
+        worker_id TEXT NOT NULL, worker_generation INTEGER NOT NULL, host_generation TEXT NOT NULL, credential_generation TEXT NOT NULL DEFAULT '',
         expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
     );''')
+    c.execute('''CREATE TABLE IF NOT EXISTS live_profile_links(
+        pairing_id TEXT PRIMARY KEY REFERENCES pairings(id) ON DELETE CASCADE,
+        demo_acceptance_id TEXT NOT NULL REFERENCES demo_acceptances(id),
+        broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL,
+        credential_generation TEXT NOT NULL, created_at REAL NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
+    )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_app_hash ON pairings(app_hash)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_terminal_hash ON pairings(terminal_hash)')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
     for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT'),('heartbeat_seq','INTEGER NOT NULL DEFAULT 0')):
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
+    if 'owner_subject' not in pairing_columns: c.execute("ALTER TABLE pairings ADD COLUMN owner_subject TEXT")
+    if 'owner_tenant' not in pairing_columns: c.execute("ALTER TABLE pairings ADD COLUMN owner_tenant TEXT")
+    managed_columns={r['name'] for r in c.execute('PRAGMA table_info(managed_accounts)').fetchall()}
+    if 'credential_generation' not in managed_columns: c.execute("ALTER TABLE managed_accounts ADD COLUMN credential_generation TEXT NOT NULL DEFAULT ''")
+    challenge_columns={r['name'] for r in c.execute('PRAGMA table_info(live_challenges)').fetchall()}
+    if 'credential_generation' not in challenge_columns: c.execute("ALTER TABLE live_challenges ADD COLUMN credential_generation TEXT NOT NULL DEFAULT ''")
     command_columns={r['name'] for r in c.execute('PRAGMA table_info(commands)').fetchall()}
     for name, definition in (('expires_at','REAL'),('request_config','TEXT'),('host_generation','TEXT')):
         if name not in command_columns: c.execute(f'ALTER TABLE commands ADD COLUMN {name} {definition}')
@@ -361,6 +375,7 @@ class ManagedAccount(BaseModel):
     commission_per_lot:float=Field(default=0.0,ge=0,allow_inf_nan=False)
     cost_evidence:str=Field(default='',max_length=512)
     isolation_attestation_id:str|None=Field(default=None,min_length=1,max_length=128)
+    credential_generation:str=Field(default='',min_length=0,max_length=128)
 class WorkerClaim(BaseModel):
     model_config=ConfigDict(extra='forbid')
     worker_id:str=Field(min_length=1,max_length=128)
@@ -410,10 +425,14 @@ class LiveAuthorization(BaseModel):
     model_config=ConfigDict(extra='forbid')
     challenge_id:str=Field(min_length=1,max_length=128)
     typed_confirmation:str=Field(min_length=8,max_length=256)
-    step_up_proof:str=Field(pattern=r'^[0-9a-f]{64}$')
+    step_up_assertion:str=Field(min_length=100,max_length=8192)
 class DemoAcceptanceRequest(BaseModel):
     model_config=ConfigDict(extra='forbid')
     confirm_demo:StrictBool
+class LiveProfileAssociationRequest(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    demo_acceptance_id:str=Field(min_length=1,max_length=128)
+    confirm_association:StrictBool
 class CloseAllConfirmation(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_close_all:StrictBool
 class AnalysisCandle(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -903,11 +922,39 @@ def live_authorization_valid(p, managed, beat, now_epoch=None):
         and account.get('account_mode') == 'LIVE'
     )
 
-def _step_up_signature(challenge_id, pairing_id, typed_confirmation):
-    if not LIVE_STEP_UP_SECRET:
-        return None
-    raw='|'.join((challenge_id,pairing_id,typed_confirmation))
-    return hmac.new(LIVE_STEP_UP_SECRET.encode(),raw.encode(),hashlib.sha256).hexdigest()
+def _management_step_up_claims(assertion):
+    if not MANAGEMENT_STEP_UP_PUBLIC_KEY:
+        raise HTTPException(503,detail={'code':'STEP_UP_NOT_CONFIGURED','message':'Management step-up verification is not configured'})
+    try:
+        claims=jwt.decode(
+            assertion, MANAGEMENT_STEP_UP_PUBLIC_KEY, algorithms=['EdDSA'],
+            audience=MANAGEMENT_STEP_UP_AUDIENCE, issuer=MANAGEMENT_STEP_UP_ISSUER,
+            options={'require':['iss','aud','sub','tenant_id','sid','jti','iat','exp','pairing_id','challenge_id',
+                                'typed_confirmation','broker_brand','login','server','account_mode',
+                                'credential_generation']},
+            leeway=10,
+        )
+    except Exception as exc:
+        raise HTTPException(401,detail={'code':'STEP_UP_INVALID','message':'Signed management step-up assertion is invalid'}) from exc
+    if not isinstance(claims,dict) or claims['account_mode']!='LIVE' or claims['tenant_id'] != claims['sub']:
+        raise HTTPException(401,detail={'code':'STEP_UP_INVALID','message':'Signed management step-up assertion is invalid'})
+    return claims
+
+def _management_identity_claims(assertion):
+    if not MANAGEMENT_STEP_UP_PUBLIC_KEY:
+        raise HTTPException(503,detail={'code':'MANAGEMENT_IDENTITY_NOT_CONFIGURED','message':'Management identity verification is not configured'})
+    try:
+        claims=jwt.decode(
+            assertion, MANAGEMENT_STEP_UP_PUBLIC_KEY, algorithms=['EdDSA'],
+            audience=MANAGEMENT_STEP_UP_AUDIENCE, issuer=MANAGEMENT_STEP_UP_ISSUER,
+            options={'require':['iss','aud','sub','tenant_id','sid','jti','iat','exp','purpose']},
+            leeway=10,
+        )
+    except Exception as exc:
+        raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_INVALID','message':'Signed management identity assertion is invalid'}) from exc
+    if claims.get('purpose') != 'bridge_pairing' or claims.get('tenant_id') != claims.get('sub'):
+        raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_INVALID','message':'Signed management identity assertion is invalid'})
+    return claims
 
 def _current_ready_context(p, expected_mode):
     with tx() as c:
@@ -1053,9 +1100,17 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     elif not _isolation_evidence_verified():
         isolation_pending=True
     with tx(True) as c:
-        if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone(): raise HTTPException(409,'Managed account already exists for this pairing')
+        # A pairing may transition from DEMO to LIVE only after the DEMO acceptance
+        # is recorded; the active managed profile remains the single current execution
+        # profile while the acceptance/link preserve the prior profile identity.
         pairing_code=secrets.token_urlsafe(18); job_id=str(uuid.uuid4()); t=time.time()
-        c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence) VALUES(?,?,?,?,?,0,?,?,?,?,?)',(p['id'],fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode or 'UNVERIFIED',brand,x.cost_model,float(x.commission_per_lot),evidence))
+        values=(fernet.encrypt(x.login.encode()).decode(),fernet.encrypt(x.server.encode()).decode(),fernet.encrypt(x.password.encode()).decode(),x.access_type,x.account_mode or 'UNVERIFIED',brand,x.cost_model,float(x.commission_per_lot),evidence,x.credential_generation,p['id'])
+        if c.execute('SELECT 1 FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone():
+            c.execute('''UPDATE managed_accounts SET login_enc=?,server_enc=?,password_enc=?,access_type=?,
+                         revoked=0,account_mode=?,broker_brand=?,cost_model=?,commission_per_lot=?,
+                         cost_evidence=?,credential_generation=? WHERE pairing_id=?''',values)
+        else:
+            c.execute('INSERT INTO managed_accounts(pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,cost_model,commission_per_lot,cost_evidence,credential_generation) VALUES(?,?,?,?,?,0,?,?,?,?,?,?)',(p['id'],*values[:-1]))
         c.execute('UPDATE pairings SET code_hash=?,expires=?,consumed=0,terminal_hash=NULL,terminal_id=NULL,instance_id=NULL,account=NULL,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(pairing_code),t+CONNECT_JOB_TTL_SECONDS,p['id']))
         c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created,requested_account_mode) VALUES(?,?,'PROVISION',?,?,?)",
                   (job_id, p['id'], 'QUEUED' if attestation or _isolation_evidence_verified() else 'AWAITING_ATTESTATION', t, x.account_mode))
@@ -1362,11 +1417,12 @@ def readiness():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
     return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
 @app.post('/v1/pairings',status_code=201)
-def create_pair(request:Request, x_owner_bootstrap:str|None=Header(default=None)):
+def create_pair(request:Request, x_owner_bootstrap:str|None=Header(default=None), x_management_identity:str|None=Header(default=None)):
     require_durable_execution()
     # On a public port pairing creation is gated by the owner's one-time 10-minute code.
     if PUBLIC_EXPOSURE and not consume_owner_bootstrap_code(x_owner_bootstrap or ''):
         raise HTTPException(401,'Owner bootstrap code required')
+    identity=_management_identity_claims(x_management_identity) if x_management_identity else None
     ip=client_ip(request); t=time.time()
     with tx(True) as c:
         row=c.execute('SELECT * FROM rate WHERE ip=?',(ip,)).fetchone()
@@ -1374,7 +1430,7 @@ def create_pair(request:Request, x_owner_bootstrap:str|None=Header(default=None)
         if row and t-row['window']<60: c.execute('UPDATE rate SET count=count+1 WHERE ip=?',(ip,))
         else: c.execute('INSERT OR REPLACE INTO rate VALUES(?,?,1)',(ip,t))
         pairing_id=str(uuid.uuid4()); code=secrets.token_urlsafe(12); app_token=token(); exp=t+600
-        c.execute('INSERT INTO pairings(id,code_hash,app_hash,expires,created) VALUES(?,?,?,?,?)',(pairing_id,digest(code),digest(app_token),exp,t))
+        c.execute('INSERT INTO pairings(id,code_hash,app_hash,expires,created,owner_subject,owner_tenant) VALUES(?,?,?,?,?,?,?)',(pairing_id,digest(code),digest(app_token),exp,t,identity['sub'] if identity else None,identity.get('tenant_id') if identity else None))
     return {'pairing_id':pairing_id,'pairing_code':code,'app_token':app_token,'expires_at':iso(datetime.fromtimestamp(exp,timezone.utc))}
 @app.post('/v1/terminal/claim')
 def claim(x:Claim):
@@ -1629,6 +1685,30 @@ def accept_demo(x:DemoAcceptanceRequest,authorization:str|None=Header(default=No
              now_epoch,expires))
     return {'accepted':True,'acceptance_id':acceptance_id,'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc))}
 
+@app.post('/v1/app/live-profile-association')
+def associate_live_profile(x:LiveProfileAssociationRequest, authorization:str|None=Header(default=None)):
+    require_durable_execution()
+    p=auth(authorization,'app')
+    if not x.confirm_association:
+        raise HTTPException(422,'Explicit DEMO-to-LIVE association is required')
+    managed,job,worker,beat=_current_ready_context(p,'LIVE')
+    with tx() as c:
+        acceptance=c.execute('SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=? AND revoked=0 AND expires_at>?',(x.demo_acceptance_id,p['id'],time.time())).fetchone()
+    if not acceptance or acceptance['broker_brand'] != managed['broker_brand']:
+        raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_INVALID','message':'The DEMO acceptance is not valid for this pairing and broker'})
+    if not managed['credential_generation']:
+        raise HTTPException(409,detail={'code':'CREDENTIAL_GENERATION_REQUIRED','message':'The LIVE credential generation must be recorded before association'})
+    with tx(True) as c:
+        c.execute('''INSERT INTO live_profile_links
+            (pairing_id,demo_acceptance_id,broker_brand,login,server,credential_generation,created_at,revoked)
+            VALUES(?,?,?,?,?,?,?,0)
+            ON CONFLICT(pairing_id) DO UPDATE SET demo_acceptance_id=excluded.demo_acceptance_id,
+              broker_brand=excluded.broker_brand,login=excluded.login,server=excluded.server,
+              credential_generation=excluded.credential_generation,created_at=excluded.created_at,revoked=0''',
+            (p['id'],x.demo_acceptance_id,managed['broker_brand'],beat['account']['login'],
+             beat['account']['server'],managed['credential_generation'],time.time()))
+    return {'associated':True,'demo_acceptance_id':x.demo_acceptance_id}
+
 @app.get('/v1/app/demo-acceptance')
 def demo_acceptance(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app')
@@ -1656,7 +1736,8 @@ def create_live_challenge(authorization:str|None=Header(default=None)):
     if managed['access_type']!='MASTER':
         raise HTTPException(409,'LIVE authorization requires a MASTER profile')
     with tx() as c:
-        acceptance=c.execute('SELECT * FROM demo_acceptances WHERE pairing_id=? AND revoked=0 AND expires_at>? ORDER BY accepted_at DESC LIMIT 1',(p['id'],time.time())).fetchone()
+        link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
+        acceptance=c.execute('SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=? AND revoked=0 AND expires_at>?',(link['demo_acceptance_id'],p['id'],time.time())).fetchone() if link else None
     if not acceptance:
         raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_REQUIRED','message':'A fresh server-validated DEMO acceptance is required before LIVE authorization'})
     challenge_id=secrets.token_urlsafe(24); now_epoch=time.time(); expires=now_epoch+120
@@ -1664,12 +1745,12 @@ def create_live_challenge(authorization:str|None=Header(default=None)):
         c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
         c.execute('''INSERT INTO live_challenges
             (id,pairing_id,challenge_hash,demo_acceptance_id,broker_brand,login,server,company,
-             worker_id,worker_generation,host_generation,expires_at,used,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)''',
+             worker_id,worker_generation,host_generation,credential_generation,expires_at,used,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)''',
             (challenge_id,p['id'],digest(challenge_id),acceptance['id'],managed['broker_brand'],
              beat['account']['login'],beat['account']['server'],beat['account']['company'],
-             job['worker_id'],worker['generation'],HOST_GENERATION,expires,now_epoch))
-    return {'challenge_id':challenge_id,'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc)),
+             job['worker_id'],worker['generation'],HOST_GENERATION,managed['credential_generation'] or '',expires,now_epoch))
+    return {'pairing_id':p['id'],'challenge_id':challenge_id,'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc)),
             'typed_confirmation':f"ARM LIVE {managed['broker_brand']} {beat['account']['login']}"}
 
 @app.post('/v1/app/live-authorization')
@@ -1678,21 +1759,43 @@ def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=Non
         raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE authorization is unavailable on ephemeral hosts'})
     require_durable_execution()
     p=auth(authorization,'app')
-    if not LIVE_STEP_UP_SECRET:
-        raise HTTPException(503,detail={'code':'STEP_UP_NOT_CONFIGURED','message':'A server-verifiable step-up authority is required'})
-    typed=f'ARM LIVE '
     with tx(True) as c:
         challenge=c.execute('SELECT * FROM live_challenges WHERE id=? AND challenge_hash=? AND pairing_id=?',
                             (x.challenge_id,digest(x.challenge_id),p['id'])).fetchone()
     if not challenge or challenge['used'] or challenge['expires_at']<=time.time():
         raise HTTPException(409,detail={'code':'LIVE_CHALLENGE_INVALID','message':'LIVE authorization challenge is invalid, expired or already used'})
+    claims=_management_step_up_claims(x.step_up_assertion)
+    if not p['owner_subject'] or claims['sub'] != p['owner_subject'] or claims['tenant_id'] != p['owner_tenant']:
+        raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'The management identity is not bound to this pairing'})
+    if any((
+        claims['pairing_id'] != p['id'],
+        claims['challenge_id'] != challenge['id'],
+        claims['typed_confirmation'] != x.typed_confirmation,
+        claims['broker_brand'] != challenge['broker_brand'],
+        claims['login'] != challenge['login'],
+        claims['server'] != challenge['server'],
+        claims['account_mode'] != 'LIVE',
+        claims['credential_generation'] != challenge['credential_generation'],
+    )):
+        with tx(True) as c:
+            c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
+        raise HTTPException(409,detail={'code':'LIVE_CONTEXT_CHANGED','message':'The authorization context changed; obtain a new challenge'})
     managed,job,worker,beat=_current_ready_context(p,'LIVE')
     expected=f'ARM LIVE {managed["broker_brand"]} {beat["account"]["login"]}'
     if x.typed_confirmation != expected:
         raise HTTPException(422,'Typed LIVE confirmation does not match the current account')
-    expected_proof=_step_up_signature(x.challenge_id,p['id'],x.typed_confirmation)
-    if not expected_proof or not hmac.compare_digest(x.step_up_proof,expected_proof):
-        raise HTTPException(401,detail={'code':'STEP_UP_INVALID','message':'Server-verifiable step-up proof is invalid'})
+    if any((
+        managed['credential_generation'] != challenge['credential_generation'],
+        job['worker_id'] != challenge['worker_id'],
+        worker['generation'] != challenge['worker_generation'],
+        HOST_GENERATION != challenge['host_generation'],
+        beat['account'].get('login') != challenge['login'],
+        beat['account'].get('server') != challenge['server'],
+        beat['account'].get('company') != challenge['company'],
+    )):
+        with tx(True) as c:
+            c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
+        raise HTTPException(409,detail={'code':'LIVE_CONTEXT_CHANGED','message':'The authorization context changed; obtain a new challenge'})
     with tx(True) as c:
         acceptance=c.execute('SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=? AND revoked=0 AND expires_at>?',(challenge['demo_acceptance_id'],p['id'],time.time())).fetchone()
         if not acceptance:

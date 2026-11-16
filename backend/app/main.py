@@ -1,4 +1,6 @@
 import hashlib
+import uuid
+import jwt
 import logging
 import re
 import secrets
@@ -15,6 +17,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from . import models
 from .config import get_settings
 from .db import SessionLocal, engine
@@ -156,6 +160,104 @@ def logout(request: Request, user: models.User = Depends(current_user), authoriz
 @app.get("/api/v1/auth/me", response_model=UserOut)
 def me(user: models.User = Depends(current_user)):
     return user
+
+
+@app.post("/api/v1/auth/live-step-up")
+def live_step_up(
+    body: dict,
+    request: Request,
+    authorization: str = Header(...),
+    user: models.User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Issue a short-lived, single-purpose assertion after password reauthentication.
+
+    The private key never leaves the management backend. The Bridge verifies the
+    resulting EdDSA JWT against its separately configured public key.
+    """
+    password = body.get("password")
+    required = ("pairing_id", "challenge_id", "typed_confirmation", "broker_brand",
+                "login", "server", "account_mode", "credential_generation")
+    if not isinstance(password, str) or not password:
+        raise HTTPException(422, "Password reauthentication is required")
+    if any(not isinstance(body.get(key), str) or not body[key].strip() for key in required):
+        raise HTTPException(422, "Complete LIVE step-up context is required")
+    try:
+        valid = hasher.verify(user.password_hash, password)
+    except VerifyMismatchError:
+        valid = False
+    if not valid:
+        audit(db, request, user.id, "auth.live_step_up_failed")
+        db.commit()
+        raise HTTPException(401, "Reauthentication failed")
+    pem = settings.step_up_private_key_pem.get_secret_value().strip()
+    if not pem:
+        raise HTTPException(503, "LIVE step-up signing is not configured")
+    try:
+        key = serialization.load_pem_private_key(pem.encode(), password=None)
+        if not isinstance(key, Ed25519PrivateKey):
+            raise ValueError("unsupported signing key")
+    except Exception as exc:
+        raise HTTPException(503, "LIVE step-up signing is not configured") from exc
+    issued = int(time.time())
+    claims = {
+        "iss": settings.step_up_issuer,
+        "aud": settings.step_up_audience,
+        "sub": str(user.id),
+        "tenant_id": str(user.id),
+        "sid": token_hash(authorization[7:]),
+        "jti": uuid.uuid4().hex,
+        "iat": issued,
+        "exp": issued + 120,
+        "pairing_id": body["pairing_id"].strip(),
+        "challenge_id": body["challenge_id"].strip(),
+        "typed_confirmation": body["typed_confirmation"],
+        "broker_brand": body["broker_brand"].strip().upper(),
+        "login": body["login"].strip(),
+        "server": body["server"].strip(),
+        "account_mode": body["account_mode"].strip().upper(),
+        "credential_generation": body["credential_generation"].strip(),
+    }
+    assertion = jwt.encode(claims, key, algorithm="EdDSA")
+    audit(db, request, user.id, "auth.live_step_up_issued",
+          f"pairing={claims['pairing_id']} challenge={claims['challenge_id']}")
+    db.commit()
+    return {"assertion": assertion, "expires_at": datetime.fromtimestamp(claims["exp"], timezone.utc)}
+
+
+@app.post("/api/v1/auth/bridge-identity")
+def bridge_identity(
+    request: Request,
+    authorization: str = Header(...),
+    user: models.User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a short-lived identity assertion used only to bind a Bridge pairing."""
+    pem = settings.step_up_private_key_pem.get_secret_value().strip()
+    if not pem:
+        raise HTTPException(503, "LIVE step-up signing is not configured")
+    try:
+        key = serialization.load_pem_private_key(pem.encode(), password=None)
+        if not isinstance(key, Ed25519PrivateKey):
+            raise ValueError("unsupported signing key")
+    except Exception as exc:
+        raise HTTPException(503, "LIVE step-up signing is not configured") from exc
+    issued = int(time.time())
+    claims = {
+        "iss": settings.step_up_issuer,
+        "aud": settings.step_up_audience,
+        "sub": str(user.id),
+        "tenant_id": str(user.id),
+        "sid": token_hash(authorization[7:]),
+        "jti": uuid.uuid4().hex,
+        "iat": issued,
+        "exp": issued + 120,
+        "purpose": "bridge_pairing",
+    }
+    assertion = jwt.encode(claims, key, algorithm="EdDSA")
+    audit(db, request, user.id, "auth.bridge_identity_issued")
+    db.commit()
+    return {"assertion": assertion, "expires_at": datetime.fromtimestamp(claims["exp"], timezone.utc)}
 
 
 @app.get("/api/v1/preferences")

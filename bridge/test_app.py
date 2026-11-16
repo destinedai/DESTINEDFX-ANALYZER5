@@ -1,5 +1,8 @@
 import io, os, time, uuid
+import jwt
 from concurrent.futures import ThreadPoolExecutor
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 from pydantic import ValidationError
 os.environ['ALLOW_LOOPBACK_HTTP']='true'
@@ -241,20 +244,28 @@ def test_open_position_with_unavailable_commission_is_accepted_as_null():
 from cryptography.fernet import Fernet
 
 def managed_env(monkeypatch):
+    monkeypatch.setattr(app,'HOST_PROFILE','PERSISTENT')
     with app.tx(True) as c:
         c.execute('DELETE FROM worker_attestations')
         c.execute('DELETE FROM worker_jobs')
         c.execute('DELETE FROM worker_identities')
         c.execute('DELETE FROM managed_accounts')
         c.execute('DELETE FROM live_challenges')
+        c.execute('DELETE FROM live_profile_links')
         c.execute('DELETE FROM demo_acceptances')
         c.execute('DELETE FROM rate')
+        c.execute('DELETE FROM ip_guard')
+        c.execute('DELETE FROM request_rate')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-' + '2026-very-long')
     monkeypatch.setenv('ALLOW_LEGACY_WORKER_TOKEN', 'true')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.destinedfx.internal')
-    monkeypatch.setenv('LIVE_STEP_UP_SECRET','step-up-fixture-secret')
-    app.LIVE_STEP_UP_SECRET='step-up-fixture-secret'
+    key=Ed25519PrivateKey.generate()
+    app.TEST_STEP_UP_PRIVATE_KEY=key
+    app.MANAGEMENT_STEP_UP_PUBLIC_KEY=key.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    app.MANAGEMENT_STEP_UP_ISSUER='destinedfx-management'
+    app.MANAGEMENT_STEP_UP_AUDIENCE='destinedfx-bridge'
     monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: True)
 
 def test_managed_registration_waits_for_verified_per_user_isolation(monkeypatch):
@@ -483,7 +494,7 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
     state=client.get('/v1/app/state',headers=ah).json()['managed_execution']
     assert state['worker_status']=='LEASED' and state['status']!='READY'
-    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==409
+    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==202
 
 def test_worker_account_mode_unverified_failure_is_reported_safely(monkeypatch):
     managed_env(monkeypatch)
@@ -936,13 +947,29 @@ def test_revocation_failure_is_reported_and_queued_provision_is_not_mislabeled(m
 def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker-Live'):
     managed_env(monkeypatch)
     p,ah=managed_pair()
-    body={'login':login,'server':server,'password':'live-test-password','access_type':access_type,'account_mode':'LIVE','broker_brand':'FBS','consent':True}
-    assert client.post('/v1/app/managed-account',headers=ah,json=body).status_code==202
+    with app.tx(True) as c:
+        c.execute('UPDATE pairings SET owner_subject=?,owner_tenant=? WHERE id=?',('fixture-user','fixture-user',p['pairing_id']))
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
-    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-live'}).json()
+    demo={'login':'600001','server':'Broker-Demo','password':'demo-test-password','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True,'credential_generation':'demo-generation'}
+    assert client.post('/v1/app/managed-account',headers=ah,json=demo).status_code==202
     with app.tx(True) as c:
         c.execute('INSERT OR IGNORE INTO worker_identities(worker_id,token_hash,created,expires_at) VALUES(?,?,?,?)',
                   ('worker-live',app.digest('fixture-worker-token'),time.time(),time.time()+3600))
+    demo_job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-live'}).json()
+    assert client.patch('/v1/worker/jobs/'+demo_job['job_id'],headers=wh,json={'worker_id':'worker-live','status':'AUTHENTICATING'}).status_code==200
+    demo_actual={'login':'600001','server':'Broker-Demo','company':'FBS Markets Inc.','currency':'USD','account_mode':'DEMO'}
+    demo_terminal=client.post('/v1/terminal/claim',json={'pairing_code':demo_job['pairing_code'],'terminal_instance_id':'demo-terminal','account':demo_actual})
+    assert demo_terminal.status_code==200
+    demo_th={'Authorization':'Bearer '+demo_terminal.json()['terminal_token']}
+    demo_hb={**heartbeat_data(account={**demo_actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100})}
+    assert client.post('/v1/terminal/heartbeat',headers=demo_th,json=demo_hb).status_code==200
+    assert client.get('/v1/worker/jobs/'+demo_job['job_id']+'/status?worker_id=worker-live',headers=wh).json()['status']=='READY'
+    acceptance=client.post('/v1/app/demo-acceptance',headers=ah,json={'confirm_demo':True})
+    assert acceptance.status_code==200, acceptance.text
+    acceptance_id=acceptance.json()['acceptance_id']
+    body={'login':login,'server':server,'password':'live-test-password','access_type':access_type,'account_mode':'LIVE','broker_brand':'FBS','consent':True,'credential_generation':'live-generation'}
+    assert client.post('/v1/app/managed-account',headers=ah,json=body).status_code==202
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-live'}).json()
     assert client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-live','status':'AUTHENTICATING'}).status_code==200
     actual={'login':login,'server':server,'company':'FBS Markets Inc.','currency':'USD','account_mode':'LIVE'}
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'live-terminal','account':actual})
@@ -952,24 +979,23 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     if access_type=='INVESTOR': hb['trade_allowed']=False
     assert client.post('/v1/terminal/heartbeat',headers=th,json=hb).status_code==200
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-live',headers=wh).json()['status']=='READY'
+    if access_type == 'MASTER':
+        assert client.post('/v1/app/live-profile-association',headers=ah,json={'demo_acceptance_id':acceptance_id,'confirm_association':True}).status_code==200
     return p,ah,wh,job,th,actual
 
 def authorize_live_fixture(p, ah, job, actual):
-    with app.tx(True) as c:
-        c.execute('''INSERT INTO demo_acceptances
-            (id,pairing_id,broker_brand,login,server,company,currency,account_mode,heartbeat_seq,
-             evidence_digest,accepted_at,expires_at,revoked)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)''',
-            (str(uuid.uuid4()),p['pairing_id'],'FBS',actual['login'],actual['server'],
-             actual['company'],actual['currency'],'DEMO',1,'fixture-evidence',
-             time.time(),time.time()+86400))
     challenge=client.post('/v1/app/live-challenge',headers=ah)
     assert challenge.status_code==200, challenge.text
     phrase=challenge.json()['typed_confirmation']
-    proof=app._step_up_signature(challenge.json()['challenge_id'],p['pairing_id'],phrase)
+    claims={'iss':'destinedfx-management','aud':'destinedfx-bridge','sub':'fixture-user','tenant_id':'fixture-user','sid':'fixture-session',
+            'jti':uuid.uuid4().hex,'iat':int(time.time()),'exp':int(time.time())+120,
+            'pairing_id':p['pairing_id'],'challenge_id':challenge.json()['challenge_id'],
+            'typed_confirmation':phrase,'broker_brand':'FBS','login':actual['login'],'server':actual['server'],
+            'account_mode':'LIVE','credential_generation':'live-generation'}
+    proof=jwt.encode(claims,app.TEST_STEP_UP_PRIVATE_KEY,algorithm='EdDSA')
     return client.post('/v1/app/live-authorization',headers=ah,json={
         'challenge_id':challenge.json()['challenge_id'],
-        'typed_confirmation':phrase,'step_up_proof':proof
+        'typed_confirmation':phrase,'step_up_assertion':proof
     })
 
 
@@ -977,6 +1003,38 @@ def test_live_master_requires_explicit_current_authorization(monkeypatch):
     p,ah,wh,job,th,actual=live_ready(monkeypatch)
     no_auth=client.post('/v1/app/commands',headers=ah,json=command_req('START'))
     assert no_auth.status_code==409
+    authorized=authorize_live_fixture(p,ah,job,actual)
+    assert authorized.status_code==200 and authorized.json()['duration_seconds']==900
+
+def test_live_authorization_rejects_unsigned_assertion_and_replay(monkeypatch):
+    p,ah,wh,job,th,actual=live_ready(monkeypatch)
+    challenge=client.post('/v1/app/live-challenge',headers=ah)
+    assert challenge.status_code==200
+    phrase=challenge.json()['typed_confirmation']
+    bad=client.post('/v1/app/live-authorization',headers=ah,json={
+        'challenge_id':challenge.json()['challenge_id'],
+        'typed_confirmation':phrase,
+        'step_up_assertion':'x' * 200,
+    })
+    assert bad.status_code==401
+    claims={'iss':'destinedfx-management','aud':'destinedfx-bridge','sub':'fixture-user','tenant_id':'fixture-user','sid':'fixture-session',
+            'jti':uuid.uuid4().hex,'iat':int(time.time()),'exp':int(time.time())+120,
+            'pairing_id':p['pairing_id'],'challenge_id':challenge.json()['challenge_id'],
+            'typed_confirmation':phrase,'broker_brand':'FBS','login':actual['login'],'server':actual['server'],
+            'account_mode':'LIVE','credential_generation':'live-generation'}
+    assertion=jwt.encode(claims,app.TEST_STEP_UP_PRIVATE_KEY,algorithm='EdDSA')
+    first=client.post('/v1/app/live-authorization',headers=ah,json={
+        'challenge_id':challenge.json()['challenge_id'],
+        'typed_confirmation':phrase,'step_up_assertion':assertion})
+    assert first.status_code==200
+    replay=client.post('/v1/app/live-authorization',headers=ah,json={
+        'challenge_id':challenge.json()['challenge_id'],
+        'typed_confirmation':phrase,'step_up_assertion':assertion})
+    assert replay.status_code==409
+
+
+def test_live_master_authorization_updates_state(monkeypatch):
+    p,ah,wh,job,th,actual=live_ready(monkeypatch)
     authorized=authorize_live_fixture(p,ah,job,actual)
     assert authorized.status_code==200 and authorized.json()['duration_seconds']==900
     state=client.get('/v1/app/state',headers=ah).json()
@@ -1587,8 +1645,8 @@ def test_host_profile_health_and_state_contract(monkeypatch):
 
 
 def test_ephemeral_blocks_live_auth_and_start_with_stable_reason(monkeypatch):
-    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
     p,ah,wh,job,th,actual=live_ready(monkeypatch)
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
     auth_response=client.post('/v1/app/live-challenge',headers=ah)
     assert auth_response.status_code==409
     assert auth_response.json()['detail']['code']=='EPHEMERAL_HOST_LIVE_BLOCKED'
