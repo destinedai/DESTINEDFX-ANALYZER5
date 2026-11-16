@@ -1952,7 +1952,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     showLiveAuthorizationDialog = false
                     scope.launch {
                         busy = true
-                        var serverLeaseIssued = false
+                        // Mark the mutation attempt before sending: the Bridge may commit the lease
+                        // while the HTTP response is lost. Catch must reconcile/revoke that ambiguous outcome.
+                        var serverAuthorizationAttempted = false
                         var liveIdentity: com.example.data.broker.ModeAccountIdentity? = null
                         val liveProfileKey = "${selectedMt5Broker}_LIVE"
                         val demoProfileKey = "${selectedMt5Broker}_DEMO"
@@ -2018,10 +2020,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 liveSnapshot.actualServer,
                                 secrets.getManagedMT5CredentialGeneration(liveProfileKey)
                             )
+                            serverAuthorizationAttempted = true
                             val expiry = liveClient.authorizeLiveSession(
                                 challenge.challengeId, liveTypedConfirmation, stepUp
                             )
-                            serverLeaseIssued = true
 
                             // Read the Bridge after authorization; never mirror a lease based only on HTTP 200.
                             val authorizedSnapshot = liveClient.state()
@@ -2071,7 +2073,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             message = "Bridge LIVE lease and matching in-memory account policy lease confirmed until $expiry. No order was sent."
                         } catch (error: Exception) {
                             var failureMessage = error.message ?: "LIVE authorization failed closed."
-                            if (serverLeaseIssued) {
+                            if (serverAuthorizationAttempted) {
                                 try {
                                     liveClient.clearLiveAuthorization()
                                     val revoked = liveClient.state()
