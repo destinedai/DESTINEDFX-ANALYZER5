@@ -64,7 +64,7 @@ class MarketDataSafetyTest {
         val existing = MarketTicker(
             symbol = "EUR/USD", price = 1.1, changePercent = 0.0, high = 0.0, low = 0.0,
             spread = 0.0002, bias = "NEUTRAL", confidence = 0, lastUpdateMillis = 99_000L,
-            isLive = true, source = "Deriv WebSocket", kind = "STREAM",
+            isLive = true, source = "Deriv public WebSocket", kind = "STREAM",
             bid = 1.0999, ask = 1.1001, hasRealSpread = true
         )
         val rejected = existing.copy(price = 1.2, source = "Unverified external chart snapshot", lastUpdateMillis = 100_000L)
@@ -73,7 +73,7 @@ class MarketDataSafetyTest {
         val staleCanonical = existing.copy(lastUpdateMillis = 80_000L)
         assertEquals(staleCanonical, canonicalTickerAfterRefresh(staleCanonical, rejected, accepted = false))
         assertEquals(QuoteFreshness.STALE, classifyQuoteFreshness(staleCanonical, 100_000L))
-        assertEquals("Deriv WebSocket", canonicalTickerAfterRefresh(existing, rejected, accepted = false)?.source)
+        assertEquals("Deriv public WebSocket", canonicalTickerAfterRefresh(existing, rejected, accepted = false)?.source)
         assertEquals(99_000L, canonicalTickerAfterRefresh(existing, rejected, accepted = false)?.lastUpdateMillis)
     }
 
@@ -169,60 +169,60 @@ class MarketDataSafetyTest {
 
     @Test
     fun arbiterRejectsPolledQuoteWhenStreamIsFresh() {
-        val existing = quote("Deriv WebSocket", "STREAM", 99_000L)
+        val existing = quote("Deriv public WebSocket", "STREAM", 99_000L)
         val incoming = quote("Unverified external polled quote", "POLLED_BIDASK", 100_000L)
         val result = QuoteArbiter.accept(
-            existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+            existing, incoming, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L
         )
         assertTrue(result is Decision.Reject)
     }
 
     @Test
     fun arbiterRejectsMalformedQuotesAndDoesNotSilentlyAcceptWrongSource() {
-        val existing = quote("Deriv WebSocket", "STREAM", 95_000L)
-        val invalid = quote("Deriv WebSocket", "STREAM", 100_000L, bid = -1.0, ask = 1.1)
-        assertTrue(QuoteArbiter.accept(existing, invalid, "Deriv WebSocket", 95_000L, 2_500L, 100_000L) is Decision.Reject)
+        val existing = quote("Deriv public WebSocket", "STREAM", 95_000L)
+        val invalid = quote("Deriv public WebSocket", "STREAM", 100_000L, bid = -1.0, ask = 1.1)
+        assertTrue(QuoteArbiter.accept(existing, invalid, "Deriv public WebSocket", 95_000L, 2_500L, 100_000L) is Decision.Reject)
 
-        val wrongSource = quote("Unverified external chart snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
+        val wrongSource = quote("Unverified external chart snapshot (External venue)", "POLLED_BIDASK", 100_000L)
         assertTrue(QuoteArbiter.accept(
-            existing, wrongSource, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+            existing, wrongSource, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
     }
 
     @Test
     fun arbiterAllowsSourceSwitchOnlyAfterActiveSourceIsSilent() {
-        val existing = quote("Deriv WebSocket", "POLLED_BIDASK", 95_000L)
-        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
+        val existing = quote("Deriv public WebSocket", "POLLED_BIDASK", 95_000L)
+        val incoming = quote("Unverified external chart snapshot (External venue)", "POLLED_BIDASK", 100_000L)
         assertTrue(QuoteArbiter.accept(
-            existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+            existing, incoming, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
         assertTrue(QuoteArbiter.accept(
-            existing, incoming, "Deriv WebSocket", 90_000L, 2_500L, 100_000L
+            existing, incoming, "Deriv public WebSocket", 90_000L, 2_500L, 100_000L
         ) is Decision.SwitchSource)
     }
 
 
     @Test
     fun freshStreamingProviderCannotBeReplacedByAnotherStream() {
-        val active = quote("Deriv WebSocket", "STREAM", 99_000L)
+        val active = quote("Deriv public WebSocket", "STREAM", 99_000L)
         val competing = quote("OANDA Pricing stream", "STREAM", 100_000L)
         assertTrue(QuoteArbiter.accept(
-            active, competing, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+            active, competing, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
 
         val staleActive = active.copy(lastUpdateMillis = 90_000L)
         assertTrue(QuoteArbiter.accept(
-            staleActive, competing, "Deriv WebSocket", 90_000L, 2_500L, 100_000L
+            staleActive, competing, "Deriv public WebSocket", 90_000L, 2_500L, 100_000L
         ) is Decision.Accept)
     }
 
     @Test
     fun arbiterRejectsFutureAndNonFiniteQuotesBeforeCanonicalization() {
-        val existing = quote("Deriv WebSocket", "STREAM", 99_000L)
-        val future = quote("Deriv WebSocket", "STREAM", 100_001L)
+        val existing = quote("Deriv public WebSocket", "STREAM", 99_000L)
+        val future = quote("Deriv public WebSocket", "STREAM", 100_001L)
         val nanPrice = future.copy(price = Double.NaN, lastUpdateMillis = 100_000L)
-        assertTrue(QuoteArbiter.accept(existing, future, "Deriv WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
-        assertTrue(QuoteArbiter.accept(existing, nanPrice, "Deriv WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
+        assertTrue(QuoteArbiter.accept(existing, future, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
+        assertTrue(QuoteArbiter.accept(existing, nanPrice, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
     }
 
 }
