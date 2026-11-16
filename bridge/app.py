@@ -61,6 +61,7 @@ NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
 NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
+LIVE_STEP_UP_SECRET=os.getenv('LIVE_STEP_UP_SECRET','').strip()
 LINUX_HOST_MODE=os.getenv('BRIDGE_HOST_MODE','').strip().lower()=='linux-host'
 HOST_AGENT_URL=os.getenv('HOST_AGENT_URL','http://127.0.0.1:8787/health/ready').strip()
 ANALYSIS_CLOCK_SKEW_MS=max(0,int(os.getenv('ANALYSIS_CLOCK_SKEW_SECONDS','120')))*1000
@@ -167,7 +168,21 @@ def db():
     CREATE INDEX IF NOT EXISTS idx_trade_ledger_events_pair_cursor ON trade_ledger_events(pairing_id,id);
     CREATE TABLE IF NOT EXISTS analysis_requests(pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, response TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(pairing_id,request_id));
     CREATE TABLE IF NOT EXISTS ip_guard(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL, fails INTEGER NOT NULL, fail_window REAL NOT NULL, locked_until REAL NOT NULL);
-    CREATE TABLE IF NOT EXISTS owner_bootstrap(code_hash TEXT PRIMARY KEY, expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);''')
+    CREATE TABLE IF NOT EXISTS owner_bootstrap(code_hash TEXT PRIMARY KEY, expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS demo_acceptances(
+        id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL UNIQUE REFERENCES pairings(id) ON DELETE CASCADE,
+        broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, company TEXT NOT NULL,
+        currency TEXT NOT NULL, account_mode TEXT NOT NULL, heartbeat_seq INTEGER NOT NULL,
+        evidence_digest TEXT NOT NULL, accepted_at REAL NOT NULL, expires_at REAL NOT NULL,
+        revoked INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS live_challenges(
+        id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE,
+        challenge_hash TEXT NOT NULL UNIQUE, demo_acceptance_id TEXT NOT NULL REFERENCES demo_acceptances(id),
+        broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, company TEXT NOT NULL,
+        worker_id TEXT NOT NULL, worker_generation INTEGER NOT NULL, host_generation TEXT NOT NULL,
+        expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
+    );''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_app_hash ON pairings(app_hash)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_terminal_hash ON pairings(terminal_hash)')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
@@ -391,7 +406,14 @@ class Claim(BaseModel): model_config=ConfigDict(extra='forbid'); pairing_code:st
 class Command(BaseModel): model_config=ConfigDict(extra='forbid'); request_id:str=Field(min_length=1,max_length=64); action:str; config:dict[str,Any]
 class AckResult(BaseModel): model_config=ConfigDict(extra='forbid'); ticket:str; status:str; message:str=Field(default='',max_length=1000)
 class Ack(BaseModel): model_config=ConfigDict(extra='forbid'); outcome:str; state:str; message:str=Field(default='',max_length=1000); results:list[AckResult]|None=None
-class LiveAuthorization(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_live_trading:bool
+class LiveAuthorization(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    challenge_id:str=Field(min_length=1,max_length=128)
+    typed_confirmation:str=Field(min_length=8,max_length=256)
+    step_up_proof:str=Field(pattern=r'^[0-9a-f]{64}$')
+class DemoAcceptanceRequest(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    confirm_demo:StrictBool
 class CloseAllConfirmation(BaseModel): model_config=ConfigDict(extra='forbid'); confirm_close_all:StrictBool
 class AnalysisCandle(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -880,6 +902,28 @@ def live_authorization_valid(p, managed, beat, now_epoch=None):
         and p['live_authorized_server'] == account.get('server')
         and account.get('account_mode') == 'LIVE'
     )
+
+def _step_up_signature(challenge_id, pairing_id, typed_confirmation):
+    if not LIVE_STEP_UP_SECRET:
+        return None
+    raw='|'.join((challenge_id,pairing_id,typed_confirmation))
+    return hmac.new(LIVE_STEP_UP_SECRET.encode(),raw.encode(),hashlib.sha256).hexdigest()
+
+def _current_ready_context(p, expected_mode):
+    with tx() as c:
+        managed=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        job=c.execute("SELECT * FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
+        worker=c.execute('SELECT * FROM worker_identities WHERE worker_id=?',
+                         (job['worker_id'],)).fetchone() if job and job['worker_id'] else None
+    beat=fresh_heartbeat(p)
+    if (not managed or managed['revoked'] or managed['account_mode']!=expected_mode or
+        not job or job['status']!='READY' or not worker or worker['status']!='ACTIVE' or
+        worker['expires_at']<=time.time() or not beat or not execution_state_eligible(beat) or
+        not beat.get('terminal_connected') or not terminal_identity_matches(p,expected_mode,beat)):
+        raise HTTPException(409,detail={'code':'ACCOUNT_EVIDENCE_NOT_READY','message':'Fresh authenticated account, worker and terminal evidence is required'})
+    if expected_mode=='LIVE' and (not beat.get('trade_allowed') or not heartbeat_news_clear(beat)):
+        raise HTTPException(409,detail={'code':'LIVE_EVIDENCE_NOT_READY','message':'LIVE terminal permission and clear news evidence are required'})
+    return managed,job,worker,beat
 
 def verified_terminal_pairing_exists():
     """Require a real fresh EA heartbeat and a worker-owned READY job."""
@@ -1559,28 +1603,114 @@ def app_trades(limit:int=Query(default=50,ge=1,le=200),cursor:int=Query(default=
     next_cursor=max([cursor]+[r['id'] for r in rows])
     return {'cursor':next_cursor,'watermark':watermark,'trades':[{'id':r['id'],'identity':r['identity'],'account_mode':r['account_mode'],'position_id':r['position_id'],'order_ticket':r['order_ticket'],'deal_ticket':r['deal_ticket'],'symbol':r['symbol'],'direction':r['direction'],'status':r['status'],'payload':json.loads(r['payload']),'updated_at':iso(datetime.fromtimestamp(r['created'],timezone.utc))} for r in rows]}
 
-@app.post('/v1/app/live-authorization')
-def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
-    if HOST_PROFILE=='EPHEMERAL': raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE authorization is unavailable on ephemeral hosts'})
+@app.post('/v1/app/demo-acceptance')
+def accept_demo(x:DemoAcceptanceRequest,authorization:str|None=Header(default=None)):
     require_durable_execution()
     p=auth(authorization,'app')
-    if not x.confirm_live_trading: raise HTTPException(422,'Explicit LIVE trading confirmation is required')
-    with tx() as c:
-        m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
-        job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
-    beat=fresh_heartbeat(p)
-    if not m or m['revoked'] or m['account_mode']!='LIVE' or m['access_type']!='MASTER': raise HTTPException(409,'LIVE authorization requires a non-revoked LIVE MASTER profile')
-    if not beat or not job or job['status']!='READY' or not execution_state_eligible(beat) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,'LIVE',beat) or not heartbeat_news_clear(beat):
-        raise HTTPException(409,'LIVE authorization requires a fresh, ready terminal whose verified identity matches the LIVE profile')
-    until=time.time()+900
+    if not x.confirm_demo:
+        raise HTTPException(422,'Explicit DEMO acceptance is required')
+    managed,job,worker,beat=_current_ready_context(p,'DEMO')
+    if managed['access_type']!='MASTER' or not heartbeat_news_clear(beat):
+        raise HTTPException(409,'DEMO acceptance requires a MASTER account and fresh clear evidence')
     account=beat['account']
+    raw=json.dumps({'pairing_id':p['id'],'broker_brand':managed['broker_brand'],'account':account,
+                    'heartbeat_seq':p['heartbeat_seq'],'worker_id':job['worker_id'],
+                    'worker_generation':worker['generation'],'host_generation':HOST_GENERATION},
+                   sort_keys=True,separators=(',',':'))
+    acceptance_id=str(uuid.uuid4()); now_epoch=time.time(); expires=now_epoch+86400
     with tx(True) as c:
-        c.execute('UPDATE pairings SET live_authorized_until=?,live_authorized_login=?,live_authorized_server=? WHERE id=?',(until,account['login'],account['server'],p['id']))
+        c.execute('UPDATE demo_acceptances SET revoked=1 WHERE pairing_id=? AND revoked=0',(p['id'],))
+        c.execute('''INSERT INTO demo_acceptances
+            (id,pairing_id,broker_brand,login,server,company,currency,account_mode,heartbeat_seq,
+             evidence_digest,accepted_at,expires_at,revoked)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)''',
+            (acceptance_id,p['id'],managed['broker_brand'],account['login'],account['server'],
+             account['company'],account['currency'],'DEMO',p['heartbeat_seq'],digest(raw),
+             now_epoch,expires))
+    return {'accepted':True,'acceptance_id':acceptance_id,'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc))}
+
+@app.get('/v1/app/demo-acceptance')
+def demo_acceptance(authorization:str|None=Header(default=None)):
+    p=auth(authorization,'app')
+    with tx() as c:
+        row=c.execute('SELECT id,broker_brand,login,server,company,currency,accepted_at,expires_at,revoked FROM demo_acceptances WHERE pairing_id=? ORDER BY accepted_at DESC LIMIT 1',(p['id'],)).fetchone()
+    if not row or row['revoked'] or row['expires_at']<=time.time():
+        return {'accepted':False}
+    return {'accepted':True,**dict(row)}
+
+@app.delete('/v1/app/demo-acceptance')
+def revoke_demo_acceptance(authorization:str|None=Header(default=None)):
+    p=auth(authorization,'app')
+    with tx(True) as c:
+        c.execute('UPDATE demo_acceptances SET revoked=1 WHERE pairing_id=?',(p['id'],))
+        c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
+    return {'revoked':True}
+
+@app.post('/v1/app/live-challenge')
+def create_live_challenge(authorization:str|None=Header(default=None)):
+    if HOST_PROFILE=='EPHEMERAL':
+        raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE authorization is unavailable on ephemeral hosts'})
+    require_durable_execution()
+    p=auth(authorization,'app')
+    managed,job,worker,beat=_current_ready_context(p,'LIVE')
+    if managed['access_type']!='MASTER':
+        raise HTTPException(409,'LIVE authorization requires a MASTER profile')
+    with tx() as c:
+        acceptance=c.execute('SELECT * FROM demo_acceptances WHERE pairing_id=? AND revoked=0 AND expires_at>? ORDER BY accepted_at DESC LIMIT 1',(p['id'],time.time())).fetchone()
+    if not acceptance:
+        raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_REQUIRED','message':'A fresh server-validated DEMO acceptance is required before LIVE authorization'})
+    challenge_id=secrets.token_urlsafe(24); now_epoch=time.time(); expires=now_epoch+120
+    with tx(True) as c:
+        c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
+        c.execute('''INSERT INTO live_challenges
+            (id,pairing_id,challenge_hash,demo_acceptance_id,broker_brand,login,server,company,
+             worker_id,worker_generation,host_generation,expires_at,used,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)''',
+            (challenge_id,p['id'],digest(challenge_id),acceptance['id'],managed['broker_brand'],
+             beat['account']['login'],beat['account']['server'],beat['account']['company'],
+             job['worker_id'],worker['generation'],HOST_GENERATION,expires,now_epoch))
+    return {'challenge_id':challenge_id,'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc)),
+            'typed_confirmation':f"ARM LIVE {managed['broker_brand']} {beat['account']['login']}"}
+
+@app.post('/v1/app/live-authorization')
+def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
+    if HOST_PROFILE=='EPHEMERAL':
+        raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE authorization is unavailable on ephemeral hosts'})
+    require_durable_execution()
+    p=auth(authorization,'app')
+    if not LIVE_STEP_UP_SECRET:
+        raise HTTPException(503,detail={'code':'STEP_UP_NOT_CONFIGURED','message':'A server-verifiable step-up authority is required'})
+    typed=f'ARM LIVE '
+    with tx(True) as c:
+        challenge=c.execute('SELECT * FROM live_challenges WHERE id=? AND challenge_hash=? AND pairing_id=?',
+                            (x.challenge_id,digest(x.challenge_id),p['id'])).fetchone()
+    if not challenge or challenge['used'] or challenge['expires_at']<=time.time():
+        raise HTTPException(409,detail={'code':'LIVE_CHALLENGE_INVALID','message':'LIVE authorization challenge is invalid, expired or already used'})
+    managed,job,worker,beat=_current_ready_context(p,'LIVE')
+    expected=f'ARM LIVE {managed["broker_brand"]} {beat["account"]["login"]}'
+    if x.typed_confirmation != expected:
+        raise HTTPException(422,'Typed LIVE confirmation does not match the current account')
+    expected_proof=_step_up_signature(x.challenge_id,p['id'],x.typed_confirmation)
+    if not expected_proof or not hmac.compare_digest(x.step_up_proof,expected_proof):
+        raise HTTPException(401,detail={'code':'STEP_UP_INVALID','message':'Server-verifiable step-up proof is invalid'})
+    with tx(True) as c:
+        acceptance=c.execute('SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=? AND revoked=0 AND expires_at>?',(challenge['demo_acceptance_id'],p['id'],time.time())).fetchone()
+        if not acceptance:
+            raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_REQUIRED','message':'DEMO acceptance is missing or expired'})
+        changed=c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0 AND expires_at>?',(x.challenge_id,time.time()))
+        if changed.rowcount!=1:
+            raise HTTPException(409,detail={'code':'LIVE_CHALLENGE_REPLAY','message':'LIVE authorization challenge was already consumed'})
+        until=time.time()+900
+        account=beat['account']
+        c.execute('UPDATE pairings SET live_authorized_until=?,live_authorized_login=?,live_authorized_server=? WHERE id=?',
+                  (until,account['login'],account['server'],p['id']))
     return {'authorized':True,'expires_at':iso(datetime.fromtimestamp(until,timezone.utc)),'duration_seconds':900}
 @app.delete('/v1/app/live-authorization')
 def revoke_live_authorization(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app')
-    with tx(True) as c: c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
+    with tx(True) as c:
+        c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
+        c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
     return {'revoked':True}
 
 @app.post('/v1/app/close-all-confirmation')

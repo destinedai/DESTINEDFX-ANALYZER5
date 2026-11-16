@@ -244,12 +244,17 @@ def managed_env(monkeypatch):
     with app.tx(True) as c:
         c.execute('DELETE FROM worker_attestations')
         c.execute('DELETE FROM worker_jobs')
+        c.execute('DELETE FROM worker_identities')
         c.execute('DELETE FROM managed_accounts')
+        c.execute('DELETE FROM live_challenges')
+        c.execute('DELETE FROM demo_acceptances')
         c.execute('DELETE FROM rate')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-' + '2026-very-long')
     monkeypatch.setenv('ALLOW_LEGACY_WORKER_TOKEN', 'true')
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.destinedfx.internal')
+    monkeypatch.setenv('LIVE_STEP_UP_SECRET','step-up-fixture-secret')
+    app.LIVE_STEP_UP_SECRET='step-up-fixture-secret'
     monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: True)
 
 def test_managed_registration_waits_for_verified_per_user_isolation(monkeypatch):
@@ -935,6 +940,9 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     assert client.post('/v1/app/managed-account',headers=ah,json=body).status_code==202
     wh={'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
     job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':'worker-live'}).json()
+    with app.tx(True) as c:
+        c.execute('INSERT OR IGNORE INTO worker_identities(worker_id,token_hash,created,expires_at) VALUES(?,?,?,?)',
+                  ('worker-live',app.digest('fixture-worker-token'),time.time(),time.time()+3600))
     assert client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={'worker_id':'worker-live','status':'AUTHENTICATING'}).status_code==200
     actual={'login':login,'server':server,'company':'FBS Markets Inc.','currency':'USD','account_mode':'LIVE'}
     terminal=client.post('/v1/terminal/claim',json={'pairing_code':job['pairing_code'],'terminal_instance_id':'live-terminal','account':actual})
@@ -946,12 +954,30 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     assert client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=worker-live',headers=wh).json()['status']=='READY'
     return p,ah,wh,job,th,actual
 
+def authorize_live_fixture(p, ah, job, actual):
+    with app.tx(True) as c:
+        c.execute('''INSERT INTO demo_acceptances
+            (id,pairing_id,broker_brand,login,server,company,currency,account_mode,heartbeat_seq,
+             evidence_digest,accepted_at,expires_at,revoked)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)''',
+            (str(uuid.uuid4()),p['pairing_id'],'FBS',actual['login'],actual['server'],
+             actual['company'],actual['currency'],'DEMO',1,'fixture-evidence',
+             time.time(),time.time()+86400))
+    challenge=client.post('/v1/app/live-challenge',headers=ah)
+    assert challenge.status_code==200, challenge.text
+    phrase=challenge.json()['typed_confirmation']
+    proof=app._step_up_signature(challenge.json()['challenge_id'],p['pairing_id'],phrase)
+    return client.post('/v1/app/live-authorization',headers=ah,json={
+        'challenge_id':challenge.json()['challenge_id'],
+        'typed_confirmation':phrase,'step_up_proof':proof
+    })
+
 
 def test_live_master_requires_explicit_current_authorization(monkeypatch):
     p,ah,wh,job,th,actual=live_ready(monkeypatch)
     no_auth=client.post('/v1/app/commands',headers=ah,json=command_req('START'))
     assert no_auth.status_code==409
-    authorized=client.post('/v1/app/live-authorization',headers=ah,json={'confirm_live_trading':True})
+    authorized=authorize_live_fixture(p,ah,job,actual)
     assert authorized.status_code==200 and authorized.json()['duration_seconds']==900
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['account_identity_verified'] is True
@@ -975,13 +1001,13 @@ def test_live_authorization_requires_confirmation_and_current_verified_identity(
 
 def test_live_investor_is_never_authorized_to_start(monkeypatch):
     p,ah,wh,job,th,actual=live_ready(monkeypatch,access_type='INVESTOR')
-    assert client.post('/v1/app/live-authorization',headers=ah,json={'confirm_live_trading':True}).status_code==409
+    assert client.post('/v1/app/live-authorization',headers=ah,json={'confirm_live_trading':True}).status_code==422
     assert client.post('/v1/app/commands',headers=ah,json=command_req('START')).status_code==409
 
 
 def test_live_profile_rejects_demo_terminal_and_expired_authorization(monkeypatch):
     p,ah,wh,job,th,actual=live_ready(monkeypatch)
-    assert client.post('/v1/app/live-authorization',headers=ah,json={'confirm_live_trading':True}).status_code==200
+    assert authorize_live_fixture(p,ah,job,actual).status_code==200
     with app.tx(True) as c:
         c.execute('UPDATE pairings SET live_authorized_until=? WHERE id=?',(time.time()-1,p['pairing_id']))
     assert client.post('/v1/app/commands',headers=ah,json=command_req('START')).status_code==409
@@ -993,7 +1019,7 @@ def test_live_profile_rejects_demo_terminal_and_expired_authorization(monkeypatc
     claim=client.post('/v1/terminal/claim',json={'pairing_code':job2['pairing_code'],'terminal_instance_id':'reported-demo-mode','account':demo})
     assert claim.status_code==401
     assert client.get('/v1/app/state',headers=ah2).json()['managed_execution']['account_mode']=='LIVE'
-    assert client.post('/v1/app/live-authorization',headers=ah2,json={'confirm_live_trading':True}).status_code==409
+    assert client.post('/v1/app/live-authorization',headers=ah2,json={'confirm_live_trading':True}).status_code==422
 
 def test_registration_does_not_require_mode_but_terminal_report_must_include_it(monkeypatch):
     managed_env(monkeypatch)
@@ -1030,7 +1056,7 @@ def test_unverified_registration_cannot_be_promoted_to_live_by_terminal_claim(mo
 def test_live_authorization_revocation_and_profile_pairing_isolation(monkeypatch):
     live=live_ready(monkeypatch)
     live_p,live_ah=live[0],live[1]
-    assert client.post('/v1/app/live-authorization',headers=live_ah,json={'confirm_live_trading':True}).status_code==200
+    assert authorize_live_fixture(live_p,live_ah,live[3],live[5]).status_code==200
     demo_p,demo_ah=managed_pair()
     assert client.post('/v1/app/managed-account',headers=demo_ah,json={'login':'800001','server':'Demo','password':'demo-test','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==202
     demo_state=client.get('/v1/app/state',headers=demo_ah).json()
@@ -1563,7 +1589,7 @@ def test_host_profile_health_and_state_contract(monkeypatch):
 def test_ephemeral_blocks_live_auth_and_start_with_stable_reason(monkeypatch):
     monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
     p,ah,wh,job,th,actual=live_ready(monkeypatch)
-    auth_response=client.post('/v1/app/live-authorization',headers=ah,json={'confirm_live_trading':True})
+    auth_response=client.post('/v1/app/live-challenge',headers=ah)
     assert auth_response.status_code==409
     assert auth_response.json()['detail']['code']=='EPHEMERAL_HOST_LIVE_BLOCKED'
     for action in ('START','RESUME'):
