@@ -171,7 +171,15 @@ object ServerOptions {
         val suggestions = LinkedHashMap<String, String>()
         ownerHistory.filter { it.isNotBlank() }.forEach { suggestions.putIfAbsent(it.trim(), "Your history") }
         hostReported.filter { it.isNotBlank() }.forEach { suggestions.putIfAbsent(it.trim(), "Reported by host") }
-        spec.serverSuggestions.filter { it.value.isNotBlank() }.forEach { suggestions.putIfAbsent(it.value.trim(), "Official page") }
+        spec.serverSuggestions.filter { it.value.isNotBlank() }.forEach { suggestion ->
+            val origin = when (suggestion.source) {
+                ServerSuggestionSource.OWNER_HISTORY -> "Your history"
+                ServerSuggestionSource.HOST_REPORTED -> "Reported by host"
+                ServerSuggestionSource.OFFICIAL_PAGE -> "Official provider reference"
+                ServerSuggestionSource.USER_SUPPLIED_REFERENCE -> "Reference name · verify with broker"
+            }
+            suggestions.putIfAbsent(suggestion.value.trim(), origin)
+        }
         return suggestions.map { ServerOption.Suggested(it.key, it.value) } + ServerOption.TypeServerName
     }
 }
