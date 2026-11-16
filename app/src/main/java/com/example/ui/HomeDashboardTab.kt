@@ -43,7 +43,6 @@ import com.example.ui.theme.*
 @Composable
 fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
-    val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val activeSymbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
     val activeTimeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
@@ -52,7 +51,9 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
     val activeTicker = tickers[activeSymbol]
     val implementedCount = StrategyRegistry.allStrategies.count { it.isImplemented }
     val feedReady = marketDataStatus.startsWith("READY", ignoreCase = true)
-    val feedUnavailable = marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true)
+    val feedUnavailable = marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) ||
+        marketDataStatus.startsWith("NO VERIFIED LIVE DATA", ignoreCase = true) ||
+        marketDataStatus.startsWith("ANALYSIS BLOCKED", ignoreCase = true)
     val feedColor = when {
         feedReady -> ProfitGreen
         feedUnavailable -> LossRed
@@ -60,7 +61,7 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
     }
     val feedLabel = when {
         feedReady -> "DATA READY"
-        feedUnavailable -> "FEED UNAVAILABLE"
+        feedUnavailable -> "NO VERIFIED DATA"
         else -> "FEED CHECKING"
     }
 
@@ -150,7 +151,7 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                             fontWeight = FontWeight.Black, letterSpacing = 1.sp)
                         Text("$activeSymbol · $activeTimeframe", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Black)
                         QuoteFreshnessIndicator(activeTicker, connecting = marketDataStatus.startsWith("WAIT"),
-                            diagnostic = quoteDiagnostics[activeSymbol], compact = true)
+                            diagnostic = viewModel.quoteDiagnosticForUi(activeSymbol), compact = true)
                     }
                     TextButton(onClick = {
                         viewModel.runSignalScan(activeSymbol, activeTimeframe, selectedMtfTimeframes)
