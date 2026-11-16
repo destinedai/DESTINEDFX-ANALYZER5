@@ -119,8 +119,7 @@ open class DestinedFXViewModel(
         // 1. Try tickers.value[symbol]?.price
         val ticker = tickers.value[symbol]
         if (ticker != null && ticker.price > 0.0) {
-            val src = ticker.source.ifBlank { "Real-time feed" }
-            return ResolvedPrice(ticker.price, src, ticker.lastUpdateMillis)
+            return ResolvedPrice(ticker.price, "Live market data", ticker.lastUpdateMillis)
         }
 
         // 2. Else try marketDataRepository.getLatestTick(symbol).price if > 0
@@ -133,8 +132,7 @@ open class DestinedFXViewModel(
         val candles = app.marketDataRepository?.getCandles(symbol, timeframe, 1) ?: emptyList()
         val latestCandle = candles.lastOrNull()
         if (latestCandle != null && latestCandle.close > 0.0) {
-            val src = app.marketDataRepository?.getDataSource(symbol, timeframe) ?: "Unknown"
-            return ResolvedPrice(latestCandle.close, src, latestCandle.timestamp)
+            return ResolvedPrice(latestCandle.close, "Market data", latestCandle.timestamp)
         }
 
         // 4. If still nothing: return null
@@ -359,12 +357,15 @@ open class DestinedFXViewModel(
         if (isPreview) null else app.marketDataRepository.getCandleError(symbol, timeframe)
 
     fun getDataSourceForSymbol(symbol: String): String =
-        if (isPreview) "Chart preview only" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
+        if (isPreview) "Chart preview" else marketDataSource(symbol, selectedTimeframe.value)
 
-    fun marketDataSource(symbol: String, timeframe: String): String =
-        if (isPreview) "Preview has no market candles" else app.marketDataRepository.getDataSource(
-            symbol, if (timeframe == "60") "H1" else timeframe
-        )
+    /** UI reveals data freshness, not an upstream vendor or hidden provider route. */
+    fun marketDataSource(symbol: String, timeframe: String): String {
+        if (isPreview) return "Chart preview"
+        val detail = app.marketDataRepository.getDataSource(symbol, if (timeframe == "60") "H1" else timeframe)
+        return if (detail.startsWith("UNAVAILABLE", ignoreCase = true)) "No verified live candles"
+        else "Live market data"
+    }
 
     fun candlesForChart(symbol: String, timeframe: String): List<Candle> =
         candlestickHistoryByTimeframe[symbol + "-" + (if (timeframe == "60") "H1" else timeframe)].orEmpty()
@@ -381,12 +382,11 @@ open class DestinedFXViewModel(
                 if (candles.isNotEmpty()) {
                     candlestickHistory[symbol] = candles
                     candlestickHistoryByTimeframe[symbol + "-" + timeframe] = candles
-                    marketDataStatus.value = "READY • " + candles.size + " candles • " +
-                        app.marketDataRepository.getDataSource(symbol, timeframe)
+                    marketDataStatus.value = "LIVE DATA • " + candles.size + " candles"
                 } else {
                     val reason = app.marketDataRepository.getCandleError(symbol, timeframe)
                         ?: "The public feed returned no OHLC candles for this symbol/timeframe."
-                    marketDataStatus.value = "UNAVAILABLE • " + reason
+                    marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe
                 }
                 runSignalScan(symbol, timeframe)
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1311,8 +1311,7 @@ open class DestinedFXViewModel(
                         if (candles.isNotEmpty()) {
                             candlestickHistory[symbol] = candles
                             candlestickHistoryByTimeframe[symbol + "-" + tfKey] = candles
-                            marketDataStatus.value = "READY • " + candles.size + " candles • " +
-                                app.marketDataRepository.getDataSource(symbol, tfKey)
+                            marketDataStatus.value = "LIVE DATA • " + candles.size + " candles"
                         } else {
                             val reason = app.marketDataRepository.getCandleError(symbol, tfKey)
                                 ?: "Waiting for valid candles from the public feed."
