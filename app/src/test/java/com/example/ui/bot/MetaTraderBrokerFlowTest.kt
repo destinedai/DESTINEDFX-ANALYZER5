@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.broker.HostProfile
 import com.example.security.SecretsManager
@@ -67,7 +68,8 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("server_field").performTextInput("Fixture-Demo")
         composeRule.onNodeWithTag("login_button").assertIsNotEnabled()
         composeRule.onNodeWithTag("login_mode_demo").performClick()
-        composeRule.onNodeWithTag("login_button").assertIsEnabled()
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
+        composeRule.onNodeWithText("Forgot password?").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("broker_back").performClick()
         composeRule.onNodeWithTag("broker_back").performClick()
         composeRule.onNodeWithTag("settings").performClick()
