@@ -63,13 +63,16 @@ write_files:
         git -C "$repo_dir" reset --hard FETCH_HEAD
       fi
 
-      # D1 host-agent.py is the required runtime contract for a real MT5 host.
-      # This checkout currently predates D1, so do not invent a substitute service.
-      if [[ ! -f "$repo_dir/host-agent.py" && ! -f "$repo_dir/managed-worker/host-agent.py" && ! -f "$repo_dir/scripts/linux-host/host-agent.py" ]]; then
+      # A host agent alone is not enough. The current Linux worker explicitly refuses
+      # ATTESTATION_REQUIRED because it still uses one shared terminal. Never mark this host
+      # READY until every managed user gets an independently attested terminal slot.
+      if [[ ! -f "$repo_dir/scripts/linux-host/host-agent.py" ]] || \
+         [[ ! -f "$repo_dir/scripts/linux-host/linux-worker.py" ]] || \
+         grep -Fq 'ISOLATED_SLOT_REQUIRED' "$repo_dir/scripts/linux-host/linux-worker.py"; then
         {
           echo "status=BLOCKED"
-          echo "reason=D1 host-agent.py is absent from the selected repository head."
-          echo "fix=Merge the reviewed D1 Linux host runtime into free/phone-only-v1, then rerun: sudo systemctl restart destinedfx-azure-first-boot.service"
+          echo "reason=Per-user isolated MT5 terminal slots are not implemented by the selected Linux worker; it still refuses ISOLATED_SLOT_REQUIRED."
+          echo "fix=Implement and test D1 per-user Linux terminal slot provisioning, process ownership, Wine prefix isolation, revocation cleanup, and multi-user acceptance; or use a verified Windows worker host."
           echo "trading=REFUSED"
         } >> "$first_run"
         printf 'BLOCKED\n' > "$state"
