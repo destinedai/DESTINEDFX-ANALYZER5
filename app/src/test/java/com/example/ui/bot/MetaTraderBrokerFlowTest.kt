@@ -84,7 +84,7 @@ class MetaTraderBrokerFlowTest {
         openFlow()
         composeRule.onNodeWithTag("add_account").performClick()
         listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
-            composeRule.onNodeWithTag("broker_${brand}_MT5").performClick()
+            composeRule.onNodeWithTag("broker_${brand}_MT5").performScrollTo().performClick()
             composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_login_fields_help").assertIsDisplayed()
             composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
