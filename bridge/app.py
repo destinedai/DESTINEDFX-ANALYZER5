@@ -1313,6 +1313,8 @@ def heartbeat_news_clear(beat, symbols=None):
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None),
                     x_management_identity:str|None=Header(default=None)):
     require_durable_execution()
+    if LINUX_HOST_MODE:
+        raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'This Linux worker still uses one shared terminal and cannot safely provision a separate MT5 terminal per user'})
     p=auth(authorization,'app')
     if not x_management_identity:
         raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate to the DestinedFX management account before registering broker credentials'})
@@ -1666,12 +1668,14 @@ def configuration_health():
             c.execute('SELECT 1').fetchone()
     except Exception as error:
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'}) from error
-    return {'status':'configured','database':'ok','managed_execution':'configured','host_profile':HOST_PROFILE, **host_lifecycle_state()}
+    return {'status':'configured','database':'ok','managed_execution':'configured','host_profile':HOST_PROFILE,'per_user_terminal_isolation':'BLOCKED' if LINUX_HOST_MODE else 'WORKER_ATTESTATION_REQUIRED', **host_lifecycle_state()}
 @app.get('/health/ready')
 def readiness():
     """Report whether the bridge can safely accept managed-execution work."""
     if os.getenv('EXECUTION_STORAGE_DURABLE', 'true').lower() != 'true':
         raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution readiness is disabled because this deployment uses ephemeral storage'})
+    if LINUX_HOST_MODE:
+        raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'The current Linux worker uses one shared MT5 terminal; a separately attested terminal slot per user is required before managed execution is ready'})
     try:
         managed_config()
         with tx() as c:
@@ -1683,7 +1687,7 @@ def readiness():
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
     if not verified_terminal_pairing_exists():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
-    return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS, **host_lifecycle_state()}
+    return {'status':'ready','database':'ok','managed_execution':'configured','per_user_terminal_isolation':'WORKER_ATTESTATION_REQUIRED','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS, **host_lifecycle_state()}
 @app.post('/v1/owner/bootstrap-code')
 def create_owner_bootstrap_code(request:Request, x_management_identity:str|None=Header(default=None)):
     """Issue a one-use ten-minute bootstrap code to a signed DestinedFX management session."""
