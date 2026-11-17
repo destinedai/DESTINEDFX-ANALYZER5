@@ -254,7 +254,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
+    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','host_lifecycle_status','max_lifetime_seconds','host_warning_seconds','host_emergency_stop_lead_seconds','host_expiry_at_epoch_seconds','host_remaining_seconds','host_shutdown_pending','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 
@@ -2263,3 +2263,31 @@ def test_host_expiry_queues_one_non_liquidating_safety_stop_per_active_pairing(m
     assert rows[0]['action'] == 'EMERGENCY_STOP'
     assert rows[0]['config'] == '{}'
     assert rows[0]['host_generation'] == app.HOST_GENERATION
+
+
+def test_linux_shared_terminal_is_not_managed_execution_ready(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'linux_host_report', lambda: None)
+
+    configured = client.get('/health/config')
+    assert configured.status_code == 200
+    assert configured.json()['per_user_terminal_isolation'] == 'BLOCKED'
+
+    ready = client.get('/health/ready')
+    assert ready.status_code == 503
+    assert ready.json()['detail']['code'] == 'PER_USER_TERMINAL_ISOLATION_REQUIRED'
+
+
+def test_linux_shared_terminal_refuses_broker_credentials_before_storage_or_job_creation(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    response = client.post('/v1/app/managed-account', json={
+        'login':'123456','server':'Fixture-Demo','password':'fixture-password',
+        'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
+    })
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'PER_USER_TERMINAL_ISOLATION_REQUIRED'
+    with app.tx() as c:
+        assert c.execute('SELECT COUNT(*) FROM managed_accounts').fetchone()[0] == 0
+        assert c.execute('SELECT COUNT(*) FROM worker_jobs').fetchone()[0] == 0
