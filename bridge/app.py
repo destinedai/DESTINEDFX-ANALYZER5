@@ -658,9 +658,24 @@ class Account(BaseModel):
     model_config=ConfigDict(extra='forbid')
     login:str=Field(min_length=1,max_length=128); server:str=Field(min_length=1,max_length=128); company:str=Field(min_length=1,max_length=128); currency:str=Field(min_length=1,max_length=16); account_mode:str
     balance:float|None=Field(default=None,ge=0,allow_inf_nan=False); equity:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); free_margin:float|None=Field(default=None,ge=0,allow_inf_nan=False); margin_level:float|None=Field(default=None,ge=0,allow_inf_nan=False); leverage:int|None=Field(default=None,gt=0)
+class TerminalQuote(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    symbol:StrictStr=Field(min_length=1,max_length=64)
+    bid:float=Field(gt=0,allow_inf_nan=False)
+    ask:float=Field(gt=0,allow_inf_nan=False)
+    timestamp_ms:StrictInt=Field(gt=0)
+
+    @model_validator(mode='after')
+    def validate_two_sided_quote(self):
+        if self.ask < self.bid:
+            raise ValueError('Terminal quote ask must be greater than or equal to bid')
+        if any(ord(ch)<32 or ord(ch)==127 for ch in self.symbol):
+            raise ValueError('Terminal quote symbol contains control characters')
+        return self
+
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict); cancelled_order_tickets:list[str]=Field(default_factory=list)
+    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict); cancelled_order_tickets:list[str]=Field(default_factory=list); broker_quotes:list[TerminalQuote]=Field(default_factory=list,max_length=32)
 
 def relevant_news_currencies(symbol):
     s=''.join(ch for ch in (symbol or '').upper() if ch.isalnum())
@@ -1837,6 +1852,42 @@ def ingest_trade_ledger(c, pairing_id, account_mode, payload, received):
                       (pairing_id,identity,account_mode,position,str(signal.get('order','')) or None,str(signal.get('deal','')) or None,str(signal.get('symbol','')),str(signal.get('direction','')) or None,'OPEN',json.dumps(document,separators=(',',':')),received,received))
             _append_trade_ledger_event(c,pairing_id,identity)
 
+BROKER_QUOTE_MAX_AGE_MS = 15_000
+BROKER_QUOTE_FUTURE_SKEW_MS = 3_000
+
+def fresh_terminal_broker_quotes(beat, now_ms=None):
+    """Return only fresh two-sided quotes directly observed by the paired MT5 terminal."""
+    if not isinstance(beat,dict):
+        return []
+    now_ms = int(time.time()*1000) if now_ms is None else int(now_ms)
+    rows = beat.get('broker_quotes')
+    if not isinstance(rows,list):
+        return []
+    accepted = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row,dict):
+            continue
+        symbol = row.get('symbol')
+        try:
+            bid = float(row.get('bid'))
+            ask = float(row.get('ask'))
+            timestamp_ms = int(row.get('timestamp_ms'))
+        except (TypeError,ValueError,OverflowError):
+            continue
+        age_ms = now_ms - timestamp_ms
+        if (not isinstance(symbol,str) or not symbol.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in symbol) or
+            not math.isfinite(bid) or not math.isfinite(ask) or bid<=0 or ask<bid or
+            timestamp_ms<=0 or age_ms < -BROKER_QUOTE_FUTURE_SKEW_MS or age_ms > BROKER_QUOTE_MAX_AGE_MS):
+            continue
+        key=symbol.strip().upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        accepted.append({'symbol':symbol.strip(),'bid':bid,'ask':ask,'timestamp_ms':timestamp_ms,
+                         'age_ms':max(0,age_ms),'source':'MT5_TERMINAL'})
+    return accepted
+
 @app.get('/v1/app/state')
 def state(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); beat=json.loads(p['heartbeat']) if p['heartbeat'] else None
@@ -1870,7 +1921,12 @@ def state(authorization:str|None=Header(default=None)):
         if actual:
             with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
     risk_controls=live_risk_controls(actual)
-    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+    broker_quotes = (
+        fresh_terminal_broker_quotes(beat)
+        if online and beat and beat.get('terminal_connected') is True and actual and
+           identity_verified and broker_identity_verified else []
+    )
+    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command,'broker_quotes':broker_quotes,'broker_quote_stale_ms':BROKER_QUOTE_MAX_AGE_MS}
     if managed is not None: result['managed_execution']=managed
     return result
 
