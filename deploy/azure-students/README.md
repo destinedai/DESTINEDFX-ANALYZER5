@@ -1,4 +1,9 @@
-# Azure for Students deploy kit
+# Azure for Students deploy kit — optional, approval required
+
+> **Not yet an available hosting subscription by default.** The owner must first receive Microsoft's approval and have an active Azure subscription. A deployment template cannot grant Azure for Students eligibility. If an application was declined, treat this route as blocked until Microsoft explicitly approves or resolves the application; do not create duplicate accounts or bypass eligibility. No Azure resources are deployed by this repository automatically.
+
+> **Not permanent/free forever.** Azure for Students is an introductory offer with a finite credit and time limit. It is not a permanent-hosting guarantee. A persistent production host requires an approved subscription and a sustainable paid/eligible hosting plan after any promotional allowance ends.
+
 
 This is the first card-free cloud path. Azure for Students is available only after the owner completes Microsoft's academic verification. Microsoft currently lists no credit card at sign-up, a USD 100 credit for 12 months, 750 hours each of B1s, B2pts v2 Arm, and B2ats v2 AMD burstable VMs for Linux or Windows, and disabled subscription and products when the credit ends unless the owner chooses an upgrade. Eligibility, the owner's university domain, regional capacity, and the current offer remain OWNER STEPS and are not verified here.
 
@@ -11,6 +16,11 @@ The button uses the compiled ARM JSON template because Microsoft's documented bu
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fdestinedai%2FDESTINEDFX-ANALYZER5%2Ffree%2Fphone-only-v1%2Fdeploy%2Fazure-students%2Fazuredeploy.json)
 
 The link is for the `free/phone-only-v1` branch. It will work only after that branch is pushed and visible to the portal.
+
+## Access gate before owner steps
+
+1. Sign in to the Azure portal and confirm that Microsoft has approved the application and an **active subscription** is available to the owner. A prior declined application means this deployment path is blocked until Microsoft resolves it; this repository cannot appeal or activate an account.
+2. Confirm the subscription's permitted use, VM size/region quota and billing state before creating resources. This kit never submits an Azure deployment by itself.
 
 ## Owner steps
 
