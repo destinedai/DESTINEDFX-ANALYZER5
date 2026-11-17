@@ -58,7 +58,7 @@ def claimed(p):
     r=client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'test-terminal-1','account':ACCOUNT}); assert r.status_code==200; return r.json()
 def heartbeat_data(**kwargs):
     now_ms=int(time.time()*1000)
-    x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,'max_concurrent_positions':2,'daily_risk_status':'NORMAL','daily_loss_used_percent':10.0},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[]}; x.update(kwargs); return x
+    x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,'max_concurrent_positions':2,'daily_risk_status':'NORMAL','daily_loss_used_percent':10.0},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[],'broker_quotes':[]}; x.update(kwargs); return x
 
 def analysis_payload(request_id='analysis-1'):
     return {'request_id':request_id,'symbol':'EUR/USD','timeframe':'M1','strategy_id':'smc-confluence-1.0.0'}
@@ -254,7 +254,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','host_lifecycle_status','max_lifetime_seconds','host_warning_seconds','host_emergency_stop_lead_seconds','host_expiry_at_epoch_seconds','host_remaining_seconds','host_shutdown_pending','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command'}
+    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','host_lifecycle_status','max_lifetime_seconds','host_warning_seconds','host_emergency_stop_lead_seconds','host_expiry_at_epoch_seconds','host_remaining_seconds','host_shutdown_pending','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command','broker_quotes','broker_quote_stale_ms'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 
@@ -695,13 +695,15 @@ def test_simultaneous_fbs_and_exness_demo_pairings_keep_tokens_telemetry_and_led
         account={**fbs_account,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},
         configuration={'strategy':'smc-confluence-1.0.0','daily_risk_status':'NORMAL','daily_loss_used_percent':12.0},
         closed_deals=[{'ticket':51001,'position_id':61001,'symbol':'EURUSD','closed_at':app.iso(),
-                       'profit':11.0,'commission':-0.5,'swap':0.0}]
+                       'profit':11.0,'commission':-0.5,'swap':0.0}],
+        broker_quotes=[{'symbol':'EURUSD','bid':1.08231,'ask':1.08245,'timestamp_ms':int(time.time()*1000)}]
     )
     exness_beat = heartbeat_data(
         account={**exness_account,'balance':20000,'equity':19800,'margin':200,'free_margin':19600,'margin_level':9900,'leverage':100},
         configuration={'strategy':'ict-silver-bullet','daily_risk_status':'WARNING_90','daily_loss_used_percent':91.0},
         closed_deals=[{'ticket':52001,'position_id':62001,'symbol':'GBPUSD','closed_at':app.iso(),
-                       'profit':-40.0,'commission':-1.0,'swap':-0.2}]
+                       'profit':-40.0,'commission':-1.0,'swap':-0.2}],
+        broker_quotes=[{'symbol':'GBPUSD.a','bid':1.27111,'ask':1.27131,'timestamp_ms':int(time.time()*1000)}]
     )
     for brand, beat in (('FBS', fbs_beat), ('EXNESS', exness_beat)):
         response = client.post('/v1/terminal/heartbeat', json=beat,
@@ -716,6 +718,13 @@ def test_simultaneous_fbs_and_exness_demo_pairings_keep_tokens_telemetry_and_led
     assert exness_state['configuration']['daily_risk_status'] == 'WARNING_90'
     assert fbs_state['account']['company'] == 'FBS Markets Inc.'
     assert exness_state['account']['company'] == 'Exness Technologies Ltd'
+    assert [(q['symbol'],q['bid'],q['ask'],q['source']) for q in fbs_state['broker_quotes']] == [
+        ('EURUSD',1.08231,1.08245,'MT5_TERMINAL')
+    ]
+    assert [(q['symbol'],q['bid'],q['ask'],q['source']) for q in exness_state['broker_quotes']] == [
+        ('GBPUSD.a',1.27111,1.27131,'MT5_TERMINAL')
+    ]
+    assert fbs_state['broker_quotes'][0]['symbol'] != exness_state['broker_quotes'][0]['symbol']
 
     fbs_trades = client.get('/v1/app/trades', headers=fbs_headers).json()['trades']
     exness_trades = client.get('/v1/app/trades', headers=exness_headers).json()['trades']
@@ -926,6 +935,28 @@ def test_worker_lease_owner_and_terminal_auth_timeout(monkeypatch):
     with app.tx(True) as c: c.execute('UPDATE worker_jobs SET status="AUTHENTICATING",lease_until=?,lease_started=? WHERE id=?',(time.time()+120,time.time()-301,job['job_id']))
     status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=owner',headers=wh).json()
     assert status['status']=='FAILED' and status['error_code']=='TERMINAL_AUTH_TIMEOUT'
+
+def test_terminal_quote_validation_rejects_crossed_and_nonfinite_prices():
+    now_ms=int(time.time()*1000)
+    with pytest.raises(ValidationError):
+        app.TerminalQuote.model_validate({'symbol':'EURUSD','bid':1.1,'ask':1.0,'timestamp_ms':now_ms})
+    with pytest.raises(ValidationError):
+        app.TerminalQuote.model_validate({'symbol':'EURUSD','bid':float('nan'),'ask':1.2,'timestamp_ms':now_ms})
+
+
+def test_terminal_broker_quote_filter_rejects_stale_future_and_duplicate_symbols():
+    now_ms=int(time.time()*1000)
+    quotes=[
+        {'symbol':'EURUSD','bid':1.1,'ask':1.1002,'timestamp_ms':now_ms},
+        {'symbol':'GBPUSD','bid':1.2,'ask':1.2002,'timestamp_ms':now_ms-20_000},
+        {'symbol':'USDJPY','bid':150.0,'ask':150.02,'timestamp_ms':now_ms+10_000},
+        {'symbol':'eurusd','bid':1.11,'ask':1.1102,'timestamp_ms':now_ms},
+    ]
+    result=app.fresh_terminal_broker_quotes({'broker_quotes':quotes},now_ms=now_ms)
+    assert [(x['symbol'],x['bid'],x['ask'],x['source']) for x in result] == [
+        ('EURUSD',1.1,1.1002,'MT5_TERMINAL')
+    ]
+
 
 def test_heartbeat_requires_present_snapshots_and_preserves_confirmed_empty_arrays():
     p=pair(); t=claimed(p); th={'Authorization':'Bearer '+t['terminal_token']}
