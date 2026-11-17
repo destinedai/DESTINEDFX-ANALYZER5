@@ -50,12 +50,34 @@ class MT5RemoteBridgeClient(
     }
 
     /** Public liveness metadata is readable before pairing; do not call authenticated /state to learn host type. */
-    override suspend fun hostProfile(): HostProfile {
-        val body = request("GET", "/health", includeAppAuthorization = false)
-        return when (body.optString("host_profile").uppercase()) {
-            "PERSISTENT" -> HostProfile.PERSISTENT
-            "EPHEMERAL" -> HostProfile.EPHEMERAL
-            else -> HostProfile.EPHEMERAL
+    override suspend fun hostProfile(): HostProfile = hostLifecycle().hostProfile
+
+    /** Reads the Codespaces hard lifetime independently from its resettable idle timeout. */
+    suspend fun hostLifecycle(): HostLifecycle = withContext(Dispatchers.IO) {
+        val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException("CONFIGURATION_REQUIRED")
+        val req = Request.Builder().url(base + "/health").header("Accept", "application/json")
+            .apply { addOptionalAccessHeaders(this) }.get().build()
+        http.newCall(req).execute().use { response ->
+            val body = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrElse { JSONObject() }
+            if (!response.isSuccessful || body.optString("status") != "ok") {
+                throw BridgeHttpException(response.code, "HOST_STATUS_UNAVAILABLE")
+            }
+            val hostProfile = when (body.optString("host_profile").uppercase()) {
+                "PERSISTENT" -> HostProfile.PERSISTENT
+                "EPHEMERAL" -> HostProfile.EPHEMERAL
+                else -> HostProfile.EPHEMERAL
+            }
+            HostLifecycle(
+                hostProfile = hostProfile,
+                lifecycleStatus = body.optString("host_lifecycle_status", "UNKNOWN"),
+                maxLifetimeSeconds = body.optLong("max_lifetime_seconds").takeIf { it > 0L },
+                warningSeconds = body.optLong("host_warning_seconds", 3600L).coerceAtLeast(0L),
+                emergencyStopLeadSeconds = body.optLong("host_emergency_stop_lead_seconds", 600L).coerceAtLeast(0L),
+                expiryAtEpochSeconds = body.optLong("host_expiry_at_epoch_seconds").takeIf { it > 0L },
+                remainingSeconds = if (body.has("host_remaining_seconds") && !body.isNull("host_remaining_seconds"))
+                    body.optLong("host_remaining_seconds").coerceAtLeast(0L) else null,
+                shutdownPending = body.optBoolean("host_shutdown_pending", false)
+            )
         }
     }
 
@@ -89,7 +111,18 @@ class MT5RemoteBridgeClient(
     data class LiveChallenge(val pairingId: String, val challengeId: String, val typedConfirmation: String, val expiresAt: String)
     data class ServiceReadiness(
         val httpReachable: Boolean, val httpStatus: Int?, val serviceStatus: String,
-        val database: String, val managedExecution: String, val errorCode: String = ""
+        val database: String, val managedExecution: String, val errorCode: String = "",
+        val perUserTerminalIsolation: String = "unknown"
+    )
+    data class HostLifecycle(
+        val hostProfile: HostProfile,
+        val lifecycleStatus: String,
+        val maxLifetimeSeconds: Long?,
+        val warningSeconds: Long,
+        val emergencyStopLeadSeconds: Long,
+        val expiryAtEpochSeconds: Long?,
+        val remainingSeconds: Long?,
+        val shutdownPending: Boolean
     )
     data class CommandResult(
         val requestId: String, val queued: Boolean, val detail: String = "", val rejected: Boolean = false,
@@ -116,6 +149,32 @@ class MT5RemoteBridgeClient(
     fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
     fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
     fun hasPairing(): Boolean = secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()
+    /** Pre-login configuration check. Unlike /health/ready, this does not require a paired terminal heartbeat. */
+    suspend fun checkServiceConfiguration(): ServiceReadiness = withContext(Dispatchers.IO) {
+        val base = validateBaseUrl(baseUrl()) ?: return@withContext ServiceReadiness(false, null, "CONFIGURATION_REQUIRED", "unknown", "unknown")
+        val req = Request.Builder().url(base + "/health/config").header("Accept", "application/json")
+            .apply { addOptionalAccessHeaders(this) }.get().build()
+        try {
+            http.newCall(req).execute().use { response ->
+                val body = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrElse { JSONObject() }
+                val detail = body.optJSONObject("detail")
+                ServiceReadiness(
+                    httpReachable = true,
+                    httpStatus = response.code,
+                    serviceStatus = body.optString("status", if (response.isSuccessful) "unknown" else "not_configured"),
+                    database = body.optString("database", "unknown"),
+                    managedExecution = body.optString("managed_execution", "unknown"),
+                    errorCode = detail?.optString("code").orEmpty(),
+                    perUserTerminalIsolation = body.optString("per_user_terminal_isolation", "unknown")
+                )
+            }
+        } catch (e: BridgeGatewayException) {
+            ServiceReadiness(false, null, e.failure.name, "unknown", "unknown", e.failure.name)
+        } catch (_: Exception) {
+            ServiceReadiness(false, null, "unreachable", "unknown", "unknown")
+        }
+    }
+
     /** Probes service readiness independently of any paired account or terminal. HTTP 200 alone is not trading readiness. */
     suspend fun checkServiceReadiness(): ServiceReadiness = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: return@withContext ServiceReadiness(false, null, "CONFIGURATION_REQUIRED", "unknown", "unknown")
@@ -156,6 +215,15 @@ class MT5RemoteBridgeClient(
         val managementIdentityAssertion = managementIdentityAssertionProvider?.invoke().orEmpty()
         require(managementIdentityAssertion.length >= 100) {
             "MANAGEMENT_SIGN_IN_REQUIRED: sign in to the DestinedFX management account before registering broker credentials."
+        }
+        val serviceConfiguration = checkServiceConfiguration()
+        require(
+            serviceConfiguration.httpReachable && serviceConfiguration.httpStatus == 200 &&
+                serviceConfiguration.serviceStatus == "configured" &&
+                serviceConfiguration.database == "ok" && serviceConfiguration.managedExecution == "configured"
+        ) { "SERVICE_CONFIGURATION_NOT_READY: the managed bridge database and execution configuration must be ready before broker credentials are submitted." }
+        require(serviceConfiguration.perUserTerminalIsolation != "BLOCKED") {
+            "PER_USER_TERMINAL_ISOLATION_REQUIRED: this Linux host uses one shared terminal and cannot safely log in separate user accounts. Use a verified per-user terminal-slot host."
         }
         require(accessType == "MASTER" || accessType == "INVESTOR")
         require(brokerBrand in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
