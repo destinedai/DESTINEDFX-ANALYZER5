@@ -427,20 +427,11 @@ fun MetaTraderBrokerFlow(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
                         keyboardActions = loginKeyboardActions(),
                     )
-                    val pairingProfile = "${spec.id.removeSuffix("_MT5")}_${form.mode.name}"
-                    if (secrets.getMT5BridgeAccountAppToken(pairingProfile).isBlank()) {
-                        OutlinedTextField(
-                            value = form.ownerBootstrapCode,
-                            onValueChange = { form = form.copy(ownerBootstrapCode = it.trim()) },
-                            modifier = Modifier.fillMaxWidth().testTag("bridge_bootstrap_code"),
-                            label = { Text("One-time owner bootstrap code") },
-                            supportingText = { Text("Required for the first public Codespaces pairing. Expires after 10 minutes; it is not saved.") },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                            keyboardActions = loginKeyboardActions(),
-                        )
-                    }
+                    Text(
+                        "The app securely requests the one-time Codespaces pairing approval after management sign-in. No terminal code needs to be copied.",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                    )
                     DropdownMenu(serverMenu, { serverMenu = false }) {
                         ServerOptions.build(spec, emptyList(), emptyList()).forEach { option ->
                             if (option is ServerOption.Suggested) DropdownMenuItem(
