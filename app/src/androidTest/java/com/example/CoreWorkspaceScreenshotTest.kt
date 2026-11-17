@@ -7,19 +7,25 @@ import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.provider.MediaStore
-import androidx.test.core.app.ActivityScenario
+import androidx.compose.ui.test.fetchSemanticsNodes
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.ui.DestinedFXScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class CoreWorkspaceScreenshotTest {
+    @get:Rule
+    val composeRule = createAndroidComposeRule<WorkspaceScreenshotActivity>()
+
     @Test
     fun capturesSixDedicatedWorkspacesAtCompactAndStandardPhoneWidths() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -43,15 +49,25 @@ class CoreWorkspaceScreenshotTest {
             DestinedFXScreen.Risk,
             DestinedFXScreen.Settings
         )
-        val scenario = ActivityScenario.launch(WorkspaceScreenshotActivity::class.java)
         try {
             val widthsAndHeights = listOf(320 to 800, 360 to 800, 390 to 844, 430 to 900)
             for ((widthDp, heightDp) in widthsAndHeights) {
                 setLogicalDisplay(instrumentation, widthDp, heightDp)
+                composeRule.waitForIdle()
                 for (screen in screens) {
-                    scenario.onActivity { it.showWorkspace(screen) }
-                    instrumentation.waitForIdleSync()
-                    SystemClock.sleep(250)
+                    composeRule.activity.showWorkspace(screen)
+                    // StateFlow collection and Compose rendering are asynchronous. Do not save a
+                    // stale frame under the next screen's filename: wait for the actual visible
+                    // workspace header to match the requested destination before taking a shot.
+                    composeRule.waitUntil(timeoutMillis = 10_000L) {
+                        composeRule.onAllNodesWithText(
+                            text = screen.title,
+                            substring = false,
+                            ignoreCase = false,
+                        ).fetchSemanticsNodes().isNotEmpty()
+                    }
+                    composeRule.waitForIdle()
+                    SystemClock.sleep(150)
                     val image = instrumentation.uiAutomation.takeScreenshot()
                     assertNotNull("Screenshot unavailable for ${screen.title} at ${widthDp}dp", image)
                     val fileName = "${screen.title.lowercase().replace(' ', '_')}_${widthDp}dp.png"
@@ -106,7 +122,7 @@ class CoreWorkspaceScreenshotTest {
         } finally {
             runShell(instrumentation, "wm size reset")
             runShell(instrumentation, "wm density reset")
-            scenario.close()
+            composeRule.waitForIdle()
         }
     }
 
