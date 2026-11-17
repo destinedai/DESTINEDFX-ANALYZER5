@@ -25,6 +25,43 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** Android control/status client for the remote MT5 relay. Never places orders. */
+data class VerifiedBrokerQuote(
+    val symbol: String,
+    val bid: Double,
+    val ask: Double,
+    val timestampMs: Long,
+    val ageMs: Long,
+    val source: String = "MT5_TERMINAL"
+)
+
+/** Parses only finite, two-sided, fresh quotes returned by the account-bound terminal heartbeat. */
+internal fun parseVerifiedBrokerQuotes(
+    rows: org.json.JSONArray?,
+    nowMs: Long,
+    maxAgeMs: Long = 15_000L
+): List<VerifiedBrokerQuote>? {
+    if (rows == null) return null
+    if (nowMs <= 0L || maxAgeMs <= 0L) return emptyList()
+    val accepted = mutableListOf<VerifiedBrokerQuote>()
+    val seen = mutableSetOf<String>()
+    for (index in 0 until rows.length()) {
+        val row = rows.optJSONObject(index) ?: continue
+        val symbol = row.optString("symbol").trim()
+        val bid = row.optDouble("bid", Double.NaN)
+        val ask = row.optDouble("ask", Double.NaN)
+        val timestampMs = row.optLong("timestamp_ms", 0L)
+        val ageMs = nowMs - timestampMs
+        val key = symbol.uppercase(java.util.Locale.ROOT)
+        if (symbol.isBlank() || symbol.any { it.code < 32 || it.code == 127 } ||
+            !bid.isFinite() || !ask.isFinite() || bid <= 0.0 || ask < bid ||
+            timestampMs <= 0L || ageMs < 0L || ageMs > maxAgeMs || !seen.add(key)) {
+            continue
+        }
+        accepted += VerifiedBrokerQuote(symbol, bid, ask, timestampMs, ageMs)
+    }
+    return accepted
+}
+
 class MT5RemoteBridgeClient(
     private val secrets: SecretsManager,
     profile: String,
@@ -140,7 +177,8 @@ class MT5RemoteBridgeClient(
         val currency: String, val balance: Double?, val equity: Double?,
         val margin: Double?, val freeMargin: Double?, val marginLevel: Double?, val leverage: Int?,
         val positions: List<JSONObject>?, val activeOrders: List<JSONObject>?, val closedDeals: List<JSONObject>?,
-        val snapshotsValid: Boolean, val lastSignal: JSONObject?, val newsVerdict: JSONObject?, val raw: JSONObject
+        val snapshotsValid: Boolean, val lastSignal: JSONObject?, val newsVerdict: JSONObject?, val raw: JSONObject,
+        val brokerQuotes: List<VerifiedBrokerQuote>? = null
     )
 
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
@@ -344,6 +382,11 @@ class MT5RemoteBridgeClient(
             }
             return out
         }
+        val brokerQuotes = parseVerifiedBrokerQuotes(
+            obj.optJSONArray("broker_quotes"),
+            System.currentTimeMillis(),
+            obj.optLong("broker_quote_stale_ms", 15_000L).coerceIn(1L, 15_000L)
+        )
         val managedState = managed?.let { it.optString("status", it.optString("state", "")) }.orEmpty().uppercase()
         val workerStatus = managed?.optString("worker_status", "UNKNOWN").orEmpty().uppercase()
         val access = managed?.optString("access_type", "").orEmpty().uppercase()
@@ -364,7 +407,7 @@ class MT5RemoteBridgeClient(
             account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
             account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
-            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj
+            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes
         )
     }
 
