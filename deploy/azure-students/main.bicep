@@ -34,6 +34,9 @@ param sshPublicKey string
 @description('Email for the USD 1 monthly budget alert. Budget alerts do not cap usage.')
 param budgetEmail string
 
+@description('Generated as the first day of the current UTC month for the monthly budget period.')
+param budgetStartDate string = utcNow('yyyy-MM-01')
+
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
   location: location
@@ -59,7 +62,7 @@ resource budget 'Microsoft.Consumption/budgets@2023-11-01' = {
     amount: 1
     timeGrain: 'Monthly'
     timePeriod: {
-      startDate: '2026-01-01'
+      startDate: budgetStartDate
     }
     notifications: {
       eightyPercent: {
