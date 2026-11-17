@@ -555,17 +555,33 @@ jobs:
         with:
           azcliversion: latest
           inlineScript: |
-            az bicep build --file deploy/azure-students/main.bicep --outfile /tmp/azuredeploy.json
+            generated = "$GITHUB_WORKSPACE/.azuredeploy.generated.json"
+            az bicep build --file deploy/azure-students/main.bicep --outfile "$generated"
             python3 - <<'PY'
-            from pathlib import Path
+            import json
             import sys
+            from pathlib import Path
 
-            generated = Path('/tmp/azuredeploy.json').read_bytes()
-            checked_in = Path('deploy/azure-students/azuredeploy.json').read_bytes()
+            generated = json.loads(Path('.azuredeploy.generated.json').read_text())
+            checked_in = json.loads(Path('deploy/azure-students/azuredeploy.json').read_text())
             if generated != checked_in:
-                print('Generated Bicep template differs from deploy/azure-students/azuredeploy.json', file=sys.stderr)
+                print(
+                    'Generated Bicep template is semantically different from '
+                    'deploy/azure-students/azuredeploy.json; inspect the '
+                    'azure-bicep-compiled-template artifact.',
+                    file=sys.stderr,
+                )
                 sys.exit(1)
+            print('Generated Bicep template matches the checked-in ARM template.')
             PY
+      - name: Preserve generated ARM template for CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-bicep-compiled-template
+          path: .azuredeploy.generated.json
+          if-no-files-found: warn
+          retention-days: 7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
