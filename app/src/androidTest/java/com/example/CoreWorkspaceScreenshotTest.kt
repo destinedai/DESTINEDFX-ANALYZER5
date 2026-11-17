@@ -7,8 +7,9 @@ import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.provider.MediaStore
-import androidx.compose.ui.test.fetchSemanticsNodes
-import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -60,12 +61,12 @@ class CoreWorkspaceScreenshotTest {
                     // stale frame under the next screen's filename: wait for the actual visible
                     // workspace header to match the requested destination before taking a shot.
                     composeRule.waitUntil(timeoutMillis = 10_000L) {
-                        composeRule.onAllNodesWithText(
-                            text = screen.title,
-                            substring = false,
-                            ignoreCase = false,
-                        ).fetchSemanticsNodes().isNotEmpty()
+                        runCatching {
+                            composeRule.onNodeWithTag("workspace_header_title")
+                                .assertTextEquals(screen.title)
+                        }.isSuccess
                     }
+                    composeRule.onNodeWithTag("workspace_header_title").assertIsDisplayed()
                     composeRule.waitForIdle()
                     SystemClock.sleep(150)
                     val image = instrumentation.uiAutomation.takeScreenshot()
