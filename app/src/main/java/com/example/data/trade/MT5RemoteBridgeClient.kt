@@ -52,11 +52,13 @@ internal fun parseVerifiedBrokerQuotes(
         val ask = row.optDouble("ask", Double.NaN)
         val digits = row.optInt("digits", 5)
         val timestampMs = row.optLong("timestamp_ms", 0L)
-        val ageMs = nowMs - timestampMs
+        val rawAgeMs = nowMs - timestampMs
+        val ageMs = rawAgeMs.coerceAtLeast(0L)
         val key = symbol.uppercase(java.util.Locale.ROOT)
         if (symbol.isBlank() || symbol.any { it.code < 32 || it.code == 127 } ||
             !bid.isFinite() || !ask.isFinite() || bid <= 0.0 || ask < bid ||
-            digits !in 0..12 || timestampMs <= 0L || ageMs < 0L || ageMs > maxAgeMs || !seen.add(key)) {
+            digits !in 0..12 || timestampMs <= 0L || rawAgeMs < -3_000L ||
+            rawAgeMs > maxAgeMs || !seen.add(key)) {
             continue
         }
         accepted += VerifiedBrokerQuote(symbol, bid, ask, digits, timestampMs, ageMs)
