@@ -555,14 +555,14 @@ jobs:
         with:
           azcliversion: latest
           inlineScript: |
-            generated="$GITHUB_WORKSPACE/.azuredeploy.generated.json"
+            generated="$GITHUB_WORKSPACE/deploy/azure-students/azuredeploy.generated.json"
             az bicep build --file deploy/azure-students/main.bicep --outfile "$generated"
             python3 - <<'PY'
             import json
             import sys
             from pathlib import Path
 
-            generated = json.loads(Path('.azuredeploy.generated.json').read_text())
+            generated = json.loads(Path('deploy/azure-students/azuredeploy.generated.json').read_text())
             checked_in = json.loads(Path('deploy/azure-students/azuredeploy.json').read_text())
             if generated != checked_in:
                 print(
@@ -579,7 +579,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: azure-bicep-compiled-template
-          path: .azuredeploy.generated.json
+          path: deploy/azure-students/azuredeploy.generated.json
           if-no-files-found: warn
           retention-days: 7
       - uses: actions/setup-python@v5
