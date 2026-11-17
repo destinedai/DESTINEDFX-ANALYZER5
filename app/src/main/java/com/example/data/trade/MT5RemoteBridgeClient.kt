@@ -220,9 +220,24 @@ class MT5RemoteBridgeClient(
         require(managementIdentityAssertion.length >= 100) {
             "MANAGEMENT_SIGN_IN_REQUIRED: a signed management identity assertion is required for MT5 pairing."
         }
-        val bootstrap = ownerBootstrapCode.trim()
+        var bootstrap = ownerBootstrapCode.trim()
         require(bootstrap.length <= 200 && bootstrap.none { it.code < 32 || it.code == 127 }) {
             "Invalid owner bootstrap code."
+        }
+        // Public Codespaces mode requires a one-use owner code. Obtain it over HTTPS using
+        // the same short-lived signed management identity; do not ask users to copy codes
+        // from a Codespaces terminal or persist the code on the device.
+        if (bootstrap.isBlank()) {
+            val host = request("GET", "/health", includeAppAuthorization = false)
+            if (host.optBoolean("public_exposure", false)) {
+                val issued = request(
+                    "POST", "/v1/owner/bootstrap-code", JSONObject(),
+                    managementIdentityAssertion = managementIdentityAssertion,
+                    includeAppAuthorization = false
+                )
+                bootstrap = issued.optString("owner_bootstrap_code")
+                require(bootstrap.isNotBlank()) { "Bridge did not issue a one-time pairing bootstrap code." }
+            }
         }
         val body = request(
             "POST", "/v1/pairings", JSONObject(),
@@ -761,6 +776,7 @@ class MT5RemoteBridgeClient(
             if (assertion == null) return
             require(method == "POST" && path in setOf(
                 "/v1/pairings",
+                "/v1/owner/bootstrap-code",
                 "/v1/app/managed-account",
                 "/v1/app/demo-acceptance",
                 "/v1/app/live-profile-association"
