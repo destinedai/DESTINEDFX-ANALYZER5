@@ -41,6 +41,17 @@ class MT5RemoteBridgeClientTest {
         assertEquals(null, parseVerifiedBrokerQuotes(null, now))
     }
 
+    @Test fun brokerQuoteParserAllowsOnlySmallClockSkewAndClampsDisplayedAge() {
+        val now = 1_800_000_000_000L
+        val rows = JSONArray()
+            .put(JSONObject().put("symbol", "EURUSD").put("bid", 1.1).put("ask", 1.1002).put("digits", 5).put("timestamp_ms", now + 1000L))
+            .put(JSONObject().put("symbol", "GBPUSD").put("bid", 1.2).put("ask", 1.2002).put("digits", 5).put("timestamp_ms", now + 5000L))
+        val accepted = parseVerifiedBrokerQuotes(rows, now)
+        assertEquals(1, accepted?.size)
+        assertEquals(0L, accepted!!.single().ageMs)
+        assertEquals("EURUSD", accepted.single().symbol)
+    }
+
     @Test fun unavailableEncryptedStorageBlocksManagedRegistrationBeforeNetwork() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
