@@ -441,6 +441,41 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val actionSnapshotVerified = verifiedActionSnapshot != null
                     val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshotVerified && !bridgeBusy && !bridgeCommandPending
                     Text("SNAPSHOT-BOUND MANAGEMENT · $selectedAccountMode", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_snapshot_management_header"))
+                    val terminalQuotes = bridgeSnapshot?.brokerQuotes.orEmpty()
+                    Text("SELECTED BROKER · MT5 TERMINAL PRICES", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_broker_quotes_header"))
+                    if (bridgeSnapshot?.connected == true && bridgeSnapshot?.heartbeatFresh == true &&
+                        bridgeSnapshot?.brokerIdentityVerified == true && terminalQuotes.isNotEmpty()) {
+                        terminalQuotes.forEach { quote ->
+                            val priceFormat = "%.${quote.digits}f"
+                            Row(
+                                modifier = Modifier.fillMaxWidth().testTag("mt5_broker_quote_${quote.symbol}"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(quote.symbol, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                    Text("BID ${String.format(java.util.Locale.US, priceFormat, quote.bid)}  ·  ASK ${String.format(java.util.Locale.US, priceFormat, quote.ask)}",
+                                        color = ProfitGreen, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                }
+                                Text("${quote.ageMs} ms · ${quote.source}", color = TextSecondary, fontSize = 8.sp)
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = when {
+                                bridgeSnapshot == null -> "Broker prices unavailable · waiting for a verified terminal snapshot."
+                                bridgeSnapshot.brokerIdentityVerified.not() -> "Broker prices withheld · account company/server identity is not verified."
+                                bridgeSnapshot.heartbeatFresh.not() -> "Broker prices withheld · MT5 terminal heartbeat is stale."
+                                terminalQuotes.isEmpty() -> "No fresh MT5 bid/ask ticks received for the configured broker symbols."
+                                else -> "Broker prices unavailable."
+                            },
+                            color = WarningAmber,
+                            fontSize = 9.sp,
+                            modifier = Modifier.testTag("mt5_broker_quotes_status")
+                        )
+                    }
+                    Text("These are quotes from this account's authenticated MT5 terminal. Analyzer/provider prices remain a separate feed and are not substituted for these broker prices.",
+                        color = TextSecondary, fontSize = 9.sp)
                     if (verifiedActionSnapshot != null) {
                         val verifiedOrders = verifiedActionSnapshot.activeOrders.orEmpty()
                         Text("PENDING ORDERS (${verifiedOrders.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_pending_orders_section"))
