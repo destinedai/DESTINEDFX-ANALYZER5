@@ -26,6 +26,7 @@ HOST_STARTED_AT_EPOCH_SECONDS=max(0,int(os.getenv('HOST_STARTED_AT_EPOCH_SECONDS
 ALLOW_LOOPBACK=os.getenv('ALLOW_LOOPBACK_HTTP','false').lower()=='true'
 MAX_BODY=int(os.getenv('MAX_BODY_BYTES','65536'))
 PAIR_RATE=int(os.getenv('PAIR_RATE_LIMIT','10'))
+OWNER_BOOTSTRAP_RATE=int(os.getenv('OWNER_BOOTSTRAP_RATE_LIMIT','10'))
 TOKEN_RATE=int(os.getenv('TOKEN_RATE_LIMIT','180'))
 # K3 public-exposure hardening. All of it is inert unless BRIDGE_PUBLIC_EXPOSURE=true.
 PUBLIC_EXPOSURE=os.getenv('BRIDGE_PUBLIC_EXPOSURE','false').strip().lower()=='true'
@@ -1583,12 +1584,20 @@ def readiness():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
     return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
 @app.post('/v1/owner/bootstrap-code')
-def create_owner_bootstrap_code(x_management_identity:str|None=Header(default=None)):
+def create_owner_bootstrap_code(request:Request, x_management_identity:str|None=Header(default=None)):
     """Issue a one-use ten-minute bootstrap code to a signed DestinedFX management session."""
     require_durable_execution()
     if not x_management_identity:
         raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'A signed management identity is required to issue a pairing bootstrap code'})
     _management_identity_claims(x_management_identity)
+    ip=client_ip(request); window=int(time.time()//60)
+    rate_key=digest('owner-bootstrap:'+ip)
+    with tx(True) as c:
+        row=c.execute('SELECT window,count FROM request_rate WHERE token_hash=?',(rate_key,)).fetchone()
+        if row and row['window']==window and row['count']>=OWNER_BOOTSTRAP_RATE:
+            raise HTTPException(429,detail={'code':'RATE_LIMITED','message':'Bootstrap code issuance rate limit exceeded'})
+        count=(row['count']+1) if row and row['window']==window else 1
+        c.execute('INSERT OR REPLACE INTO request_rate(token_hash,window,count) VALUES(?,?,?)',(rate_key,window,count))
     code,ttl=issue_owner_bootstrap_code()
     return {'owner_bootstrap_code':code,'expires_in_seconds':ttl}
 
