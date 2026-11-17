@@ -2200,3 +2200,66 @@ def test_live_daily_loss_breach_revokes_existing_server_lease(monkeypatch):
                       (pairing['pairing_id'],)).fetchone()
     assert row['live_authorized_until'] is None
     assert client.post('/v1/app/commands',headers=headers,json=command_req('START')).status_code==409
+
+
+def test_host_lifecycle_uses_absolute_maximum_not_resettable_idle_timeout(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'HOST_STARTED_AT_EPOCH_SECONDS', 1000)
+    monkeypatch.setattr(app, 'HOST_MAX_LIFETIME_SECONDS', 43200)
+    monkeypatch.setattr(app, 'HOST_WARNING_SECONDS', 3600)
+    monkeypatch.setattr(app, 'HOST_EMERGENCY_STOP_LEAD_SECONDS', 600)
+
+    active = app.host_lifecycle_state(1000 + 43200 - 3601)
+    assert active['host_lifecycle_status'] == 'ACTIVE'
+    assert active['host_remaining_seconds'] == 3601
+    assert active['host_shutdown_pending'] is False
+
+    warning = app.host_lifecycle_state(1000 + 43200 - 3599)
+    assert warning['host_lifecycle_status'] == 'WARNING'
+    assert warning['host_shutdown_pending'] is False
+
+    draining = app.host_lifecycle_state(1000 + 43200 - 599)
+    assert draining['host_lifecycle_status'] == 'SHUTDOWN_PENDING'
+    assert draining['host_shutdown_pending'] is True
+    assert draining['host_remaining_seconds'] == 599
+
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'PERSISTENT')
+    persistent = app.host_lifecycle_state(1000 + 43200 * 4)
+    assert persistent['host_lifecycle_status'] == 'PERSISTENT'
+    assert persistent['host_expiry_at_epoch_seconds'] is None
+    assert persistent['host_remaining_seconds'] is None
+    assert persistent['host_shutdown_pending'] is False
+
+
+def test_host_expiry_queues_one_non_liquidating_safety_stop_per_active_pairing(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'HOST_STARTED_AT_EPOCH_SECONDS', 1000)
+    monkeypatch.setattr(app, 'HOST_MAX_LIFETIME_SECONDS', 43200)
+    monkeypatch.setattr(app, 'HOST_EMERGENCY_STOP_LEAD_SECONDS', 600)
+    pairing_id = 'host-expiry-fixture-pairing'
+    with app.tx(True) as c:
+        c.execute(
+            'INSERT INTO pairings(id,code_hash,app_hash,expires,consumed,created) VALUES(?,?,?,?,1,?)',
+            (pairing_id, 'code-hash', 'app-hash', time.time() + 600, time.time())
+        )
+        c.execute(
+            """INSERT INTO managed_accounts
+               (pairing_id,login_enc,server_enc,password_enc,access_type,revoked,account_mode,broker_brand,credential_generation)
+               VALUES(?,?,?,?,?,0,'DEMO','FBS','fixture-generation')""",
+            (pairing_id, 'encrypted-login', 'encrypted-server', 'encrypted-password', 'MASTER')
+        )
+
+    near_expiry = 1000 + 43200 - 599
+    assert app.queue_host_expiry_safety_stops(near_expiry) == 1
+    assert app.queue_host_expiry_safety_stops(near_expiry) == 0
+    with app.tx() as c:
+        rows = c.execute(
+            'SELECT action,config,host_generation FROM commands WHERE pairing_id=?',
+            (pairing_id,)
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]['action'] == 'EMERGENCY_STOP'
+    assert rows[0]['config'] == '{}'
+    assert rows[0]['host_generation'] == app.HOST_GENERATION
