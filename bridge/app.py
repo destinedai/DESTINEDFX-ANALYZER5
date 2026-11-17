@@ -663,6 +663,7 @@ class TerminalQuote(BaseModel):
     symbol:StrictStr=Field(min_length=1,max_length=64)
     bid:float=Field(gt=0,allow_inf_nan=False)
     ask:float=Field(gt=0,allow_inf_nan=False)
+    digits:StrictInt=Field(default=5,ge=0,le=12)
     timestamp_ms:StrictInt=Field(gt=0)
 
     @model_validator(mode='after')
@@ -1872,19 +1873,21 @@ def fresh_terminal_broker_quotes(beat, now_ms=None):
         try:
             bid = float(row.get('bid'))
             ask = float(row.get('ask'))
+            digits = int(row.get('digits',5))
             timestamp_ms = int(row.get('timestamp_ms'))
         except (TypeError,ValueError,OverflowError):
             continue
         age_ms = now_ms - timestamp_ms
         if (not isinstance(symbol,str) or not symbol.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in symbol) or
             not math.isfinite(bid) or not math.isfinite(ask) or bid<=0 or ask<bid or
-            timestamp_ms<=0 or age_ms < -BROKER_QUOTE_FUTURE_SKEW_MS or age_ms > BROKER_QUOTE_MAX_AGE_MS):
+            digits<0 or digits>12 or timestamp_ms<=0 or
+            age_ms < -BROKER_QUOTE_FUTURE_SKEW_MS or age_ms > BROKER_QUOTE_MAX_AGE_MS):
             continue
         key=symbol.strip().upper()
         if key in seen:
             continue
         seen.add(key)
-        accepted.append({'symbol':symbol.strip(),'bid':bid,'ask':ask,'timestamp_ms':timestamp_ms,
+        accepted.append({'symbol':symbol.strip(),'bid':bid,'ask':ask,'digits':digits,'timestamp_ms':timestamp_ms,
                          'age_ms':max(0,age_ms),'source':'MT5_TERMINAL'})
     return accepted
 
