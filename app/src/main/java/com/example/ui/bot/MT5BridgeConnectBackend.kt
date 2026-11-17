@@ -1,32 +1,72 @@
 package com.example.ui.bot
 
 import com.example.data.broker.BrokerLoginSpec
-import com.example.data.trade.MT5RemoteBridgeClient
-import com.example.data.broker.LoginMode
 import com.example.data.broker.HostProfile
+import com.example.data.broker.LoginMode
+import com.example.data.management.ManagementException
+import com.example.data.management.ManagementFailure
+import com.example.data.trade.MT5ManagedAccountGateway
+import com.example.data.trade.MT5ManagedAccountLogin
+import com.example.data.trade.MT5RemoteBridgeClient
 import org.json.JSONObject
 
 /**
- * Real adapter over the verified bridge. It sends the credentials once through registerManagedAccount
- * and then only reads the bridge's own state; nothing here decides that an account is connected.
+ * Adapter over the actual managed bridge. The owner bootstrap code is passed only to the first
+ * pairing request; it is never stored with the broker password or retained for observation.
  */
-class MT5BridgeConnectBackend(private val client: MT5RemoteBridgeClient) : ConnectBackend {
+class MT5BridgeConnectBackend(private val client: MT5ManagedAccountGateway) : ConnectBackend {
     private var requestedForm: LoginForm? = null
 
     override suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm): String? {
         if (form.mode == LoginMode.LIVE && form.type == AccessType.TRADE) {
-            val hostProfile = client.state().hostProfile
+            // /v1/app/state requires an app bearer and cannot be called before a new profile is paired.
+            // /health is deliberately public and reports only the host's configured profile.
+            val hostProfile = client.hostProfile()
             if (hostProfile != HostProfile.PERSISTENT) return "EPHEMERAL_HOST_LIVE_BLOCKED"
         }
         return null
     }
 
     override suspend fun submit(spec: BrokerLoginSpec, form: LoginForm) {
-        requestedForm = form
-        client.registerManagedAccount(
-            login = form.login.trim(), password = form.password, server = form.server.trim(),
-            accessType = form.type.wireValue, consent = true, savePasswordLocally = form.savePassword,
-        )
+        // Keep only non-secret identity fields for later heartbeat comparison.
+        requestedForm = form.copy(password = "", ownerBootstrapCode = "")
+        try {
+            client.registerManagedAccount(
+                MT5ManagedAccountLogin(
+                    brokerBrand = spec.id.removeSuffix("_MT5"),
+                    accountMode = form.mode.name,
+                    login = form.login.trim(),
+                    password = form.password,
+                    server = form.server.trim(),
+                    accessType = form.type.wireValue,
+                    savePasswordLocally = form.savePassword,
+                    ownerBootstrapCode = form.ownerBootstrapCode.trim(),
+                )
+            )
+        } catch (e: MT5RemoteBridgeClient.BridgeHttpException) {
+            if (e.safeDescription in ConnectFailures.knownCodes) throw ConnectSubmissionFailure(e.safeDescription)
+            throw e
+        } catch (e: ManagementException) {
+            val code = when (e.failure) {
+                ManagementFailure.UNCONFIGURED,
+                ManagementFailure.AUTH_EXPIRED,
+                ManagementFailure.INVALID_CREDENTIALS -> "MANAGEMENT_SIGN_IN_REQUIRED"
+                else -> "MANAGEMENT_SERVICE_UNAVAILABLE"
+            }
+            throw ConnectSubmissionFailure(code)
+        } catch (e: IllegalArgumentException) {
+            mapConfigurationFailure(e.message)?.let { throw ConnectSubmissionFailure(it) }
+            throw e
+        } catch (e: IllegalStateException) {
+            mapConfigurationFailure(e.message)?.let { throw ConnectSubmissionFailure(it) }
+            throw e
+        }
+    }
+
+    private fun mapConfigurationFailure(message: String?): String? = when {
+        message.orEmpty().contains("MANAGEMENT_SIGN_IN_REQUIRED") -> "MANAGEMENT_SIGN_IN_REQUIRED"
+        message.orEmpty().contains("OWNER_BOOTSTRAP_REQUIRED") -> "OWNER_BOOTSTRAP_REQUIRED"
+        else -> null
     }
 
     override suspend fun observe(): ConnectObservation {
@@ -84,23 +124,3 @@ class MT5BridgeConnectBackend(private val client: MT5RemoteBridgeClient) : Conne
         )
     }
 }
-
-internal fun hasVerifiedModeMismatchEvidence(
-    requestedMode: String,
-    actualMode: String,
-    requestedLogin: String,
-    actualLogin: String,
-    requestedServer: String,
-    actualServer: String,
-    workerReady: Boolean,
-    terminalOnline: Boolean,
-    terminalConnected: Boolean,
-    heartbeatFresh: Boolean,
-    brokerIdentityVerified: Boolean,
-): Boolean =
-    requestedMode.uppercase() in setOf("DEMO", "LIVE") &&
-        actualMode.uppercase() in setOf("DEMO", "LIVE") &&
-        requestedMode.uppercase() != actualMode.uppercase() &&
-        requestedLogin.isNotBlank() && requestedLogin == actualLogin &&
-        requestedServer.isNotBlank() && requestedServer == actualServer &&
-        workerReady && terminalOnline && terminalConnected && heartbeatFresh && brokerIdentityVerified
