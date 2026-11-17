@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.trade.MT5RemoteBridgeClient
+import com.example.data.trade.parseVerifiedBrokerQuotes
 import com.example.security.SecretsManager
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
@@ -20,6 +21,25 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MT5RemoteBridgeClientTest {
+    @Test fun brokerQuoteParserAcceptsOnlyFreshFiniteTwoSidedUniqueTerminalPrices() {
+        val now = 1_800_000_000_000L
+        val rows = JSONArray()
+            .put(JSONObject().put("symbol", "EURUSD.a").put("bid", 1.08231).put("ask", 1.08245).put("timestamp_ms", now - 1200L))
+            .put(JSONObject().put("symbol", "GBPUSD").put("bid", 1.2700).put("ask", 1.2690).put("timestamp_ms", now))
+            .put(JSONObject().put("symbol", "USDJPY").put("bid", 150.0).put("ask", 150.02).put("timestamp_ms", now - 20_000L))
+            .put(JSONObject().put("symbol", "AUDUSD").put("bid", 0.6500).put("ask", 0.6502).put("timestamp_ms", now + 1L))
+            .put(JSONObject().put("symbol", "EURUSD.A").put("bid", 1.08230).put("ask", 1.08244).put("timestamp_ms", now))
+        val accepted = parseVerifiedBrokerQuotes(rows, now)
+        assertEquals(1, accepted?.size)
+        val quote = accepted!!.single()
+        assertEquals("EURUSD.a", quote.symbol)
+        assertEquals(1.08231, quote.bid, 0.0000001)
+        assertEquals(1.08245, quote.ask, 0.0000001)
+        assertEquals(1200L, quote.ageMs)
+        assertEquals("MT5_TERMINAL", quote.source)
+        assertEquals(null, parseVerifiedBrokerQuotes(null, now))
+    }
+
     @Test fun unavailableEncryptedStorageBlocksManagedRegistrationBeforeNetwork() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
