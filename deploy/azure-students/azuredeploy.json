@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "5417832959502577191"
+      "templateHash": "13661797003577343331"
     }
   },
   "parameters": {
@@ -74,6 +74,13 @@
       "metadata": {
         "description": "Email for the USD 1 monthly budget alert. Budget alerts do not cap usage."
       }
+    },
+    "budgetStartDate": {
+      "type": "string",
+      "defaultValue": "[utcNow('yyyy-MM-01')]",
+      "metadata": {
+        "description": "Generated as the first day of the current UTC month for the monthly budget period."
+      }
     }
   },
   "resources": [
@@ -92,7 +99,7 @@
         "amount": 1,
         "timeGrain": "Monthly",
         "timePeriod": {
-          "startDate": "2026-01-01"
+          "startDate": "[parameters('budgetStartDate')]"
         },
         "notifications": {
           "eightyPercent": {
