@@ -89,7 +89,7 @@ class MetaTraderBrokerFlowTest {
             composeRule.onNodeWithTag("broker_list").performScrollToNode(hasTestTag("broker_${brand}_MT5"))
             composeRule.onNodeWithTag("broker_${brand}_MT5").performClick()
             composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
-            composeRule.onNodeWithTag("mt5_login_fields_help").assertIsDisplayed()
+            composeRule.onNodeWithTag("mt5_login_fields_help").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
             composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
             composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("Fixture-Demo")
