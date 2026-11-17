@@ -441,14 +441,19 @@ string NewsJson(){return StringFormat("{\"status\":\"%s\",\"detail\":\"%s\",\"so
 string BrokerQuotesJson(){
    string output="[";
    int emitted=0;
-   long nowMs=(long)TimeGMT()*1000;
+   // MqlTick.time_msc is broker-server time. Normalize to UTC before
+   // comparing it with the Bridge clock or serializing the heartbeat.
+   datetime utcNow=TimeGMT();
+   datetime serverNow=TimeTradeServer();
+   long serverUtcOffsetMs=(long)(serverNow-utcNow)*1000;
+   long nowMs=(long)utcNow*1000;
    for(int i=0;i<ArraySize(g_symbols)&&i<32;i++)
    {
       string sym=Trim(g_symbols[i]);
       if(sym=="")continue;
       MqlTick q;
       if(!SymbolInfoTick(sym,q))continue;
-      long stamp=(long)q.time_msc;
+      long stamp=(long)q.time_msc-serverUtcOffsetMs;
       long ageMs=nowMs-stamp;
       long allowedAgeMs=(long)QuoteFreshnessSeconds(sym)*1000;
       int digits=(int)SymbolInfoInteger(sym,SYMBOL_DIGITS);
