@@ -696,14 +696,14 @@ def test_simultaneous_fbs_and_exness_demo_pairings_keep_tokens_telemetry_and_led
         configuration={'strategy':'smc-confluence-1.0.0','daily_risk_status':'NORMAL','daily_loss_used_percent':12.0},
         closed_deals=[{'ticket':51001,'position_id':61001,'symbol':'EURUSD','closed_at':app.iso(),
                        'profit':11.0,'commission':-0.5,'swap':0.0}],
-        broker_quotes=[{'symbol':'EURUSD','bid':1.08231,'ask':1.08245,'timestamp_ms':int(time.time()*1000)}]
+        broker_quotes=[{'symbol':'EURUSD','bid':1.08231,'ask':1.08245,'digits':5,'timestamp_ms':int(time.time()*1000)}]
     )
     exness_beat = heartbeat_data(
         account={**exness_account,'balance':20000,'equity':19800,'margin':200,'free_margin':19600,'margin_level':9900,'leverage':100},
         configuration={'strategy':'ict-silver-bullet','daily_risk_status':'WARNING_90','daily_loss_used_percent':91.0},
         closed_deals=[{'ticket':52001,'position_id':62001,'symbol':'GBPUSD','closed_at':app.iso(),
                        'profit':-40.0,'commission':-1.0,'swap':-0.2}],
-        broker_quotes=[{'symbol':'GBPUSD.a','bid':1.27111,'ask':1.27131,'timestamp_ms':int(time.time()*1000)}]
+        broker_quotes=[{'symbol':'GBPUSD.a','bid':1.27111,'ask':1.27131,'digits':5,'timestamp_ms':int(time.time()*1000)}]
     )
     for brand, beat in (('FBS', fbs_beat), ('EXNESS', exness_beat)):
         response = client.post('/v1/terminal/heartbeat', json=beat,
@@ -718,11 +718,11 @@ def test_simultaneous_fbs_and_exness_demo_pairings_keep_tokens_telemetry_and_led
     assert exness_state['configuration']['daily_risk_status'] == 'WARNING_90'
     assert fbs_state['account']['company'] == 'FBS Markets Inc.'
     assert exness_state['account']['company'] == 'Exness Technologies Ltd'
-    assert [(q['symbol'],q['bid'],q['ask'],q['source']) for q in fbs_state['broker_quotes']] == [
-        ('EURUSD',1.08231,1.08245,'MT5_TERMINAL')
+    assert [(q['symbol'],q['bid'],q['ask'],q['digits'],q['source']) for q in fbs_state['broker_quotes']] == [
+        ('EURUSD',1.08231,1.08245,5,'MT5_TERMINAL')
     ]
-    assert [(q['symbol'],q['bid'],q['ask'],q['source']) for q in exness_state['broker_quotes']] == [
-        ('GBPUSD.a',1.27111,1.27131,'MT5_TERMINAL')
+    assert [(q['symbol'],q['bid'],q['ask'],q['digits'],q['source']) for q in exness_state['broker_quotes']] == [
+        ('GBPUSD.a',1.27111,1.27131,5,'MT5_TERMINAL')
     ]
     assert fbs_state['broker_quotes'][0]['symbol'] != exness_state['broker_quotes'][0]['symbol']
 
