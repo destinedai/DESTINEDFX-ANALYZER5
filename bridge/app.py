@@ -1674,8 +1674,6 @@ def readiness():
     """Report whether the bridge can safely accept managed-execution work."""
     if os.getenv('EXECUTION_STORAGE_DURABLE', 'true').lower() != 'true':
         raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution readiness is disabled because this deployment uses ephemeral storage'})
-    if LINUX_HOST_MODE:
-        raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'The current Linux worker uses one shared MT5 terminal; a separately attested terminal slot per user is required before managed execution is ready'})
     try:
         managed_config()
         with tx() as c:
@@ -1685,6 +1683,8 @@ def readiness():
         raise
     except Exception:
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
+    if LINUX_HOST_MODE:
+        raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'The current Linux worker uses one shared MT5 terminal; a separately attested terminal slot per user is required before managed execution is ready'})
     if not verified_terminal_pairing_exists():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
     return {'status':'ready','database':'ok','managed_execution':'configured','per_user_terminal_isolation':'WORKER_ATTESTATION_REQUIRED','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS, **host_lifecycle_state()}
