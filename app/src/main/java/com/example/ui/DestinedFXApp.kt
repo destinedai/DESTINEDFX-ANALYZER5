@@ -241,7 +241,8 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                 text = selectedScreen.title,
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = TextPrimary
+                                color = TextPrimary,
+                                modifier = Modifier.testTag("workspace_header_title")
                             )
                             Text(
                                 text = selectedScreen.purpose,
