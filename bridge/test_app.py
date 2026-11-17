@@ -1973,7 +1973,7 @@ def public_mode(monkeypatch, host='fixture-codespace-8000.app.github.dev'):
     monkeypatch.setattr(app,'PUBLIC_EXPOSURE',True)
     monkeypatch.setattr(app,'EXPECTED_PUBLIC_HOST',host)
     with app.tx(immediate=True) as c:
-        c.execute('DELETE FROM ip_guard'); c.execute('DELETE FROM owner_bootstrap')
+        c.execute('DELETE FROM ip_guard'); c.execute('DELETE FROM owner_bootstrap'); c.execute('DELETE FROM request_rate')
 
 def test_public_mode_rejects_unexpected_host(monkeypatch):
     public_mode(monkeypatch)
@@ -2010,6 +2010,16 @@ def test_public_pairing_needs_one_time_owner_code(monkeypatch):
     assert ok.status_code==201
     assert pub.post('/v1/pairings',headers=signed_headers).status_code==401
     assert pub.post('/v1/owner/bootstrap-code',headers={**host,'X-Management-Identity':management_identity_assertion()}).status_code==200
+
+def test_owner_bootstrap_issuance_is_rate_limited(monkeypatch):
+    public_mode(monkeypatch)
+    monkeypatch.setattr(app,'OWNER_BOOTSTRAP_RATE',2)
+    host={'Host':'fixture-codespace-8000.app.github.dev','X-Management-Identity':management_identity_assertion()}
+    assert pub.post('/v1/owner/bootstrap-code',headers=host).status_code==200
+    assert pub.post('/v1/owner/bootstrap-code',headers=host).status_code==200
+    limited=pub.post('/v1/owner/bootstrap-code',headers=host)
+    assert limited.status_code==429
+    assert limited.json()['detail']['code']=='RATE_LIMITED'
 
 def test_owner_code_expires_after_ten_minutes(monkeypatch):
     public_mode(monkeypatch)
