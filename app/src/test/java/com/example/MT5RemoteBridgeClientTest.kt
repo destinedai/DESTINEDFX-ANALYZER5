@@ -36,6 +36,7 @@ class MT5RemoteBridgeClientTest {
         assertEquals(1.08231, quote.bid, 0.0000001)
         assertEquals(1.08245, quote.ask, 0.0000001)
         assertEquals(1200L, quote.ageMs)
+        assertEquals(5, quote.digits)
         assertEquals("MT5_TERMINAL", quote.source)
         assertEquals(null, parseVerifiedBrokerQuotes(null, now))
     }
