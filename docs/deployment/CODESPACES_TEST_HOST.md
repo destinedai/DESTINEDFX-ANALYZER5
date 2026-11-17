@@ -44,10 +44,9 @@ The command prints a bridge URL like:
 
 ```text
 BRIDGE URL:   https://<codespace-name>-8000.app.github.dev
-PAIRING CODE: <one-time code>
 ```
 
-The pairing code is valid once for 10 minutes. Never place it in source, logs, screenshots, issue reports, or a returned evidence file.
+The normal Android pairing flow no longer requires the owner to copy a bootstrap code. After the owner signs in to the DestinedFX management account, the app requests a one-use, ten-minute pairing bootstrap over HTTPS using the signed management identity. The Bridge rate-limits issuance and stores only the code hash. The CLI `owner_ctl.py issue-code` remains an operator fallback; never place a raw code in source, logs, screenshots, issue reports, or returned evidence files.
 
 ## Self-check results
 
@@ -57,12 +56,12 @@ A `FAIL` includes the next fix. `NOT_VERIFIED` means the owner must supply an ow
 
 ## Pair the phone and verify DEMO
 
-1. In the app open **Settings > Connection**.
-2. Enter the complete HTTPS bridge URL and the one-time owner pairing code.
+1. In the app sign in to the DestinedFX management account from **Settings**. This identity signs initial MT5 pairing requests; it is separate from broker credentials.
+2. Open **Settings > Connection** and enter the complete HTTPS bridge URL.
 3. Open **Bot > Accounts > Add account**.
-4. Search for the exact broker brand. Select the verified broker specification or create an explicitly unverified manual profile. Never guess a server.
-5. Open the official DEMO account page only if required by the broker. The app does not create the account.
-6. Enter the owner-issued login, password, and exact server. Start with DEMO. Do not enable LIVE.
+4. Search for the exact broker brand. Select the matching MT5 broker route. Never guess the server.
+5. Open the broker's official DEMO account page only if you need to create your own DEMO account; the app does not create it.
+6. Enter the account's login number, master password, and exact broker-issued server in the app. The app obtains the one-use pairing bootstrap automatically, then submits the broker credentials over HTTPS to the configured bridge. Start with DEMO. Do not enable LIVE.
 7. Confirm the verified account card shows the terminal-reported account, server, company identity, account mode, worker `READY`, and a fresh identity-matched EA heartbeat.
 8. Accept DEMO only after that fresh read-only verification. Record the complete owner-side lifecycle separately. No order is claimed by this runbook.
 9. Run `bash deploy/codespaces/verify-public-ready.sh` and return its redacted forwarding diagnostic with the connection report.
