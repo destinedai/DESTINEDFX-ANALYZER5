@@ -340,3 +340,24 @@ class ConnectUseCase(
 
     private fun failed(code: String) = ConnectOutcome.Failed(code, ConnectFailures.sentence(code))
 }
+
+/** Shared evidence gate used by both the primary Bot workspace and the broker-login adapter. */
+internal fun hasVerifiedModeMismatchEvidence(
+    requestedMode: String,
+    actualMode: String,
+    requestedLogin: String,
+    actualLogin: String,
+    requestedServer: String,
+    actualServer: String,
+    workerReady: Boolean,
+    terminalOnline: Boolean,
+    terminalConnected: Boolean,
+    heartbeatFresh: Boolean,
+    brokerIdentityVerified: Boolean,
+): Boolean =
+    requestedMode.uppercase() in setOf("DEMO", "LIVE") &&
+        actualMode.uppercase() in setOf("DEMO", "LIVE") &&
+        requestedMode.uppercase() != actualMode.uppercase() &&
+        requestedLogin.isNotBlank() && requestedLogin == actualLogin &&
+        requestedServer.isNotBlank() && requestedServer == actualServer &&
+        workerReady && terminalOnline && terminalConnected && heartbeatFresh && brokerIdentityVerified
