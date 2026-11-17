@@ -8,6 +8,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
@@ -84,7 +86,8 @@ class MetaTraderBrokerFlowTest {
         openFlow()
         composeRule.onNodeWithTag("add_account").performClick()
         listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
-            composeRule.onNodeWithTag("broker_${brand}_MT5").performScrollTo().performClick()
+            composeRule.onNodeWithTag("broker_list").performScrollToNode(hasTestTag("broker_${brand}_MT5"))
+            composeRule.onNodeWithTag("broker_${brand}_MT5").performClick()
             composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_login_fields_help").assertIsDisplayed()
             composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
