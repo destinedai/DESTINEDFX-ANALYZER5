@@ -17,6 +17,9 @@ def test_subscription_template_has_only_student_vm_sizes_and_conservative_disk_g
     assert params["vmSize"]["defaultValue"] == "Standard_B1s"
     assert params["vmSize"]["allowedValues"] == ["Standard_B1s", "Standard_B2ats_v2", "Standard_B2pts_v2"]
     assert params["osDiskSizeGb"]["allowedValues"] == [30]
+    assert params["budgetStartDate"]["defaultValue"] == "[utcNow('yyyy-MM-01')]"
+    assert "startDate: budgetStartDate" in BICEP
+    assert "2026-01-01" not in BICEP
     assert "Standard_D" not in BICEP
 
 
@@ -33,6 +36,12 @@ def test_cloud_init_is_embedded_and_names_missing_d1_fix() -> None:
     assert "ISOLATED_SLOT_REQUIRED" in body
     assert "destinedfx-azure-first-boot.service" in body
     assert "tailscale up --ssh --accept-dns=false" in body
+
+
+def test_student_subscription_access_is_an_explicit_owner_gate() -> None:
+    assert "active subscription" in README
+    assert "application was declined" in README
+    assert "No Azure resources are deployed" in README
 
 
 def test_deploy_button_decodes_to_pushed_compiled_template_path() -> None:
