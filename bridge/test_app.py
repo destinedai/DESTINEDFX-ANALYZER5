@@ -1984,7 +1984,19 @@ def test_public_pairing_needs_one_time_owner_code(monkeypatch):
     public_mode(monkeypatch)
     host={'Host':'fixture-codespace-8000.app.github.dev'}
     assert pub.post('/v1/pairings',headers=host).status_code==401
-    code,ttl=app.issue_owner_bootstrap_code()
+    # The active Android client can obtain this one-use code without a terminal session,
+    # but only through a fresh signed management identity assertion.
+    missing=pub.post('/v1/owner/bootstrap-code',headers=host)
+    assert missing.status_code==401
+    assert missing.json()['detail']['code']=='MANAGEMENT_IDENTITY_REQUIRED'
+    invalid=pub.post('/v1/owner/bootstrap-code',headers={**host,'X-Management-Identity':'invalid'})
+    assert invalid.status_code==401
+    issued=pub.post('/v1/owner/bootstrap-code',headers={
+        **host,'X-Management-Identity':management_identity_assertion()
+    })
+    assert issued.status_code==200, issued.text
+    code=issued.json()['owner_bootstrap_code']
+    ttl=issued.json()['expires_in_seconds']
     assert ttl==600
     # A missing signed identity must not consume the owner's one-time bootstrap code.
     missing_identity=pub.post('/v1/pairings',headers={**host,'X-Owner-Bootstrap':code})
@@ -1997,6 +2009,7 @@ def test_public_pairing_needs_one_time_owner_code(monkeypatch):
     ok=pub.post('/v1/pairings',headers=signed_headers)
     assert ok.status_code==201
     assert pub.post('/v1/pairings',headers=signed_headers).status_code==401
+    assert pub.post('/v1/owner/bootstrap-code',headers={**host,'X-Management-Identity':management_identity_assertion()}).status_code==200
 
 def test_owner_code_expires_after_ten_minutes(monkeypatch):
     public_mode(monkeypatch)
