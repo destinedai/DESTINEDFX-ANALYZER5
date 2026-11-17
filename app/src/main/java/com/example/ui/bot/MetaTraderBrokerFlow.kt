@@ -325,7 +325,7 @@ fun MetaTraderBrokerFlow(
                 if (filtered.isEmpty()) {
                     Text(BrokerCatalog.EMPTY_STATE, color = TextPrimary, fontSize = 18.sp, modifier = Modifier.testTag("broker_empty"))
                     Text(BrokerCatalog.CAUTION, color = WarningAmber, fontSize = 12.sp)
-                } else LazyColumn(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.weight(1f)) {
+                } else LazyColumn(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.weight(1f).testTag("broker_list")) {
                     items(filtered, key = { it.specId }) { row ->
                         BrokerRowCard(row) {
                             selected = BrokerLoginSpecs.byId(row.specId)
