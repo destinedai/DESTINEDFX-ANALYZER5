@@ -2,12 +2,12 @@ package com.example
 
 import com.example.data.broker.BrokerLoginSpecs
 import com.example.data.broker.HostProfile
+import com.example.data.broker.LoginMode
 import com.example.data.trade.MT5ManagedAccountGateway
 import com.example.data.trade.MT5ManagedAccountLogin
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.ui.bot.AccessType
 import com.example.ui.bot.LoginForm
-import com.example.ui.bot.LoginMode
 import com.example.ui.bot.MT5BridgeConnectBackend
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
