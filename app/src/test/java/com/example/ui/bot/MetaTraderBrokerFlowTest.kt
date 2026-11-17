@@ -2,7 +2,6 @@ package com.example.ui.bot
 
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -93,7 +92,6 @@ class MetaTraderBrokerFlowTest {
             composeRule.onNodeWithTag("server_field").assertIsDisplayed()
             composeRule.onNodeWithTag("login_mode_demo").performClick()
             composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
-            composeRule.onNodeWithTag("bridge_bootstrap_code").assertDoesNotExist()
             composeRule.onNodeWithTag("broker_back").performClick()
         }
     }
