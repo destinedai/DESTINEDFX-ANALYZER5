@@ -29,6 +29,7 @@ data class VerifiedBrokerQuote(
     val symbol: String,
     val bid: Double,
     val ask: Double,
+    val digits: Int,
     val timestampMs: Long,
     val ageMs: Long,
     val source: String = "MT5_TERMINAL"
@@ -49,15 +50,16 @@ internal fun parseVerifiedBrokerQuotes(
         val symbol = row.optString("symbol").trim()
         val bid = row.optDouble("bid", Double.NaN)
         val ask = row.optDouble("ask", Double.NaN)
+        val digits = row.optInt("digits", 5)
         val timestampMs = row.optLong("timestamp_ms", 0L)
         val ageMs = nowMs - timestampMs
         val key = symbol.uppercase(java.util.Locale.ROOT)
         if (symbol.isBlank() || symbol.any { it.code < 32 || it.code == 127 } ||
             !bid.isFinite() || !ask.isFinite() || bid <= 0.0 || ask < bid ||
-            timestampMs <= 0L || ageMs < 0L || ageMs > maxAgeMs || !seen.add(key)) {
+            digits !in 0..12 || timestampMs <= 0L || ageMs < 0L || ageMs > maxAgeMs || !seen.add(key)) {
             continue
         }
-        accepted += VerifiedBrokerQuote(symbol, bid, ask, timestampMs, ageMs)
+        accepted += VerifiedBrokerQuote(symbol, bid, ask, digits, timestampMs, ageMs)
     }
     return accepted
 }
