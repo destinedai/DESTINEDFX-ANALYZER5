@@ -29,7 +29,8 @@ def test_template_has_no_public_ip_or_inbound_security_rules() -> None:
 
 def test_cloud_init_is_embedded_and_names_missing_d1_fix() -> None:
     body = json.dumps(TEMPLATE)
-    assert "D1 host-agent.py is absent" in body
+    assert "Per-user isolated MT5 terminal slots are not implemented" in body
+    assert "ISOLATED_SLOT_REQUIRED" in body
     assert "destinedfx-azure-first-boot.service" in body
     assert "tailscale up --ssh --accept-dns=false" in body
 
