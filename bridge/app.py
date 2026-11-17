@@ -1,5 +1,6 @@
 import asyncio, os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error
 import re
+import logging
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from functools import lru_cache
@@ -23,6 +24,37 @@ if not HOST_GENERATION or len(HOST_GENERATION)>128:
     raise ValueError('HOST_GENERATION must be a bounded non-empty identifier')
 HOST_IDLE_TIMEOUT_SECONDS=max(300,min(14400,int(os.getenv('HOST_IDLE_TIMEOUT_SECONDS','14400'))))
 HOST_STARTED_AT_EPOCH_SECONDS=max(0,int(os.getenv('HOST_STARTED_AT_EPOCH_SECONDS',str(int(time.time())))))
+HOST_MAX_LIFETIME_SECONDS=max(300,min(43200,int(os.getenv('HOST_MAX_LIFETIME_SECONDS','43200'))))
+HOST_WARNING_SECONDS=max(60,min(HOST_MAX_LIFETIME_SECONDS,int(os.getenv('HOST_WARNING_SECONDS','3600'))))
+HOST_EMERGENCY_STOP_LEAD_SECONDS=max(60,min(1800,int(os.getenv('HOST_EMERGENCY_STOP_LEAD_SECONDS','600'))))
+LIFECYCLE_LOG=logging.getLogger('destinedfx.bridge.host-lifecycle')
+
+def host_lifecycle_state(now_epoch=None):
+    """Describe the absolute Codespaces lifetime separately from resettable idle timeout."""
+    if HOST_PROFILE != 'EPHEMERAL' or HOST_STARTED_AT_EPOCH_SECONDS <= 0:
+        return {
+            'host_lifecycle_status':'PERSISTENT' if HOST_PROFILE == 'PERSISTENT' else 'UNKNOWN',
+            'max_lifetime_seconds':None,
+            'host_warning_seconds':HOST_WARNING_SECONDS,
+            'host_emergency_stop_lead_seconds':HOST_EMERGENCY_STOP_LEAD_SECONDS,
+            'host_expiry_at_epoch_seconds':None,
+            'host_remaining_seconds':None,
+            'host_shutdown_pending':False,
+        }
+    current=time.time() if now_epoch is None else float(now_epoch)
+    expiry=HOST_STARTED_AT_EPOCH_SECONDS + HOST_MAX_LIFETIME_SECONDS
+    remaining=max(0,int(expiry-current))
+    pending=remaining <= HOST_EMERGENCY_STOP_LEAD_SECONDS
+    warning=remaining <= HOST_WARNING_SECONDS
+    return {
+        'host_lifecycle_status':'SHUTDOWN_PENDING' if pending else ('WARNING' if warning else 'ACTIVE'),
+        'max_lifetime_seconds':HOST_MAX_LIFETIME_SECONDS,
+        'host_warning_seconds':HOST_WARNING_SECONDS,
+        'host_emergency_stop_lead_seconds':HOST_EMERGENCY_STOP_LEAD_SECONDS,
+        'host_expiry_at_epoch_seconds':expiry,
+        'host_remaining_seconds':remaining,
+        'host_shutdown_pending':pending,
+    }
 ALLOW_LOOPBACK=os.getenv('ALLOW_LOOPBACK_HTTP','false').lower()=='true'
 MAX_BODY=int(os.getenv('MAX_BODY_BYTES','65536'))
 PAIR_RATE=int(os.getenv('PAIR_RATE_LIMIT','10'))
@@ -83,6 +115,37 @@ ANALYSIS_SYMBOL_POLICY={
 ANALYSIS_SESSION_POLICY={'FOREX':True,'METAL':True,'CRYPTO':False}
 _NEWS_CACHE={}
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
+_HOST_LIFECYCLE_TASK=None
+
+async def _host_lifecycle_guard():
+    """Queue an idempotent safety stop before an EPHEMERAL host reaches its hard limit."""
+    while True:
+        try:
+            queued=await asyncio.to_thread(queue_host_expiry_safety_stops)
+            if queued:
+                LIFECYCLE_LOG.warning("Host-expiry safety stop queued for %s managed pairing(s)",queued)
+        except Exception:
+            # Never log job payloads, broker identity, or credentials. Retry on the next tick.
+            LIFECYCLE_LOG.error("Host-expiry safety stop scheduling failed; retrying")
+        await asyncio.sleep(5)
+
+@app.on_event('startup')
+async def _start_host_lifecycle_guard():
+    global _HOST_LIFECYCLE_TASK
+    if HOST_PROFILE == 'EPHEMERAL' and HOST_STARTED_AT_EPOCH_SECONDS > 0 and _HOST_LIFECYCLE_TASK is None:
+        _HOST_LIFECYCLE_TASK=asyncio.create_task(_host_lifecycle_guard())
+
+@app.on_event('shutdown')
+async def _stop_host_lifecycle_guard():
+    global _HOST_LIFECYCLE_TASK
+    task=_HOST_LIFECYCLE_TASK
+    _HOST_LIFECYCLE_TASK=None
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 def cloudflare_access_settings():
     team_domain=os.getenv('CF_ACCESS_TEAM_DOMAIN','').strip().rstrip('/')
@@ -243,6 +306,35 @@ def tx(immediate=False):
     try: yield c; c.commit()
     except: c.rollback(); raise
     finally: c.close()
+
+
+def queue_host_expiry_safety_stops(now_epoch=None):
+    """Queue one non-liquidating EMERGENCY_STOP per connected account before host expiry."""
+    lifecycle=host_lifecycle_state(now_epoch)
+    if not lifecycle['host_shutdown_pending']:
+        return 0
+    queued=0
+    with tx(True) as c:
+        rows=c.execute(
+            """SELECT p.id FROM pairings p
+               JOIN managed_accounts m ON m.pairing_id=p.id
+               WHERE p.consumed=1 AND m.revoked=0 AND m.account_mode IN ('DEMO','LIVE')
+               ORDER BY p.id"""
+        ).fetchall()
+        for row in rows:
+            pairing_id=row['id']
+            request_id=str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                'destinedfx-host-expiry-stop:' + HOST_GENERATION + ':' + pairing_id
+            ))
+            inserted=c.execute(
+                """INSERT OR IGNORE INTO commands
+                   (pairing_id,request_id,action,config,host_generation)
+                   VALUES(?,?,'EMERGENCY_STOP','{}',?)""",
+                (pairing_id,request_id,HOST_GENERATION)
+            )
+            queued += max(0,inserted.rowcount)
+    return queued
 
 def secure(request):
     if request.url.scheme=='https': return
@@ -1411,6 +1503,9 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
     worker=worker_auth(authorization)
     require_worker_identity(worker,x.worker_id)
     fernet,_=managed_config(); worker_secret=worker['token']; t=time.time()
+    draining=host_lifecycle_state(t)['host_shutdown_pending']
+    if draining:
+        queue_host_expiry_safety_stops(t)
     with tx(True) as c:
         # Include in-flight provision leases as well as worker-reported terminal processes.
         # This closes the race where two simultaneous requests claim before either terminal
@@ -1420,7 +1515,7 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
             (x.worker_id,t)
         ).fetchone()[0]
         at_capacity = x.active_terminals >= x.max_terminals or leased_provisions >= x.max_terminals
-        if at_capacity:
+        if at_capacity or draining:
             r=c.execute("SELECT * FROM worker_jobs WHERE kind='REVOKE' AND (status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?)) ORDER BY created LIMIT 1",(t,)).fetchone()
         else:
             r=c.execute("SELECT * FROM worker_jobs WHERE status IN ('QUEUED','AWAITING_ATTESTATION') OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?) ORDER BY created LIMIT 1",(t,)).fetchone()
@@ -1555,7 +1650,13 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
 @app.get('/health/live')
 def live_health(): return {'status':'ok'}
 @app.get('/health')
-def health(): return {'status':'ok','host_profile':HOST_PROFILE,'public_exposure':PUBLIC_EXPOSURE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
+def health():
+    return {
+        'status':'ok','host_profile':HOST_PROFILE,'public_exposure':PUBLIC_EXPOSURE,
+        'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,
+        'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,
+        **host_lifecycle_state(),
+    }
 @app.get('/health/config')
 def configuration_health():
     require_durable_execution()
@@ -1565,7 +1666,7 @@ def configuration_health():
             c.execute('SELECT 1').fetchone()
     except Exception as error:
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'}) from error
-    return {'status':'configured','database':'ok','managed_execution':'configured','host_profile':HOST_PROFILE}
+    return {'status':'configured','database':'ok','managed_execution':'configured','host_profile':HOST_PROFILE, **host_lifecycle_state()}
 @app.get('/health/ready')
 def readiness():
     """Report whether the bridge can safely accept managed-execution work."""
@@ -1582,7 +1683,7 @@ def readiness():
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
     if not verified_terminal_pairing_exists():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
-    return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
+    return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS, **host_lifecycle_state()}
 @app.post('/v1/owner/bootstrap-code')
 def create_owner_bootstrap_code(request:Request, x_management_identity:str|None=Header(default=None)):
     """Issue a one-use ten-minute bootstrap code to a signed DestinedFX management session."""
@@ -1765,7 +1866,7 @@ def state(authorization:str|None=Header(default=None)):
         if actual:
             with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
     risk_controls=live_risk_controls(actual)
-    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
+    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command}
     if managed is not None: result['managed_execution']=managed
     return result
 
@@ -2227,6 +2328,8 @@ def issue_destructive_command(x,p):
 def command(x:Command,authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); check_json(x.config)
     linux_host_report()
+    if host_lifecycle_state()['host_shutdown_pending'] and x.action in ('START','RESUME'):
+        raise HTTPException(409,detail={'code':'HOST_SHUTDOWN_PENDING','message':'The Codespaces hard lifetime is approaching; new entries and resumes are blocked while the safety stop is active'})
     # A non-durable diagnostic deployment may still deliver a narrowly scoped
     # safety stop to a terminal already paired in the current process. It must
     # never create a new START/RESUME or a destructive trading command.
