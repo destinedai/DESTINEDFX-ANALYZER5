@@ -555,7 +555,7 @@ jobs:
         with:
           azcliversion: latest
           inlineScript: |
-            generated = "$GITHUB_WORKSPACE/.azuredeploy.generated.json"
+            generated="$GITHUB_WORKSPACE/.azuredeploy.generated.json"
             az bicep build --file deploy/azure-students/main.bicep --outfile "$generated"
             python3 - <<'PY'
             import json
