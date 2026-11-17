@@ -37,7 +37,7 @@ class MetaTraderBrokerFlowTest {
                 MetaTraderBrokerFlow(
                     secrets = secrets,
                     context = context,
-                    hostProfile = HostProfile.PERSISTENT,
+                    hostProfile = HostProfile.EPHEMERAL,
                     onGrantAccess = { _, _ -> "WAITING FOR SPOTWARE APPROVAL" },
                     onConnect = { _, _, _ -> ConnectOutcome.Failed("FIXTURE", "Fixture only") },
                     onRefreshAccount = { _, _ -> null },
@@ -77,5 +77,23 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("settings").assertIsDisplayed().performClick()
         composeRule.onNodeWithTag("settings_advanced").performClick()
         composeRule.onNodeWithTag("legacy_bot_tools").assertIsDisplayed()
+    }
+
+    @Test
+    fun everySupportedMt5BrokerShowsStandardLoginFieldsAndFirstPairingCode() {
+        openFlow()
+        composeRule.onNodeWithTag("add_account").performClick()
+        listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
+            composeRule.onNodeWithTag("broker_${brand}_MT5").performClick()
+            composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
+            composeRule.onNodeWithTag("mt5_login_fields_help").assertIsDisplayed()
+            composeRule.onNodeWithTag("field_login").assertIsDisplayed()
+            composeRule.onNodeWithTag("field_password").assertIsDisplayed()
+            composeRule.onNodeWithTag("server_field").assertIsDisplayed()
+            composeRule.onNodeWithTag("login_mode_demo").performClick()
+            composeRule.onNodeWithTag("bridge_bootstrap_code").performScrollTo().assertIsDisplayed()
+            composeRule.onNodeWithTag("bridge_bootstrap_code").performTextInput("fixture-one-time-code")
+            composeRule.onNodeWithTag("broker_back").performClick()
+        }
     }
 }
