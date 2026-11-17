@@ -20,7 +20,7 @@ The link is for the `free/phone-only-v1` branch. It will work only after that br
 4. Paste an SSH **public** key only. Never paste a private key into the portal, Cloud Shell, GitHub, or chat. Enter an email address for the USD 1 budget alerts.
 5. Deploy. The template refuses sizes outside the Azure for Students list and refuses disks other than 30 GB. No public IP is created.
 6. Open Azure Cloud Shell in the phone browser and run the output command that reads `/var/lib/destinedfx/first-run.txt`. The bootstrap prints the interactive Tailscale login URL when Tailscale is not yet authenticated. Open that URL, approve the device in the owner's Tailscale account, and install the Tailscale app on the phone. No Tailscale auth key is stored by this kit.
-7. Treat `status=BLOCKED` as a hard stop. On this branch the D1 Linux `host-agent.py` runtime is absent, so the first-run record names the exact fix: merge the reviewed D1 runtime into `free/phone-only-v1`, then restart `destinedfx-azure-first-boot.service`. Do not install a broker, pair an account, or trade before that fix.
+7. Treat `status=BLOCKED` as a hard stop. The diagnostic `host-agent.py` is present, but the Linux worker still rejects `ISOLATED_SLOT_REQUIRED` because it cannot provision a distinct terminal and Wine prefix for each user's broker account. The first-run record names the remaining D1 work. Do not enter broker credentials or trade on this Linux host until isolated slots, process ownership, revocation cleanup and multi-user tests pass. The existing Windows worker implementation is a separate route; it is not evidence that this Linux VM is ready.
 
 The equivalent Cloud Shell path is:
 
@@ -33,7 +33,7 @@ The script validates the allow-list, requires the Azure CLI session, and passes 
 
 ## Honest limits
 
-One 1 GB class VM is intended for one MT5 terminal only if the owner measures stable performance. This repository head does not contain the D1 Linux host runtime, so the kit cannot claim a working MT5 terminal, EA heartbeat, bridge, broker, or trading deployment. ARM is UNVERIFIED. Azure size availability varies by region. The student offer has one account per person and finite activation availability. A budget alert is not a spending cap. When the credit is exhausted, Microsoft says the subscription is disabled unless the owner upgrades.
+One 1 GB class VM is intended for one MT5 terminal only if the owner measures stable performance. The diagnostic Linux host agent is present, but the Linux worker still uses a shared terminal and explicitly refuses isolated per-user slots. Consequently this kit cannot claim a working isolated MT5 session, broker login, live balance synchronization, or trading deployment. ARM is UNVERIFIED. Azure size availability varies by region. The student offer has one account per person and finite activation availability. A budget alert is not a spending cap. When the credit is exhausted, Microsoft says the subscription is disabled unless the owner upgrades.
 
 No broker account was created and no order was placed.
 
