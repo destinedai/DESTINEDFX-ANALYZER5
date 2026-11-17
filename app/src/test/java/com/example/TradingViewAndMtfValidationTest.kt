@@ -336,9 +336,13 @@ class TradingViewAndMtfValidationTest {
         assertEquals("GBP/USD", mapping["frxGBPUSD"])
         assertEquals("XAU/USD", mapping["frxXAUUSD"])
         assertEquals("XAG/USD", mapping["frxXAGUSD"])
-        // Crypto is already served by the public Binance stream, so Deriv aliases must not
-        // override the canonical crypto tickers.
-        assertFalse(mapping.keys.any { it.startsWith("cry") })
+        // Only the two crypto instruments with explicit, audited Deriv resolver entries
+        // may be mapped. Other analyzer crypto labels must remain unsupported, not guessed.
+        assertEquals("BTC/USD", mapping["cryBTCUSD"])
+        assertEquals("ETH/USD", mapping["cryETHUSD"])
+        assertFalse(mapping.values.contains("BNB/USD"))
+        assertFalse(mapping.values.contains("SOL/USD"))
+        assertFalse(mapping.values.contains("XRP/USD"))
     }
 
     @Test
