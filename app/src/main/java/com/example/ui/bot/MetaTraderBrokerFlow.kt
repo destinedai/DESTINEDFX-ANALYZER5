@@ -211,9 +211,7 @@ fun MetaTraderBrokerFlow(
     }
 
     Column(
-        Modifier.fillMaxSize().background(Color.Black)
-            .then(if (page == FlowPage.LOGIN) Modifier.imePadding().verticalScroll(loginScrollState) else Modifier)
-            .padding(16.dp),
+        Modifier.fillMaxSize().background(Color.Black).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -357,6 +355,13 @@ fun MetaTraderBrokerFlow(
             }
             FlowPage.LOGIN -> {
                 val spec = selected ?: return@Column
+                // Keep the page header and Back control fixed; only the long login form scrolls.
+                // imePadding reduces the viewport above the keyboard while verticalScroll keeps
+                // every credential field and action reachable on short phone screens.
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().imePadding().verticalScroll(loginScrollState),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
                         onClick = { openUrl(spec.demoSignupUrl) },
@@ -503,6 +508,7 @@ fun MetaTraderBrokerFlow(
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("LOGIN")
                 }
                 if (busy) TextButton(onClick = { busy = false }, modifier = Modifier.height(48.dp)) { Text("CANCEL") }
+                }
             }
             FlowPage.PICK_ACCOUNT -> {
                 val spec = selected ?: return@Column
