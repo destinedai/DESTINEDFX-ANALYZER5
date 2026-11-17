@@ -2,6 +2,7 @@ package com.example.ui.bot
 
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -80,7 +81,7 @@ class MetaTraderBrokerFlowTest {
     }
 
     @Test
-    fun everySupportedMt5BrokerShowsStandardLoginFieldsAndFirstPairingCode() {
+    fun everySupportedMt5BrokerShowsStandardLoginFieldsWithoutManualBootstrap() {
         openFlow()
         composeRule.onNodeWithTag("add_account").performClick()
         listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
@@ -91,8 +92,8 @@ class MetaTraderBrokerFlowTest {
             composeRule.onNodeWithTag("field_password").assertIsDisplayed()
             composeRule.onNodeWithTag("server_field").assertIsDisplayed()
             composeRule.onNodeWithTag("login_mode_demo").performClick()
-            composeRule.onNodeWithTag("bridge_bootstrap_code").performScrollTo().assertIsDisplayed()
-            composeRule.onNodeWithTag("bridge_bootstrap_code").performTextInput("fixture-one-time-code")
+            composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
+            composeRule.onNodeWithTag("bridge_bootstrap_code").assertDoesNotExist()
             composeRule.onNodeWithTag("broker_back").performClick()
         }
     }
