@@ -108,6 +108,8 @@ data class LoginForm(
     val appId: String = "",
     val token: String = "",
     val savePassword: Boolean = false,
+    /** One-use public bridge bootstrap; never persisted with broker credentials. */
+    val ownerBootstrapCode: String = "",
 ) {
     // Never print secrets, even in logs or test failures.
     override fun toString(): String = "LoginForm(type=$type, login=${login.length} chars, server=$server, secrets=<redacted>)"
@@ -196,6 +198,9 @@ object ConnectFailures {
         "ALGO_TRADING_DISABLED" to "Algo trading is disabled in the terminal.",
         "WEBREQUEST_NOT_ALLOWED" to "The terminal is blocking the bridge address (WebRequest not allowed).",
         "ACCOUNT_DISABLED" to "The broker reports this account as disabled.",
+        "OWNER_BOOTSTRAP_REQUIRED" to "Enter the one-time owner bootstrap code for this first public bridge pairing. It expires after 10 minutes.",
+        "MANAGEMENT_SIGN_IN_REQUIRED" to "Sign in to your DestinedFX management account before connecting this managed MT5 broker. Secure account pairing requires that identity.",
+        "MANAGEMENT_SERVICE_UNAVAILABLE" to "The DestinedFX management service is not reachable. Broker credentials were not submitted.",
         "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.",
         "WAITING_FOR_SPOTWARE_APPROVAL" to "WAITING FOR SPOTWARE APPROVAL",
         "PROVIDER_AUTH_FAILED" to "Provider authorization failed. Check the grant and try again.",
