@@ -441,10 +441,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val actionSnapshotVerified = verifiedActionSnapshot != null
                     val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshotVerified && !bridgeBusy && !bridgeCommandPending
                     Text("SNAPSHOT-BOUND MANAGEMENT · $selectedAccountMode", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_snapshot_management_header"))
-                    val terminalQuotes = bridgeSnapshot?.brokerQuotes.orEmpty()
+                    val currentBrokerSnapshot = bridgeSnapshot
+                    val terminalQuotes = currentBrokerSnapshot?.brokerQuotes.orEmpty()
+                    val brokerQuotesReady = currentBrokerSnapshot?.let {
+                        it.connected && it.heartbeatFresh && it.brokerIdentityVerified
+                    } == true && terminalQuotes.isNotEmpty()
                     Text("SELECTED BROKER · MT5 TERMINAL PRICES", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_broker_quotes_header"))
-                    if (bridgeSnapshot?.connected == true && bridgeSnapshot?.heartbeatFresh == true &&
-                        bridgeSnapshot?.brokerIdentityVerified == true && terminalQuotes.isNotEmpty()) {
+                    if (brokerQuotesReady) {
                         terminalQuotes.forEach { quote ->
                             val priceFormat = "%.${quote.digits}f"
                             Row(
@@ -463,9 +466,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     } else {
                         Text(
                             text = when {
-                                bridgeSnapshot == null -> "Broker prices unavailable · waiting for a verified terminal snapshot."
-                                bridgeSnapshot.brokerIdentityVerified.not() -> "Broker prices withheld · account company/server identity is not verified."
-                                bridgeSnapshot.heartbeatFresh.not() -> "Broker prices withheld · MT5 terminal heartbeat is stale."
+                                currentBrokerSnapshot == null -> "Broker prices unavailable · waiting for a verified terminal snapshot."
+                                currentBrokerSnapshot?.brokerIdentityVerified != true -> "Broker prices withheld · account company/server identity is not verified."
+                                currentBrokerSnapshot?.heartbeatFresh != true -> "Broker prices withheld · MT5 terminal heartbeat is stale."
                                 terminalQuotes.isEmpty() -> "No fresh MT5 bid/ask ticks received for the configured broker symbols."
                                 else -> "Broker prices unavailable."
                             },
