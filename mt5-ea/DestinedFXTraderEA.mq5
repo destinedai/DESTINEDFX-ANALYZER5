@@ -451,11 +451,12 @@ string BrokerQuotesJson(){
       long stamp=(long)q.time_msc;
       long ageMs=nowMs-stamp;
       long allowedAgeMs=(long)QuoteFreshnessSeconds(sym)*1000;
-      if(stamp<=0||ageMs < -3000||ageMs > allowedAgeMs||
+      int digits=(int)SymbolInfoInteger(sym,SYMBOL_DIGITS);
+      if(stamp<=0||ageMs < -3000||ageMs > allowedAgeMs||digits<0||digits>12||
          !Finite(q.bid)||!Finite(q.ask)||q.bid<=0||q.ask<q.bid)continue;
       if(emitted>0)output+=",";
-      output+=StringFormat("{\"symbol\":\"%s\",\"bid\":%.10f,\"ask\":%.10f,\"timestamp_ms\":%I64d}",
-                           Esc(sym),q.bid,q.ask,stamp);
+      output+=StringFormat("{\"symbol\":\"%s\",\"bid\":%.10f,\"ask\":%.10f,\"digits\":%d,\"timestamp_ms\":%I64d}",
+                           Esc(sym),q.bid,q.ask,digits,stamp);
       emitted++;
    }
    return output+"]";
