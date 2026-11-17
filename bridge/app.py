@@ -1554,7 +1554,7 @@ def worker_job_status(job_id:str,worker_id:str=Query(min_length=1,max_length=128
 @app.get('/health/live')
 def live_health(): return {'status':'ok'}
 @app.get('/health')
-def health(): return {'status':'ok','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
+def health(): return {'status':'ok','host_profile':HOST_PROFILE,'public_exposure':PUBLIC_EXPOSURE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
 @app.get('/health/config')
 def configuration_health():
     require_durable_execution()
@@ -1582,6 +1582,16 @@ def readiness():
     if not verified_terminal_pairing_exists():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
     return {'status':'ready','database':'ok','managed_execution':'configured','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS}
+@app.post('/v1/owner/bootstrap-code')
+def create_owner_bootstrap_code(x_management_identity:str|None=Header(default=None)):
+    """Issue a one-use ten-minute bootstrap code to a signed DestinedFX management session."""
+    require_durable_execution()
+    if not x_management_identity:
+        raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'A signed management identity is required to issue a pairing bootstrap code'})
+    _management_identity_claims(x_management_identity)
+    code,ttl=issue_owner_bootstrap_code()
+    return {'owner_bootstrap_code':code,'expires_in_seconds':ttl}
+
 @app.post('/v1/pairings',status_code=201)
 def create_pair(request:Request, x_owner_bootstrap:str|None=Header(default=None), x_management_identity:str|None=Header(default=None)):
     require_durable_execution()
