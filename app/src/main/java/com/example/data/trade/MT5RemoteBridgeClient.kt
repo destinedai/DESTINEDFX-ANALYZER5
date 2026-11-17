@@ -33,7 +33,32 @@ class MT5RemoteBridgeClient(
     brokerBrand: String,
     private val modeArmingPolicy: ModeArmingPolicy? = null,
     private val managementIdentityAssertionProvider: (suspend () -> String)? = null
-) {
+) : MT5ManagedAccountGateway {
+    override suspend fun registerManagedAccount(login: MT5ManagedAccountLogin): Snapshot {
+        require(login.brokerBrand == brokerBrand && login.accountMode == accountMode) {
+            "Managed login request does not match this broker-qualified profile."
+        }
+        return registerManagedAccount(
+            login = login.login,
+            password = login.password,
+            server = login.server,
+            accessType = login.accessType,
+            consent = true,
+            savePasswordLocally = login.savePasswordLocally,
+            ownerBootstrapCode = login.ownerBootstrapCode
+        )
+    }
+
+    /** Public liveness metadata is readable before pairing; do not call authenticated /state to learn host type. */
+    override suspend fun hostProfile(): HostProfile {
+        val body = request("GET", "/health", includeAppAuthorization = false)
+        return when (body.optString("host_profile").uppercase()) {
+            "PERSISTENT" -> HostProfile.PERSISTENT
+            "EPHEMERAL" -> HostProfile.EPHEMERAL
+            else -> HostProfile.EPHEMERAL
+        }
+    }
+
     /** Legacy mode-keyed storage namespace; neutral identity migration is still pending. */
     val profile: String = profile.trim().uppercase().also {
         require(it.matches(Regex("[A-Z0-9_-]{1,80}"))) { "Invalid broker account profile key." }
@@ -212,7 +237,7 @@ class MT5RemoteBridgeClient(
         return Pairing(pairingId, code, body.optString("expires_at"))
     }
 
-    suspend fun state(): Snapshot {
+    override suspend fun state(): Snapshot {
         val obj = request("GET", "/v1/app/state")
         val account = obj.optJSONObject("account")
         val managed = obj.optJSONObject("managed_execution")
@@ -668,13 +693,13 @@ class MT5RemoteBridgeClient(
         }
     }
 
-    private suspend fun request(method: String, path: String, body: JSONObject? = null, ownerBootstrapCode: String? = null, managementIdentityAssertion: String? = null): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun request(method: String, path: String, body: JSONObject? = null, ownerBootstrapCode: String? = null, managementIdentityAssertion: String? = null, includeAppAuthorization: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException(if (!managedConfigured()) "CONFIGURATION_REQUIRED" else "Managed service URL is invalid; HTTPS is required.")
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
         addOptionalAccessHeaders(builder)
         addOwnerBootstrapHeader(builder, method, path, ownerBootstrapCode)
         addManagementIdentityHeader(builder, method, path, managementIdentityAssertion)
-        secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
+        if (includeAppAuthorization) secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty().take(256 * 1024)
@@ -683,7 +708,12 @@ class MT5RemoteBridgeClient(
                     val value = JSONObject(text).opt("detail")
                     if (value is JSONObject) value.optString("code", "") else value?.toString().orEmpty()
                 }.getOrDefault("")
-                val safe = detail.takeIf { it.matches(Regex("[A-Z0-9_]{1,64}")) } ?: "Bridge request failed (${response.code})."
+                val normalizedDetail = when (detail) {
+                    "Owner bootstrap code required" -> "OWNER_BOOTSTRAP_REQUIRED"
+                    "Management identity required", "MANAGEMENT_IDENTITY_REQUIRED", "MANAGEMENT_IDENTITY_NOT_CONFIGURED", "MANAGEMENT_IDENTITY_INVALID" -> "MANAGEMENT_SIGN_IN_REQUIRED"
+                    else -> detail
+                }
+                val safe = normalizedDetail.takeIf { it.matches(Regex("[A-Z0-9_]{1,64}")) } ?: "Bridge request failed (${response.code})."
                 throw BridgeHttpException(response.code, safe)
             }
             if (text.isBlank()) JSONObject() else try { JSONObject(text) } catch (_: Exception) { throw IllegalStateException("Bridge returned invalid JSON.") }
