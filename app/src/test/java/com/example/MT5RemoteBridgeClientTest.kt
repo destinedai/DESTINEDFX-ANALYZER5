@@ -41,6 +41,11 @@ class MT5RemoteBridgeClientTest {
             builder, "POST", "/v1/pairings", validAssertion
         )
         assertEquals(validAssertion, builder.build().header("X-Management-Identity"))
+        val bootstrapBuilder = Request.Builder().url("https://bridge.example.com")
+        MT5RemoteBridgeClient.addManagementIdentityHeader(
+            bootstrapBuilder, "POST", "/v1/owner/bootstrap-code", validAssertion
+        )
+        assertEquals(validAssertion, bootstrapBuilder.build().header("X-Management-Identity"))
         assertThrows(IllegalArgumentException::class.java) {
             MT5RemoteBridgeClient.addManagementIdentityHeader(
                 Request.Builder().url("https://bridge.example.com"),
