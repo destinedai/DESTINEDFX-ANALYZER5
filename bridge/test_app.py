@@ -1531,8 +1531,9 @@ def test_configuration_health_refuses_linux_slots_without_root_attestation(monke
         })
     monkeypatch.setattr(app, 'linux_host_report', unavailable_host)
     response = client.get('/health/config')
-    assert response.status_code == 503
-    assert response.json()['detail']['code'] == 'PER_USER_TERMINAL_ISOLATION_REQUIRED'
+    assert response.status_code == 200
+    assert response.json()['per_user_terminal_isolation'] == 'BLOCKED'
+    assert response.json()['isolated_slots'] == 0
 
 
 def test_malformed_managed_origin_fails_closed(monkeypatch):
@@ -2052,6 +2053,7 @@ def public_mode(monkeypatch, host='fixture-codespace-8000.app.github.dev'):
 
 def test_public_health_reports_exact_forwarded_host_for_mobile_discovery(monkeypatch):
     public_mode(monkeypatch)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
     health = pub.get('/health', headers={'Host': 'fixture-codespace-8000.app.github.dev'})
     assert health.status_code == 200
     body = health.json()
