@@ -65,6 +65,8 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     broker_specs = read_text(root, "app/src/main/java/com/example/data/broker/BrokerLoginSpec.kt")
     linux_slots = read_text(root, "scripts/linux-host/linux-slot-worker.py")
     codespaces_start = read_text(root, "deploy/codespaces/start.sh")
+    windows_installer = read_text(root, "managed-worker/windows/install-owner-stack.ps1")
+    windows_owner_setup = read_text(root, "managed-worker/windows/OWNER-SETUP.md")
     azure_bootstrap = read_text(root, "deploy/azure-students/cloud-init.yaml")
     broker_matrix = read_text(root, "docs/broker-capability-matrix.md")
     ea = read_text(root, "mt5-ea/DestinedFXTraderEA.mq5")
@@ -246,6 +248,20 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "isolated MT5 host memory floor",
         slot_memory_ok,
         "A terminal slot requires at least 3 GiB currently available memory; smaller hosts receive zero capacity and refuse provisioning.",
+    )
+
+    windows_background_host_ok = (
+        "New-ScheduledTaskTrigger -AtStartup" in windows_installer
+        and "New-ScheduledTaskTrigger -AtLogOn -User $owner" in windows_installer
+        and "-User $owner -Password $taskPassword" in windows_installer
+        and "LogonType Interactive" not in windows_installer
+        and "Task Scheduler stores its protected task credential" in windows_owner_setup
+    )
+    add_check(
+        checks,
+        "Windows owner host background startup",
+        windows_background_host_ok,
+        "The Windows Bridge/worker, backup and health jobs run as the DPAPI owner identity using Task Scheduler password logon at boot and sign-in; real logoff MT5 heartbeat acceptance remains external.",
     )
 
     azure_host_not_overstated = (
