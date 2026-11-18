@@ -72,8 +72,13 @@ def _run(
     return result
 
 
-def _sudo(*argv: str, input_text: str | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
-    return _run(["sudo", "-n", *argv], input_text=input_text, timeout=timeout)
+def _sudo(
+    *argv: str,
+    input_text: str | None = None,
+    timeout: int = 30,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    return _run(["sudo", "-n", *argv], input_text=input_text, timeout=timeout, check=check)
 
 
 def _proc_start_ticks(pid: int, proc_root: Path = _PROC_ROOT) -> int | None:
@@ -387,6 +392,18 @@ class LinuxSlotManager:
             xvfb_pid=proc.pid, xvfb_start_ticks=ticks,
         )
 
+    def _slot_argv(self, reservation: SlotReservation, argv: list[str]) -> list[str]:
+        return [
+            "sudo", "-n", "-u", reservation.linux_user, "--", "env",
+            f"HOME={reservation.slot_root}",
+            f"WINEPREFIX={reservation.wine_prefix}",
+            f"DISPLAY={reservation.display}",
+            f"XAUTHORITY={reservation.xauthority}",
+            "WINEDEBUG=-all",
+            "WINEDLLOVERRIDES=",
+            *argv,
+        ]
+
     def run_as_slot(
         self,
         reservation: SlotReservation,
@@ -394,22 +411,28 @@ class LinuxSlotManager:
         *,
         input_text: str | None = None,
         timeout: int = 300,
-        stdout: int | None = subprocess.DEVNULL,
     ) -> subprocess.CompletedProcess:
-        env = [
-            "env",
-            f"HOME={reservation.slot_root}",
-            f"WINEPREFIX={reservation.wine_prefix}",
-            f"DISPLAY={reservation.display}",
-            f"XAUTHORITY={reservation.xauthority}",
-            "WINEDEBUG=-all",
-            "WINEDLLOVERRIDES=",
-        ]
         return _run(
-            ["sudo", "-n", "-u", reservation.linux_user, "--", *env, *argv],
-            input_text=input_text, timeout=timeout,
-            check=True,
+            self._slot_argv(reservation, argv),
+            input_text=input_text, timeout=timeout, check=True,
         )
+
+    def popen_as_slot(
+        self,
+        reservation: SlotReservation,
+        argv: list[str],
+        *,
+        stdout: int | Any = subprocess.DEVNULL,
+        stderr: int | Any = subprocess.STDOUT,
+    ) -> subprocess.Popen:
+        try:
+            return subprocess.Popen(
+                self._slot_argv(reservation, argv),
+                stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                start_new_session=True, close_fds=True,
+            )
+        except OSError:
+            raise IsolationError("SLOT_PROCESS_LAUNCH_FAILED") from None
 
     def stop(
         self,
@@ -459,7 +482,14 @@ class LinuxSlotManager:
             return
         # Only remove a home owned by the exact dedicated slot identity after all
         # its processes are confirmed dead.
-        _sudo("userdel", "--remove", username, check=False, timeout=60)
+        removed = _sudo("userdel", "--remove", username, check=False, timeout=60)
+        try:
+            pwd.getpwnam(username)
+            raise IsolationError("SLOT_USER_CLEANUP_FAILED")
+        except KeyError:
+            pass
+        if removed.returncode != 0:
+            raise IsolationError("SLOT_USER_CLEANUP_FAILED")
         self._release_display(display)
         log = self.runtime_root / f"xvfb-{pairing_key(pairing_id)}-{job_id}.log"
         log.unlink(missing_ok=True)
