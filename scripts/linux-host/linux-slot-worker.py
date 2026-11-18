@@ -70,6 +70,18 @@ def _log(message: str) -> None:
     print(f"destinedfx-slot-worker: {message}", flush=True)
 
 
+def _require_stop_config() -> None:
+    if not Path(os.environ.get("BRIDGE_DB_PATH", str(STATE / "bridge.sqlite3"))).is_file():
+        raise SlotWorkerError("BRIDGE_DATABASE_UNAVAILABLE")
+    try:
+        subprocess.run(
+            ["sudo", "-n", "true"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise SlotWorkerError("SLOT_ADMIN_PRIVILEGE_UNAVAILABLE") from None
+
+
 def _require_config() -> None:
     if CONTROL_URL != "http://127.0.0.1:8000":
         raise SlotWorkerError("CONTROL_PLANE_MUST_BE_LOOPBACK")
@@ -641,9 +653,10 @@ def main() -> int:
     global _MANAGER
     _MANAGER = LinuxSlotManager(SLOT_ROOT, SLOT_RUNTIME)
     try:
-        _require_config()
         if args.stop_all:
+            _require_stop_config()
             return stop_all()
+        _require_config()
         if args.loop:
             while True:
                 try:
