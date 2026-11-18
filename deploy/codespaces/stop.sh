@@ -41,9 +41,9 @@ stop_recorded() {
 # First stop per-pairing MT5 processes. This runner rechecks the durable
 # Bridge broker state and refuses cleanup if any account is unsafe or unknown.
 ROOT="$ROOT"
-if [[ -d "$SLOT_ROOT" ]]; then
+if [[ -d "$STATE/isolated-slots" ]]; then
   shopt -s nullglob
-  SLOT_MARKERS=("$SLOT_ROOT"/*/*/.destinedfx-worker.json)
+  SLOT_MARKERS=("$STATE/isolated-slots"/*.json)
   shopt -u nullglob
   if (( ${#SLOT_MARKERS[@]} > 0 )); then
     if [[ ! -s "$BRIDGE_DB" ]]; then
@@ -86,9 +86,9 @@ for entry in proc.glob("[0-9]*"):
     row=identity(pid)
     if not row: continue
     uid,ticks,args=row
-    if uid!=0 or not args or os.path.realpath(args[0])!=script:
+    if uid!=0 or len(args)<2 or os.path.realpath(args[1])!=script:
         continue
-    if args[1:] != ["--host","127.0.0.1","--port","8787"]:
+    if args[2:] != ["--host","127.0.0.1","--port","8787"]:
         continue
     try: os.kill(pid,signal.SIGTERM)
     except ProcessLookupError: continue
