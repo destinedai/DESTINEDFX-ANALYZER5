@@ -392,8 +392,12 @@ open class DestinedFXViewModel(
         viewModelScope.launch {
             marketDataStatus.value = "REFRESHING • " + symbol + " • " + timeframe
             try {
-                withTimeoutOrNull(4_000L) { app.marketDataRepository.refreshSymbol(symbol) }
-                val candles = withTimeoutOrNull(32_000L) {
+                // Deriv active-symbol discovery can require a WebSocket handshake plus a response.
+                // Its provider budget is 30s; do not cancel it after the old 4s UI wrapper.
+                withTimeoutOrNull(36_000L) { app.marketDataRepository.refreshSymbol(symbol) }
+                // OHLC loading can include active-symbol discovery followed by candle history;
+                // the repository now permits both provider stages to finish (up to ~62s).
+                val candles = withTimeoutOrNull(65_000L) {
                     app.marketDataRepository.getCandles(symbol, timeframe, 150)
                 } ?: emptyList()
                 if (candles.isNotEmpty()) {
@@ -401,13 +405,17 @@ open class DestinedFXViewModel(
                     candlestickHistoryByTimeframe[symbol + "-" + timeframe] = candles
                     marketDataStatus.value = "LIVE DATA • " + candles.size + " candles"
                 } else {
-                    marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe
+                    val detail = app.marketDataRepository.getCandleError(symbol, timeframe)
+                    marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe +
+                        (detail?.takeIf { it.isNotBlank() }?.let { " • " + it.take(220) } ?: "")
                 }
                 runSignalScan(symbol, timeframe)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe
+                val detail = app.marketDataRepository.getCandleError(symbol, timeframe)
+                marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe +
+                    (detail?.takeIf { it.isNotBlank() }?.let { " • " + it.take(220) } ?: "")
                 Log.w("DestinedFXViewModel", "Manual market refresh failed: " + e.javaClass.simpleName)
             }
         }
