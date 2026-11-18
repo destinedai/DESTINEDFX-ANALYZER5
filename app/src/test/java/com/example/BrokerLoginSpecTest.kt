@@ -85,6 +85,48 @@ class BrokerLoginSpecTest {
     }
 
     @Test
+    fun everyManagedMt5BrokerRequiresItsOwnVerifiedDemoAcceptance() {
+        val paths = mapOf(
+            "FBS_MT5" to com.example.data.broker.ModePath.FBS_MT5,
+            "EXNESS_MT5" to com.example.data.broker.ModePath.EXNESS_MT5,
+            "HFM_MT5" to com.example.data.broker.ModePath.HFM_MT5,
+            "DERIV_MT5" to com.example.data.broker.ModePath.DERIV_MT5,
+        )
+        val now = 1_800_000_000_000L
+        val policy = com.example.data.broker.ModeArmingPolicy(nowMs = { now })
+        val mt5Specs = BrokerLoginSpecs.forConnector(LoginConnector.MT5_TERMINAL)
+        assertEquals(paths.keys, mt5Specs.map { it.id }.toSet())
+        mt5Specs.forEach { spec ->
+            val identity = com.example.data.broker.ModeAccountIdentity(
+                path = paths.getValue(spec.id),
+                broker = spec.id.substringBefore("_MT5"),
+                accountId = "12345678",
+                server = "Broker-Demo",
+                mode = com.example.data.broker.AccountMode.DEMO,
+                credentialGeneration = "credential-generation",
+            )
+            val verification = com.example.data.broker.ModeReadOnlyVerification(
+                identity = identity,
+                checkedAtMs = now,
+                authenticatedSession = true,
+                freshAccountData = true,
+                freshQuote = true,
+                freshHeartbeat = true,
+                accountIdentityMatched = true,
+            )
+            val decision = policy.demoDecision(
+                identity = identity,
+                verification = verification,
+                acceptance = null,
+                currentCredentialGeneration = identity.credentialGeneration,
+                now = now,
+            )
+            assertFalse(spec.id, decision.allowed)
+            assertEquals(spec.id, "OWNER_DEMO_ACCEPTANCE_REQUIRED", decision.reason)
+        }
+    }
+
+    @Test
     fun mt5ServerSuggestionsAreNeverInventedAndCarryProvenance() {
         BrokerLoginSpecs.all.filter { it.connector == LoginConnector.MT5_TERMINAL }.forEach { spec ->
             assertTrue(spec.serverSuggestions.any { it.source == ServerSuggestionSource.OWNER_HISTORY })
