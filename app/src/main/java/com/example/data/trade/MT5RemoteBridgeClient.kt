@@ -415,6 +415,21 @@ class MT5RemoteBridgeClient(
         )
     }
 
+    /** Owner-only preflight; no stop is queued until GitHub confirms the Codespaces action. */
+    suspend fun prepareHostStop(): JSONObject {
+        val identity = managementIdentityAssertionProvider?.invoke()
+            ?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Sign in to the DestinedFX management account before stopping the host.")
+        return request(
+            "POST",
+            "/v1/app/host/prepare-stop",
+            JSONObject(),
+            managementIdentityAssertion = identity
+        )
+    }
+
+    suspend fun hostStatus(): JSONObject = request("GET", "/v1/app/host/status")
+
     data class TradePage(val cursor: Int, val watermark: Double, val trades: List<JSONObject>)
 
     suspend fun tradeHistory(cursor: Int = 0, updatedAfter: Double = 0.0): TradePage {
