@@ -116,11 +116,17 @@ try:
             break
 except (OSError, ValueError, IndexError):
     pass
-memory_slots = max(1, available // (3 * 1024**3)) if available else 1
-print(max(1, min(int(sys.argv[1]), os.cpu_count() or 1, memory_slots)))
+# One isolated Wine/MT5 terminal needs a conservative 3 GiB available-memory
+# budget. Never invent one slot when the measured host is below that floor.
+memory_slots = available // (3 * 1024**3)
+print(min(int(sys.argv[1]), os.cpu_count() or 1, memory_slots) if memory_slots > 0 else 0)
 PY
 )"
 export DESTINEDFX_SLOT_MAX_TERMINALS
+if (( DESTINEDFX_SLOT_MAX_TERMINALS < 1 )); then
+  fail 'Insufficient available memory for one isolated MT5 terminal; at least 3 GiB available RAM is required. No broker credentials will be provisioned.'
+  exit 1
+fi
 mkdir -p "$DESTINEDFX_SLOT_RUNTIME"
 chmod 700 "$DESTINEDFX_SLOT_RUNTIME"
 sudo -n install -d -o root -g root -m 0711 "$DESTINEDFX_SLOT_ROOT"
