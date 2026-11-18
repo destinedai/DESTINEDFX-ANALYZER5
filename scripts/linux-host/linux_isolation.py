@@ -110,6 +110,35 @@ def _proc_snapshot(pid: int, proc_root: Path = _PROC_ROOT) -> dict[str, Any] | N
         return None
 
 
+def find_slot_xvfb(
+    *,
+    linux_uid: int,
+    display: str,
+    xauthority: str,
+    proc_root: Path = _PROC_ROOT,
+) -> dict[str, int] | None:
+    expected_auth = os.path.realpath(xauthority)
+    for entry in proc_root.glob("[0-9]*"):
+        try:
+            pid = int(entry.name)
+        except ValueError:
+            continue
+        record = _proc_snapshot(pid, proc_root)
+        if not record or record["uid"] != linux_uid:
+            continue
+        args = record["args"]
+        if not args or "Xvfb" not in Path(args[0]).name:
+            continue
+        if display not in args or "-nolisten" not in args or "tcp" not in args:
+            continue
+        if record["env"].get("DISPLAY") != display:
+            continue
+        if os.path.realpath(record["env"].get("XAUTHORITY", "")) != expected_auth:
+            continue
+        return {"pid": pid, "start_ticks": record["start_ticks"]}
+    return None
+
+
 def find_slot_process(
     *,
     linux_uid: int,
@@ -175,6 +204,9 @@ def verify_slot_reservation(payload: dict[str, Any], slots_root: Path, owner_uid
         if not account.pw_shell.endswith("/nologin"):
             return False
         root = slots_root.resolve(strict=True)
+        root_info = root.stat()
+        if root_info.st_uid != 0 or stat.S_IMODE(root_info.st_mode) != 0o711:
+            return False
         if slot_root.parent != root or not slot_root.is_dir():
             return False
         if wine_prefix.parent != slot_root / job_id or terminal_home.parent != slot_root / job_id:
@@ -314,8 +346,20 @@ class LinuxSlotManager:
             display = f":{number}"
             socket_path = Path(f"/tmp/.X11-unix/X{number}")
             lease = self.runtime_root / f"display-{number}.json"
-            if socket_path.exists() or lease.exists():
+            if socket_path.exists():
                 continue
+            if lease.exists():
+                # A lease left after a host crash is reclaimable only when its
+                # display socket is absent and the lease is old enough that no
+                # allocator can still be between reservation and Xvfb startup.
+                try:
+                    stale = time.time() - lease.stat().st_mtime > 120
+                except OSError:
+                    stale = False
+                if stale:
+                    lease.unlink(missing_ok=True)
+                else:
+                    continue
             payload = json.dumps({"display": display, "uid": uid, "user": username, "created": time.time()})
             try:
                 fd = os.open(lease, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -368,21 +412,26 @@ class LinuxSlotManager:
             except OSError:
                 lease.unlink(missing_ok=True)
                 raise IsolationError("X_SERVER_START_FAILED") from None
-        ticks = _proc_start_ticks(proc.pid)
-        if ticks is None:
-            lease.unlink(missing_ok=True)
-            raise IsolationError("X_SERVER_IDENTITY_UNAVAILABLE")
+        # Popen.pid is the sudo wrapper. Attest the real Xvfb child after it
+        # appears under the dedicated slot UID, with its exact DISPLAY/cookie.
         deadline = time.monotonic() + 10
+        xvfb_identity = None
         while time.monotonic() < deadline:
             if proc.poll() is not None:
                 lease.unlink(missing_ok=True)
                 raise IsolationError("X_SERVER_START_FAILED")
             if Path(f"/tmp/.X11-unix/X{display[1:]}").exists():
-                break
+                xvfb_identity = find_slot_xvfb(
+                    linux_uid=uid, display=display, xauthority=str(xauthority)
+                )
+                if xvfb_identity:
+                    break
             time.sleep(0.1)
-        else:
-            self.stop(pairing_id, job_id, username, uid, display, proc.pid, ticks, strict=False)
+        if not xvfb_identity:
+            self.stop(pairing_id, job_id, username, uid, display, 0, 0, strict=False)
             raise IsolationError("X_SERVER_NOT_READY")
+        xvfb_pid = xvfb_identity["pid"]
+        xvfb_ticks = xvfb_identity["start_ticks"]
         terminal_path = terminal_home / "terminal64.exe"
         return SlotReservation(
             pairing_id=pairing_id, job_id=job_id, worker_id=worker_id,
@@ -422,12 +471,13 @@ class LinuxSlotManager:
         reservation: SlotReservation,
         argv: list[str],
         *,
+        cwd: str | Path | None = None,
         stdout: int | Any = subprocess.DEVNULL,
         stderr: int | Any = subprocess.STDOUT,
     ) -> subprocess.Popen:
         try:
             return subprocess.Popen(
-                self._slot_argv(reservation, argv),
+                self._slot_argv(reservation, argv), cwd=str(cwd) if cwd else None,
                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                 start_new_session=True, close_fds=True,
             )
