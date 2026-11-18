@@ -37,6 +37,21 @@ After the first broker-confirmed fill, wait for the Android Bot screen to synchr
 
 Retain timestamped redacted bridge health/readiness responses, worker lifecycle markers without secrets, Android screenshots, EA heartbeat samples, MT5 terminal journal excerpts, order/deal/position exports, and the final bridge command history. Redact login if organizational policy requires it, and always remove passwords, tokens, encryption keys, and private URLs before sharing.
 
+## All four MT5 broker DEMO acceptances
+
+The Bot supports four MT5 terminal broker profiles. Execute a separate acceptance for each profile; do not copy an identity, server, heartbeat, acceptance digest, or order result between brokers.
+
+| Broker profile | Exact Bot route | Actual broker DEMO account | Acceptance |
+|---|---|---|---|
+| FBS | `FBS_MT5` | Owner must select the exact FBS-issued DEMO server | NOT RUN |
+| Exness | `EXNESS_MT5` | Owner must select the exact Exness-issued DEMO server | NOT RUN |
+| HFM | `HFM_MT5` | Owner must select the exact HF Markets-issued DEMO server | NOT RUN |
+| Deriv MT5 | `DERIV_MT5` | Owner must select the exact Deriv MT5 DEMO server | NOT RUN |
+
+For each row, independently: (1) provision that broker's own MT5 terminal mapping on the host; (2) enter the broker-issued DEMO login/password/server only in the authenticated Bot login flow; (3) verify terminal-reported company, login, exact server and DEMO mode; (4) wait for the identity-bound fresh EA heartbeat and worker READY; (5) inspect a fresh quote and symbol specification; (6) only after explicit owner approval, run one minimum-validity DEMO order through the EA with broker-valid SL/TP and reconcile the exact order/deal; (7) verify close, closed history, restart/reconnect, duplicate suppression and STOP; and (8) retain a redacted report with commit/APK/EA/host checksums, broker brand, server, timestamps, terminal build, heartbeat age, broker ticket/deal, SL/TP and reconciliation verdict. Never include passwords, tokens, access assertions or private network URLs.
+
+CI, source audits, broker-name aliases, successful login forms, fixture tests and an EA compiler result are not DEMO acceptance. A brand remains NOT VERIFIED until its own genuine terminal and broker-side evidence exists. No credentials are requested or accepted in repository issues or chat.
+
 ## Current environment and shortest safe first-DEMO path
 
 The repository's `render.yaml` specifies a Free, sleeping, non-durable diagnostics service. It is not suitable for pairing, credential registration, worker provisioning, or execution. No paid resources were created. Do not submit credentials, pair a terminal, or claim worker/EA readiness until the owner deploys or authorizes a separate durable HTTPS bridge and verifies `/health/ready`.
