@@ -28,6 +28,10 @@ The worker service uses a sudoers rule restricted to start, stop, and restart of
 
 `download-ea-release.sh URL SHA256 DESTINATION.ex5` accepts only a direct HTTPS GitHub release asset URL and requires an owner-reviewed 64-character SHA-256. It refuses mismatches before installing the compiled EA. No release is created by this repository task; supply a real published asset URL and checksum when one exists.
 
+## Isolated-slot resource gate
+
+The per-pairing Linux slot worker requires **at least 3 GiB of currently available RAM per MT5 terminal**, in addition to CPU and configured-slot limits. If available memory is below that floor, the worker reports zero capacity and refuses to claim/provision a broker account. It must not silently force a one-terminal capacity on a smaller VM. This is a conservative launch gate, not a promise that every 3 GiB machine will sustain MT5; the owner must measure terminal stability and choose an even lower slot count when required.
+
 ## Services and platform boundary
 
 The existing units run Xvfb, MT5, the host agent, and the loopback-only FastAPI bridge under `destinedfx`. The additional worker service and timer perform connect jobs. `ensure-swap.sh` provisions the configured swap file idempotently, and `logrotate.d/destinedfx` bounds logs. No trading port is opened to the public Internet.
