@@ -25,6 +25,17 @@ Describe 'DestinedFX owner stack' {
         Test-Path $snapshot | Should -BeFalse
     }
 
+    It 'registers host and recovery tasks for background password logon at startup and owner sign-in' {
+        $installer = Get-Content (Join-Path $PSScriptRoot 'install-owner-stack.ps1') -Raw
+        $installer | Should -Match 'New-ScheduledTaskTrigger -AtStartup'
+        $installer | Should -Match 'New-ScheduledTaskTrigger -AtLogOn -User \$owner'
+        $installer | Should -Match 'Register-ScheduledTask -TaskName ''DestinedFX Owner Bridge and Worker'' -User \$owner -Password \$taskPassword'
+        $installer | Should -Match 'Register-ScheduledTask -TaskName ''DestinedFX Bridge SQLite Backup'' -User \$owner -Password \$taskPassword'
+        $installer | Should -Match 'Register-ScheduledTask -TaskName ''DestinedFX Owner Bridge Health Monitor'' -User \$owner -Password \$taskPassword'
+        $installer | Should -Match '-StartWhenAvailable -MultipleInstances IgnoreNew'
+        $installer | Should -Not -Match 'LogonType Interactive'
+    }
+
     It 'ships the recovery and supervision entry points' {
         (Test-Path (Join-Path $PSScriptRoot 'run-owner-stack.ps1')) | Should -BeTrue
         (Test-Path (Join-Path $PSScriptRoot 'install-owner-stack.ps1')) | Should -BeTrue
