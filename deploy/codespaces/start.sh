@@ -77,13 +77,13 @@ export DESTINEDFX_RUNTIME_DIR="$RUNTIME" DESTINEDFX_HOST_CONTROL_DIR="$RUNTIME" 
 export DESTINEDFX_CONTROL_PLANE_URL="http://127.0.0.1:8000" DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true
 export DESTINEDFX_WORKER_ID="${DESTINEDFX_WORKER_ID:-codespaces-host-01}"
 
-track_pid() { printf '%s|%s\\n' "$1" "$2" >>"$RUNTIME/pids"; }
+track_pid() { printf '%s|%s\n' "$1" "$2" >>"$RUNTIME/pids"; }
 if [[ -f "$RUNTIME/pids" && -s "$RUNTIME/pids" ]]; then
   all_running=true
   while IFS='|' read -r pid expected; do
     [[ "$pid" =~ ^[0-9]+$ && -n "$expected" ]] || { all_running=false; continue; }
     cmdline=""
-    [[ -r "/proc/$pid/cmdline" ]] && cmdline="$(tr '\\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ -r "/proc/$pid/cmdline" ]] && cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
     [[ "$cmdline" == *"$expected"* ]] || all_running=false
   done < "$RUNTIME/pids"
   if [[ "$all_running" == true ]]; then
