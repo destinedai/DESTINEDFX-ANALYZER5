@@ -1827,6 +1827,8 @@ def live_health(): return {'status':'ok'}
 def health():
     return {
         'status':'ok','host_profile':HOST_PROFILE,'public_exposure':PUBLIC_EXPOSURE,
+        # The mobile app compares this non-secret value with the URL host before saving it.
+        'expected_forwarded_host':EXPECTED_PUBLIC_HOST if PUBLIC_EXPOSURE else '',
         'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,
         'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,
         **host_lifecycle_state(),
