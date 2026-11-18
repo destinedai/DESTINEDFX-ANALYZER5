@@ -145,12 +145,19 @@ class CodespacesLifecycleClient(
         val accessToken = validAccessToken()
         val deadline = System.currentTimeMillis() + timeoutMs
         var lastFailure = "Codespace has not reached Available state."
+        var codespaceName = ""
+        var codespaceState = "UNKNOWN"
+        var nextStateRefreshAt = 0L
         while (System.currentTimeMillis() < deadline) {
-            val codespace = findOwnedCodespace(accessToken)
-            val name = codespace.optString("name")
-            val state = codespace.optString("state")
-            if (state.equals("Available", ignoreCase = true)) {
-                val origin = codespacesBridgeOrigin(name, forwardingDomain)
+            val now = System.currentTimeMillis()
+            if (codespaceName.isBlank() || now >= nextStateRefreshAt) {
+                val codespace = findOwnedCodespace(accessToken)
+                codespaceName = codespace.optString("name")
+                codespaceState = codespace.optString("state")
+                nextStateRefreshAt = now + 15_000L
+            }
+            if (codespaceState.equals("Available", ignoreCase = true)) {
+                val origin = codespacesBridgeOrigin(codespaceName, forwardingDomain)
                 try {
                     val live = bridgeJson(origin, "/health/live")
                     check(live.first == 200 && live.second.optString("status") == "ok") {
@@ -186,7 +193,7 @@ class CodespacesLifecycleClient(
                     lastFailure = error.message ?: "Forwarded Bridge health check failed."
                 }
             } else {
-                lastFailure = "GitHub Codespace state is $state; waiting for Available."
+                lastFailure = "GitHub Codespace state is $codespaceState; waiting for Available."
             }
             delay(4_000L)
         }
