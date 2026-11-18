@@ -169,7 +169,8 @@ def find_slot_process(
         # Wine sometimes reports a Z: path instead of the Unix path. The UID,
         # exact prefix, exact display, and executable basename remain mandatory.
         if expected_terminal not in joined and not any(
-            Path(part).name.lower() == "terminal64.exe" for part in record["args"]
+            part.replace("\\", "/").split("/")[-1].lower() == "terminal64.exe"
+            for part in record["args"]
         ):
             continue
         return {"pid": pid, "start_ticks": record["start_ticks"]}
