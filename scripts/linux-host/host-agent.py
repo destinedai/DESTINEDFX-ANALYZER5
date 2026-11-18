@@ -32,7 +32,13 @@ CONNECT_JOB_START_FILE = os.getenv(
 SLOT_ISOLATION_ENABLED = os.getenv("DESTINEDFX_ISOLATED_SLOTS", "").lower() == "true"
 SLOT_ROOT = Path(os.getenv("DESTINEDFX_SLOT_ROOT", "/home/destinedfx-slots"))
 SLOT_RUNTIME = Path(os.getenv("DESTINEDFX_SLOT_RUNTIME", "/var/lib/destinedfx-slot-runtime"))
+HOST_AGENT_TOKEN_FILE = os.getenv("HOST_AGENT_TOKEN_FILE", "")
 HOST_AGENT_TOKEN = os.getenv("HOST_AGENT_TOKEN", "")
+if not HOST_AGENT_TOKEN and HOST_AGENT_TOKEN_FILE:
+    try:
+        HOST_AGENT_TOKEN = Path(HOST_AGENT_TOKEN_FILE).read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        HOST_AGENT_TOKEN = ""
 HOST_OWNER_UID = int(os.getenv("DESTINEDFX_HOST_OWNER_UID", "1000"))
 SLOT_MAX_TERMINALS = max(1, min(8, int(os.getenv("DESTINEDFX_SLOT_MAX_TERMINALS", "1"))))
 
