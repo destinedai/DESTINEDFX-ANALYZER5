@@ -12,10 +12,13 @@ from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, Stri
 from cryptography.fernet import Fernet, InvalidToken
 import jwt
 from jwt import PyJWKClient
+from host_lifecycle import backup_database, inspect_shutdown_safety, read_status, touch_activity
+from pathlib import Path
 from quantitative import STRATEGY_RULESETS, analyze_json
 
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
+HOST_CONTROL_DIR=os.getenv('DESTINEDFX_HOST_CONTROL_DIR',os.path.join(os.path.dirname(os.path.abspath(DB_PATH)),'runtime'))
 HOST_PROFILE=os.getenv('BRIDGE_HOST_PROFILE','PERSISTENT').strip().upper()
 if HOST_PROFILE not in ('PERSISTENT','EPHEMERAL'):
     raise ValueError('BRIDGE_HOST_PROFILE must be PERSISTENT or EPHEMERAL')
@@ -430,6 +433,9 @@ def rotate_all_app_tokens():
         return c.total_changes
 @app.middleware('http')
 async def limits(request:Request, call_next):
+    stop_marker=os.path.join(HOST_CONTROL_DIR,'stop.request')
+    if request.method in ('POST','PUT','PATCH','DELETE') and os.path.exists(stop_marker) and request.url.path not in ('/v1/app/host/cancel-stop',):
+        return JSONResponse({'detail':{'code':'HOST_DRAINING','message':'Host shutdown is pending; new commands are temporarily blocked'}},503)
     secure(request)
     blocked=public_host_guard(request)
     if blocked is not None: return blocked
@@ -1893,7 +1899,7 @@ def fresh_terminal_broker_quotes(beat, now_ms=None):
 
 @app.get('/v1/app/state')
 def state(authorization:str|None=Header(default=None)):
-    p=auth(authorization,'app'); beat=json.loads(p['heartbeat']) if p['heartbeat'] else None
+    p=auth(authorization,'app'); touch_activity(HOST_CONTROL_DIR); beat=json.loads(p['heartbeat']) if p['heartbeat'] else None
     age=max(0,int(time.time()-datetime.fromisoformat(beat['timestamp'].replace('Z','+00:00')).timestamp())) if beat else None
     online=bool(beat and age is not None and age<=STALE)
     with tx() as c: cmd=c.execute('SELECT * FROM commands WHERE pairing_id=? ORDER BY id DESC LIMIT 1',(p['id'],)).fetchone()
@@ -1932,6 +1938,38 @@ def state(authorization:str|None=Header(default=None)):
     result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command,'broker_quotes':broker_quotes,'broker_quote_stale_ms':BROKER_QUOTE_MAX_AGE_MS}
     if managed is not None: result['managed_execution']=managed
     return result
+
+
+def _require_pairing_owner(p, assertion):
+    if not assertion:
+        raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate as the owner before controlling this Codespace'})
+    identity=_management_identity_claims(assertion)
+    if (not p.get('owner_subject') or not p.get('owner_tenant') or
+        identity.get('sub') != p['owner_subject'] or identity.get('tenant_id') != p['owner_tenant']):
+        raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'Only the management user that owns this Bridge pairing may control the Codespace'})
+
+@app.get('/v1/app/host/status')
+def app_host_status(authorization:str|None=Header(default=None)):
+    auth(authorization,'app')
+    return {'host_profile':HOST_PROFILE,**host_lifecycle_state(),**read_status(HOST_CONTROL_DIR)}
+
+@app.post('/v1/app/host/prepare-stop')
+def prepare_host_stop(authorization:str|None=Header(default=None),
+                      x_management_identity:str|None=Header(default=None)):
+    p=auth(authorization,'app')
+    _require_pairing_owner(p,x_management_identity)
+    if not LINUX_HOST_MODE or HOST_PROFILE != 'EPHEMERAL':
+        raise HTTPException(409,detail={'code':'HOST_LIFECYCLE_UNAVAILABLE','message':'This Bridge is not running the owner-controlled Codespaces host lifecycle'})
+    safety=inspect_shutdown_safety(DB_PATH,heartbeat_stale_seconds=STALE)
+    if not safety['safe']:
+        raise HTTPException(409,detail={'code':'HOST_STOP_BLOCKED','reasons':safety['reasons'],'message':'The host cannot be stopped while broker state is open, stale, incomplete or unresolved'})
+    try:
+        backup=backup_database(DB_PATH,Path(HOST_CONTROL_DIR).parent/'backups')
+    except (OSError,sqlite3.Error):
+        raise HTTPException(503,detail={'code':'HOST_BACKUP_FAILED','message':'A verified Bridge database backup could not be created; the host was not prepared for shutdown'})
+    return {'status':'PREPARED','host_generation':HOST_GENERATION,'backup_verified':True,
+            'backup_name':backup.name,'broker_safety':safety}
+
 
 @app.post('/v1/app/analysis',response_model=AnalysisResponse)
 def app_analysis(x:AnalysisRequest,authorization:str|None=Header(default=None)):
