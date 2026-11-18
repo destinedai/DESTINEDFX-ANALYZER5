@@ -80,6 +80,10 @@ class SecretsManager internal constructor(
         private const val MODE_DEMO_ACCEPTANCE_PREFIX = "mode_demo_acceptance_"
         private const val MODE_ARMING_AUDIT = "mode_arming_audit_v1"
         private val MODE_ARMING_AUDIT_LOCK = Any()
+        private const val GITHUB_CODESPACES_CLIENT_ID = "codespaces_github_app_client_id"
+        private const val GITHUB_CODESPACES_ACCESS_TOKEN = "codespaces_github_access_token"
+        private const val GITHUB_CODESPACES_REFRESH_TOKEN = "codespaces_github_refresh_token"
+        private const val GITHUB_CODESPACES_ACCESS_EXPIRES_AT = "codespaces_github_access_expires_at"
     }
 
     val isSecureStorageAvailable: Boolean
@@ -601,13 +605,6 @@ class SecretsManager internal constructor(
 
     // GitHub Codespaces owner controls: a public GitHub App client ID plus
     // per-owner OAuth tokens are stored separately from all broker credentials.
-    private companion object {
-        const val GITHUB_CODESPACES_CLIENT_ID = "codespaces_github_app_client_id"
-        const val GITHUB_CODESPACES_ACCESS_TOKEN = "codespaces_github_access_token"
-        const val GITHUB_CODESPACES_REFRESH_TOKEN = "codespaces_github_refresh_token"
-        const val GITHUB_CODESPACES_ACCESS_EXPIRES_AT = "codespaces_github_access_expires_at"
-    }
-
     fun saveCodespacesGitHubClientId(value: String): Boolean {
         if (!isSecureStorageAvailable) return false
         val clientId = value.trim()
