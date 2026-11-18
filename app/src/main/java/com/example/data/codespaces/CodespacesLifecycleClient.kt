@@ -1,0 +1,235 @@
+package com.example.data.codespaces
+
+import android.net.Uri
+import com.example.security.SecretsManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+
+/** Owner-only GitHub Codespaces lifecycle client. No GitHub App secret is packaged in the APK. */
+class CodespacesLifecycleClient(
+    private val secrets: SecretsManager,
+    private val http: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(30, TimeUnit.SECONDS)
+        .build()
+) {
+    companion object {
+        private const val API = "https://api.github.com"
+        private const val DEVICE_CODE_URL = "https://github.com/login/device/code"
+        private const val TOKEN_URL = "https://github.com/login/oauth/access_token"
+        private const val REPOSITORY = "destinedai/DESTINEDFX-ANALYZER5"
+        private const val REPOSITORY_ID = 1409048108L
+        private const val API_VERSION = "2022-11-28"
+    }
+
+    data class DeviceAuthorization(
+        val deviceCode: String,
+        val userCode: String,
+        val verificationUri: String,
+        val expiresInSeconds: Long,
+        val intervalSeconds: Long
+    )
+
+    data class PollResult(val authorized: Boolean, val message: String)
+    data class LifecycleResult(
+        val accepted: Boolean,
+        val codespaceName: String,
+        val state: String,
+        val message: String
+    )
+
+    private fun clientId(): String = secrets.getCodespacesGitHubClientId()
+        .takeIf { it.isNotBlank() }
+        ?: throw IllegalStateException("Enter the GitHub App Client ID first.")
+
+    suspend fun beginDeviceAuthorization(): DeviceAuthorization = withContext(Dispatchers.IO) {
+        val body = FormBody.Builder()
+            .add("client_id", clientId())
+            .add("scope", "offline_access")
+            .build()
+        val request = Request.Builder().url(DEVICE_CODE_URL)
+            .header("Accept", "application/json").post(body).build()
+        val json = executeJson(request)
+        val deviceCode = json.optString("device_code")
+        val userCode = json.optString("user_code")
+        val verificationUri = json.optString("verification_uri")
+        val expires = json.optLong("expires_in", 0L)
+        val interval = json.optLong("interval", 5L)
+        require(deviceCode.isNotBlank() && userCode.isNotBlank() &&
+            verificationUri == "https://github.com/login/device" && expires > 0L) {
+            "GitHub did not return a valid device authorization request."
+        }
+        DeviceAuthorization(deviceCode, userCode, verificationUri, expires, interval.coerceIn(1L, 30L))
+    }
+
+    suspend fun checkDeviceAuthorization(deviceCode: String): PollResult = withContext(Dispatchers.IO) {
+        require(deviceCode.isNotBlank() && deviceCode.length <= 1024) {
+            "The GitHub device authorization request has expired; start again."
+        }
+        val body = FormBody.Builder()
+            .add("client_id", clientId())
+            .add("device_code", deviceCode)
+            .add("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+            .build()
+        val request = Request.Builder().url(TOKEN_URL)
+            .header("Accept", "application/json").post(body).build()
+        val json = executeJson(request, allowOAuthError = true)
+        when (val error = json.optString("error")) {
+            "authorization_pending" -> PollResult(false, "Waiting for GitHub authorization.")
+            "slow_down" -> PollResult(false, "GitHub requested a slower authorization check. Try again shortly.")
+            "access_denied" -> throw IllegalStateException("GitHub authorization was denied.")
+            "expired_token", "incorrect_device_code" ->
+                throw IllegalStateException("The GitHub device code expired. Start authorization again.")
+            else -> {
+                if (error.isNotBlank()) throw IllegalStateException("GitHub device authorization failed ($error).")
+                saveTokenResponse(json)
+                PollResult(true, "GitHub owner authorization is securely saved on this device.")
+            }
+        }
+    }
+
+    suspend fun startRepositoryCodespace(): LifecycleResult = withContext(Dispatchers.IO) {
+        val accessToken = validAccessToken()
+        val codespace = findOwnedCodespace(accessToken)
+        val name = codespace.optString("name")
+        val state = codespace.optString("state")
+        require(name.isNotBlank()) { "GitHub returned a Codespace without a name." }
+        if (state.equals("Available", ignoreCase = true)) {
+            return@withContext LifecycleResult(true, name, state, "The DestinedFX Codespace is already available.")
+        }
+        executeSuccess(apiRequest(accessToken, "POST", "/user/codespaces/" + Uri.encode(name) + "/start"))
+        LifecycleResult(true, name, state, "GitHub accepted the Codespaces start request. The Python host supervisor starts when the container becomes available.")
+    }
+
+    suspend fun stopRepositoryCodespace(): LifecycleResult = withContext(Dispatchers.IO) {
+        val accessToken = validAccessToken()
+        val codespace = findOwnedCodespace(accessToken)
+        val name = codespace.optString("name")
+        val state = codespace.optString("state")
+        require(name.isNotBlank()) { "GitHub returned a Codespace without a name." }
+        if (state.equals("Shutdown", ignoreCase = true)) {
+            return@withContext LifecycleResult(true, name, state, "The DestinedFX Codespace is already stopped.")
+        }
+        executeSuccess(apiRequest(accessToken, "POST", "/user/codespaces/" + Uri.encode(name) + "/stop"))
+        LifecycleResult(true, name, state, "GitHub accepted the Codespaces stop request.")
+    }
+
+    suspend fun revokeLocalAuthorization() = withContext(Dispatchers.IO) {
+        secrets.clearCodespacesGitHubAuthorization()
+    }
+
+    private fun validAccessToken(): String {
+        val accessToken = secrets.getCodespacesGitHubAccessToken()
+        val refreshToken = secrets.getCodespacesGitHubRefreshToken()
+        val expiresAt = secrets.getCodespacesGitHubAccessExpiresAtMillis()
+        if (accessToken.isBlank() || refreshToken.isBlank()) {
+            throw IllegalStateException("Authorize GitHub before controlling the Codespaces host.")
+        }
+        if (expiresAt > System.currentTimeMillis() + 60_000L) return accessToken
+
+        val body = FormBody.Builder()
+            .add("client_id", clientId())
+            .add("grant_type", "refresh_token")
+            .add("refresh_token", refreshToken)
+            .build()
+        val request = Request.Builder().url(TOKEN_URL)
+            .header("Accept", "application/json").post(body).build()
+        val json = executeJson(request, allowOAuthError = true)
+        if (json.has("error")) {
+            secrets.clearCodespacesGitHubAuthorization()
+            throw IllegalStateException("GitHub authorization expired. Authorize this device again.")
+        }
+        saveTokenResponse(json)
+        return secrets.getCodespacesGitHubAccessToken()
+            .takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("GitHub did not issue a usable access token.")
+    }
+
+    private fun saveTokenResponse(json: JSONObject) {
+        val access = json.optString("access_token")
+        val refresh = json.optString("refresh_token")
+        val expires = json.optLong("expires_in", 0L)
+        require(access.isNotBlank() && refresh.isNotBlank() && expires > 0L) {
+            "GitHub did not return an expiring access token and refresh token. Ensure offline_access is enabled for this GitHub App."
+        }
+        val expiry = System.currentTimeMillis() + expires.coerceAtMost(31_536_000L) * 1000L
+        check(secrets.saveCodespacesGitHubTokens(access, refresh, expiry)) {
+            "GitHub authorization could not be saved in Android Keystore-backed storage."
+        }
+    }
+
+    private fun findOwnedCodespace(accessToken: String): JSONObject {
+        val request = apiRequest(accessToken, "GET", "/user/codespaces?per_page=100")
+        val json = executeJson(request)
+        val items = json.optJSONArray("codespaces")
+            ?: throw IOException("GitHub returned an invalid Codespaces list.")
+        val matches = (0 until items.length()).mapNotNull { index ->
+            items.optJSONObject(index)?.let { item ->
+                val repository = item.optJSONObject("repository")
+                val fullName = repository?.optString("full_name").orEmpty()
+                val repositoryId = repository?.optLong("id", -1L) ?: -1L
+                item.takeIf { fullName.equals(REPOSITORY, ignoreCase = true) && repositoryId == REPOSITORY_ID }
+            }
+        }
+        if (matches.size != 1) {
+            throw IllegalStateException(
+                if (matches.isEmpty()) "No Codespace was found for $REPOSITORY."
+                else "More than one Codespace belongs to $REPOSITORY. Remove the ambiguity before using phone controls."
+            )
+        }
+        return matches.single()
+    }
+
+    private fun apiRequest(accessToken: String, method: String, path: String): Request {
+        val builder = Request.Builder().url(API + path)
+            .header("Accept", "application/vnd.github+json")
+            .header("Authorization", "Bearer $accessToken")
+            .header("X-GitHub-Api-Version", API_VERSION)
+        return when (method) {
+            "GET" -> builder.get().build()
+            "POST" -> builder.post(ByteArray(0).toRequestBody(null)).build()
+            else -> throw IllegalArgumentException("Unsupported GitHub API method.")
+        }
+    }
+
+    private fun executeJson(request: Request, allowOAuthError: Boolean = false): JSONObject {
+        http.newCall(request).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful && !allowOAuthError) {
+                val detail = runCatching { JSONObject(raw).optString("message") }.getOrDefault("")
+                throw IOException(
+                    if (response.code == 401 || response.code == 403)
+                        "GitHub denied Codespaces access. Check GitHub App permissions and re-authorize."
+                    else "GitHub request failed (" + response.code + ")" +
+                        (if (detail.isNotBlank()) ": " + detail else ".")
+                )
+            }
+            return runCatching { JSONObject(raw) }
+                .getOrElse { throw IOException("GitHub returned an invalid response.") }
+        }
+    }
+
+    private fun executeSuccess(request: Request) {
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val raw = response.body?.string().orEmpty()
+                val detail = runCatching { JSONObject(raw).optString("message") }.getOrDefault("")
+                throw IOException(
+                    if (response.code == 401 || response.code == 403)
+                        "GitHub denied the Codespaces lifecycle action. Verify Codespaces lifecycle admin permission."
+                    else "Codespaces lifecycle request failed (" + response.code + ")" +
+                        (if (detail.isNotBlank()) ": " + detail else ".")
+                )
+            }
+        }
+    }
+}
