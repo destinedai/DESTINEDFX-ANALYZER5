@@ -6,6 +6,7 @@ verified. It never closes positions or cancels orders.
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import sqlite3
 import tempfile
@@ -62,46 +63,45 @@ def inspect_shutdown_safety(
             return {"safe": False, "reasons": ["DATABASE_SCHEMA_INCOMPLETE"]}
 
         pairing_rows = connection.execute(
-            "SELECT id, consumed, heartbeat FROM pairings WHERE consumed=1"
+            "SELECT id, consumed, heartbeat, account FROM pairings WHERE consumed=1"
         ).fetchall()
-        managed_ids: set[str] = set()
+        managed_ids = {
+            str(row["pairing_id"])
+            for row in connection.execute(
+                """SELECT pairing_id FROM managed_accounts
+                   WHERE revoked=0 AND account_mode IN ('DEMO','LIVE')"""
+            ).fetchall()
+        }
 
-        for row in connection.execute(
-            """SELECT p.id, p.heartbeat, m.account_mode, m.revoked
-               FROM pairings p
-               JOIN managed_accounts m ON m.pairing_id=p.id
-               WHERE p.consumed=1 AND m.revoked=0
-                 AND m.account_mode IN ('DEMO','LIVE')"""
-        ).fetchall():
-            pairing_id = str(row["id"])
-            managed_ids.add(pairing_id)
-            heartbeat = _read_json(row["heartbeat"])
-            timestamp = _epoch(heartbeat.get("timestamp") if heartbeat else None)
-            age = None if timestamp is None else now - timestamp
-            if age is None or age < -30 or age > heartbeat_stale_seconds:
-                reasons.add("BROKER_STATE_UNVERIFIED")
-                continue
-            positions = heartbeat.get("open_positions")
-            orders = heartbeat.get("active_orders")
-            if not isinstance(positions, list) or not isinstance(orders, list):
-                reasons.add("BROKER_STATE_INCOMPLETE")
-                continue
-            if positions:
-                reasons.add("OPEN_POSITIONS")
-            if orders:
-                reasons.add("PENDING_OR_ACTIVE_ORDERS")
-
-        # Also inspect manually paired terminals that have a broker account in
-        # their heartbeat even when no managed-account row exists.
         for row in pairing_rows:
             pairing_id = str(row["id"])
             heartbeat = _read_json(row["heartbeat"])
-            account = heartbeat.get("account") if heartbeat else None
-            if not isinstance(account, dict):
+            claimed = _read_json(row["account"]) or {}
+            observed = heartbeat.get("account") if heartbeat else None
+            claimed_mode = str(claimed.get("account_mode", "")).upper()
+            observed_mode = str(observed.get("account_mode", "")).upper() if isinstance(observed, dict) else ""
+            requires_broker_check = (
+                pairing_id in managed_ids
+                or claimed_mode in {"DEMO", "LIVE"}
+                or observed_mode in {"DEMO", "LIVE"}
+            )
+            if not requires_broker_check:
                 continue
-            mode = str(account.get("account_mode", "")).upper()
-            if mode not in {"DEMO", "LIVE"}:
+            if heartbeat is None or not isinstance(observed, dict):
+                reasons.add("BROKER_STATE_UNVERIFIED")
                 continue
+            expected_mode = claimed_mode if claimed_mode in {"DEMO", "LIVE"} else observed_mode
+            if observed_mode not in {"DEMO", "LIVE"} or (
+                expected_mode in {"DEMO", "LIVE"} and observed_mode != expected_mode
+            ):
+                reasons.add("BROKER_IDENTITY_UNVERIFIED")
+            # When the pairing recorded an account identity, require the fresh
+            # heartbeat to match those fields before relying on its zero-trade view.
+            for field in ("login", "server", "company", "currency"):
+                expected_value = str(claimed.get(field, "") or "")
+                actual_value = str(observed.get(field, "") or "")
+                if expected_value and not hmac.compare_digest(expected_value, actual_value):
+                    reasons.add("BROKER_IDENTITY_UNVERIFIED")
             timestamp = _epoch(heartbeat.get("timestamp"))
             age = None if timestamp is None else now - timestamp
             if age is None or age < -30 or age > heartbeat_stale_seconds:
