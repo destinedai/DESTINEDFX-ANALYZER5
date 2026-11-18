@@ -1842,7 +1842,31 @@ def configuration_health():
             c.execute('SELECT 1').fetchone()
     except Exception as error:
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'}) from error
-    return {'status':'configured','database':'ok','managed_execution':'configured','host_profile':HOST_PROFILE,'per_user_terminal_isolation':'BLOCKED' if LINUX_HOST_MODE else 'WORKER_ATTESTATION_REQUIRED', **host_lifecycle_state()}
+    # A Linux deployment may be used only after the root agent has independently
+    # attested per-pairing OS identity, Wine-prefix and terminal-process isolation.
+    # Do not report a blanket BLOCKED value when that evidence is healthy, and do
+    # not report VERIFIED merely because Linux-host mode is enabled.
+    host = linux_host_report()
+    isolation = linux_slot_isolation(host)
+    if LINUX_HOST_MODE and (not isolation.get('enabled') or not isolation.get('ready')):
+        raise HTTPException(
+            503,
+            detail={
+                'code': 'PER_USER_TERMINAL_ISOLATION_REQUIRED',
+                'message': 'Root host agent has not verified isolated per-user MT5 slot capacity',
+            },
+        )
+    isolation_status = 'VERIFIED' if LINUX_HOST_MODE else 'WORKER_ATTESTATION_REQUIRED'
+    return {
+        'status': 'configured',
+        'database': 'ok',
+        'managed_execution': 'configured',
+        'host_profile': HOST_PROFILE,
+        'per_user_terminal_isolation': isolation_status,
+        'isolated_slots': int(isolation.get('active_slots', 0)) if LINUX_HOST_MODE else 0,
+        'max_isolated_slots': int(isolation.get('max_slots', 0)) if LINUX_HOST_MODE else 0,
+        **host_lifecycle_state(),
+    }
 @app.get('/health/ready')
 def readiness():
     """Report infrastructure and isolated-slot capacity without claiming an account is logged in."""
