@@ -333,11 +333,9 @@ def _copy_ea_and_compile(reservation: SlotReservation) -> Path:
     metaeditor = reservation.terminal_home / METAEDITOR_EXE.name
     if not metaeditor.is_file():
         raise SlotWorkerError("EA_COMPILER_MISSING")
-    if not (EA_SOURCE.parent / "include").is_dir():
-        # The EA build source tree is still used as the compiler include root.
-        include_root = EA_SOURCE.parent
-    else:
-        include_root = EA_SOURCE.parent / "include"
+    # Match the existing Windows/MetaEditor worker: the repository root is the
+    # include root for the EA's relative includes.
+    include_root = EA_SOURCE.parent.parent
     src_win = _MANAGER.run_as_slot(
         reservation, ["winepath", "-w", str(experts / "DestinedFXTraderEA.mq5")], timeout=30
     ).stdout.strip()
@@ -453,8 +451,8 @@ def _prepare_and_launch(job: dict, reservation: SlotReservation) -> dict[str, in
         # Isolation supports per-user sessions, but new Linux provisioning remains DEMO-only.
         raise SlotWorkerError("LINUX_LIVE_PROVISIONING_DISABLED")
     _copy_clean_terminal(reservation)
-    _copy_ea_and_compile(reservation)
     _MANAGER.run_as_slot(reservation, ["wineboot", "-u"], timeout=180)
+    _copy_ea_and_compile(reservation)
     set_text = worker.make_set_file(validated["bridge_url"], validated["pairing_code"], account)
     ini_text = worker.ini_text(validated, account["access_type"], os.environ.get("DESTINEDFX_SYMBOL", "EURUSD"))
     preset = reservation.terminal_home / "MQL5" / "Presets" / "DestinedFXTraderEA.set"
@@ -554,10 +552,16 @@ def run_once() -> str:
     if job.get("status") == "ATTESTATION_REQUIRED":
         reservation = None
         try:
-            reservation = _MANAGER.prepare(job["pairing_id"], job["job_id"], WORKER_ID)
+            existing = [row for row in _active_manifests() if row.get("job_id") == job["job_id"]]
+            if existing:
+                if len(existing) != 1 or existing[0].get("status") != "RESERVED":
+                    raise SlotWorkerError("SLOT_RESERVATION_REQUIRES_OPERATOR_REVIEW")
+                reservation = _reservation_from_manifest(existing[0])
+            else:
+                reservation = _MANAGER.prepare(job["pairing_id"], job["job_id"], WORKER_ID)
+                _write_manifest(_manifest_from_reservation(reservation, "RESERVED"))
             reservation_payload = _reservation_payload(reservation)
             _agent("/internal/slot/reservation", reservation_payload)
-            _write_manifest(_manifest_from_reservation(reservation, "RESERVED"))
             evidence = _attestation(job, reservation)
             # Use the same pre-reservation capacity observation on retry. The new
             # reservation is the job we are claiming, not a second occupied slot.
@@ -571,6 +575,7 @@ def run_once() -> str:
                         reservation.linux_uid, reservation.display,
                         reservation.xvfb_pid, reservation.xvfb_start_ticks, strict=True,
                     )
+                    _manifest_path(reservation.job_id).unlink(missing_ok=True)
                 except Exception:
                     _write_manifest(_manifest_from_reservation(reservation, "OPERATOR_REVIEW"))
             raise
@@ -625,7 +630,7 @@ def run_once() -> str:
 
 
 def stop_all() -> int:
-    _require_config()
+    _require_stop_config()
     database = Path(os.environ.get("BRIDGE_DB_PATH", str(STATE / "bridge.sqlite3")))
     safety = inspect_shutdown_safety(database)
     if not safety.get("safe"):
