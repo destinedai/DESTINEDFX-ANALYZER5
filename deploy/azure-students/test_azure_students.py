@@ -35,7 +35,7 @@ def test_cloud_init_recognizes_new_slot_worker_but_keeps_uninstalled_runtime_blo
     assert "linux-slot-worker.py" in body
     assert "linux_isolation.py" in body
     assert "BLOCKED_OWNER_RUNTIME_SETUP" in body
-    assert "does not install or enable an isolated-slot" in body
+    assert "has not installed or enabled an isolated-slot" in body
     assert "destinedfx-azure-first-boot.service" in body
     assert "tailscale up --ssh --accept-dns=false" in body
     assert "READY_FOR_OWNER_PAIRING_ONLY" not in body
