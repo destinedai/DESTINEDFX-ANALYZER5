@@ -3,6 +3,7 @@ package com.example.data.codespaces
 import android.net.Uri
 import com.example.security.SecretsManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
@@ -13,6 +14,27 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+/**
+ * Build the documented HTTPS forwarding origin without accepting arbitrary hosts or URL
+ * components. GitHub's forwarding domain is supplied by the Codespace environment; the
+ * mobile client uses the documented default and verifies it against the Bridge's host check.
+ */
+internal fun codespacesBridgeOrigin(
+    codespaceName: String,
+    forwardingDomain: String = "app.github.dev"
+): String {
+    val name = codespaceName.trim().lowercase()
+    require(name.matches(Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"))) {
+        "GitHub returned an invalid Codespace name."
+    }
+    val domain = forwardingDomain.trim().lowercase().trimEnd('.')
+    require(domain.matches(Regex("(?:[a-z0-9-]+\\.)*app\\.github\\.dev")) &&
+        !domain.startsWith(".") && !domain.contains("..")) {
+        "Unsupported GitHub Codespaces forwarding domain."
+    }
+    return "https://$name-8000.$domain"
+}
+
 /** Owner-only GitHub Codespaces lifecycle client. No GitHub App secret is packaged in the APK. */
 class CodespacesLifecycleClient(
     private val secrets: SecretsManager,
@@ -20,7 +42,8 @@ class CodespacesLifecycleClient(
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(30, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val forwardingDomain: String = "app.github.dev"
 ) {
     companion object {
         private const val API = "https://api.github.com"
@@ -108,6 +131,81 @@ class CodespacesLifecycleClient(
         }
         executeSuccess(apiRequest(accessToken, "POST", "/user/codespaces/" + Uri.encode(name) + "/start"))
         LifecycleResult(true, name, state, "GitHub accepted the Codespaces start request. The Python host supervisor starts when the container becomes available.")
+    }
+
+    /**
+     * Discover the repository Codespace's forwarded Bridge URL after the host is available.
+     * The app never sends its GitHub OAuth token to the forwarded service. It accepts the
+     * URL only when the public health endpoint reports the exact expected host, EPHEMERAL
+     * profile, public-exposure guard, and durable Bridge configuration.
+     */
+    suspend fun discoverAndSaveBridge(timeoutMs: Long = 180_000L): String = withContext(Dispatchers.IO) {
+        require(timeoutMs in 5_000L..300_000L) { "Bridge discovery timeout is outside the allowed range." }
+        val accessToken = validAccessToken()
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var lastFailure = "Codespace has not reached Available state."
+        while (System.currentTimeMillis() < deadline) {
+            val codespace = findOwnedCodespace(accessToken)
+            val name = codespace.optString("name")
+            val state = codespace.optString("state")
+            if (state.equals("Available", ignoreCase = true)) {
+                val origin = codespacesBridgeOrigin(name, forwardingDomain)
+                try {
+                    val live = bridgeJson(origin, "/health/live")
+                    check(live.first == 200 && live.second.optString("status") == "ok") {
+                        "Bridge liveness check did not pass."
+                    }
+                    val health = bridgeJson(origin, "/health")
+                    val healthBody = health.second
+                    check(health.first == 200 &&
+                        healthBody.optString("status") == "ok" &&
+                        healthBody.optString("host_profile") == "EPHEMERAL" &&
+                        healthBody.optBoolean("public_exposure", false) &&
+                        healthBody.optString("expected_forwarded_host").equals(
+                            URI(origin).host.orEmpty(), ignoreCase = true
+                        )) {
+                        "Forwarded Bridge host did not pass the exact-host/public-exposure safety check."
+                    }
+                    val config = bridgeJson(origin, "/health/config")
+                    val configBody = config.second
+                    check(config.first == 200 &&
+                        configBody.optString("status") == "configured" &&
+                        configBody.optString("database") == "ok" &&
+                        configBody.optString("managed_execution") == "configured" &&
+                        configBody.optString("per_user_terminal_isolation") in
+                            setOf("VERIFIED", "WORKER_ATTESTATION_REQUIRED")) {
+                        "Bridge durable configuration or terminal-isolation contract is not ready."
+                    }
+                    check(secrets.saveManagedMT5ServiceUrl(origin)) {
+                        "The verified Bridge URL could not be saved in secure app storage."
+                    }
+                    return@withContext origin
+                } catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    lastFailure = error.message ?: "Forwarded Bridge health check failed."
+                }
+            } else {
+                lastFailure = "GitHub Codespace state is $state; waiting for Available."
+            }
+            delay(4_000L)
+        }
+        throw IOException("Automatic Bridge URL discovery did not complete: $lastFailure")
+    }
+
+    private fun bridgeJson(origin: String, path: String): Pair<Int, JSONObject> {
+        val request = Request.Builder()
+            .url(origin + path)
+            .header("Accept", "application/json")
+            .header("X-Tunnel-Skip-AntiPhishing-Page", "true")
+            .get()
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (response.priorResponse != null) throw IOException("Bridge probe was redirected; refusing an unverified host.")
+            val body = response.body?.string().orEmpty()
+            val json = runCatching { JSONObject(body) }
+                .getOrElse { throw IOException("Forwarded port did not return the expected Bridge JSON.") }
+            return response.code to json
+        }
     }
 
     suspend fun stopRepositoryCodespace(): LifecycleResult = withContext(Dispatchers.IO) {
