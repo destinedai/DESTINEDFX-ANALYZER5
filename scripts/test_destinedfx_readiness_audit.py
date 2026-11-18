@@ -60,6 +60,7 @@ class ReadinessAuditTests(unittest.TestCase):
         self.assertIn("four broker-specific MT5 DEMO paths", names)
         self.assertIn("isolated MT5 host memory floor", names)
         self.assertIn("persistent Azure host is not falsely marked ready", names)
+        self.assertIn("Windows owner host background startup", names)
 
     def test_bridge_probe_distinguishes_ephemeral_liveness_from_readiness(self):
         requests = []
