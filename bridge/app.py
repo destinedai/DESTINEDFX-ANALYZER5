@@ -1426,8 +1426,15 @@ def heartbeat_news_clear(beat, symbols=None):
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None),
                     x_management_identity:str|None=Header(default=None)):
     require_durable_execution()
+    # In Linux host mode, accept enrolment only after the root host agent has
+    # verified that isolated per-pairing Unix/Wine/X11 slots can be provisioned.
+    # The password remains encrypted at rest and is withheld from the worker until
+    # that particular pairing/job submits valid root-verified slot evidence.
     if LINUX_HOST_MODE:
-        raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'This Linux worker still uses one shared terminal and cannot safely provision a separate MT5 terminal per user'})
+        host=linux_host_report()
+        isolation=host.get('slot_isolation') or {}
+        if not isolation.get('enabled') or not isolation.get('ready'):
+            raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user MT5 slot capacity'})
     p=auth(authorization,'app')
     if not x_management_identity:
         raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate to the DestinedFX management account before registering broker credentials'})
