@@ -1,6 +1,6 @@
 # DestinedFX owner-operated Windows stack
 
-This kit runs the bridge and MT5 worker on the owner's Windows computer. It is not a hosted service: keep the PC powered on, awake, connected to the network, and signed in to the Windows owner account for the scheduled tasks to run. A sleep, sign-out, shutdown, network outage, or PC restart can make the service unavailable. No VPS or public hosting is provisioned.
+This kit runs the Bridge and MT5 worker on an owner-operated Windows computer. The installer registers password-logon Task Scheduler jobs for the same Windows owner identity, triggered at Windows boot and owner sign-in. This allows the Bridge supervisor and recovery jobs to run in a non-interactive background session while that owner is signed out; it preserves the owner-bound DPAPI profile rather than switching to LocalSystem or S4U. The installer asks once for the Windows account password so Task Scheduler can store its protected task credential. The password is not written to DestinedFX files. Keep the PC powered on, awake, connected to the network, and prevent sleep/hibernation. A powered-off, sleeping or network-disconnected PC remains unavailable. This is owner-operated hosting, not an independently managed VPS or cloud SLA.
 
 ## Private network and setup
 
@@ -32,4 +32,4 @@ The restore validates the DPAPI archive, every checksum, SQLite integrity, and t
 
 This restore is supported only on the same Windows host under the same Windows user profile that created the DPAPI backup. A new host or different user must use a separately designed owner-controlled migration envelope; copying the `.dpapi` ciphertext is not migration and is intentionally rejected as unsupported.
 
-This kit does not establish a production release signature, commercial Tailscale rights, a live broker connection, or genuine DEMO acceptance. Verify the actual Windows host and broker account locally before relying on it.
+The non-interactive task configuration is source-tested but must still be verified on the owner PC after sign-out and reboot. The terminal/EA must independently prove it can remain connected and send a fresh heartbeat in that background session; a running scheduled task alone does not establish unattended MT5 readiness. This kit does not establish a production release signature, commercial Tailscale rights, a live broker connection, or genuine DEMO acceptance. Verify the actual Windows host and broker account locally before relying on it.
