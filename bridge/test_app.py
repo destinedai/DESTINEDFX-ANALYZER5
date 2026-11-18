@@ -2016,6 +2016,17 @@ def public_mode(monkeypatch, host='fixture-codespace-8000.app.github.dev'):
     with app.tx(immediate=True) as c:
         c.execute('DELETE FROM ip_guard'); c.execute('DELETE FROM owner_bootstrap'); c.execute('DELETE FROM request_rate')
 
+def test_public_health_reports_exact_forwarded_host_for_mobile_discovery(monkeypatch):
+    public_mode(monkeypatch)
+    health = pub.get('/health', headers={'Host': 'fixture-codespace-8000.app.github.dev'})
+    assert health.status_code == 200
+    body = health.json()
+    assert body['status'] == 'ok'
+    assert body['host_profile'] == 'EPHEMERAL'
+    assert body['public_exposure'] is True
+    assert body['expected_forwarded_host'] == 'fixture-codespace-8000.app.github.dev'
+
+
 def test_public_mode_rejects_unexpected_host(monkeypatch):
     public_mode(monkeypatch)
     assert pub.get('/v1/app/state',headers={'Host':'evil.example'}).status_code==421
