@@ -4,6 +4,9 @@ import com.destinedfx.core.marketdata.Decision
 import com.destinedfx.core.marketdata.QuoteArbiter
 import com.destinedfx.core.marketdata.QuoteView
 import com.example.data.market.QuoteFreshness
+import com.example.data.market.DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS
+import com.example.data.market.DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS
+import com.example.data.market.DERIV_CANDLE_HISTORY_TIMEOUT_MS
 import com.example.data.market.classifyQuoteFreshness
 import com.example.data.market.candleSourceKey
 import com.example.data.market.canMergeQuoteIntoCandle
@@ -28,6 +31,17 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 class MarketDataSafetyTest {
+    @Test
+    fun derivOuterTimeoutsAllowNestedConnectAndProviderResponseBudgetsToFinish() {
+        // Deriv active-symbol discovery waits up to 16s for the WebSocket plus 12s
+        // for its response. The repository must not cancel that request at 5s or 18s.
+        assertTrue(DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS > 16_000L + 12_000L)
+        assertTrue(DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS > DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS)
+
+        // Candle history waits up to 16s for the socket plus 10s for the history response.
+        assertTrue(DERIV_CANDLE_HISTORY_TIMEOUT_MS > 16_000L + 10_000L)
+    }
+
     @Test
     fun candleSourceKeysDoNotAliasTimeframes() {
         assertEquals("EUR/USD-M15", candleSourceKey("EUR/USD", "m15"))
