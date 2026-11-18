@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, Stri
 from cryptography.fernet import Fernet, InvalidToken
 import jwt
 from jwt import PyJWKClient
-from host_lifecycle import backup_database, inspect_shutdown_safety, read_status, touch_activity
+from host_lifecycle import backup_database, cancel_stop, inspect_shutdown_safety, read_status, touch_activity
 from pathlib import Path
 from quantitative import STRATEGY_RULESETS, analyze_json
 
@@ -224,6 +224,7 @@ def db():
     c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA foreign_keys=ON'); c.execute('PRAGMA busy_timeout=10000')
     c.executescript('''        CREATE TABLE IF NOT EXISTS pairings(id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, app_hash TEXT NOT NULL, terminal_hash TEXT, expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, terminal_id TEXT, instance_id TEXT, account TEXT, heartbeat TEXT, created REAL NOT NULL, live_authorized_until REAL, live_authorized_login TEXT, live_authorized_server TEXT, heartbeat_seq INTEGER NOT NULL DEFAULT 0, owner_subject TEXT, owner_tenant TEXT);
     CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id), request_id TEXT NOT NULL, action TEXT NOT NULL, config TEXT NOT NULL, ack TEXT, expires_at REAL, request_config TEXT, host_generation TEXT, UNIQUE(pairing_id,request_id));
+    CREATE TABLE IF NOT EXISTS host_control(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS close_all_confirmations(token_hash TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, account_mode TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS command_items(command_id INTEGER NOT NULL REFERENCES commands(id) ON DELETE CASCADE, ticket TEXT NOT NULL, target_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_volume REAL NOT NULL DEFAULT 0.0, remaining_volume REAL, ack_status TEXT, message TEXT NOT NULL DEFAULT '', operational_status TEXT NOT NULL DEFAULT 'PENDING', ack_heartbeat_seq INTEGER, PRIMARY KEY(command_id,ticket));
     CREATE TABLE IF NOT EXISTS rate(ip TEXT PRIMARY KEY, window REAL NOT NULL, count INTEGER NOT NULL);
@@ -311,6 +312,24 @@ def tx(immediate=False):
     finally: c.close()
 
 
+def _host_stop_prepared(connection):
+    row = connection.execute(
+        "SELECT value FROM host_control WHERE key='shutdown_prepared'"
+    ).fetchone()
+    return bool(row and row["value"] == HOST_GENERATION)
+
+
+def _require_host_accepting_commands(connection):
+    if _host_stop_prepared(connection):
+        raise HTTPException(
+            409,
+            detail={
+                "code": "HOST_SHUTDOWN_PREPARED",
+                "message": "This Codespaces host is prepared for shutdown; new trading commands are blocked until shutdown is cancelled or the host restarts",
+            },
+        )
+
+
 def queue_host_expiry_safety_stops(now_epoch=None):
     """Queue one non-liquidating EMERGENCY_STOP per connected account before host expiry."""
     lifecycle=host_lifecycle_state(now_epoch)
@@ -318,6 +337,8 @@ def queue_host_expiry_safety_stops(now_epoch=None):
         return 0
     queued=0
     with tx(True) as c:
+        if _host_stop_prepared(c):
+            return 0
         rows=c.execute(
             """SELECT p.id FROM pairings p
                JOIN managed_accounts m ON m.pairing_id=p.id
@@ -1951,7 +1972,10 @@ def _require_pairing_owner(p, assertion):
 @app.get('/v1/app/host/status')
 def app_host_status(authorization:str|None=Header(default=None)):
     auth(authorization,'app')
-    return {'host_profile':HOST_PROFILE,**host_lifecycle_state(),**read_status(HOST_CONTROL_DIR)}
+    with tx() as c:
+        shutdown_prepared = _host_stop_prepared(c)
+    return {'host_profile':HOST_PROFILE,'shutdown_prepared':shutdown_prepared,**host_lifecycle_state(),**read_status(HOST_CONTROL_DIR)}
+
 
 @app.post('/v1/app/host/prepare-stop')
 def prepare_host_stop(authorization:str|None=Header(default=None),
@@ -1960,15 +1984,53 @@ def prepare_host_stop(authorization:str|None=Header(default=None),
     _require_pairing_owner(p,x_management_identity)
     if not LINUX_HOST_MODE or HOST_PROFILE != 'EPHEMERAL':
         raise HTTPException(409,detail={'code':'HOST_LIFECYCLE_UNAVAILABLE','message':'This Bridge is not running the owner-controlled Codespaces host lifecycle'})
-    safety=inspect_shutdown_safety(DB_PATH,heartbeat_stale_seconds=STALE)
-    if not safety['safe']:
-        raise HTTPException(409,detail={'code':'HOST_STOP_BLOCKED','reasons':safety['reasons'],'message':'The host cannot be stopped while broker state is open, stale, incomplete or unresolved'})
+
+    # Serialize shutdown preparation with the command insertion transactions.
+    with tx(True) as c:
+        c.execute(
+            """INSERT INTO host_control(key,value,updated)
+               VALUES('shutdown_prepared',?,?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated""",
+            (HOST_GENERATION,time.time()),
+        )
+
     try:
+        safety=inspect_shutdown_safety(DB_PATH,heartbeat_stale_seconds=STALE)
+        if not safety['safe']:
+            raise HTTPException(409,detail={'code':'HOST_STOP_BLOCKED','reasons':safety['reasons'],
+                'message':'Stop the EA and resolve open positions, active orders, stale broker state or unfinished commands before stopping the host'})
+
         backup=backup_database(DB_PATH,Path(HOST_CONTROL_DIR).parent/'backups')
+        backup_safety=inspect_shutdown_safety(backup,heartbeat_stale_seconds=STALE)
+        current_safety=inspect_shutdown_safety(DB_PATH,heartbeat_stale_seconds=STALE)
+        if not backup_safety['safe'] or not current_safety['safe']:
+            reasons=sorted(set(backup_safety['reasons']) | set(current_safety['reasons']))
+            raise HTTPException(409,detail={'code':'HOST_STOP_STATE_CHANGED','reasons':reasons,
+                'message':'Broker state changed during backup verification; the host remains online and shutdown was cancelled'})
+    except HTTPException:
+        try: cancel_stop(HOST_CONTROL_DIR,DB_PATH,HOST_GENERATION)
+        except sqlite3.Error: pass
+        raise
     except (OSError,sqlite3.Error):
-        raise HTTPException(503,detail={'code':'HOST_BACKUP_FAILED','message':'A verified Bridge database backup could not be created; the host was not prepared for shutdown'})
+        try: cancel_stop(HOST_CONTROL_DIR,DB_PATH,HOST_GENERATION)
+        except sqlite3.Error: pass
+        raise HTTPException(503,detail={'code':'HOST_BACKUP_FAILED',
+            'message':'A verified database backup and safe-state recheck could not be completed; the host was not prepared for shutdown'})
     return {'status':'PREPARED','host_generation':HOST_GENERATION,'backup_verified':True,
-            'backup_name':backup.name,'broker_safety':safety}
+            'backup_name':backup.name,'broker_safety':current_safety,'backup_safety':backup_safety}
+
+
+@app.post('/v1/app/host/cancel-stop')
+def cancel_host_stop(authorization:str|None=Header(default=None),
+                     x_management_identity:str|None=Header(default=None)):
+    p=auth(authorization,'app')
+    _require_pairing_owner(p,x_management_identity)
+    if not LINUX_HOST_MODE or HOST_PROFILE != 'EPHEMERAL':
+        raise HTTPException(409,detail={'code':'HOST_LIFECYCLE_UNAVAILABLE','message':'This Bridge is not running the owner-controlled Codespaces host lifecycle'})
+    try: cancel_stop(HOST_CONTROL_DIR,DB_PATH,HOST_GENERATION)
+    except sqlite3.Error:
+        raise HTTPException(503,detail={'code':'HOST_STOP_CANCEL_FAILED','message':'The durable host-shutdown gate could not be cleared'})
+    return {'status':'CANCELLED','host_generation':HOST_GENERATION}
 
 
 @app.post('/v1/app/analysis',response_model=AnalysisResponse)
@@ -2403,6 +2465,7 @@ def issue_destructive_command(x,p):
     if confirmation: config['confirmation']=cfg['confirmation']
     serialized=json.dumps(config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
+        _require_host_accepting_commands(c)
         concurrent=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
         if concurrent:
             if concurrent['action']!=x.action or concurrent['request_config']!=raw_config: raise HTTPException(409,'request_id was already used for a different command payload')
@@ -2427,7 +2490,9 @@ def issue_destructive_command(x,p):
 
 @app.post('/v1/app/commands',status_code=202)
 def command(x:Command,authorization:str|None=Header(default=None)):
-    p=auth(authorization,'app'); check_json(x.config)
+    p=auth(authorization,'app')
+    with tx() as c: _require_host_accepting_commands(c)
+    check_json(x.config)
     linux_host_report()
     if host_lifecycle_state()['host_shutdown_pending'] and x.action in ('START','RESUME'):
         raise HTTPException(409,detail={'code':'HOST_SHUTDOWN_PENDING','message':'The Codespaces hard lifetime is approaching; new entries and resumes are blocked while the safety stop is active'})
@@ -2455,6 +2520,7 @@ def command(x:Command,authorization:str|None=Header(default=None)):
         if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or not heartbeat_news_clear(beat,symbols) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, eligible EA state, verified identity/mode, fresh CLEAR news verdict, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
     serialized=json.dumps(x.config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
+        _require_host_accepting_commands(c)
         c.execute('INSERT OR IGNORE INTO commands(pairing_id,request_id,action,config,host_generation) VALUES(?,?,?,?,?)',(p['id'],x.request_id,x.action,serialized,HOST_GENERATION))
         r=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
         if r['action']!=x.action or r['config']!=serialized: raise HTTPException(409,'request_id was already used for a different command payload')

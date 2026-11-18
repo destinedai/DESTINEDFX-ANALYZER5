@@ -428,6 +428,18 @@ class MT5RemoteBridgeClient(
         )
     }
 
+    suspend fun cancelHostStop(): JSONObject {
+        val identity = managementIdentityAssertionProvider?.invoke()
+            ?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Sign in to the DestinedFX management account before cancelling host shutdown.")
+        return request(
+            "POST",
+            "/v1/app/host/cancel-stop",
+            JSONObject(),
+            managementIdentityAssertion = identity
+        )
+    }
+
     suspend fun hostStatus(): JSONObject = request("GET", "/v1/app/host/status")
 
     data class TradePage(val cursor: Int, val watermark: Double, val trades: List<JSONObject>)

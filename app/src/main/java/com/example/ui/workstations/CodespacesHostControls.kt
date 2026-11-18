@@ -166,7 +166,13 @@ fun CodespacesHostControls(
                             val stopped = github.stopRepositoryCodespace()
                             message = stopped.message + " Verified backup: " + preflight.optString("backup_name")
                         } catch (error: Exception) {
-                            message = error.message ?: "STOP HOST failed; the Codespace was not reported as stopped."
+                            val released = runCatching { bridgeClient.cancelHostStop() }.isSuccess
+                            val detail = error.message ?: "STOP HOST failed; the Codespace was not reported as stopped."
+                            message = if (released) {
+                                "$detail The Bridge shutdown lock was cleared; the Codespace remains available."
+                            } else {
+                                "$detail The Bridge shutdown lock could not be cleared; check host status before resuming trading."
+                            }
                         } finally {
                             busy = false
                         }
@@ -182,7 +188,8 @@ fun CodespacesHostControls(
                     try {
                         val status = bridgeClient.hostStatus()
                         message = "Host status: " + status.optString("status", "UNKNOWN") +
-                            " · lifecycle: " + status.optString("host_lifecycle_status", "UNKNOWN")
+                            " · lifecycle: " + status.optString("host_lifecycle_status", "UNKNOWN") +
+                            " · shutdown prepared: " + status.optBoolean("shutdown_prepared", false)
                     } catch (error: Exception) {
                         message = error.message ?: "Host status is unavailable."
                     } finally {

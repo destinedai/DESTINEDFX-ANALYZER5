@@ -289,6 +289,7 @@ def managed_env(monkeypatch):
         c.execute('DELETE FROM rate')
         c.execute('DELETE FROM ip_guard')
         c.execute('DELETE FROM request_rate')
+        c.execute('DELETE FROM host_control')
     monkeypatch.setenv('CREDENTIALS_FERNET_KEY', Fernet.generate_key().decode())
     monkeypatch.setenv('WORKER_TOKEN', 'operator-secret-test-fixture-' + '2026-very-long')
     monkeypatch.setenv('ALLOW_LEGACY_WORKER_TOKEN', 'true')
@@ -2322,3 +2323,57 @@ def test_linux_shared_terminal_refuses_broker_credentials_before_storage_or_job_
     with app.tx() as c:
         assert c.execute('SELECT COUNT(*) FROM managed_accounts').fetchone()[0] == 0
         assert c.execute('SELECT COUNT(*) FROM worker_jobs').fetchone()[0] == 0
+
+
+def test_manual_host_stop_is_owner_gated_and_blocks_commands_until_cancelled(monkeypatch, tmp_path):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
+    monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'linux_host_report', lambda: None)
+    p = pair()
+    headers = {
+        'Authorization': 'Bearer ' + p['app_token'],
+        'X-Management-Identity': p['_management_identity_assertion'],
+    }
+    prepared = client.post('/v1/app/host/prepare-stop', headers=headers)
+    assert prepared.status_code == 200, prepared.text
+    assert prepared.json()['status'] == 'PREPARED'
+    assert prepared.json()['backup_verified'] is True
+    blocked = client.post('/v1/app/commands', headers=headers, json=command_req('STOP'))
+    assert blocked.status_code == 409
+    assert blocked.json()['detail']['code'] == 'HOST_SHUTDOWN_PREPARED'
+    status = client.get('/v1/app/host/status', headers=headers)
+    assert status.status_code == 200 and status.json()['shutdown_prepared'] is True
+    cancelled = client.post('/v1/app/host/cancel-stop', headers=headers)
+    assert cancelled.status_code == 200 and cancelled.json()['status'] == 'CANCELLED'
+    status = client.get('/v1/app/host/status', headers=headers)
+    assert status.json()['shutdown_prepared'] is False
+    accepted = client.post('/v1/app/commands', headers=headers, json=command_req('STOP'))
+    assert accepted.status_code == 202
+
+
+def test_host_stop_rechecks_backup_and_clears_gate_when_state_changes(monkeypatch, tmp_path):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
+    monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    p = pair()
+    headers = {
+        'Authorization': 'Bearer ' + p['app_token'],
+        'X-Management-Identity': p['_management_identity_assertion'],
+    }
+    real_inspect = app.inspect_shutdown_safety
+    def inspect(path, **kwargs):
+        if str(path) != str(app.DB_PATH):
+            return {'safe': False, 'reasons': ['EA_ACTIVE']}
+        return real_inspect(path, **kwargs)
+    monkeypatch.setattr(app, 'inspect_shutdown_safety', inspect)
+    response = client.post('/v1/app/host/prepare-stop', headers=headers)
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'HOST_STOP_STATE_CHANGED'
+    with app.tx() as c:
+        row = c.execute("SELECT value FROM host_control WHERE key='shutdown_prepared'").fetchone()
+    assert row is None

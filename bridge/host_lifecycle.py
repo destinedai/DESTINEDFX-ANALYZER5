@@ -78,6 +78,11 @@ def inspect_shutdown_safety(
             heartbeat = _read_json(row["heartbeat"])
             claimed = _read_json(row["account"]) or {}
             observed = heartbeat.get("account") if heartbeat else None
+            ea_state = str(heartbeat.get("state", "")).strip().upper()
+            if ea_state == "RUNNING":
+                reasons.add("EA_ACTIVE")
+            elif ea_state not in {"READY", "PAUSED", "STOPPED"}:
+                reasons.add("EA_STATE_UNVERIFIED")
             claimed_mode = str(claimed.get("account_mode", "")).upper()
             observed_mode = str(observed.get("account_mode", "")).upper() if isinstance(observed, dict) else ""
             requires_broker_check = (
@@ -238,13 +243,42 @@ def request_stop(runtime_dir: str | os.PathLike[str], *, reason: str, grace_seco
     return payload
 
 
-def cancel_stop(runtime_dir: str | os.PathLike[str]) -> None:
+def cancel_stop(
+    runtime_dir: str | os.PathLike[str],
+    db_path: str | os.PathLike[str] | None = None,
+    host_generation: str | None = None,
+) -> None:
+    """Clear stop markers and the matching durable host-shutdown gate."""
     runtime = Path(runtime_dir)
     for name in ("stop.request", "host-draining"):
         try:
             (runtime / name).unlink()
         except FileNotFoundError:
             pass
+    if db_path is None:
+        return
+    database = Path(db_path)
+    if not database.is_file():
+        return
+    with sqlite3.connect(str(database), timeout=5) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "host_control" not in tables:
+            return
+        if host_generation:
+            connection.execute(
+                "DELETE FROM host_control WHERE key='shutdown_prepared' AND value=?",
+                (host_generation,),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM host_control WHERE key='shutdown_prepared'"
+            )
+        connection.commit()
 
 
 def touch_activity(runtime_dir: str | os.PathLike[str]) -> None:

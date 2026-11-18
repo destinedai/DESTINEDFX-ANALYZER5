@@ -180,10 +180,32 @@ def ensure_started() -> dict[str, Any]:
     return {"status": "SUPERVISOR_STARTED", "pid": process.pid}
 
 
-def _graceful_stop(child: subprocess.Popen[bytes]) -> bool:
-    """Stop the owned terminal and host services, then end only our own process group."""
+def _graceful_stop(
+    child: subprocess.Popen[bytes],
+    backup_database,
+    inspect_shutdown_safety,
+    *,
+    reason: str,
+) -> bool:
+    """Recheck live and backed-up broker state before stopping owned services."""
     if child.poll() is not None:
         return True
+    try:
+        safety = inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15)
+        if not safety["safe"]:
+            _write_status("STOP_BLOCKED", reason=reason, safety_reasons=safety["reasons"])
+            return False
+        backup = backup_database(DB_PATH, STATE / "backups")
+        backup_safety = inspect_shutdown_safety(backup, heartbeat_stale_seconds=15)
+        current_safety = inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15)
+        if not backup_safety["safe"] or not current_safety["safe"]:
+            reasons = sorted(set(backup_safety["reasons"]) | set(current_safety["reasons"]))
+            _write_status("STOP_BLOCKED", reason=reason, safety_reasons=reasons)
+            return False
+        _write_status("SHUTTING_DOWN", reason=reason, backup=backup.name, backup_verified=True)
+    except Exception as exc:
+        _write_status("STOP_FAILED", reason="SHUTDOWN_PREFLIGHT_FAILED", detail=type(exc).__name__)
+        return False
     try:
         with (RUNTIME / "host-stop.log").open("ab") as stop_log:
             result = subprocess.run(
@@ -252,15 +274,10 @@ def supervise() -> int:
         _write_status("STARTING", start_pid=child.pid)
         while True:
             if stop_requested:
-                safety = inspect_shutdown_safety(DB_PATH)
-                if safety["safe"]:
-                    backup = backup_database(DB_PATH, STATE / "backups")
-                    _write_status("SHUTTING_DOWN", reason="CODESPACES_SIGNAL",
-                                  backup=backup.name, backup_verified=True)
-                    return 0 if _graceful_stop(child) else 2
-                _write_status("STOP_BLOCKED", reason="CODESPACES_SIGNAL",
-                              safety_reasons=safety["reasons"])
-                return 2
+                return 0 if _graceful_stop(
+                    child, backup_database, inspect_shutdown_safety,
+                    reason="CODESPACES_SIGNAL",
+                ) else 2
 
             if child.poll() is not None:
                 _write_status("FAILED", reason="START_SCRIPT_EXITED",
@@ -277,7 +294,10 @@ def supervise() -> int:
         # account identifiers, bridge tokens, or other environment secrets.
         _write_status("FAILED", reason=type(exc).__name__)
         if child is not None and child.poll() is None:
-            _graceful_stop(child)
+            _graceful_stop(
+                child, backup_database, inspect_shutdown_safety,
+                reason="SUPERVISOR_FAILURE",
+            )
         return 2
     finally:
         try:
@@ -303,8 +323,8 @@ def main() -> int:
             return 0
         if args.command == "cancel-stop":
             _, cancel_stop, _ = _helper_imports()
-            cancel_stop(RUNTIME)
-            _write_status("RUNNING")
+            cancel_stop(RUNTIME, DB_PATH, os.environ.get("HOST_GENERATION"))
+            _write_status("RUNNING", shutdown_cancelled=True)
             return 0
     except Exception as exc:
         print(f"FAIL: host controller ({type(exc).__name__})", file=sys.stderr)

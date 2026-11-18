@@ -52,6 +52,7 @@ def _make_db(path, *, heartbeat=None, account=None, ledger_status=None,
     if heartbeat is None:
         heartbeat = {
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "state": "READY",
             "account": account,
             "open_positions": [],
             "active_orders": [],
@@ -177,3 +178,67 @@ def test_wal_committed_data_is_present_in_verified_backup(tmp_path):
     with sqlite3.connect(backup) as snapshot:
         assert snapshot.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert snapshot.execute("SELECT value FROM evidence").fetchone()[0] == "committed-in-wal"
+
+
+def test_running_ea_blocks_host_stop_even_without_positions_or_orders(tmp_path):
+    path = tmp_path / "bridge.sqlite3"
+    heartbeat = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "state": "RUNNING",
+        "account": {
+            "login": "700001",
+            "server": "Broker-Demo",
+            "company": "Broker",
+            "currency": "USD",
+            "account_mode": "DEMO",
+        },
+        "open_positions": [],
+        "active_orders": [],
+    }
+    connection = _make_db(path, heartbeat=heartbeat)
+    connection.close()
+    result = inspect_shutdown_safety(path)
+    assert result["safe"] is False
+    assert "EA_ACTIVE" in result["reasons"]
+
+
+@pytest.mark.parametrize("state", ["ERROR", "UNKNOWN", ""])
+def test_unknown_ea_state_blocks_host_stop(tmp_path, state):
+    path = tmp_path / "bridge.sqlite3"
+    heartbeat = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "state": state,
+        "account": {
+            "login": "700001",
+            "server": "Broker-Demo",
+            "company": "Broker",
+            "currency": "USD",
+            "account_mode": "DEMO",
+        },
+        "open_positions": [],
+        "active_orders": [],
+    }
+    connection = _make_db(path, heartbeat=heartbeat)
+    connection.close()
+    result = inspect_shutdown_safety(path)
+    assert result["safe"] is False
+    assert "EA_STATE_UNVERIFIED" in result["reasons"]
+
+
+def test_cancel_stop_clears_generation_scoped_database_gate(tmp_path):
+    from host_lifecycle import cancel_stop
+    path = tmp_path / "bridge.sqlite3"
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "stop.request").write_text("pending", encoding="utf-8")
+    (runtime / "host-draining").write_text("pending", encoding="utf-8")
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE host_control (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated REAL NOT NULL)")
+    connection.execute("INSERT INTO host_control(key,value,updated) VALUES('shutdown_prepared','generation-a',1)")
+    connection.commit()
+    connection.close()
+    cancel_stop(runtime, path, "generation-a")
+    assert not (runtime / "stop.request").exists()
+    assert not (runtime / "host-draining").exists()
+    with sqlite3.connect(path) as check:
+        assert check.execute("SELECT COUNT(*) FROM host_control").fetchone()[0] == 0
