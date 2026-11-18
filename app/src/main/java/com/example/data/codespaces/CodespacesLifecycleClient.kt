@@ -123,6 +123,11 @@ class CodespacesLifecycleClient(
         LifecycleResult(true, name, state, "GitHub accepted the Codespaces stop request.")
     }
 
+    suspend fun repositoryCodespaceState(): String = withContext(Dispatchers.IO) {
+        val accessToken = validAccessToken()
+        findOwnedCodespace(accessToken).optString("state").ifBlank { "UNKNOWN" }
+    }
+
     suspend fun revokeLocalAuthorization() = withContext(Dispatchers.IO) {
         secrets.clearCodespacesGitHubAuthorization()
     }
