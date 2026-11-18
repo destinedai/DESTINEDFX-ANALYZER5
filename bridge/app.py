@@ -576,7 +576,25 @@ class WorkerAttestation(BaseModel):
     process_identity:str=Field(min_length=1,max_length=512)
     ea_identity:str=Field(min_length=1,max_length=256)
     broker_brand:str=Field(min_length=1,max_length=20)
-    login:str=Field(pattern=r'^[0-9]{1,20}
+    login:str=Field(pattern=r'^[0-9]{1,20}$')
+    server:str=Field(min_length=1,max_length=128)
+    account_mode:str=Field(pattern=r'^(DEMO|LIVE)$')
+    host_generation:str=Field(min_length=1,max_length=128)
+    issued_at:float=Field(gt=0)
+    expires_at:float=Field(gt=0)
+    nonce:str=Field(min_length=16,max_length=128)
+    signature:str=Field(pattern=r'^[0-9a-f]{64}$')
+class WorkerAttestationFinalize(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    attestation_id:str=Field(min_length=1,max_length=128)
+    worker_id:str=Field(min_length=1,max_length=128)
+    terminal_path:str=Field(min_length=1,max_length=512)
+    process_identity:str=Field(min_length=1,max_length=512)
+    ea_identity:str=Field(min_length=1,max_length=256)
+    pid:int|None=Field(default=None,gt=1)
+    process_start_ticks:int|None=Field(default=None,gt=0)
+    signature:str=Field(pattern=r'^[0-9a-f]{64}$')
+
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
     status:str; worker_id:str=Field(min_length=1,max_length=128); error_code:str|None=Field(default=None,max_length=64); error_message:str|None=Field(default=None,max_length=200)
