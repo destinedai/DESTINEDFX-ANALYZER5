@@ -27,7 +27,7 @@ class MT5RemoteBridgeClientTest {
             .put(JSONObject().put("symbol", "EURUSD.a").put("bid", 1.08231).put("ask", 1.08245).put("timestamp_ms", now - 1200L))
             .put(JSONObject().put("symbol", "GBPUSD").put("bid", 1.2700).put("ask", 1.2690).put("timestamp_ms", now))
             .put(JSONObject().put("symbol", "USDJPY").put("bid", 150.0).put("ask", 150.02).put("timestamp_ms", now - 20_000L))
-            .put(JSONObject().put("symbol", "AUDUSD").put("bid", 0.6500).put("ask", 0.6502).put("timestamp_ms", now + 1L))
+            .put(JSONObject().put("symbol", "AUDUSD").put("bid", 0.6500).put("ask", 0.6502).put("timestamp_ms", now + 5_000L))
             .put(JSONObject().put("symbol", "EURUSD.A").put("bid", 1.08230).put("ask", 1.08244).put("timestamp_ms", now))
         val accepted = parseVerifiedBrokerQuotes(rows, now)
         assertEquals(1, accepted?.size)
