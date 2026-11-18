@@ -199,6 +199,14 @@ def linux_host_report():
     return payload
 
 
+def linux_slot_isolation(host):
+    """Return slot isolation evidence, defaulting to unverified when no host report exists."""
+    if not isinstance(host, dict):
+        return {}
+    isolation = host.get('slot_isolation')
+    return isolation if isinstance(isolation, dict) else {}
+
+
 def host_agent_slot_request(path, payload):
     """Request root-only validation of a reserved or running per-user MT5 slot."""
     if not LINUX_HOST_MODE or not path.startswith('/internal/slot/'):
@@ -1432,7 +1440,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     # that particular pairing/job submits valid root-verified slot evidence.
     if LINUX_HOST_MODE:
         host=linux_host_report()
-        isolation=host.get('slot_isolation') or {}
+        isolation=linux_slot_isolation(host)
         if not isolation.get('enabled') or not isolation.get('ready'):
             raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user MT5 slot capacity'})
     p=auth(authorization,'app')
@@ -1847,7 +1855,9 @@ def readiness():
     except Exception:
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
     if LINUX_HOST_MODE:
-        isolation=host.get('slot_isolation') or {}
+        isolation=linux_slot_isolation(host)
+        if not isolation.get('enabled') or not isolation.get('ready'):
+            raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user MT5 slot capacity'})
         return {'status':'ready','database':'ok','managed_execution':'configured',
                 'per_user_terminal_isolation':'VERIFIED','isolated_slots':int(isolation.get('active_slots',0)),
                 'max_isolated_slots':int(isolation.get('max_slots',1)),
@@ -2104,7 +2114,7 @@ def app_host_status(authorization:str|None=Header(default=None)):
     auth(authorization,'app')
     with tx() as c:
         shutdown_prepared = _host_stop_prepared(c)
-    isolation=linux_host_report().get('slot_isolation',{}) if LINUX_HOST_MODE else {'enabled':False,'ready':True,'active_slots':0,'max_slots':0}
+    isolation=linux_slot_isolation(linux_host_report()) if LINUX_HOST_MODE else {'enabled':False,'ready':True,'active_slots':0,'max_slots':0}
     return {'host_profile':HOST_PROFILE,'shutdown_prepared':shutdown_prepared,
             'slot_isolation':isolation,**host_lifecycle_state(),**read_status(HOST_CONTROL_DIR)}
 
