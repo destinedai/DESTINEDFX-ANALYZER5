@@ -69,8 +69,8 @@ def _make_db(path, *, heartbeat=None, account=None, ledger_status=None,
             "INSERT INTO trade_ledger(pairing_id, identity, status) VALUES(?,?,?)",
             ("pair-1", "position:123", ledger_status),
         )
-    if command_ack is not None:
-        connection.execute("INSERT INTO commands(pairing_id, ack) VALUES(?,?)", ("pair-1", command_ack))
+    if command_ack != "NO_COMMAND":
+        connection.execute("INSERT INTO commands(pairing_id, ack) VALUES(?,?)", ("pair-1", None if command_ack is None else command_ack))
     if job_status is not None:
         connection.execute("INSERT INTO worker_jobs(pairing_id, status) VALUES(?,?)", ("pair-1", job_status))
     connection.commit()
