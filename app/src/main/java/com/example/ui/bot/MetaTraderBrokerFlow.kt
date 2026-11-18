@@ -159,6 +159,11 @@ fun MetaTraderBrokerFlow(
             FlowPage.ADVANCED -> page = FlowPage.SETTINGS
         }
     }
+    // A new broker login form must always start at its header, even when the previous
+    // broker form was scrolled to the credential fields.
+    LaunchedEffect(page, selected?.id) {
+        if (page == FlowPage.LOGIN) loginScrollState.scrollTo(0)
+    }
     LaunchedEffect(page, accountDetails?.retrievedAtMs) {
         while (page == FlowPage.ACCOUNT) {
             clockNowMs = System.currentTimeMillis()
