@@ -326,6 +326,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
                     Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && bridgeSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) bridgeSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    val observedHostProfile = bridgeSnapshot?.hostProfile?.name ?: "UNKNOWN"
+                    Text(
+                        "HOST PROFILE: $observedHostProfile · LIVE GATE: " +
+                            if (observedHostProfile == "PERSISTENT") "PERSISTENT HOST EVIDENCE PRESENT" else "BLOCKED — PERSISTENT HOST NOT VERIFIED",
+                        color = if (observedHostProfile == "PERSISTENT") ProfitGreen else WarningAmber,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                     OutlinedButton(onClick = { showBridgeDetails = !showBridgeDetails }, modifier = Modifier.fillMaxWidth().testTag("bridge_setup_details_toggle")) {
                         Text(if (showBridgeDetails) "HIDE CONNECTION DETAILS" else "CONNECTION SETUP & POSITION DETAILS", fontSize = 10.sp)
                     }
@@ -355,12 +363,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             onValueChange = { ownerBootstrapCodeInput = it },
                             modifier = Modifier.fillMaxWidth().testTag("managed_bridge_owner_bootstrap"),
                             enabled = !bridgeBusy && !isConnectingBroker,
-                            label = { Text("One-time owner bootstrap code") },
+                            label = { Text("Optional owner bootstrap code (manual recovery)") },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             supportingText = {
-                                Text("First pairing only. Expires in 10 minutes. Not saved.")
+                                Text("Leave blank for automatic one-use issuance using your signed management identity. Manual recovery only; expires in 10 minutes and is not saved.")
                             }
                         )
                     }
@@ -410,6 +418,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val supportedStrategy = selectedStrategyId in StrategyRegistry.managedStrategyIds
                     val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
                     if (selectedAccountMode == "LIVE") {
+                        if (observedHostProfile != "PERSISTENT") {
+                            Text(
+                                "LIVE IS BLOCKED: host profile is $observedHostProfile. A persistent, independently verified host is required; an ephemeral Codespaces host remains DEMO-only. This is an active safety gate, not a missing button.",
+                                color = LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold
+                            )
+                        }
                         Text("LIVE authorization: ${if (bridgeSnapshot?.liveAuthorized == true) "ACTIVE (server-verified, short-lived)" else "NOT AUTHORIZED"}", color = if (bridgeSnapshot?.liveAuthorized == true) WarningAmber else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         Button(enabled = !bridgeBusy && bridgeProfileReady && bridgeSnapshot?.liveAuthorized != true, onClick = { showLiveAuthorizationDialog = true }) {
                             Text("AUTHORIZE LIVE SESSION (15 MIN)")
