@@ -2754,9 +2754,7 @@ def revoke_pairing(authorization:str|None=Header(default=None)):
         c.execute('UPDATE pairings SET app_hash=?,terminal_hash=NULL,consumed=1,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(secrets.token_urlsafe(32)),p['id']))
         c.execute('DELETE FROM commands WHERE pairing_id=?',(p['id'],))
     return {'revoked':True,'deprovision_queued':True}
-)
-    server:str=Field(min_length=1,max_length=128)
-    account_mode:str=Field(pattern=r'^(DEMO|LIVE)
+
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
     status:str; worker_id:str=Field(min_length=1,max_length=128); error_code:str|None=Field(default=None,max_length=64); error_message:str|None=Field(default=None,max_length=200)
