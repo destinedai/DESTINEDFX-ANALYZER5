@@ -197,7 +197,7 @@ def slot_isolation_report():
         checks["slots_root"] = info.st_uid == 0 and (info.st_mode & 0o777) == 0o711
     if checks["runtime_root"]:
         info = SLOT_RUNTIME.stat()
-        checks["runtime_root"] = info.st_uid == 0 and (info.st_mode & 0o077) == 0
+        checks["runtime_root"] = info.st_uid == HOST_OWNER_UID and (info.st_mode & 0o077) == 0
     active = 0
     if checks["slots_root"]:
         for marker in SLOT_ROOT.glob("*/**/.destinedfx-worker.json"):
