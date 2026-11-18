@@ -89,10 +89,12 @@ grep -Fq 'chmod 600 "$STATE/bridge.env"' "$ROOT/deploy/codespaces/start.sh" || f
 pass 'generated credentials are constrained to private state modes'
 grep -Fq 'linux-slot-worker.py" --loop --interval 3' "$ROOT/deploy/codespaces/start.sh" || fail 'start.sh must run the isolated Linux slot connect-job worker'
 grep -Fq 'DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true' "$ROOT/deploy/codespaces/start.sh" || fail 'loopback control plane opt-in missing'
-grep -Fq 'MT5_JOURNAL_DIR="$TERMINAL_ROOT/Logs"' "$ROOT/deploy/codespaces/start.sh" || fail 'journal must be the platform Logs folder, not MQL5/Logs'
-grep -Fq '.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe' "$ROOT/deploy/codespaces/start.sh" || fail 'MetaQuotes default terminal path missing'
-if grep -Fq 'MQL5/Logs' "$ROOT/deploy/codespaces/start.sh"; then fail 'start.sh must not point the journal at MQL5/Logs'; fi
-pass 'T1 path scheme: one terminal location, platform Logs journal, runner and process control wired'
+grep -Fq 'unset WINEPREFIX MT5_JOURNAL_DIR DESTINEDFX_EA_SET_PATH' "$ROOT/deploy/codespaces/start.sh" || fail 'shared Wine prefix, journal and preset overrides must remain unset'
+grep -Fq 'export DESTINEDFX_ISOLATED_SLOTS=true' "$ROOT/deploy/codespaces/start.sh" || fail 'per-user isolated MT5 slots must be enabled'
+grep -Fq '"/portable"' "$ROOT/scripts/linux-host/linux-slot-worker.py" || fail 'each MT5 session must use its private portable terminal data tree'
+grep -Fq 'terminal-{pairing_key(reservation.pairing_id)}.log' "$ROOT/scripts/linux-host/linux-slot-worker.py" || fail 'each pairing must have a separate private runtime log'
+grep -Fq '.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe' "$ROOT/deploy/codespaces/start.sh" || fail 'MetaQuotes default terminal template path missing'
+pass 'Per-user runtime: isolated Wine prefix, portable terminal data and per-pairing logs wired'
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/wine-bin"
