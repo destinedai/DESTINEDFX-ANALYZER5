@@ -58,6 +58,15 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     bot_ui = read_text(root, "app/src/main/java/com/example/ui/workstations/BotWorkstation.kt")
     bridge_client = read_text(root, "app/src/main/java/com/example/data/trade/MT5RemoteBridgeClient.kt")
     arming = read_text(root, "app/src/main/java/com/example/data/broker/ModeArmingPolicy.kt")
+    codespaces = read_text(root, "app/src/main/java/com/example/data/codespaces/CodespacesLifecycleClient.kt")
+    codespaces_ui = read_text(root, "app/src/main/java/com/example/ui/workstations/CodespacesHostControls.kt")
+    bridge = read_text(root, "bridge/app.py")
+    broker_directory = read_text(root, "app/src/main/java/com/example/data/broker/BrokerDirectory.kt")
+    broker_specs = read_text(root, "app/src/main/java/com/example/data/broker/BrokerLoginSpec.kt")
+    linux_slots = read_text(root, "scripts/linux-host/linux-slot-worker.py")
+    codespaces_start = read_text(root, "deploy/codespaces/start.sh")
+    azure_bootstrap = read_text(root, "deploy/azure-students/cloud-init.yaml")
+    broker_matrix = read_text(root, "docs/broker-capability-matrix.md")
     ea = read_text(root, "mt5-ea/DestinedFXTraderEA.mq5")
     readme = read_text(root, "README.md")
 
@@ -172,6 +181,83 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         actions_ok,
         "The app queues START/STOP/Pause/Resume and position-management commands; "
         "the EA owns new Buy/Sell submissions and checks identity, heartbeat, risk and its journal.",
+    )
+
+    bridge_discovery_ok = (
+        "discoverAndSaveBridge" in codespaces
+        and "codespacesBridgeOrigin" in codespaces
+        and '"/health/live"' in codespaces
+        and '"/health/config"' in codespaces
+        and "expected_forwarded_host" in codespaces
+        and "saveManagedMT5ServiceUrl(origin)" in codespaces
+        and "DISCOVER BRIDGE URL" in codespaces_ui
+        and "expected_forwarded_host" in bridge
+    )
+    add_check(
+        checks,
+        "automatic Codespaces Bridge discovery",
+        bridge_discovery_ok,
+        "The phone derives the port-8000 origin, probes liveness/configuration and exact public host, then saves only the verified HTTPS origin.",
+    )
+
+    linux_health_ok = (
+        "host = linux_host_report()" in bridge
+        and "linux_slot_isolation(host)" in bridge
+        and "'VERIFIED' if LINUX_HOST_MODE" in bridge
+        and "PER_USER_TERMINAL_ISOLATION_REQUIRED" in bridge
+    )
+    add_check(
+        checks,
+        "Linux Bridge configuration reflects root slot attestation",
+        linux_health_ok,
+        "Linux configuration health must use actual root host-agent isolation evidence, not a hard-coded BLOCKED response.",
+    )
+
+    required_mt5 = {"FBS", "EXNESS", "HFM", "DERIV"}
+    mt5_routes_ok = all(
+        token in broker_directory and token in broker_specs and token in arming
+        for token in required_mt5
+    ) and all(
+        (f"{brand} MT5" in broker_matrix or f"{brand} MT5" in broker_matrix)
+        for brand in ("FBS", "Exness", "HFM", "Deriv")
+    )
+    demo_gate_ok = (
+        "OWNER_DEMO_ACCEPTANCE_REQUIRED" in arming
+        and "every ManagedMt5Broker" not in broker_specs
+        and all(token in broker_matrix and "NOT VERIFIED" in broker_matrix for token in (
+            "FBS MT5", "Exness MT5", "HFM MT5", "Deriv MT5"
+        ))
+    )
+    add_check(
+        checks,
+        "four broker-specific MT5 DEMO paths",
+        mt5_routes_ok and demo_gate_ok,
+        "FBS, Exness, HFM and Deriv MT5 have distinct route identities; none is marked DEMO-accepted without account-bound evidence.",
+    )
+
+    slot_memory_ok = (
+        "3 * 1024 ** 3" in linux_slots
+        and "INSUFFICIENT_MEMORY_FOR_MT5_SLOT" in linux_slots
+        and "memory_slots = available // (3 * 1024**3)" in codespaces_start
+        and "DESTINEDFX_SLOT_MAX_TERMINALS < 1" in codespaces_start
+    )
+    add_check(
+        checks,
+        "isolated MT5 host memory floor",
+        slot_memory_ok,
+        "A terminal slot requires at least 3 GiB currently available memory; smaller hosts receive zero capacity and refuse provisioning.",
+    )
+
+    azure_host_not_overstated = (
+        "BLOCKED_OWNER_RUNTIME_SETUP" in azure_bootstrap
+        and "does not install or enable an isolated-slot" not in azure_bootstrap
+        and "systemd runtime" in azure_bootstrap
+    )
+    add_check(
+        checks,
+        "persistent Azure host is not falsely marked ready",
+        azure_host_not_overstated,
+        "The Azure bootstrap must remain blocked until its isolated-slot systemd runtime, encrypted credentials and MT5 template are installed.",
     )
 
     manual_order_api = any(token in bridge_client for token in (
