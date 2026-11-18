@@ -32,9 +32,24 @@ from cryptography.fernet import Fernet
 with open(sys.argv[1], 'x', encoding='utf-8') as f:
     f.write('CREDENTIALS_FERNET_KEY=' + Fernet.generate_key().decode() + '\n')
     f.write('WORKER_TOKEN=' + secrets.token_urlsafe(48) + '\n')
+    f.write('HOST_AGENT_TOKEN=' + secrets.token_urlsafe(48) + '\n')
 PY
 fi
 chmod 600 "$STATE/bridge.env"
+# Existing installations created before host-agent authentication receive a new
+# random token once; the token is never passed in the process command line.
+if ! grep -q '^HOST_AGENT_TOKEN=' "$STATE/bridge.env"; then
+  umask 077
+  printf 'HOST_AGENT_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >>"$STATE/bridge.env"
+  chmod 600 "$STATE/bridge.env"
+fi
+set -a
+# shellcheck disable=SC1090
+source "$STATE/bridge.env"
+set +a
+if [[ -z "${HOST_AGENT_TOKEN:-}" || "${#HOST_AGENT_TOKEN}" -lt 32 ]]; then
+  fail 'Root host-agent token is missing or invalid.'; exit 1
+fi
 
 # Public reach (K3). The marker is created only by verify-public-ready.sh after the hardening tests pass
 # for the exact bridge code; without it the port stays private and the bridge stays loopback-only.
@@ -47,35 +62,72 @@ FORWARD_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
 PUBLIC_HOST="${CODESPACE_NAME}-8000.${FORWARD_DOMAIN}"
 printf 'PASS: bridge binding remains restricted to 127.0.0.1.\n'
 
-# ---- One path scheme for every component (T1): derived once from the real terminal location. ----
+# ---- Per-user terminal template and isolated Linux slot prerequisites. ----
+if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true >/dev/null 2>&1; then
+  fail 'Passwordless sudo is required to create isolated non-login MT5 slot identities.'; exit 1
+fi
+for tool in useradd userdel Xvfb xauth wine wineboot winepath; do
+  command -v "$tool" >/dev/null 2>&1 || { fail "Required isolation tool is missing: $tool"; exit 1; }
+done
 find_terminal() {
-  local c
-  for c in "${MT5_TERMINAL_EXE:-}" \
-           "$HOME/.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
-           "$HOME/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"; do
-    [[ -n "$c" && -f "$c" ]] && { printf '%s' "$c"; return 0; }
+  local candidate
+  for candidate in "${MT5_TERMINAL_EXE:-}" \
+      "$HOME/.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
+      "$HOME/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"; do
+    [[ -n "$candidate" && -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
   done
   return 1
 }
 TERMINAL_EXE=""
-if TERMINAL_EXE="$(find_terminal)"; then
-  TERMINAL_ROOT="$(dirname "$TERMINAL_EXE")"
-  # In /portable mode the data folder is the terminal folder: the terminal Journal is the Logs folder (Experts logs live elsewhere).
-  export MT5_TERMINAL_EXE="$TERMINAL_EXE" MT5_JOURNAL_DIR="$TERMINAL_ROOT/Logs"
-  export DESTINEDFX_EA_SET_PATH="$TERMINAL_ROOT/MQL5/Presets/DestinedFXTraderEA.set"
-  if [[ "$TERMINAL_EXE" == "$HOME/.mt5/"* ]]; then export WINEPREFIX="$HOME/.mt5"
-  elif [[ "$TERMINAL_EXE" == "$HOME/.wine/"* ]]; then export WINEPREFIX="$HOME/.wine"
-  fi
-else
-  unset MT5_TERMINAL_EXE
+if ! TERMINAL_EXE="$(find_terminal)"; then
+  fail 'MT5 terminal template is missing; install the official terminal before enabling managed account sessions.'; exit 1
 fi
-export DESTINEDFX_TERMINAL_STARTUP_CONFIG="$STATE/startup.ini"
-export DESTINEDFX_ACTIVE_JOB_PATH="$STATE/active-job.json" CONNECT_JOB_START_FILE="$STATE/connect-job-start.epoch"
-export DESTINEDFX_TERMINAL_CONTROL=process DESTINEDFX_TERMINAL_PIDFILE="$RUNTIME/terminal.pid"
-export DESTINEDFX_TERMINAL_LAUNCHER="$ROOT/scripts/linux-host/launch-mt5.sh" DESTINEDFX_TERMINAL_LOG="$RUNTIME/terminal.log"
-export DESTINEDFX_RUNTIME_DIR="$RUNTIME" DESTINEDFX_HOST_CONTROL_DIR="$RUNTIME" DESTINEDFX_TERMINAL_EXIT_CODE_FILE="$RUNTIME/terminal.exit-code"
-export DESTINEDFX_CONTROL_PLANE_URL="http://127.0.0.1:8000" DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true
+TERMINAL_ROOT="$(dirname "$TERMINAL_EXE")"
+METAEDITOR_EXE="$TERMINAL_ROOT/metaeditor64.exe"
+if [[ ! -f "$METAEDITOR_EXE" ]]; then
+  fail 'MetaEditor is missing from the MT5 terminal template; isolated EA compilation is required.'; exit 1
+fi
+export MT5_TERMINAL_EXE="$TERMINAL_EXE"
+export DESTINEDFX_MT5_TERMINAL_TEMPLATE="$TERMINAL_ROOT"
+export MT5_METAEDITOR_EXE="$METAEDITOR_EXE"
+export DESTINEDFX_EA_SOURCE="$ROOT/mt5-ea/DestinedFXTraderEA.mq5"
+export WINE_BIN="$(command -v wine)"
+# The shared installation is a read-only program template only. No user session
+# launches it, and no global WINEPREFIX or terminal config is exported.
+unset WINEPREFIX MT5_JOURNAL_DIR DESTINEDFX_EA_SET_PATH
+export DESTINEDFX_SLOT_ROOT="${DESTINEDFX_SLOT_ROOT:-/home/destinedfx-slots}"
+export DESTINEDFX_SLOT_RUNTIME="$RUNTIME/slot-runtime"
+export DESTINEDFX_ISOLATED_SLOTS=true
+export DESTINEDFX_HOST_OWNER_UID="$(id -u)"
+export DESTINEDFX_CONTROL_PLANE_URL="http://127.0.0.1:8000"
+export DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true
 export DESTINEDFX_WORKER_ID="${DESTINEDFX_WORKER_ID:-codespaces-host-01}"
+SLOT_MAX_CONFIG="${DESTINEDFX_SLOT_MAX_TERMINALS:-2}"
+if [[ ! "$SLOT_MAX_CONFIG" =~ ^[0-9]+$ ]] || (( SLOT_MAX_CONFIG < 1 || SLOT_MAX_CONFIG > 8 )); then
+  fail 'DESTINEDFX_SLOT_MAX_TERMINALS must be from 1 to 8.'; exit 1
+fi
+DESTINEDFX_SLOT_MAX_TERMINALS="$(python3 - "$SLOT_MAX_CONFIG" <<'PY'
+import os, sys
+available = 0
+try:
+    for line in open('/proc/meminfo', encoding='ascii'):
+        if line.startswith('MemAvailable:'):
+            available = int(line.split()[1]) * 1024
+            break
+except (OSError, ValueError, IndexError):
+    pass
+memory_slots = max(1, available // (3 * 1024**3)) if available else 1
+print(max(1, min(int(sys.argv[1]), os.cpu_count() or 1, memory_slots)))
+PY
+)"
+export DESTINEDFX_SLOT_MAX_TERMINALS
+mkdir -p "$DESTINEDFX_SLOT_RUNTIME"
+chmod 700 "$DESTINEDFX_SLOT_RUNTIME"
+sudo -n install -d -o root -g root -m 0711 "$DESTINEDFX_SLOT_ROOT"
+HOST_AGENT_TOKEN_FILE="$RUNTIME/host-agent.token"
+printf '%s\n' "$HOST_AGENT_TOKEN" | sudo -n tee "$HOST_AGENT_TOKEN_FILE" >/dev/null
+sudo -n chown root:root "$HOST_AGENT_TOKEN_FILE"
+sudo -n chmod 0600 "$HOST_AGENT_TOKEN_FILE"
 
 track_pid() { printf '%s|%s\n' "$1" "$2" >>"$RUNTIME/pids"; }
 if [[ -f "$RUNTIME/pids" && -s "$RUNTIME/pids" ]]; then
@@ -115,15 +167,22 @@ if ! pgrep -f '^Xvfb :99 ' >/dev/null 2>&1; then
 fi
 export DISPLAY=:99
 bash "$ROOT/deploy/codespaces/vnc-up.sh"
-python3 "$ROOT/scripts/linux-host/host-agent.py" --host 127.0.0.1 --port 8787 >>"$RUNTIME/host-agent.log" 2>&1 &
+sudo -n env PATH="$PATH" HOST_AGENT_TOKEN_FILE="$HOST_AGENT_TOKEN_FILE" \
+  DESTINEDFX_ISOLATED_SLOTS=true DESTINEDFX_SLOT_ROOT="$DESTINEDFX_SLOT_ROOT" \
+  DESTINEDFX_SLOT_RUNTIME="$DESTINEDFX_SLOT_RUNTIME" DESTINEDFX_HOST_OWNER_UID="$DESTINEDFX_HOST_OWNER_UID" \
+  DESTINEDFX_SLOT_MAX_TERMINALS="$DESTINEDFX_SLOT_MAX_TERMINALS" WINE_BIN="$WINE_BIN" \
+  python3 "$ROOT/scripts/linux-host/host-agent.py" --host 127.0.0.1 --port 8787 >>"$RUNTIME/host-agent.log" 2>&1 &
 track_pid "$!" "host-agent.py"
-
-set -a
-# shellcheck disable=SC1090
-source "$STATE/bridge.env"
-set +a
+for _ in $(seq 1 20); do
+  if curl -fs --max-time 2 http://127.0.0.1:8787/health/ready >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+if ! curl -fs --max-time 2 http://127.0.0.1:8787/health/ready >/dev/null 2>&1; then
+  fail 'Root host agent failed its isolated-slot readiness check.'; exit 1
+fi
 HOST_STARTED_AT_EPOCH_SECONDS="$(date +%s)"
-export BRIDGE_DB_PATH="$STATE/bridge.sqlite3" ALLOW_LOOPBACK_HTTP=true BRIDGE_HOST_MODE=linux-host HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
+export HOST_AGENT_TOKEN HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
+export BRIDGE_DB_PATH="$STATE/bridge.sqlite3" BRIDGE_BASE_URL=http://127.0.0.1:8000 ALLOW_LOOPBACK_HTTP=true BRIDGE_HOST_MODE=linux-host
 if [[ "$PUBLIC_READY" == true ]]; then export BRIDGE_PUBLIC_EXPOSURE=true EXPECTED_FORWARDED_HOST="$PUBLIC_HOST"; fi
 export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="$((IDLE_TIMEOUT_MINUTES * 60))" HOST_STARTED_AT_EPOCH_SECONDS HOST_MAX_LIFETIME_SECONDS=43200 HOST_WARNING_SECONDS=3600 HOST_EMERGENCY_STOP_LEAD_SECONDS=600
 (
@@ -132,28 +191,23 @@ export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="
 ) >>"$RUNTIME/bridge.log" 2>&1 &
 track_pid "$!" "uvicorn app:app"
 
-# Connect-job runner: claims jobs from the loopback bridge, writes the private startup config, restarts the terminal.
+# Multi-user Linux runner: each pairing receives a distinct OS identity,
+# Wine prefix, private portable MT5 tree, Xauthority cookie and Xvfb display.
 (
   set -a
   # shellcheck disable=SC1090
   source "$STATE/bridge.env"
   set +a
   export DESTINEDFX_WORKER_TOKEN="$WORKER_TOKEN"
-  exec python3 "$ROOT/scripts/linux-host/linux-worker.py" --loop --interval 3
-) >>"$RUNTIME/linux-worker.log" 2>&1 &
-track_pid "$!" "linux-worker.py --loop"
-pass 'Linux connect-job runner started (process control, loopback control plane).'
-
-if [[ -n "$TERMINAL_EXE" ]]; then
-  rm -f "$RUNTIME/terminal.exit-code"
-  if python3 "$ROOT/scripts/linux-host/linux-worker.py" --terminal start >>"$RUNTIME/terminal-control.log" 2>&1; then
-    printf 'INFO: MT5 terminal launch requested; process creation is not terminal readiness.\n'
-  else
-    fail 'MT5 terminal launch request failed; inspect redacted diagnostics and terminal-control.log.'
-  fi
-else
-  fail 'MT5 terminal is not installed (checked ~/.mt5 and ~/.wine); host runtime is diagnostic-only until it is.'
-fi
+  export DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true
+  export DESTINEDFX_CONTROL_PLANE_URL=http://127.0.0.1:8000
+  export HOST_AGENT_TOKEN HOST_AGENT_URL
+  export BRIDGE_DB_PATH="$STATE/bridge.sqlite3"
+  exec python3 "$ROOT/scripts/linux-host/linux-slot-worker.py" --loop --interval 3
+) >>"$RUNTIME/linux-slot-worker.log" 2>&1 &
+track_pid "$!" "linux-slot-worker.py --loop"
+pass "Isolated MT5 slot worker started (up to $DESTINEDFX_SLOT_MAX_TERMINALS resource-bounded sessions)."
+python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
 python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
 
 expose_publicly() {
