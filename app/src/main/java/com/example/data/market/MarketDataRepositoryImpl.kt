@@ -24,6 +24,10 @@ import java.util.concurrent.ConcurrentHashMap
  * Map confirmed Deriv public symbols back to canonical analyzer symbols.
  * The active-symbol directory is checked again before a request is sent.
  */
+internal const val DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS = 30_000L
+internal const val DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS = 32_000L
+internal const val DERIV_CANDLE_HISTORY_TIMEOUT_MS = 30_000L
+
 internal fun buildDerivCanonicalSymbolMap(
     symbols: List<String> = SymbolRegistry.getBackgroundSymbols()
 ): Map<String, String> =
@@ -193,7 +197,7 @@ class MarketDataRepositoryImpl(
 
     private suspend fun resolveDerivSymbol(canonicalSymbol: String): String? {
         val gateway = derivMarketDataGateway ?: return null
-        val discovered = withTimeoutOrNull(18_000L) { gateway.fetchActiveSymbols() } ?: emptyList()
+        val discovered = withTimeoutOrNull(DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS) { gateway.fetchActiveSymbols() } ?: emptyList()
         if (discovered.isEmpty()) return null
 
         // A hard-coded mapping is only a search hint. Never send a market request until
@@ -524,13 +528,13 @@ class MarketDataRepositoryImpl(
 
         // Public Deriv OHLC candles are used only after the exact code is found in active_symbols.
         if (candles.isEmpty() && isExplicitDerivPublicSource(preferred) && derivMarketDataGateway != null) {
-            derivSymbol = withTimeoutOrNull(5_000L) { resolveDerivSymbol(symbol) }
+            derivSymbol = withTimeoutOrNull(DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS) { resolveDerivSymbol(symbol) }
             if (derivSymbol != null) {
                 derivFetchAttempted = true
                 val weekly = tf == com.destinedfx.core.marketdata.Timeframe.W1
                 val granSec = if (weekly) 86_400 else (tf?.minutes ?: 60) * 60
                 val requestCount = if (weekly) (count * 7 + 14).coerceAtMost(1_800) else count
-                val fetched = withTimeoutOrNull(10_000L) {
+                val fetched = withTimeoutOrNull(DERIV_CANDLE_HISTORY_TIMEOUT_MS) {
                     derivMarketDataGateway.fetchCandles(derivSymbol, granSec, requestCount)
                 } ?: emptyList()
                 candles = if (weekly) aggregateDailyCandlesToWeekly(fetched).takeLast(count) else fetched
@@ -576,11 +580,11 @@ class MarketDataRepositoryImpl(
             _candleFetchErrors.update { it - key }
             return@withContext processedCandles.takeLast(count)
         } else {
-            val providerError = if (derivFetchAttempted && derivSymbol != null) {
-                derivMarketDataGateway?.getLastCandleError(derivSymbol)
+            val providerError = if (preferred == "DERIV_PUBLIC") {
+                derivMarketDataGateway?.getLastCandleError(derivSymbol ?: symbol)
             } else null
             val errorMsg = when {
-                !providerError.isNullOrBlank() -> "The live market-data request could not be completed for " + symbol + "."
+                !providerError.isNullOrBlank() -> "Deriv public feed could not verify or fetch " + symbol + " " + timeframe + ". Provider detail: " + providerError.take(240)
                 derivSymbol == null && preferred == "DERIV_PUBLIC" ->
                     "The current provider directory has not verified an instrument for " + symbol + ". No substitute price series was used."
                 preferred == "OANDA" && secrets.getOandaApiKey().isBlank() ->
