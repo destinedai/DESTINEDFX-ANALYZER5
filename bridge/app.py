@@ -1613,7 +1613,7 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
                 submitted=WorkerAttestation.model_validate(x.attestation)
             except ValidationError:
                 raise HTTPException(422,'Invalid worker attestation')
-            evidence=submitted.model_dump()
+            evidence=submitted.model_dump(exclude_unset=True)
             if not hmac.compare_digest(submitted.signature,_attestation_signature(worker_secret,evidence)):
                 raise HTTPException(401,'Invalid worker attestation signature')
             if submitted.pairing_id != r['pairing_id'] or submitted.worker_id != x.worker_id:
@@ -1625,16 +1625,39 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
             if any((submitted.login != expected_login,submitted.server != expected_server,
                     submitted.broker_brand != m['broker_brand'],submitted.account_mode != (r['requested_account_mode'] or ''))):
                 raise HTTPException(409,'Worker attestation does not match the registered account')
+            if LINUX_HOST_MODE:
+                required_slot_fields=(submitted.job_id,submitted.linux_user,submitted.slot_root,
+                    submitted.terminal_home,submitted.xauthority,submitted.display,
+                    submitted.xvfb_pid,submitted.xvfb_start_ticks)
+                if submitted.job_id != r['id'] or any(value is None for value in required_slot_fields):
+                    raise HTTPException(409,'Linux slot reservation does not include the required per-job OS isolation evidence')
+                if not re.fullmatch(r'dfxslot_[0-9a-f]{16}',submitted.linux_user or ''):
+                    raise HTTPException(422,'Linux slot user identity is invalid')
+                occupied=c.execute(
+                    """SELECT 1 FROM worker_attestations a
+                       JOIN worker_jobs j ON j.id=a.job_id
+                       WHERE a.host_generation=? AND a.pairing_id<>?
+                         AND (a.linux_uid=? OR a.linux_user=? OR a.wine_prefix=? OR a.terminal_path=?)
+                         AND j.status IN ('LEASED','PROVISIONING','AUTHENTICATING','READY')
+                       LIMIT 1""",
+                    (HOST_GENERATION,submitted.pairing_id,submitted.linux_uid,
+                     submitted.linux_user,submitted.wine_prefix,submitted.terminal_path),
+                ).fetchone()
+                if occupied:
+                    raise HTTPException(409,'Linux slot identity or terminal paths are already assigned to another active pairing')
+                host_agent_slot_request('/internal/slot/reservation',submitted.model_dump(exclude_unset=True))
             attestation_id=str(uuid.uuid4())
             c.execute('''INSERT INTO worker_attestations
                 (id,pairing_id,worker_id,slot_id,linux_uid,wine_prefix,terminal_path,process_identity,ea_identity,
-                 broker_brand,login,server,account_mode,host_generation,issued_at,expires_at,nonce,signature,used,job_id)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)''',
+                 broker_brand,login,server,account_mode,host_generation,issued_at,expires_at,nonce,signature,used,job_id,
+                 linux_user,slot_root,terminal_home,xauthority,display,xvfb_pid,xvfb_start_ticks)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)''',
                 (attestation_id,submitted.pairing_id,submitted.worker_id,submitted.slot_id,submitted.linux_uid,
                  submitted.wine_prefix,submitted.terminal_path,submitted.process_identity,submitted.ea_identity,
                  submitted.broker_brand,submitted.login,submitted.server,submitted.account_mode,
                  submitted.host_generation,submitted.issued_at,submitted.expires_at,submitted.nonce,
-                 submitted.signature,r['id']))
+                 submitted.signature,r['id'],submitted.linux_user,submitted.slot_root,submitted.terminal_home,
+                 submitted.xauthority,submitted.display,submitted.xvfb_pid,submitted.xvfb_start_ticks))
         elif x.attestation and _isolation_evidence_verified():
             attestation_id=None
         c.execute("UPDATE worker_jobs SET status='LEASED',worker_id=?,lease_until=?,lease_started=? WHERE id=?",(x.worker_id,t+120,t,r['id']))
