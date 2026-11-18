@@ -2323,6 +2323,10 @@ def test_linux_shared_terminal_is_not_managed_execution_ready(monkeypatch):
 def test_linux_shared_terminal_refuses_broker_credentials_before_storage_or_job_creation(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(
+        app, 'linux_host_report',
+        lambda: {'healthy': True, 'slot_isolation': {'enabled': False, 'ready': False}},
+    )
     response = client.post('/v1/app/managed-account', json={
         'login':'123456','server':'Fixture-Demo','password':'fixture-password',
         'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True
