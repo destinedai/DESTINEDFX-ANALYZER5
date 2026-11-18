@@ -514,7 +514,6 @@ class MarketDataRepositoryImpl(
 
         var candles = emptyList<Candle>()
         var sourceUsed = ""
-        var derivFetchAttempted = false
         var derivSymbol: String? = null
 
         val preferred = selectedApiSource.value
@@ -530,7 +529,6 @@ class MarketDataRepositoryImpl(
         if (candles.isEmpty() && isExplicitDerivPublicSource(preferred) && derivMarketDataGateway != null) {
             derivSymbol = withTimeoutOrNull(DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS) { resolveDerivSymbol(symbol) }
             if (derivSymbol != null) {
-                derivFetchAttempted = true
                 val weekly = tf == com.destinedfx.core.marketdata.Timeframe.W1
                 val granSec = if (weekly) 86_400 else (tf?.minutes ?: 60) * 60
                 val requestCount = if (weekly) (count * 7 + 14).coerceAtMost(1_800) else count
