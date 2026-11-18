@@ -63,28 +63,31 @@ write_files:
         git -C "$repo_dir" reset --hard FETCH_HEAD
       fi
 
-      # A host agent alone is not enough. The current Linux worker explicitly refuses
-      # ATTESTATION_REQUIRED because it still uses one shared terminal. Never mark this host
-      # READY until every managed user gets an independently attested terminal slot.
+      # The repository now has a distinct per-pairing slot worker. The older
+      # linux-worker.py remains a legacy single-terminal runner and must not be used
+      # as proof of multi-user readiness. The Azure student bootstrap currently clones
+      # source and configures Tailscale only; it does not install the isolated-slot
+      # systemd runtime, compile MT5/EA, or create the encrypted runtime credentials.
       if [[ ! -f "$repo_dir/scripts/linux-host/host-agent.py" ]] || \
-         [[ ! -f "$repo_dir/scripts/linux-host/linux-worker.py" ]] || \
-         grep -Fq 'ISOLATED_SLOT_REQUIRED' "$repo_dir/scripts/linux-host/linux-worker.py"; then
+         [[ ! -f "$repo_dir/scripts/linux-host/linux-slot-worker.py" ]] || \
+         [[ ! -f "$repo_dir/scripts/linux-host/linux_isolation.py" ]]; then
         {
-          echo "status=BLOCKED"
-          echo "reason=Per-user isolated MT5 terminal slots are not implemented by the selected Linux worker; it still refuses ISOLATED_SLOT_REQUIRED."
-          echo "fix=Implement and test D1 per-user Linux terminal slot provisioning, process ownership, Wine prefix isolation, revocation cleanup, and multi-user acceptance; or use a verified Windows worker host."
+          echo "status=BLOCKED_SOURCE_COMPONENTS_MISSING"
+          echo "reason=Required per-pairing Linux slot worker or root host-agent source is missing."
           echo "trading=REFUSED"
         } >> "$first_run"
         printf 'BLOCKED\n' > "$state"
-      chmod 0600 "$state"
-      exit 0
+        chmod 0600 "$state"
+        exit 0
       fi
 
       {
-        echo "status=READY_FOR_OWNER_PAIRING_ONLY"
-        echo "trading=REFUSED until D1 doctor, fresh EA heartbeat, DEMO acceptance, and rollout gates pass"
+        echo "status=BLOCKED_OWNER_RUNTIME_SETUP"
+        echo "reason=This Azure template is only a VM and private Tailscale bootstrap; it has not installed or enabled an isolated-slot Bridge/host-agent/worker systemd runtime."
+        echo "fix=Integrate the linux-slot-worker.py and root-attested linux_isolation.py path with durable systemd services, configure encrypted Bridge/worker/host-agent credentials, install and compile the official x86_64 MT5 terminal/EA template, then pass isolated-slot and real broker DEMO acceptance."
+        echo "trading=REFUSED"
       } >> "$first_run"
-      printf 'READY\n' > "$state"
+      printf 'BLOCKED\n' > "$state"
       chmod 0600 "$state"
 
   - path: /etc/systemd/system/destinedfx-azure-first-boot.service
