@@ -599,6 +599,52 @@ class SecretsManager internal constructor(
     fun clearMT5BridgeAccountAppToken(profileKey: String): Boolean =
         isSecureStorageAvailable && prefs.edit().remove(mt5AccountKey("bridge_token", profileKey)).commit()
 
+    // GitHub Codespaces owner controls: a public GitHub App client ID plus
+    // per-owner OAuth tokens are stored separately from all broker credentials.
+    private companion object {
+        const val GITHUB_CODESPACES_CLIENT_ID = "codespaces_github_app_client_id"
+        const val GITHUB_CODESPACES_ACCESS_TOKEN = "codespaces_github_access_token"
+        const val GITHUB_CODESPACES_REFRESH_TOKEN = "codespaces_github_refresh_token"
+        const val GITHUB_CODESPACES_ACCESS_EXPIRES_AT = "codespaces_github_access_expires_at"
+    }
+
+    fun saveCodespacesGitHubClientId(value: String): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val clientId = value.trim()
+        if (clientId.isBlank() || clientId.length > 128 ||
+            !clientId.matches(Regex("[A-Za-z0-9_-]{8,128}"))) return false
+        return prefs.edit().putString(GITHUB_CODESPACES_CLIENT_ID, clientId).commit()
+    }
+
+    fun getCodespacesGitHubClientId(): String =
+        if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_CLIENT_ID, "") ?: "" else ""
+
+    fun saveCodespacesGitHubTokens(accessToken: String, refreshToken: String, expiresAtMillis: Long): Boolean {
+        if (!isSecureStorageAvailable || accessToken.isBlank() || refreshToken.isBlank() ||
+            accessToken.length > 4096 || refreshToken.length > 4096 || expiresAtMillis <= 0L) return false
+        return prefs.edit()
+            .putString(GITHUB_CODESPACES_ACCESS_TOKEN, accessToken)
+            .putString(GITHUB_CODESPACES_REFRESH_TOKEN, refreshToken)
+            .putLong(GITHUB_CODESPACES_ACCESS_EXPIRES_AT, expiresAtMillis)
+            .commit()
+    }
+
+    fun getCodespacesGitHubAccessToken(): String =
+        if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_ACCESS_TOKEN, "") ?: "" else ""
+
+    fun getCodespacesGitHubRefreshToken(): String =
+        if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_REFRESH_TOKEN, "") ?: "" else ""
+
+    fun getCodespacesGitHubAccessExpiresAtMillis(): Long =
+        if (isSecureStorageAvailable) prefs.getLong(GITHUB_CODESPACES_ACCESS_EXPIRES_AT, 0L) else 0L
+
+    fun clearCodespacesGitHubAuthorization(): Boolean =
+        isSecureStorageAvailable && prefs.edit()
+            .remove(GITHUB_CODESPACES_ACCESS_TOKEN)
+            .remove(GITHUB_CODESPACES_REFRESH_TOKEN)
+            .remove(GITHUB_CODESPACES_ACCESS_EXPIRES_AT)
+            .commit()
+
     /** Configured profile namespaces that have a saved opaque app token; no token values are returned. */
     fun getConfiguredMT5AccountProfileKeys(): List<String> {
         if (!isSecureStorageAvailable) return emptyList()
