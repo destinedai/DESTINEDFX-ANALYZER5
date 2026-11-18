@@ -11,7 +11,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; }
 
 if [[ "$(uname -m)" != x86_64 ]]; then fail 'Expected x86_64 Codespaces host.'; exit 1; fi
 if [[ -z "${CODESPACE_NAME:-}" ]]; then fail 'CODESPACE_NAME is unavailable; this script expects GitHub Codespaces.'; exit 1; fi
-IDLE_TIMEOUT_MINUTES="${DESTINEDFX_IDLE_TIMEOUT_MINUTES:-240}"
+IDLE_TIMEOUT_MINUTES="${DESTINEDFX_IDLE_TIMEOUT_MINUTES:-20}"
 if [[ ! "$IDLE_TIMEOUT_MINUTES" =~ ^[0-9]+$ ]] || (( IDLE_TIMEOUT_MINUTES < 5 || IDLE_TIMEOUT_MINUTES > 240 )); then
   fail 'DESTINEDFX_IDLE_TIMEOUT_MINUTES must be an integer from 5 to 240.'; exit 1
 fi
@@ -73,28 +73,39 @@ export DESTINEDFX_TERMINAL_STARTUP_CONFIG="$STATE/startup.ini"
 export DESTINEDFX_ACTIVE_JOB_PATH="$STATE/active-job.json" CONNECT_JOB_START_FILE="$STATE/connect-job-start.epoch"
 export DESTINEDFX_TERMINAL_CONTROL=process DESTINEDFX_TERMINAL_PIDFILE="$RUNTIME/terminal.pid"
 export DESTINEDFX_TERMINAL_LAUNCHER="$ROOT/scripts/linux-host/launch-mt5.sh" DESTINEDFX_TERMINAL_LOG="$RUNTIME/terminal.log"
-export DESTINEDFX_RUNTIME_DIR="$RUNTIME" DESTINEDFX_TERMINAL_EXIT_CODE_FILE="$RUNTIME/terminal.exit-code"
+export DESTINEDFX_RUNTIME_DIR="$RUNTIME" DESTINEDFX_HOST_CONTROL_DIR="$RUNTIME" DESTINEDFX_TERMINAL_EXIT_CODE_FILE="$RUNTIME/terminal.exit-code"
 export DESTINEDFX_CONTROL_PLANE_URL="http://127.0.0.1:8000" DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true
 export DESTINEDFX_WORKER_ID="${DESTINEDFX_WORKER_ID:-codespaces-host-01}"
 
-if [[ -f "$RUNTIME/pids" ]]; then
-  while read -r pid; do
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-      pass 'Existing managed Codespaces processes are already running.'
-      python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
-      exit 0
-    fi
+track_pid() { printf '%s|%s\\n' "$1" "$2" >>"$RUNTIME/pids"; }
+if [[ -f "$RUNTIME/pids" && -s "$RUNTIME/pids" ]]; then
+  all_running=true
+  while IFS='|' read -r pid expected; do
+    [[ "$pid" =~ ^[0-9]+$ && -n "$expected" ]] || { all_running=false; continue; }
+    cmdline=""
+    [[ -r "/proc/$pid/cmdline" ]] && cmdline="$(tr '\\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$cmdline" == *"$expected"* ]] || all_running=false
   done < "$RUNTIME/pids"
-  rm -f "$RUNTIME/pids"
+  if [[ "$all_running" == true ]]; then
+    pass 'Existing managed Codespaces processes are identity-verified and already running.'
+    python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
+    exit 0
+  fi
+  "$ROOT/deploy/codespaces/stop.sh" >/dev/null 2>&1 || true
 fi
 : > "$RUNTIME/pids"
 chmod 600 "$RUNTIME/pids"
 cleanup() { "$ROOT/deploy/codespaces/stop.sh" >/dev/null 2>&1 || true; }
 trap cleanup EXIT INT TERM
 
-Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >>"$RUNTIME/xvfb.log" 2>&1 & echo $! >>"$RUNTIME/pids"
+if ! pgrep -f '^Xvfb :99 ' >/dev/null 2>&1; then
+  Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >>"$RUNTIME/xvfb.log" 2>&1 &
+  track_pid "$!" "Xvfb :99"
+fi
 export DISPLAY=:99
-python3 "$ROOT/scripts/linux-host/host-agent.py" --host 127.0.0.1 --port 8787 >>"$RUNTIME/host-agent.log" 2>&1 & echo $! >>"$RUNTIME/pids"
+bash "$ROOT/deploy/codespaces/vnc-up.sh"
+python3 "$ROOT/scripts/linux-host/host-agent.py" --host 127.0.0.1 --port 8787 >>"$RUNTIME/host-agent.log" 2>&1 &
+track_pid "$!" "host-agent.py"
 
 set -a
 # shellcheck disable=SC1090
@@ -107,7 +118,8 @@ export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="
 (
   cd "$ROOT/bridge"
   "$STATE/venv/bin/python" -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers --timeout-keep-alive 5 --limit-concurrency 50
-) >>"$RUNTIME/bridge.log" 2>&1 & echo $! >>"$RUNTIME/pids"
+) >>"$RUNTIME/bridge.log" 2>&1 &
+track_pid "$!" "uvicorn app:app"
 
 # Connect-job runner: claims jobs from the loopback bridge, writes the private startup config, restarts the terminal.
 (
@@ -117,7 +129,8 @@ export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="
   set +a
   export DESTINEDFX_WORKER_TOKEN="$WORKER_TOKEN"
   exec python3 "$ROOT/scripts/linux-host/linux-worker.py" --loop --interval 3
-) >>"$RUNTIME/linux-worker.log" 2>&1 & echo $! >>"$RUNTIME/pids"
+) >>"$RUNTIME/linux-worker.log" 2>&1 &
+track_pid "$!" "linux-worker.py --loop"
 pass 'Linux connect-job runner started (process control, loopback control plane).'
 
 if [[ -n "$TERMINAL_EXE" ]]; then
