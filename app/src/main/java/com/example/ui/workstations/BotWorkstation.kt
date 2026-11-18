@@ -329,6 +329,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     OutlinedButton(onClick = { showBridgeDetails = !showBridgeDetails }, modifier = Modifier.fillMaxWidth().testTag("bridge_setup_details_toggle")) {
                         Text(if (showBridgeDetails) "HIDE CONNECTION DETAILS" else "CONNECTION SETUP & POSITION DETAILS", fontSize = 10.sp)
                     }
+                    CodespacesHostControls(secrets = bridgeSecrets, bridgeClient = bridgeClient)
                     if (showBridgeDetails) {
                     val news = bridgeSnapshot?.newsVerdict.takeIf { verifiedRemoteSnapshotForBot != null }
                     val newsStatus = news?.optString("status", "UNKNOWN")?.uppercase() ?: "UNKNOWN"
