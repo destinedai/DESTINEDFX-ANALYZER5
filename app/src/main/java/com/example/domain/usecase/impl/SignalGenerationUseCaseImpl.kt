@@ -162,7 +162,10 @@ class SignalGenerationUseCaseImpl(
                 targets.map { t ->
                     async {
                         try {
-                            withTimeout(30_000) {
+                            withTimeout(65_000) {
+                                // getCandles may first complete Deriv active-symbol discovery (up to 32s)
+                                // and then the historical candle request (up to 30s). Do not cancel
+                                // that nested provider work at the old 30-second MTF boundary.
                                 t to load(t, if (t == Timeframe.W1) 80 else 150)
                             }
                         } catch (e: TimeoutCancellationException) {
