@@ -302,6 +302,15 @@ def managed_env(monkeypatch):
     app.MANAGEMENT_STEP_UP_AUDIENCE='destinedfx-bridge'
     monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: True)
 
+def signed_worker_attestation(evidence):
+    """Sign the exact Pydantic-normalized payload that the Bridge verifies."""
+    normalized = app.WorkerAttestation.model_validate(
+        {**evidence, 'signature': '0' * 64}
+    ).model_dump(exclude={'signature'})
+    normalized['signature'] = app._attestation_signature(os.environ['WORKER_TOKEN'], normalized)
+    return normalized
+
+
 def test_managed_registration_waits_for_verified_per_user_isolation(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: False)
@@ -376,7 +385,7 @@ def test_worker_attestation_is_signed_bound_and_single_use(monkeypatch):
         'account_mode': 'DEMO', 'host_generation': app.HOST_GENERATION,
         'issued_at': now, 'expires_at': now + 300, 'nonce': uuid.uuid4().hex,
     }
-    evidence['signature'] = app._attestation_signature(os.environ['WORKER_TOKEN'], evidence)
+    evidence = signed_worker_attestation(evidence)
     response = client.post('/v1/worker/attestations',
                            headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
                            json=evidence)
@@ -407,7 +416,7 @@ def test_worker_attestation_rejects_client_auth_and_replay(monkeypatch):
         'account_mode': 'DEMO', 'host_generation': app.HOST_GENERATION,
         'issued_at': now, 'expires_at': now + 300, 'nonce': uuid.uuid4().hex,
     }
-    evidence['signature'] = app._attestation_signature(os.environ['WORKER_TOKEN'], evidence)
+    evidence = signed_worker_attestation(evidence)
     assert client.post('/v1/worker/attestations',
                        headers={'Authorization':'Bearer '+p['app_token']},
                        json=evidence).status_code == 401
@@ -444,7 +453,7 @@ def test_pending_registration_worker_claim_requires_finalized_slot_evidence(monk
         'server':'Demo-Server', 'account_mode':'DEMO', 'host_generation':app.HOST_GENERATION,
         'issued_at':now, 'expires_at':now+300, 'nonce':uuid.uuid4().hex,
     }
-    evidence['signature'] = app._attestation_signature(os.environ['WORKER_TOKEN'], evidence)
+    evidence = signed_worker_attestation(evidence)
     claimed = client.post('/v1/worker/jobs/claim', headers=worker_headers, json={
         'worker_id':'worker-a', 'active_terminals':0, 'max_terminals':1, 'attestation':evidence,
     })
