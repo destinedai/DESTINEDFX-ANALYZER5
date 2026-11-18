@@ -30,6 +30,7 @@ on:
       - 'scripts/test_mt5_diagnostics.py'
       - 'scripts/test_wine_guard.py'
       - 'scripts/test_linux_host.py'
+      - 'scripts/test_linux_slot_worker.py'
       - 'bridge/app.py'
       - 'bridge/test_app.py'
       - 'app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt'
