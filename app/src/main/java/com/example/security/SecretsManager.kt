@@ -609,7 +609,7 @@ class SecretsManager internal constructor(
         if (!isSecureStorageAvailable) return false
         val clientId = value.trim()
         if (clientId.isBlank() || clientId.length > 128 ||
-            !clientId.matches(Regex("[A-Za-z0-9_-]{8,128}"))) return false
+            !clientId.matches(Regex("[A-Za-z0-9._-]{8,128}"))) return false
         return prefs.edit().putString(GITHUB_CODESPACES_CLIENT_ID, clientId).commit()
     }
 
