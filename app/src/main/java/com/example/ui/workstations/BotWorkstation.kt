@@ -439,6 +439,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             dismissButton = { TextButton(onClick = { showLiveAuthorizationDialog = false }) { Text("CANCEL") } }
                         )
                     }
+                    Text(
+                        "NEW MT5 ENTRIES: START activates the selected managed EA strategy. The EA submits broker Buy/Sell only after its own fresh-quote, account-identity, heartbeat, news, cost and risk checks. This phone UI does not send an arbitrary manual market order.",
+                        color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "A queued/acknowledged command is not a fill. The Bot waits for EA acknowledgement and a fresh terminal snapshot; unresolved results stay UNKNOWN and are not blindly resent.",
+                        color = TextSecondary, fontSize = 10.sp
+                    )
                     Text("Managed EA strategy support is registry-validated; support does not imply profitability or real-broker testing.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     BridgeTelemetry(
                         if (bridgeMode) bridgeSnapshot else null, selectedAccountMode,
