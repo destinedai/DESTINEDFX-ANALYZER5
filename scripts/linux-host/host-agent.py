@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Linux MT5 host health agent. No credentials are read or emitted."""
 import argparse
+import hmac
 import json
 import os
 import re
@@ -28,6 +29,12 @@ WINE_BIN = os.getenv("WINE_BIN", "wine")
 CONNECT_JOB_START_FILE = os.getenv(
     "CONNECT_JOB_START_FILE", "/var/lib/destinedfx/connect-job-start.epoch"
 )
+SLOT_ISOLATION_ENABLED = os.getenv("DESTINEDFX_ISOLATED_SLOTS", "").lower() == "true"
+SLOT_ROOT = Path(os.getenv("DESTINEDFX_SLOT_ROOT", "/home/destinedfx-slots"))
+SLOT_RUNTIME = Path(os.getenv("DESTINEDFX_SLOT_RUNTIME", "/var/lib/destinedfx-slot-runtime"))
+HOST_AGENT_TOKEN = os.getenv("HOST_AGENT_TOKEN", "")
+HOST_OWNER_UID = int(os.getenv("DESTINEDFX_HOST_OWNER_UID", "1000"))
+SLOT_MAX_TERMINALS = max(1, min(8, int(os.getenv("DESTINEDFX_SLOT_MAX_TERMINALS", "1"))))
 
 
 def _num(path, key):
@@ -167,6 +174,85 @@ def heartbeat_report(now=None):
         return {"present": False, "fresh": False, "reason": "INVALID"}
 
 
+
+def slot_isolation_report():
+    """Sanitized capability check; no account identities or credentials are returned."""
+    if not SLOT_ISOLATION_ENABLED:
+        return {"enabled": False, "ready": False, "active_slots": 0,
+                "max_slots": SLOT_MAX_TERMINALS, "reason": "ISOLATION_DISABLED"}
+    checks = {
+        "root_agent": os.geteuid() == 0,
+        "host_token": bool(HOST_AGENT_TOKEN and len(HOST_AGENT_TOKEN) >= 32),
+        "slots_root": SLOT_ROOT.is_dir(),
+        "runtime_root": SLOT_RUNTIME.is_dir(),
+        "sudo": shutil.which("sudo") is not None,
+        "useradd": shutil.which("useradd") is not None,
+        "userdel": shutil.which("userdel") is not None,
+        "xvfb": Path("/usr/bin/Xvfb").is_file(),
+        "xauth": Path("/usr/bin/xauth").is_file(),
+        "wine": shutil.which(WINE_BIN) is not None,
+    }
+    if checks["slots_root"]:
+        info = SLOT_ROOT.stat()
+        checks["slots_root"] = info.st_uid == 0 and (info.st_mode & 0o777) == 0o711
+    if checks["runtime_root"]:
+        info = SLOT_RUNTIME.stat()
+        checks["runtime_root"] = info.st_uid == 0 and (info.st_mode & 0o077) == 0
+    active = 0
+    if checks["slots_root"]:
+        for marker in SLOT_ROOT.glob("*/**/.destinedfx-worker.json"):
+            try:
+                value = json.loads(marker.read_text(encoding="utf-8"))
+                if isinstance(value, dict) and value.get("status") in {
+                    "LAUNCH_PENDING", "AUTHENTICATING", "READY", "OPERATOR_REVIEW"
+                }:
+                    active += 1
+            except (OSError, ValueError, TypeError):
+                active += 1
+    return {
+        "enabled": True, "ready": all(checks.values()), "checks": checks,
+        "active_slots": min(active, SLOT_MAX_TERMINALS), "max_slots": SLOT_MAX_TERMINALS,
+    }
+
+
+def _slot_module():
+    from linux_isolation import verify_slot_reservation, verify_slot_process, find_slot_process
+    return verify_slot_reservation, verify_slot_process, find_slot_process
+
+
+def _authorized_internal(request):
+    supplied = request.headers.get("Authorization", "")
+    prefix = "Bearer "
+    return bool(HOST_AGENT_TOKEN and supplied.startswith(prefix) and
+                hmac.compare_digest(supplied[len(prefix):], HOST_AGENT_TOKEN))
+
+
+def _internal_slot_action(path, payload):
+    verify_reservation, verify_process, find_process = _slot_module()
+    if not isinstance(payload, dict):
+        return 400, {"verified": False, "code": "INVALID_SLOT_PAYLOAD"}
+    if not verify_reservation(payload, SLOT_ROOT, HOST_OWNER_UID):
+        return 409, {"verified": False, "code": "SLOT_RESERVATION_UNVERIFIED"}
+    if path == "/internal/slot/reservation":
+        return 200, {"verified": True, "linux_uid": int(payload["linux_uid"]),
+                     "display": str(payload["display"])}
+    if path == "/internal/slot/discover":
+        found = find_process(
+            linux_uid=int(payload["linux_uid"]),
+            wine_prefix=str(payload["wine_prefix"]),
+            terminal_path=str(payload["terminal_path"]),
+            display=str(payload["display"]),
+        )
+        if not found:
+            return 409, {"verified": False, "code": "TERMINAL_PROCESS_NOT_FOUND"}
+        return 200, {"verified": True, **found}
+    if path == "/internal/slot/process":
+        if not verify_process(payload):
+            return 409, {"verified": False, "code": "TERMINAL_PROCESS_IDENTITY_UNVERIFIED"}
+        return 200, {"verified": True}
+    return 404, {"verified": False, "code": "NOT_FOUND"}
+
+
 def report():
     import time
 
@@ -179,18 +265,19 @@ def report():
     except (OSError, ValueError, IndexError):
         uptime = 0.0
     disk = shutil.disk_usage(os.getenv("HOST_AGENT_DISK_PATH", "/"))
-    terminal = terminal_process_alive()
+    isolated = slot_isolation_report()
+    terminal = terminal_process_alive() if not SLOT_ISOLATION_ENABLED else bool(isolated["active_slots"])
     wine_version, wine_ok = wine_report()
     heartbeat = heartbeat_report()
     low_memory = mem_available > 0 and mem_available < int(
         os.getenv("HOST_AGENT_MIN_AVAILABLE_BYTES", str(256 * 1024 * 1024))
     )
-    host_ready = bool(wine_ok and terminal and not low_memory)
-    account_ready = bool(
-        host_ready
-        and heartbeat.get("fresh")
-        and heartbeat.get("terminal_connected")
-    )
+    if SLOT_ISOLATION_ENABLED:
+        host_ready = bool(wine_ok and isolated["ready"] and not low_memory and disk.free >= 2 * 1024**3)
+        account_ready = bool(host_ready and isolated["active_slots"] > 0)
+    else:
+        host_ready = bool(wine_ok and terminal and not low_memory)
+        account_ready = bool(host_ready and heartbeat.get("fresh") and heartbeat.get("terminal_connected"))
     return {
         "schema": "destinedfx.host-agent.v1",
         "timestamp": time.time(),
@@ -205,11 +292,35 @@ def report():
         "ea_heartbeat": heartbeat,
         "host_ready": host_ready,
         "account_ready": account_ready,
-        "healthy": account_ready,
+        "healthy": host_ready if SLOT_ISOLATION_ENABLED else account_ready,
+        "slot_isolation": isolated,
     }
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if not self.path.startswith("/internal/slot/"):
+            self.send_error(404)
+            return
+        if not _authorized_internal(self):
+            self.send_error(401)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 32768:
+                self.send_error(413)
+                return
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            status, body = _internal_slot_action(self.path, payload)
+        except (OSError, ValueError, TypeError, KeyError):
+            status, body = 400, {"verified": False, "code": "INVALID_SLOT_PAYLOAD"}
+        encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def do_GET(self):
         if self.path not in ("/health", "/health/ready"):
             self.send_error(404)
