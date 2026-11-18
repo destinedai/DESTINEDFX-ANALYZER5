@@ -142,8 +142,15 @@ fun CodespacesHostControls(
                         busy = true
                         try {
                             val result = github.startRepositoryCodespace()
-                            message = result.message + " Codespace: " + result.codespaceName
+                            message = result.message + " Codespace: " + result.codespaceName + " · discovering the secured Bridge URL…"
                             authorized = true
+                            val origin = github.discoverAndSaveBridge()
+                            val configuration = bridgeClient.checkServiceConfiguration()
+                            check(configuration.httpReachable && configuration.httpStatus == 200 &&
+                                configuration.database == "ok" && configuration.managedExecution == "configured") {
+                                "Bridge URL was discovered, but the Android service-configuration check did not pass."
+                            }
+                            message = "Bridge URL automatically discovered, health-checked and saved: $origin · host remains EPHEMERAL/DEMO · MT5 account heartbeat and broker acceptance are still separate checks."
                         } catch (error: Exception) {
                             message = error.message ?: "Codespaces START was not confirmed."
                             authorized = secrets.getCodespacesGitHubAccessToken().isNotBlank()
@@ -182,6 +189,27 @@ fun CodespacesHostControls(
                 }
             ) { Text("STOP HOST", fontSize = 10.sp) }
         }
+        OutlinedButton(
+            enabled = !busy && authorized,
+            onClick = {
+                scope.launch {
+                    busy = true
+                    try {
+                        val origin = github.discoverAndSaveBridge()
+                        val configuration = bridgeClient.checkServiceConfiguration()
+                        check(configuration.httpReachable && configuration.httpStatus == 200 &&
+                            configuration.database == "ok" && configuration.managedExecution == "configured") {
+                            "Bridge health passed, but Android configuration verification failed."
+                        }
+                        message = "Bridge URL discovered, health-checked and saved: $origin · EPHEMERAL/DEMO only."
+                    } catch (error: Exception) {
+                        message = error.message ?: "Automatic Bridge URL discovery failed."
+                    } finally {
+                        busy = false
+                    }
+                }
+            }
+        ) { Text("DISCOVER BRIDGE URL", fontSize = 9.sp) }
         OutlinedButton(
             enabled = !busy && authorized,
             onClick = {
