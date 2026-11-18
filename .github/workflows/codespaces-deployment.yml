@@ -12,6 +12,14 @@ on:
       - 'bridge/app.py'
       - 'bridge/test_app.py'
       - 'app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt'
+      - 'app/src/main/java/com/example/ui/workstations/BotWorkstation.kt'
+      - 'app/src/main/java/com/example/ui/SimplifiedAnalyzerTab.kt'
+      - 'app/src/main/java/com/example/data/market/MarketDataRepositoryImpl.kt'
+      - 'app/src/main/java/com/example/domain/usecase/impl/SignalGenerationUseCaseImpl.kt'
+      - 'app/src/test/java/com/example/MarketDataSafetyTest.kt'
+      - 'scripts/destinedfx_readiness_audit.py'
+      - 'scripts/test_destinedfx_readiness_audit.py'
+      - 'README.md'
       - '.github/workflows/codespaces-deployment.yml'
   pull_request:
     paths:
@@ -24,6 +32,14 @@ on:
       - 'bridge/app.py'
       - 'bridge/test_app.py'
       - 'app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt'
+      - 'app/src/main/java/com/example/ui/workstations/BotWorkstation.kt'
+      - 'app/src/main/java/com/example/ui/SimplifiedAnalyzerTab.kt'
+      - 'app/src/main/java/com/example/data/market/MarketDataRepositoryImpl.kt'
+      - 'app/src/main/java/com/example/domain/usecase/impl/SignalGenerationUseCaseImpl.kt'
+      - 'app/src/test/java/com/example/MarketDataSafetyTest.kt'
+      - 'scripts/destinedfx_readiness_audit.py'
+      - 'scripts/test_destinedfx_readiness_audit.py'
+      - 'README.md'
       - '.github/workflows/codespaces-deployment.yml'
   workflow_dispatch:
 
@@ -52,6 +68,10 @@ jobs:
             deploy/codespaces/first-run-check.sh scripts/linux-host/install-mt5.sh \
             scripts/linux-host/launch-mt5.sh scripts/linux-host/check-wine-mt5-compat.sh \
             scripts/linux-host/wine-guard.sh scripts/linux-host/wine-probe.sh
+      - name: Run DestinedFX source audit and offline Bridge probe tests
+        run: |
+          python3 scripts/test_destinedfx_readiness_audit.py
+          python3 scripts/destinedfx_readiness_audit.py
       - name: Run offline MT5 diagnostic tests
         run: python3 scripts/test_mt5_diagnostics.py
       - name: Run Wine and Linux-host regression tests
