@@ -195,16 +195,32 @@ $healthScript = Join-Path $PSScriptRoot 'health-monitor.py'
 if (-not (Test-Path $supervisor) -or -not (Test-Path $backupScript) -or -not (Test-Path $healthScript)) { throw 'Owner stack support scripts are missing.' }
 if (-not $AddBroker) {
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$supervisor`" -ProjectRoot `"$project`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $owner
-$settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-$principal = New-ScheduledTaskPrincipal -UserId $owner -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-$backupAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$backupScript`""
-$backupTrigger = New-ScheduledTaskTrigger -Daily -At '3:00AM'
-Register-ScheduledTask -TaskName 'DestinedFX Bridge SQLite Backup' -Action $backupAction -Trigger $backupTrigger -Settings $settings -Principal $principal -Force | Out-Null
-$healthAction = New-ScheduledTaskAction -Execute $venvPython -Argument "`"$healthScript`" --url http://127.0.0.1:8000 --state-file `"$base\logs\health.json`" --data-root `"$workerData`" --backup-root `"$backupDir`""
-$healthTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
-Register-ScheduledTask -TaskName 'DestinedFX Owner Bridge Health Monitor' -Action $healthAction -Trigger $healthTrigger -Settings $settings -Principal $principal -Force | Out-Null
+$startupTrigger = New-ScheduledTaskTrigger -AtStartup
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $owner
+$trigger = @($startupTrigger, $logonTrigger)
+# Password logon lets Task Scheduler run as the same Windows owner when no
+# interactive desktop is signed in. This preserves CurrentUser DPAPI access;
+# S4U is deliberately not used because Windows documents that it cannot access
+# network resources or encrypted files.
+$settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
+$taskPasswordSecure = Read-Host "Windows password for $owner (Task Scheduler stores it protected; it is not written to DestinedFX files)" -AsSecureString
+if ($null -eq $taskPasswordSecure -or $taskPasswordSecure.Length -eq 0) { throw 'A Windows account password is required for unattended owner-stack startup.' }
+$taskPasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($taskPasswordSecure)
+$taskPassword = $null
+try {
+    $taskPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($taskPasswordPtr)
+    Register-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker' -User $owner -Password $taskPassword -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited -Force | Out-Null
+    $backupAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$backupScript`""
+    $backupTrigger = New-ScheduledTaskTrigger -Daily -At '3:00AM'
+    Register-ScheduledTask -TaskName 'DestinedFX Bridge SQLite Backup' -User $owner -Password $taskPassword -Action $backupAction -Trigger $backupTrigger -Settings $settings -RunLevel Limited -Force | Out-Null
+    $healthAction = New-ScheduledTaskAction -Execute $venvPython -Argument "`"$healthScript`" --url http://127.0.0.1:8000 --state-file `"$base\logs\health.json`" --data-root `"$workerData`" --backup-root `"$backupDir`""
+    $healthTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+    Register-ScheduledTask -TaskName 'DestinedFX Owner Bridge Health Monitor' -User $owner -Password $taskPassword -Action $healthAction -Trigger $healthTrigger -Settings $settings -RunLevel Limited -Force | Out-Null
+} finally {
+    if ($taskPasswordPtr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($taskPasswordPtr) }
+    if ($taskPasswordSecure) { $taskPasswordSecure.Dispose() }
+    $taskPassword = $null
+}
 Start-ScheduledTask -TaskName 'DestinedFX Owner Bridge and Worker'
 } else { Write-Host 'Existing scheduled tasks and running worker are left untouched; the new broker mapping takes effect on the next normal stack start.' }
 $env:DESTINEDFX_HEALTH_URL="$origin/health/ready"
@@ -238,4 +254,4 @@ Write-Host "Bridge binds only to 127.0.0.1:8000; private HTTPS origin: $origin"
 Write-Host "Durable SQLite path: $(Join-Path $dataDir 'bridge.sqlite3'); rolling backups: $backupDir"
 Write-Host "Worker config: $workerConfig; worker ID: $workerId"
 Write-Host 'Add the exact HTTPS tailnet origin to each isolated MT5 terminal WebRequest allowlist. Begin with DEMO only.'
-Write-Host 'Interactive-logon scheduled task is NOT a 24/7 service: Windows sign-in, powered/awake host, and network connectivity are required.'
+Write-Host 'Background password-logon scheduled tasks start at Windows boot and owner sign-in, including when the owner is signed out. Keep the PC powered, awake, and network-connected; update the stored Task Scheduler credentials if the Windows password changes.'
