@@ -86,6 +86,17 @@ if [[ -f "$RUNTIME/pids" && -s "$RUNTIME/pids" ]]; then
     [[ -r "/proc/$pid/cmdline" ]] && cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
     [[ "$cmdline" == *"$expected"* ]] || all_running=false
   done < "$RUNTIME/pids"
+  for spec in "x11vnc.pid|x11vnc" "novnc.pid|websockify"; do
+    pidfile="${spec%%|*}"
+    expected="${spec#*|}"
+    pid=""
+    [[ -s "$RUNTIME/$pidfile" ]] && pid="$(cat "$RUNTIME/$pidfile" 2>/dev/null || true)"
+    cmdline=""
+    if [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]]; then
+      cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+    fi
+    [[ "$cmdline" == *"$expected"* ]] || all_running=false
+  done
   if [[ "$all_running" == true ]]; then
     pass 'Existing managed Codespaces processes are identity-verified and already running.'
     python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
