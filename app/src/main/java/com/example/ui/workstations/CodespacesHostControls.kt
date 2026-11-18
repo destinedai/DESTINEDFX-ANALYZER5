@@ -158,21 +158,22 @@ fun CodespacesHostControls(
                 onClick = {
                     scope.launch {
                         busy = true
+                        var shutdownPrepared = false
                         try {
                             val preflight = bridgeClient.prepareHostStop()
                             check(preflight.optString("status") == "PREPARED" &&
                                 preflight.optBoolean("backup_verified", false)) {
                                 "Bridge did not confirm a safe, backed-up shutdown."
                             }
+                            shutdownPrepared = true
                             val stopped = github.stopRepositoryCodespace()
                             message = stopped.message + " Verified backup: " + preflight.optString("backup_name")
                         } catch (error: Exception) {
-                            val released = runCatching { bridgeClient.cancelHostStop() }.isSuccess
                             val detail = error.message ?: "STOP HOST failed; the Codespace was not reported as stopped."
-                            message = if (released) {
-                                "$detail The Bridge shutdown lock was cleared; the Codespace remains available."
+                            message = if (shutdownPrepared) {
+                                "$detail The stop result is uncertain; the Bridge safety lock remains closed. Check GitHub host status before cancelling preparation."
                             } else {
-                                "$detail The Bridge shutdown lock could not be cleared; check host status before resuming trading."
+                                detail
                             }
                         } finally {
                             busy = false
@@ -199,6 +200,30 @@ fun CodespacesHostControls(
                 }
             }
         ) { Text("CHECK HOST STATUS", fontSize = 9.sp) }
+        OutlinedButton(
+            enabled = !busy && authorized,
+            onClick = {
+                scope.launch {
+                    busy = true
+                    try {
+                        val status = bridgeClient.hostStatus()
+                        check(status.optBoolean("shutdown_prepared", false)) {
+                            "No host shutdown preparation is pending."
+                        }
+                        val githubState = github.repositoryCodespaceState()
+                        check(githubState.equals("Available", ignoreCase = true)) {
+                            "GitHub reports $githubState. Shutdown preparation is retained because the stop request may already be in progress."
+                        }
+                        bridgeClient.cancelHostStop()
+                        message = "Shutdown preparation cancelled. GitHub confirms the Codespace is Available and the Bridge command gate is cleared."
+                    } catch (error: Exception) {
+                        message = error.message ?: "Shutdown preparation could not be cancelled safely."
+                    } finally {
+                        busy = false
+                    }
+                }
+            }
+        ) { Text("CANCEL STOP PREPARATION", fontSize = 9.sp) }
         OutlinedButton(
             enabled = !busy && authorized,
             onClick = {
