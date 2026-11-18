@@ -110,13 +110,13 @@ def _memory_available_bytes() -> int:
 
 
 def capacity() -> int:
-    """Conservative session capacity for the actual Codespaces machine resources."""
+    """Require at least 3 GiB of available RAM for each isolated MT5 terminal."""
     cpus = os.cpu_count() or 1
-    available_gib = _memory_available_bytes() // (1024 ** 3)
-    memory_slots = available_gib // 3
-    if available_gib <= 0:
-        return 1
-    return max(1, min(MAX_SLOT_CONFIG, cpus, int(memory_slots)))
+    available_bytes = _memory_available_bytes()
+    memory_slots = available_bytes // (3 * 1024 ** 3)
+    if cpus < 1 or memory_slots < 1:
+        return 0
+    return min(MAX_SLOT_CONFIG, cpus, int(memory_slots))
 
 
 def _api(method: str, path: str, payload: dict | None = None, timeout: int = 20) -> dict:
@@ -533,6 +533,8 @@ def run_once() -> str:
     _require_config()
     active_before = _active_manifests()
     max_slots = capacity()
+    if max_slots < 1:
+        raise SlotWorkerError("INSUFFICIENT_MEMORY_FOR_MT5_SLOT")
     payload = {
         "worker_id": WORKER_ID,
         "active_terminals": min(len(active_before), max_slots),
