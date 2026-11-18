@@ -74,6 +74,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val scanStage by viewModel.scanProgressStage.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
+    val candleFetchErrors by viewModel.candleFetchErrors.collectAsStateWithLifecycle()
     val strategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     var advancedOpen by remember { mutableStateOf(false) }
     // TradingView is the primary visible chart. The native chart remains an implementation
@@ -87,6 +88,8 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val rr = currentAnalysis?.let { validatedDisplayRewardRisk(it.signalState, it.direction, it.entry, it.stopLoss, it.tp1) }
     val hasPlan = rr != null && currentSignal?.entryPrice?.let { it > 0.0 } == true
     val candles = viewModel.candlesForChart(symbol, timeframe)
+    val candleTimeframeKey = if (timeframe == "60") "H1" else timeframe.uppercase()
+    val candleDiagnostic = candleFetchErrors["$symbol-$candleTimeframeKey"]
     val readiness = deriveMarketReadiness(
         ticker = activeTicker,
         candleSource = viewModel.marketDataSource(symbol, timeframe),
@@ -135,7 +138,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             }
         }
         item {
-            ReadinessCard(readiness, marketDataStatus, quoteDiagnostics[symbol])
+            ReadinessCard(readiness, marketDataStatus, quoteDiagnostics[symbol], candleDiagnostic)
         }
         item {
             SelectionBar(viewModel, symbol, timeframe, strategyId)
@@ -176,8 +179,17 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                 else Text("ANALYSE MARKET", fontWeight = FontWeight.Black, fontSize = 12.sp)
             }
             if (!canAnalyze && !scanning) {
-                Text("Analysis is disabled until a fresh verified quote and validated candles are available.", color = WarningAmber, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
+                Text(
+                    candleDiagnostic?.takeIf { it.isNotBlank() }?.let { "Analysis is waiting for provider OHLC: " + plainTradingReason(it) }
+                        ?: "Analysis is disabled until a fresh verified quote and validated candles are available.",
+                    color = WarningAmber, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp)
+                )
             }
+            OutlinedButton(
+                onClick = { viewModel.refreshMarketData(symbol, timeframe) },
+                enabled = !scanning,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("REFRESH VERIFIED QUOTE & OHLC DATA") }
         }
         item {
                 Card(modifier = Modifier.fillMaxWidth().height(470.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = DarkBackground), border = BorderStroke(1.dp, CardBorder)) {
@@ -241,7 +253,12 @@ private fun SelectionBar(viewModel: DestinedFXViewModel, symbol: String, timefra
 }
 
 @Composable
-private fun ReadinessCard(readiness: MarketReadiness, marketDataStatus: String, diagnostic: String?) {
+private fun ReadinessCard(
+    readiness: MarketReadiness,
+    marketDataStatus: String,
+    diagnostic: String?,
+    candleDiagnostic: String?
+) {
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, CardBorder)) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text("MARKET STATUS", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
@@ -251,6 +268,9 @@ private fun ReadinessCard(readiness: MarketReadiness, marketDataStatus: String, 
             StatusLine("Analysis", readiness.analysisLabel, readiness.analysisCompleted)
             StatusLine("Trading", readiness.eligibilityLabel, readiness.tradingEligible)
             if (!diagnostic.isNullOrBlank()) Text(plainTradingReason(diagnostic), color = WarningAmber, fontSize = 10.sp)
+            if (!candleDiagnostic.isNullOrBlank()) {
+                Text("OHLC PROVIDER: " + plainTradingReason(candleDiagnostic), color = WarningAmber, fontSize = 10.sp)
+            }
             if (marketDataStatus.isNotBlank()) Text(plainTradingReason(marketDataStatus), color = TextMuted, fontSize = 10.sp)
         }
     }
