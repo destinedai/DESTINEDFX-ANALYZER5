@@ -66,6 +66,15 @@ def validate_origin(raw: str) -> str | None:
         port = parsed.port
     except (ValueError, UnicodeError):
         return None
+    # HTTP is permitted only for this same-host Codespaces worker when the
+    # explicit loopback guard is set. Remote workers continue to require HTTPS.
+    loopback_enabled = os.environ.get("DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE", "").lower() == "true"
+    loopback = host in {"127.0.0.1", "::1"} and parsed.scheme == "http"
+    if loopback_enabled and loopback:
+        if (parsed.username or parsed.password or parsed.query or parsed.fragment
+                or parsed.path not in ("", "/") or port is None or not (1 <= port <= 65535)):
+            return None
+        return f"http://{host}:{port}"
     placeholder = (host in {"example.com", "example.org", "example.net", "testserver", "bridge.example", "localhost"}
                    or host.endswith(".example") or host.startswith("your-")
                    or host.startswith("placeholder") or host.endswith((".localhost", ".test", ".invalid")) or "example" in host)
