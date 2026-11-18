@@ -1552,9 +1552,8 @@ def worker_attestation_finalize(x:WorkerAttestationFinalize, authorization:str|N
     require_durable_execution()
     worker=worker_auth(authorization)
     require_worker_identity(worker,x.worker_id)
-    worker_secret=worker['token']
-    evidence=x.model_dump()
-    if not hmac.compare_digest(x.signature,_attestation_signature(worker_secret,evidence)):
+    evidence=x.model_dump(exclude_unset=True)
+    if not hmac.compare_digest(x.signature,_attestation_signature(worker['token'],evidence)):
         raise HTTPException(401,'Invalid worker attestation finalization signature')
     with tx(True) as c:
         row=c.execute('SELECT * FROM worker_attestations WHERE id=? AND worker_id=? AND used=1',
@@ -1563,14 +1562,28 @@ def worker_attestation_finalize(x:WorkerAttestationFinalize, authorization:str|N
             raise HTTPException(404,'Worker attestation not found')
         if row['expires_at'] <= time.time():
             raise HTTPException(409,'Worker attestation expired')
+    if LINUX_HOST_MODE:
+        if (x.pid is None or x.process_start_ticks is None or x.terminal_path != row['terminal_path']
+                or not row['linux_user'] or not row['display'] or not row['xauthority']):
+            raise HTTPException(409,'Finalized terminal does not match its reserved Linux slot')
+        process_payload={
+            'pairing_id':row['pairing_id'],'job_id':row['job_id'],'linux_user':row['linux_user'],
+            'linux_uid':row['linux_uid'],'slot_root':row['slot_root'],'terminal_home':row['terminal_home'],
+            'wine_prefix':row['wine_prefix'],'terminal_path':x.terminal_path,'xauthority':row['xauthority'],
+            'display':row['display'],'xvfb_pid':row['xvfb_pid'],'xvfb_start_ticks':row['xvfb_start_ticks'],
+            'pid':x.pid,'start_ticks':x.process_start_ticks,
+        }
+        host_agent_slot_request('/internal/slot/process',process_payload)
+    with tx(True) as c:
         updated=c.execute('''UPDATE worker_attestations
-                             SET terminal_path=?, process_identity=?, ea_identity=?, finalized=1
+                             SET terminal_path=?,process_identity=?,ea_identity=?,
+                                 process_pid=?,process_start_ticks=?,finalized=1
                              WHERE id=? AND worker_id=? AND used=1 AND finalized=0''',
-                          (x.terminal_path,x.process_identity,x.ea_identity,x.attestation_id,x.worker_id))
+                          (x.terminal_path,x.process_identity,x.ea_identity,x.pid,x.process_start_ticks,
+                           x.attestation_id,x.worker_id))
         if updated.rowcount != 1:
             raise HTTPException(409,'Worker attestation was already finalized')
     return {'attestation_id':x.attestation_id,'status':'FINALIZED'}
-
 @app.post('/v1/worker/jobs/claim')
 def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
     require_durable_execution()
@@ -1697,9 +1710,20 @@ def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(defaul
         if r['kind']=='REVOKE' and x.status not in ('REVOKED','FAILED'): raise HTTPException(422,'Revocation job must be acknowledged as REVOKED or FAILED')
         if r['kind']!='REVOKE' and x.status=='REVOKED': raise HTTPException(422,'Only a revocation job can be marked REVOKED')
         if x.status=='READY' and not _isolation_evidence_verified():
-            evidence=c.execute('SELECT finalized,expires_at FROM worker_attestations WHERE job_id=? AND worker_id=? AND used=1',(job_id,x.worker_id)).fetchone()
-            if not evidence or not evidence['finalized'] or evidence['expires_at'] <= time.time():
+            evidence=c.execute('SELECT * FROM worker_attestations WHERE job_id=? AND worker_id=? AND used=1',(job_id,x.worker_id)).fetchone()
+            if not evidence or not evidence['finalized']:
                 raise HTTPException(409,'Finalized worker isolation evidence is required before READY')
+            if LINUX_HOST_MODE:
+                process_payload={
+                    'pairing_id':evidence['pairing_id'],'job_id':evidence['job_id'],
+                    'linux_user':evidence['linux_user'],'linux_uid':evidence['linux_uid'],
+                    'slot_root':evidence['slot_root'],'terminal_home':evidence['terminal_home'],
+                    'wine_prefix':evidence['wine_prefix'],'terminal_path':evidence['terminal_path'],
+                    'xauthority':evidence['xauthority'],'display':evidence['display'],
+                    'xvfb_pid':evidence['xvfb_pid'],'xvfb_start_ticks':evidence['xvfb_start_ticks'],
+                    'pid':evidence['process_pid'],'start_ticks':evidence['process_start_ticks'],
+                }
+                host_agent_slot_request('/internal/slot/process',process_payload)
         if r['status']=='READY' and x.status in ('PROVISIONING','AUTHENTICATING'): return {'updated':True}
         if r['status'] not in ('LEASED','PROVISIONING','AUTHENTICATING'): raise HTTPException(409,'Job is not active')
         lease=time.time()+120 if x.status in ('PROVISIONING','AUTHENTICATING','LEASED') else r['lease_until']
@@ -1779,7 +1803,15 @@ def readiness():
     except Exception:
         raise HTTPException(503, detail={'code':'DATABASE_UNAVAILABLE','message':'Bridge storage is unavailable'})
     if LINUX_HOST_MODE:
-        raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'The current Linux worker uses one shared MT5 terminal; a separately attested terminal slot per user is required before managed execution is ready'})
+        host=linux_host_report()
+        isolation=host.get('slot_isolation') or {}
+        if not isolation.get('ready'):
+            raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'The root host agent has not verified the per-pairing MT5 slot runtime'})
+        return {'status':'ready','database':'ok','managed_execution':'configured',
+                'per_user_terminal_isolation':'VERIFIED','isolated_slots':isolation.get('active_slots',0),
+                'max_isolated_slots':isolation.get('max_slots',1),'host_profile':HOST_PROFILE,
+                'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,
+                **host_lifecycle_state()}
     if not verified_terminal_pairing_exists():
         raise HTTPException(503, detail={'code':'NO_VERIFIED_TERMINAL_PAIRING','message':'Durable storage and configuration are present, but no real terminal pairing has a fresh authenticated EA heartbeat and READY worker state'})
     return {'status':'ready','database':'ok','managed_execution':'configured','per_user_terminal_isolation':'WORKER_ATTESTATION_REQUIRED','verified_terminal_pairing':'healthy','host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS, **host_lifecycle_state()}
@@ -6929,9 +6961,9 @@ class WorkerAttestationFinalize(BaseModel):
     terminal_path:str=Field(min_length=1,max_length=512)
     process_identity:str=Field(min_length=1,max_length=512)
     ea_identity:str=Field(min_length=1,max_length=256)
-    pid:int=Field(gt=1)
-    process_start_ticks:int=Field(gt=0)
-    signature:str=Field(pattern=r'^[0-9a-f]{64}
+    pid:int|None=Field(default=None,gt=1)
+    process_start_ticks:int|None=Field(default=None,gt=0)
+    signature:str=Field(pattern=r'^[0-9a-f]{64}$')
 class WorkerUpdate(BaseModel):
     model_config=ConfigDict(extra='forbid')
     status:str; worker_id:str=Field(min_length=1,max_length=128); error_code:str|None=Field(default=None,max_length=64); error_message:str|None=Field(default=None,max_length=200)
