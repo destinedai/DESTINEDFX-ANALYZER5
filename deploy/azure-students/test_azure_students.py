@@ -30,12 +30,15 @@ def test_template_has_no_public_ip_or_inbound_security_rules() -> None:
     assert "publicIp" not in body
 
 
-def test_cloud_init_is_embedded_and_names_missing_d1_fix() -> None:
+def test_cloud_init_recognizes_new_slot_worker_but_keeps_uninstalled_runtime_blocked() -> None:
     body = json.dumps(TEMPLATE)
-    assert "Per-user isolated MT5 terminal slots are not implemented" in body
-    assert "ISOLATED_SLOT_REQUIRED" in body
+    assert "linux-slot-worker.py" in body
+    assert "linux_isolation.py" in body
+    assert "BLOCKED_OWNER_RUNTIME_SETUP" in body
+    assert "does not install or enable an isolated-slot" in body
     assert "destinedfx-azure-first-boot.service" in body
     assert "tailscale up --ssh --accept-dns=false" in body
+    assert "READY_FOR_OWNER_PAIRING_ONLY" not in body
 
 
 def test_student_subscription_access_is_an_explicit_owner_gate() -> None:
