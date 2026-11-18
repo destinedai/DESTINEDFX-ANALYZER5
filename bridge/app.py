@@ -1846,25 +1846,32 @@ def configuration_health():
     # attested per-pairing OS identity, Wine-prefix and terminal-process isolation.
     # Do not report a blanket BLOCKED value when that evidence is healthy, and do
     # not report VERIFIED merely because Linux-host mode is enabled.
-    host = linux_host_report()
+    host = None
+    if LINUX_HOST_MODE:
+        # Configuration health remains distinct from execution readiness. Report
+        # BLOCKED when the root agent/isolated slots are missing; /health/ready and
+        # account registration independently refuse to proceed until attested.
+        try:
+            host = linux_host_report()
+        except HTTPException:
+            host = None
     isolation = linux_slot_isolation(host)
-    if LINUX_HOST_MODE and (not isolation.get('enabled') or not isolation.get('ready')):
-        raise HTTPException(
-            503,
-            detail={
-                'code': 'PER_USER_TERMINAL_ISOLATION_REQUIRED',
-                'message': 'Root host agent has not verified isolated per-user MT5 slot capacity',
-            },
-        )
-    isolation_status = 'VERIFIED' if LINUX_HOST_MODE else 'WORKER_ATTESTATION_REQUIRED'
+    isolation_verified = bool(
+        LINUX_HOST_MODE and isolation.get('enabled') and isolation.get('ready')
+    )
+    isolation_status = (
+        'VERIFIED' if isolation_verified
+        else 'BLOCKED' if LINUX_HOST_MODE
+        else 'WORKER_ATTESTATION_REQUIRED'
+    )
     return {
         'status': 'configured',
         'database': 'ok',
         'managed_execution': 'configured',
         'host_profile': HOST_PROFILE,
         'per_user_terminal_isolation': isolation_status,
-        'isolated_slots': int(isolation.get('active_slots', 0)) if LINUX_HOST_MODE else 0,
-        'max_isolated_slots': int(isolation.get('max_slots', 0)) if LINUX_HOST_MODE else 0,
+        'isolated_slots': int(isolation.get('active_slots', 0)) if isolation_verified else 0,
+        'max_isolated_slots': int(isolation.get('max_slots', 0)) if isolation_verified else 0,
         **host_lifecycle_state(),
     }
 @app.get('/health/ready')
