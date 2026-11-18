@@ -1501,6 +1501,40 @@ def test_documented_health_paths_are_implemented(monkeypatch):
     assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
 
 
+def test_configuration_health_reports_root_verified_linux_slot_isolation(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': True,
+        'slot_isolation': {
+            'enabled': True,
+            'ready': True,
+            'active_slots': 1,
+            'max_slots': 2,
+        },
+    })
+    response = client.get('/health/config')
+    assert response.status_code == 200
+    body = response.json()
+    assert body['per_user_terminal_isolation'] == 'VERIFIED'
+    assert body['isolated_slots'] == 1
+    assert body['max_isolated_slots'] == 2
+
+
+def test_configuration_health_refuses_linux_slots_without_root_attestation(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    def unavailable_host():
+        raise app.HTTPException(503, detail={
+            'code': 'PER_USER_TERMINAL_ISOLATION_REQUIRED',
+            'message': 'Root host agent has not verified isolated per-user MT5 slot capacity',
+        })
+    monkeypatch.setattr(app, 'linux_host_report', unavailable_host)
+    response = client.get('/health/config')
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'PER_USER_TERMINAL_ISOLATION_REQUIRED'
+
+
 def test_malformed_managed_origin_fails_closed(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.invalid:99999')
