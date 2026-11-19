@@ -16,6 +16,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.broker.HostProfile
 import com.example.security.SecretsManager
 import com.example.ui.theme.DestinedFXTheme
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
