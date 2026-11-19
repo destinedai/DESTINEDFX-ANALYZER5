@@ -1292,7 +1292,7 @@ def test_profile_reenrollment_invalidates_associated_live_lease(monkeypatch):
     # Simulate the worker-confirmed completion of this demo terminal's revoke.
     # Re-enrolment must not replace credentials while its prior terminal is active.
     with app.tx(True) as c:
-        c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE id=?",(job,))
+        c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE id=?",(job['job_id'],))
     re_enrolled=client.post('/v1/app/managed-account',headers=demo_headers,json={
         'login':'600001','server':'Broker-Demo','password':'new-demo-password',
         'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True,
@@ -1434,7 +1434,7 @@ def test_live_profile_reenrollment_clears_its_own_server_lease(monkeypatch):
     assert before['managed_execution']['live_authorized'] is True
     # Only a completed worker revoke frees this pairing for credential rotation.
     with app.tx(True) as c:
-        c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE id=?",(job,))
+        c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE id=?",(job['job_id'],))
     re_enrolled=client.post('/v1/app/managed-account',headers=headers,json={
         'login':actual['login'],'server':actual['server'],'password':'rotated-live-password',
         'access_type':'MASTER','account_mode':'LIVE','broker_brand':'FBS','consent':True,
@@ -1508,6 +1508,32 @@ def test_documented_health_paths_are_implemented(monkeypatch):
     monkeypatch.setenv('BRIDGE_BASE_URL','https://bridge.realcop.com')
     assert client.get('/health/ready').status_code==503
     assert client.get('/health/ready').json()['detail']['code']=='NO_VERIFIED_TERMINAL_PAIRING'
+
+
+def test_host_agent_internal_slot_route_uses_agent_root_not_health_path(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_AGENT_URL', 'http://127.0.0.1:8787/health/ready')
+    monkeypatch.setenv('HOST_AGENT_TOKEN', 'host-agent-fixture-token-' * 2)
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def read(self, _limit):
+            return b'{"verified":true,"display":":100"}'
+
+    def fake_open(request, timeout):
+        requests.append((request.full_url, request.get_header('Authorization'), timeout))
+        return Response()
+
+    monkeypatch.setattr(app.urllib.request, 'urlopen', fake_open)
+    result = app.host_agent_slot_request('/internal/slot/reservation', {'pairing_id':'fixture-pair'})
+    assert result == {'verified': True, 'display': ':100'}
+    assert requests[0][0] == 'http://127.0.0.1:8787/internal/slot/reservation'
+    assert requests[0][1] == 'Bearer ' + 'host-agent-fixture-token-' * 2
 
 
 def test_configuration_health_reports_root_verified_linux_slot_isolation(monkeypatch):
