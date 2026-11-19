@@ -148,7 +148,7 @@ class MyApplication : Application() {
             _db = dbInstance
             _modeArmingPolicy = ModeArmingPolicy(auditSink = secrets::appendModeArmingAudit)
             _universalConnectorDispatcher = UniversalConnectorDispatcher(emptyMap(), modeArmingPolicy)
-            _riskRepository = RiskRepositoryImpl(this@MyApplication)
+            _riskRepository = RiskRepositoryImpl(this@MyApplication, secrets)
             
             val derivMarketDataGateway = com.example.data.deriv.DerivMarketDataGateway()
             
