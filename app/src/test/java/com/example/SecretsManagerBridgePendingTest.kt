@@ -2,6 +2,8 @@ package com.example
 
 import androidx.test.core.app.ApplicationProvider
 import com.example.security.SecretsManager
+import com.destinedfx.core.security.CrashLogManager
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -266,6 +268,30 @@ class SecretsManagerBridgePendingTest {
         assertTrue(manager.markMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
         assertTrue(manager.wasMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
         assertFalse(manager.wasMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-20", 80))
+    }
+
+    @Test fun legacyCrashDiagnosticsMigrateToEncryptedStorageAndPlaintextFileIsDeleted() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val legacy = File(context.filesDir, CrashLogManager.CRASH_FILE_NAME)
+        legacy.writeText("CRASH: fixture.Exception\\nThread: main | TimeMs: 123\\nStack frames:\\n  at fixture.Frame")
+        val manager = SecretsManager(context)
+
+        assertFalse(legacy.exists())
+        if (manager.isSecureStorageAvailable) {
+            assertTrue(manager.getLastCrashLog()?.contains("CRASH: fixture.Exception") == true)
+            assertTrue(manager.clearLastCrashLog())
+            assertEquals(null, manager.getLastCrashLog())
+        } else {
+            assertEquals(null, manager.getLastCrashLog())
+        }
+    }
+
+    @Test fun crashLogManagerCannotWriteNewPlaintextDiagnosticFiles() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val legacy = File(context.filesDir, CrashLogManager.CRASH_FILE_NAME)
+        legacy.delete()
+        assertFalse(CrashLogManager(context.filesDir).writeCrash("CRASH: fixture.Exception"))
+        assertFalse(legacy.exists())
     }
 
     @Test fun manualMt5BalancePersistenceIsDisabledAndCannotBeReadAsBrokerEvidence() {
