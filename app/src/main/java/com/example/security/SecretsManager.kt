@@ -92,12 +92,25 @@ class SecretsManager internal constructor(
         private const val BOT_TIMEFRAME = "bot_timeframe_encrypted"
         private const val BOT_RISK_PERCENT = "bot_risk_percent_encrypted"
         private const val BOT_THEME_MODE = "bot_theme_mode_encrypted"
+        private const val DERIV_BOT_SYMBOL = "deriv_bot_symbol_v1"
+        private const val DERIV_BOT_STRATEGY = "deriv_bot_strategy_v1"
+        private const val DERIV_BOT_TIMEFRAME = "deriv_bot_timeframe_v1"
+        private const val DERIV_BOT_ENABLED = "deriv_bot_recovery_enabled_v1"
+        private const val DERIV_BOT_STATUS_STATE = "deriv_bot_service_state_v1"
+        private const val DERIV_BOT_STATUS_REASON = "deriv_bot_service_reason_v1"
+        private const val TRADE_SYNC_PREFIX = "trade_sync_v1_"
+        private const val TRADE_REPORT_FINGERPRINT_PREFIX = "trade_report_fingerprint_v1_"
+        private const val MT5_RISK_ALERT_PREFIX = "mt5_risk_alert_v1_"
     }
 
     val isSecureStorageAvailable: Boolean
     private val prefs: android.content.SharedPreferences
-    // Legacy preference file is read once and cleared after migration into encrypted prefs.
+    // Legacy preference files are read once and cleared only after a successful encrypted migration.
     private val botConfigPrefs = ctx.getSharedPreferences("destinedfx_bot_config", Context.MODE_PRIVATE)
+    private val derivBotConfigPrefs = ctx.getSharedPreferences("deriv_bot_config", Context.MODE_PRIVATE)
+    private val tradeSyncPrefs = ctx.getSharedPreferences("destinedfx_trade_sync", Context.MODE_PRIVATE)
+    private val tradeReportPrefs = ctx.getSharedPreferences("destinedfx_trade_reports", Context.MODE_PRIVATE)
+    private val mt5RiskAlertPrefs = ctx.getSharedPreferences("mt5_daily_risk_alerts", Context.MODE_PRIVATE)
     /** Live trading authorization is deliberately process-memory-only and never restored after restart. */
     @Volatile private var derivRealLease: DerivRealAuthorizationLease? = null
 
@@ -118,6 +131,10 @@ class SecretsManager internal constructor(
         isSecureStorageAvailable = prefs !== UnavailableSharedPreferences
         if (isSecureStorageAvailable) {
             migrateLegacyBotPreferences()
+            migrateLegacyDerivBotPreferences()
+            migrateLegacyTradeSyncPreferences()
+            migrateLegacyTradeReportPreferences()
+            migrateLegacyMt5RiskAlertPreferences()
             // Remove legacy operator-entered balance hints; they are not current broker evidence.
             prefs.edit().remove(MT5_BALANCE).commit()
         }
@@ -168,6 +185,188 @@ class SecretsManager internal constructor(
         // Clear the legacy plaintext preference file only after the encrypted write commits.
         if (edit.commit()) botConfigPrefs.edit().clear().commit()
     }
+
+    private fun migrateLegacyDerivBotPreferences() {
+        val old = derivBotConfigPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        (old["symbol"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_SYMBOL)) edit.putString(DERIV_BOT_SYMBOL, it.trim())
+        }
+        (old["strategy"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_STRATEGY)) edit.putString(DERIV_BOT_STRATEGY, it.trim())
+        }
+        (old["timeframe"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_TIMEFRAME)) edit.putString(DERIV_BOT_TIMEFRAME, it.trim())
+        }
+        (old["enabled"] as? Boolean)?.let {
+            if (!prefs.contains(DERIV_BOT_ENABLED)) edit.putBoolean(DERIV_BOT_ENABLED, it)
+        }
+        (old["service_status_state"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_STATUS_STATE)) edit.putString(DERIV_BOT_STATUS_STATE, it.take(32))
+        }
+        (old["service_status_reason"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_STATUS_REASON)) edit.putString(DERIV_BOT_STATUS_REASON, it.take(240))
+        }
+        // Retain the legacy copy unless the complete encrypted migration commits.
+        if (edit.commit()) derivBotConfigPrefs.edit().clear().commit()
+    }
+
+    private fun migrateLegacyTradeSyncPreferences() {
+        val old = tradeSyncPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        val migrated = mutableListOf<String>()
+        old.forEach { (key, value) ->
+            if (!key.matches(Regex("[a-z0-9_]{1,96}_(cursor|watermark)"))) return@forEach
+            val destination = TRADE_SYNC_PREFIX + key
+            if (!prefs.contains(destination)) {
+                when (value) {
+                    is Int -> edit.putInt(destination, value)
+                    is String -> edit.putString(destination, value)
+                    else -> return@forEach
+                }
+            }
+            migrated += key
+        }
+        if (migrated.isNotEmpty() && edit.commit()) {
+            val cleanup = tradeSyncPrefs.edit()
+            migrated.forEach { cleanup.remove(it) }
+            cleanup.commit()
+        }
+    }
+
+    private fun migrateLegacyTradeReportPreferences() {
+        val old = tradeReportPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        val migrated = mutableListOf<String>()
+        old.forEach { (fileName, value) ->
+            val fingerprint = value as? String ?: return@forEach
+            if (fileName.isBlank() || fileName.length > 180) return@forEach
+            val destination = TRADE_REPORT_FINGERPRINT_PREFIX + sha256Hex(fileName)
+            if (!prefs.contains(destination)) edit.putString(destination, fingerprint.take(128))
+            migrated += fileName
+        }
+        if (migrated.isNotEmpty() && edit.commit()) {
+            val cleanup = tradeReportPrefs.edit()
+            migrated.forEach { cleanup.remove(it) }
+            cleanup.commit()
+        }
+    }
+
+    private fun migrateLegacyMt5RiskAlertPreferences() {
+        val old = mt5RiskAlertPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        val migrated = mutableListOf<String>()
+        old.forEach { (legacyKey, value) ->
+            if (value !is Boolean || legacyKey.length !in 8..160) return@forEach
+            val destination = MT5_RISK_ALERT_PREFIX + sha256Hex(legacyKey)
+            if (!prefs.contains(destination)) edit.putBoolean(destination, value)
+            migrated += legacyKey
+        }
+        if (migrated.isNotEmpty() && edit.commit()) {
+            val cleanup = mt5RiskAlertPrefs.edit()
+            migrated.forEach { cleanup.remove(it) }
+            cleanup.commit()
+        }
+    }
+
+    fun saveDerivBotRecoveryConfiguration(symbol: String, strategy: String, timeframe: String): Boolean {
+        if (!isSecureStorageAvailable || symbol.isBlank() || symbol.length > 64 ||
+            strategy.isBlank() || strategy.length > 96 || timeframe.isBlank() || timeframe.length > 16 ||
+            listOf(symbol, strategy, timeframe).any { value -> value.any(Char::isISOControl) }) return false
+        return prefs.edit()
+            .putString(DERIV_BOT_SYMBOL, symbol.trim())
+            .putString(DERIV_BOT_STRATEGY, strategy.trim())
+            .putString(DERIV_BOT_TIMEFRAME, timeframe.trim())
+            .commit()
+    }
+
+    fun getDerivBotRecoverySymbol(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_SYMBOL, "").orEmpty() else ""
+
+    fun getDerivBotRecoveryStrategy(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_STRATEGY, "").orEmpty() else ""
+
+    fun getDerivBotRecoveryTimeframe(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_TIMEFRAME, "").orEmpty() else ""
+
+    fun isDerivBotRecoveryEnabled(): Boolean =
+        isSecureStorageAvailable && prefs.getBoolean(DERIV_BOT_ENABLED, false)
+
+    fun setDerivBotRecoveryEnabled(enabled: Boolean): Boolean =
+        isSecureStorageAvailable && prefs.edit().putBoolean(DERIV_BOT_ENABLED, enabled).commit()
+
+    fun saveDerivBotServiceStatus(state: String, reason: String, disableRecovery: Boolean = false): Boolean {
+        if (!isSecureStorageAvailable ||
+            state !in setOf("STOPPED", "STARTING", "CONNECTING", "RECONCILING", "RUNNING", "PAUSED", "ERROR") ||
+            reason.isBlank()) return false
+        val edit = prefs.edit()
+            .putString(DERIV_BOT_STATUS_STATE, state)
+            .putString(DERIV_BOT_STATUS_REASON, reason.take(240))
+        if (disableRecovery) edit.putBoolean(DERIV_BOT_ENABLED, false)
+        return edit.commit()
+    }
+
+    fun getDerivBotServiceState(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_STATUS_STATE, "STOPPED") ?: "STOPPED" else "STOPPED"
+
+    fun getDerivBotServiceReason(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_STATUS_REASON, "BOT NOT RUNNING — not started")
+            ?: "BOT NOT RUNNING — not started" else "BOT NOT RUNNING — secure storage unavailable"
+
+    private fun tradeSyncKey(profile: String, field: String): String {
+        val normalized = profile.trim().lowercase()
+        require(normalized.matches(Regex("[a-z0-9_]{1,96}")) && field in setOf("cursor", "watermark")) {
+            "Trade synchronization key is invalid."
+        }
+        return TRADE_SYNC_PREFIX + normalized + "_" + field
+    }
+
+    fun getTradeSyncCursor(profile: String): Int =
+        if (isSecureStorageAvailable) prefs.getInt(tradeSyncKey(profile, "cursor"), 0).coerceAtLeast(0) else 0
+
+    fun getTradeSyncWatermark(profile: String): Double =
+        if (isSecureStorageAvailable) prefs.getString(tradeSyncKey(profile, "watermark"), "0")
+            ?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0 else 0.0
+
+    fun saveTradeSyncProgress(profile: String, cursor: Int, watermark: Double): Boolean {
+        if (!isSecureStorageAvailable || cursor < 0 || !watermark.isFinite() || watermark < 0.0) return false
+        return prefs.edit()
+            .putInt(tradeSyncKey(profile, "cursor"), cursor)
+            .putString(tradeSyncKey(profile, "watermark"), watermark.toString())
+            .commit()
+    }
+
+    fun getTradeReportFingerprint(fileName: String): String? {
+        if (!isSecureStorageAvailable || fileName.isBlank() || fileName.length > 180) return null
+        return prefs.getString(TRADE_REPORT_FINGERPRINT_PREFIX + sha256Hex(fileName), null)
+    }
+
+    fun saveTradeReportFingerprint(fileName: String, fingerprint: String): Boolean {
+        if (!isSecureStorageAvailable || fileName.isBlank() || fileName.length > 180 ||
+            !fingerprint.matches(Regex("[0-9a-f]{64}"))) return false
+        return prefs.edit().putString(
+            TRADE_REPORT_FINGERPRINT_PREFIX + sha256Hex(fileName), fingerprint
+        ).commit()
+    }
+
+    private fun mt5RiskAlertKey(profile: String, day: String, threshold: Int): String {
+        require(profile.isNotBlank() && profile.length <= 128 &&
+            day.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")) && threshold in setOf(80, 90, 100)) {
+            "MT5 risk alert identity is invalid."
+        }
+        return MT5_RISK_ALERT_PREFIX + sha256Hex(profile + "_" + day + "_" + threshold)
+    }
+
+    fun wasMt5DailyRiskAlertSent(profile: String, day: String, threshold: Int): Boolean =
+        isSecureStorageAvailable && prefs.getBoolean(mt5RiskAlertKey(profile, day, threshold), false)
+
+    fun markMt5DailyRiskAlertSent(profile: String, day: String, threshold: Int): Boolean =
+        isSecureStorageAvailable && prefs.edit()
+            .putBoolean(mt5RiskAlertKey(profile, day, threshold), true).commit()
 
     fun saveCTraderOAuth(
         clientId: String,
