@@ -55,7 +55,8 @@ grep -Fq 'mt5_terminal_ready NOT_VERIFIED' "$ROOT/deploy/codespaces/first-run-ch
 grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
 grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
 if grep -Fq 'Xvfb :99 -screen 0 1280x800x24' "$ROOT/deploy/codespaces/start.sh"; then fail 'start.sh must delegate Xvfb ownership to vnc-up.sh'; fi
-grep -Fq 'display_processes.py check-xvfb' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'existing Xvfb must be identity-verified before adoption'
+grep -Fq 'DISPLAY_HELPER="$ROOT/deploy/codespaces/display_processes.py"' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'display process identity helper path missing'
+grep -Fq 'check-xvfb "$XVFB_PID"' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'existing Xvfb must be identity-verified before adoption'
 grep -Fq 'cleanup-legacy' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'legacy unauthenticated VNC services must be safely reconciled'
 grep -Fq -- '--listen 127.0.0.1' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC websocket must bind to loopback only'
 grep -Fq 'xvfb.ownership' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must distinguish owned and adopted Xvfb'
