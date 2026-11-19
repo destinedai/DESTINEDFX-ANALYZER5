@@ -2,6 +2,7 @@ package com.example
 
 import android.content.ContentValues
 import androidx.room.Room
+import com.example.data.AppDatabase
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -52,7 +53,7 @@ class EncryptedAppDatabaseTest {
                 put("uid", "migration-user-1")
                 put("registrationDate", 1_800_000_000_000L)
             }
-            assertTrue(plainDb.insert("users", androidx.sqlite.db.SupportSQLiteDatabase.CONFLICT_ABORT, user) != -1L)
+            assertTrue(plainDb.insert("users", android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT, user) != -1L)
 
             val trade = ContentValues().apply {
                 put("id", 77)
@@ -71,7 +72,7 @@ class EncryptedAppDatabaseTest {
                 put("timestamp", 1_800_000_000_000L)
                 put("closeTimestamp", 1_800_000_060_000L)
             }
-            assertTrue(plainDb.insert("trade_journal", androidx.sqlite.db.SupportSQLiteDatabase.CONFLICT_ABORT, trade) != -1L)
+            assertTrue(plainDb.insert("trade_journal", android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT, trade) != -1L)
 
             val analysis = ContentValues().apply {
                 put("id", 88)
@@ -83,7 +84,7 @@ class EncryptedAppDatabaseTest {
                 put("signal", "BUY")
                 put("report", "local analysis history fixture")
             }
-            assertTrue(plainDb.insert("analysis_history", androidx.sqlite.db.SupportSQLiteDatabase.CONFLICT_ABORT, analysis) != -1L)
+            assertTrue(plainDb.insert("analysis_history", android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT, analysis) != -1L)
 
             val encryptedDb = encrypted.openHelper.writableDatabase
             AppDatabase.copyPlaintextTables(plainDb, encryptedDb)
