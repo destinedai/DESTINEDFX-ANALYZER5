@@ -247,6 +247,12 @@ def _check_one_slot(
         raise AcceptanceError("REAL_MT5_PROCESS_IDENTITY_MISMATCH")
     if not terminal_path.is_file():
         raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_MISSING")
+    try:
+        terminal_info = terminal_path.stat()
+    except OSError:
+        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_MISSING") from None
+    if terminal_info.st_uid != uid or not (terminal_info.st_mode & stat.S_IXUSR):
+        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_OWNERSHIP_INVALID")
 
     startup_ini = job_root / "startup.ini"
     startup_set = terminal_home / "MQL5" / "Presets" / "DestinedFXTraderEA.set"
@@ -274,7 +280,7 @@ def _deny_cross_slot_access(slots: list[tuple[int, str, Path]]) -> int:
                 probes += 1
                 if result.returncode == 0:
                     raise AcceptanceError("CROSS_USER_XAUTHORITY_ACCESS_NOT_BLOCKED")
-                if result.returncode not in {1, 2}:
+                if result.returncode != 1:
                     raise AcceptanceError("CROSS_USER_PERMISSION_PROBE_FAILED")
     return probes
 
@@ -284,7 +290,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         raise AcceptanceError("RUN_AS_ROOT_WITH_SUDO_E")
     owner_uid = _owner_uid(args)
     owner_home = Path(pwd.getpwuid(owner_uid).pw_dir)
-    state_dir = Path(args.state_dir) if args.state_dir else owner_home / ".local/share/destinedfx-codespaces"
+    state_dir = Path(args.state_dir or os.environ.get("DESTINEDFX_CODESPACES_STATE_DIR") or (owner_home / ".local/share/destinedfx-codespaces"))
     manifest_dir = state_dir / "isolated-slots"
     slots_root = Path(args.slots_root or os.environ.get("DESTINEDFX_SLOT_ROOT", "/home/destinedfx-slots")).resolve()
 
