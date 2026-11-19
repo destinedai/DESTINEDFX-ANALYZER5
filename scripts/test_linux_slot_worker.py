@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # The slot worker imports owner lifecycle helpers and the Windows/Linux shared
 # worker implementation from these source directories when loaded as a module.
-sys.path.insert(0, str(ROOT / "deploy" / "codespaces"))
+sys.path.insert(0, str(ROOT / "bridge"))
 sys.path.insert(0, str(ROOT / "managed-worker"))
 sys.path.insert(0, str(ROOT / "scripts" / "linux-host"))
 MODULE = ROOT / "scripts" / "linux-host" / "linux-slot-worker.py"
