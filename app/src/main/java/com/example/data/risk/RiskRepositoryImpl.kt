@@ -54,7 +54,7 @@ class RiskRepositoryImpl(
         if (!secrets.isSecureStorageAvailable) return
         migrationMutex.withLock {
             val legacy = ctx.riskSettingsStore.data.first()
-            if (legacy.isEmpty()) return@withLock
+            if (legacy.asMap().isEmpty()) return@withLock
 
             if (secrets.getEncryptedRiskProfile() == null) {
                 fun finiteNonNegative(key: Preferences.Key<Double>, fallback: Double): Double =
