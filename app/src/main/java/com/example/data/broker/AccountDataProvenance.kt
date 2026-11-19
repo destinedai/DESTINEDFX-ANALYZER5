@@ -30,7 +30,9 @@ data class BrokerAccountSnapshot(
     val margin: Double?,
     val freeMargin: Double?,
     val validity: DataValidity,
-    val errorCode: String? = null
+    val errorCode: String? = null,
+    /** Null when the broker did not report leverage; never substitute a conventional default. */
+    val leverage: Int? = null
 ) {
     fun isDisplayable(nowMs: Long = System.currentTimeMillis(), maxAgeMs: Long = 15_000L): Boolean {
         val values = listOf(balance, equity, margin, freeMargin)
