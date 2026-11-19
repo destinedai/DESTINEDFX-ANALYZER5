@@ -427,11 +427,10 @@ open class DestinedFXViewModel(
     val brokerConnected = MutableStateFlow(if (isPreview) false else app.brokerManager.activeBroker.value.isConnected())
     val brokerQuote = MutableStateFlow<com.destinedfx.core.marketdata.MarketQuote?>(null)
 
-    val crashLogManager by lazy { com.destinedfx.core.security.CrashLogManager(application.filesDir) }
     val lastCrashText = MutableStateFlow<String?>(null)
 
     fun dismissLastCrash() {
-        if (!isPreview) crashLogManager.dismissCrash()
+        if (!isPreview) app.secretsManager.clearLastCrashLog()
         lastCrashText.value = null
     }
 
@@ -1268,7 +1267,7 @@ open class DestinedFXViewModel(
 
             startDataCorrespondenceUpdates()
             try {
-                lastCrashText.value = crashLogManager.readLastCrash()
+                lastCrashText.value = app.secretsManager.getLastCrashLog()
             } catch (e: Throwable) {
                 Log.w("DestinedFXViewModel", "readLastCrash failed: ${e.message}")
             }
