@@ -14,6 +14,7 @@ import com.example.data.market.canonicalTickerAfterRefresh
 import com.example.data.market.processPollingItemsIndependently
 import com.example.data.market.resilientPollingLoop
 import com.example.data.market.sanitizeOhlcCandles
+import com.example.data.market.isCandleSnapshotFresh
 import com.example.data.market.isExplicitDerivPublicSource
 import com.example.data.market.buildDerivCanonicalSymbolMap
 import com.example.domain.model.Candle
@@ -237,6 +238,25 @@ class MarketDataSafetyTest {
         val nanPrice = future.copy(price = Double.NaN, lastUpdateMillis = 100_000L)
         assertTrue(QuoteArbiter.accept(existing, future, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
         assertTrue(QuoteArbiter.accept(existing, nanPrice, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
+    }
+
+    @Test
+    fun candleSnapshotChecksRetrievalAgeAndLatestClosedBar() {
+        val now = 500_000_000L
+        assertTrue(isCandleSnapshotFresh(now - 1_000L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 30_000L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now + 1L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, 0L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now + 1L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now - 300_000L, now, "M1"))
+        assertTrue(isCandleSnapshotFresh(
+            now - 1_000L, now - 48L * 60L * 60L * 1000L, now, "H1",
+            allowWeekendGap = true
+        ))
+        assertFalse(isCandleSnapshotFresh(
+            now - 1_000L, now - 48L * 60L * 60L * 1000L, now, "H1"
+        ))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now - 60_000L, now, "UNKNOWN"))
     }
 
 }
