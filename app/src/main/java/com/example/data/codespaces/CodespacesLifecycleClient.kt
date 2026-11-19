@@ -36,6 +36,33 @@ internal fun codespacesBridgeOrigin(
     return "https://$name-8000.$domain"
 }
 
+/**
+ * A configured Bridge may be saved by the phone even while terminal isolation is BLOCKED.
+ * This only establishes a trusted connection target; broker registration has a separate
+ * fail-closed isolation gate in MT5RemoteBridgeClient.
+ */
+internal fun codespacesBridgeConfigurationAllowsOriginSave(
+    status: String,
+    database: String,
+    managedExecution: String,
+    isolationStatus: String
+): Boolean {
+    val knownIsolation = isolationStatus.trim().uppercase() in
+        setOf("VERIFIED", "WORKER_ATTESTATION_REQUIRED", "BLOCKED")
+    return status.trim().equals("configured", ignoreCase = true) &&
+        database.trim().equals("ok", ignoreCase = true) &&
+        managedExecution.trim().equals("configured", ignoreCase = true) &&
+        knownIsolation
+}
+
+internal fun codespacesBridgeIsolationNotice(isolationStatus: String): String =
+    when (isolationStatus.trim().uppercase()) {
+        "VERIFIED" -> "Per-user terminal isolation is verified."
+        "WORKER_ATTESTATION_REQUIRED" -> "Worker attestation is still required before a terminal is accepted."
+        "BLOCKED" -> "Per-user terminal isolation is BLOCKED; the Bridge is connected for diagnostics only and broker credentials cannot be registered."
+        else -> "Per-user terminal isolation is UNKNOWN; broker credential registration remains blocked."
+    }
+
 /** Owner-only GitHub Codespaces lifecycle client. No GitHub App secret is packaged in the APK. */
 class CodespacesLifecycleClient(
     private val secrets: SecretsManager,
@@ -176,13 +203,13 @@ class CodespacesLifecycleClient(
                     }
                     val config = bridgeJson(origin, "/health/config")
                     val configBody = config.second
-                    check(config.first == 200 &&
-                        configBody.optString("status") == "configured" &&
-                        configBody.optString("database") == "ok" &&
-                        configBody.optString("managed_execution") == "configured" &&
-                        configBody.optString("per_user_terminal_isolation") in
-                            setOf("VERIFIED", "WORKER_ATTESTATION_REQUIRED")) {
-                        "Bridge durable configuration or terminal-isolation contract is not ready."
+                    check(config.first == 200 && codespacesBridgeConfigurationAllowsOriginSave(
+                        status = configBody.optString("status"),
+                        database = configBody.optString("database"),
+                        managedExecution = configBody.optString("managed_execution"),
+                        isolationStatus = configBody.optString("per_user_terminal_isolation")
+                    )) {
+                        "Bridge durable configuration is unavailable or its terminal-isolation status is unknown."
                     }
                     check(secrets.saveManagedMT5ServiceUrl(origin)) {
                         "The verified Bridge URL could not be saved in secure app storage."

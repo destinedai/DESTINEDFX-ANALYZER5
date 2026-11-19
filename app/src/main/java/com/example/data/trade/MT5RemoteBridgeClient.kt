@@ -66,6 +66,14 @@ internal fun parseVerifiedBrokerQuotes(
     return accepted
 }
 
+/**
+ * Missing or unknown isolation metadata must never be interpreted as a usable terminal host.
+ * WORKER_ATTESTATION_REQUIRED is a known non-Linux worker path; BLOCKED and unknown values fail closed.
+ */
+internal fun isManagedTerminalIsolationStatusAccepted(isolationStatus: String): Boolean =
+    isolationStatus.trim().uppercase(Locale.ROOT) in
+        setOf("VERIFIED", "WORKER_ATTESTATION_REQUIRED")
+
 class MT5RemoteBridgeClient(
     private val secrets: SecretsManager,
     profile: String,
@@ -264,8 +272,8 @@ class MT5RemoteBridgeClient(
                 serviceConfiguration.serviceStatus == "configured" &&
                 serviceConfiguration.database == "ok" && serviceConfiguration.managedExecution == "configured"
         ) { "SERVICE_CONFIGURATION_NOT_READY: the managed bridge database and execution configuration must be ready before broker credentials are submitted." }
-        require(serviceConfiguration.perUserTerminalIsolation != "BLOCKED") {
-            "PER_USER_TERMINAL_ISOLATION_REQUIRED: this Linux host uses one shared terminal and cannot safely log in separate user accounts. Use a verified per-user terminal-slot host."
+        require(isManagedTerminalIsolationStatusAccepted(serviceConfiguration.perUserTerminalIsolation)) {
+            "PER_USER_TERMINAL_ISOLATION_REQUIRED: this host has not attested an accepted per-user MT5 terminal-isolation path. Broker credentials were not submitted."
         }
         require(accessType == "MASTER" || accessType == "INVESTOR")
         require(brokerBrand in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }

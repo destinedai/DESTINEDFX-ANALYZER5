@@ -20,6 +20,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.codespaces.CodespacesLifecycleClient
+import com.example.data.codespaces.codespacesBridgeConfigurationAllowsOriginSave
+import com.example.data.codespaces.codespacesBridgeIsolationNotice
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.security.SecretsManager
 import kotlinx.coroutines.launch
@@ -28,7 +30,8 @@ import kotlinx.coroutines.launch
 fun CodespacesHostControls(
     secrets: SecretsManager,
     bridgeClient: MT5RemoteBridgeClient,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onBridgeOriginDiscovered: (String) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
@@ -147,10 +150,16 @@ fun CodespacesHostControls(
                             val origin = github.discoverAndSaveBridge()
                             val configuration = bridgeClient.checkServiceConfiguration()
                             check(configuration.httpReachable && configuration.httpStatus == 200 &&
-                                configuration.database == "ok" && configuration.managedExecution == "configured") {
-                                "Bridge URL was discovered, but the Android service-configuration check did not pass."
+                                codespacesBridgeConfigurationAllowsOriginSave(
+                                    configuration.serviceStatus,
+                                    configuration.database,
+                                    configuration.managedExecution,
+                                    configuration.perUserTerminalIsolation
+                                )) {
+                                "Bridge URL was discovered, but Android could not verify the Bridge configuration and isolation status."
                             }
-                            message = "Bridge URL automatically discovered, health-checked and saved: $origin · host remains EPHEMERAL/DEMO · MT5 account heartbeat and broker acceptance are still separate checks."
+                            onBridgeOriginDiscovered(origin)
+                            message = "Bridge URL automatically discovered, health-checked and connected to the Bot: $origin · ${codespacesBridgeIsolationNotice(configuration.perUserTerminalIsolation)} · host remains EPHEMERAL/DEMO; broker heartbeat and DEMO acceptance are separate checks."
                         } catch (error: Exception) {
                             message = error.message ?: "Codespaces START was not confirmed."
                             authorized = secrets.getCodespacesGitHubAccessToken().isNotBlank()
@@ -198,10 +207,16 @@ fun CodespacesHostControls(
                         val origin = github.discoverAndSaveBridge()
                         val configuration = bridgeClient.checkServiceConfiguration()
                         check(configuration.httpReachable && configuration.httpStatus == 200 &&
-                            configuration.database == "ok" && configuration.managedExecution == "configured") {
-                            "Bridge health passed, but Android configuration verification failed."
+                            codespacesBridgeConfigurationAllowsOriginSave(
+                                configuration.serviceStatus,
+                                configuration.database,
+                                configuration.managedExecution,
+                                configuration.perUserTerminalIsolation
+                            )) {
+                            "Bridge health passed, but Android could not verify the Bridge configuration and isolation status."
                         }
-                        message = "Bridge URL discovered, health-checked and saved: $origin · EPHEMERAL/DEMO only."
+                        onBridgeOriginDiscovered(origin)
+                        message = "Bridge URL discovered, health-checked and connected to the Bot: $origin · ${codespacesBridgeIsolationNotice(configuration.perUserTerminalIsolation)} · EPHEMERAL/DEMO only."
                     } catch (error: Exception) {
                         message = error.message ?: "Automatic Bridge URL discovery failed."
                     } finally {

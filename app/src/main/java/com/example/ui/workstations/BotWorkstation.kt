@@ -337,7 +337,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     OutlinedButton(onClick = { showBridgeDetails = !showBridgeDetails }, modifier = Modifier.fillMaxWidth().testTag("bridge_setup_details_toggle")) {
                         Text(if (showBridgeDetails) "HIDE CONNECTION DETAILS" else "CONNECTION SETUP & POSITION DETAILS", fontSize = 10.sp)
                     }
-                    CodespacesHostControls(secrets = bridgeSecrets, bridgeClient = bridgeClient)
+                    CodespacesHostControls(
+                        secrets = bridgeSecrets,
+                        bridgeClient = bridgeClient,
+                        onBridgeOriginDiscovered = { origin ->
+                            // The child control saves the same encrypted origin used by bridgeClient.
+                            // Keep the Bot's editable field and visible snapshot in sync with that connection.
+                            managedBridgeUrlInput = origin
+                            bridgeSnapshot = null
+                        }
+                    )
                     if (showBridgeDetails) {
                     val news = bridgeSnapshot?.newsVerdict.takeIf { verifiedRemoteSnapshotForBot != null }
                     val newsStatus = news?.optString("status", "UNKNOWN")?.uppercase() ?: "UNKNOWN"
