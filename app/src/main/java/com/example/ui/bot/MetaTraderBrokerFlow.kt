@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -236,7 +237,12 @@ fun MetaTraderBrokerFlow(
                     FlowPage.ACCOUNT -> selected?.displayName ?: "Account"
                     else -> selected?.displayName ?: "Account"
                 },
-                color = TextPrimary, fontSize = 22.sp, modifier = Modifier.weight(1f).padding(start = 12.dp),
+                color = TextPrimary,
+                fontSize = 18.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(start = 12.dp).testTag("broker_flow_header_title"),
             )
             if (page == FlowPage.ACCOUNTS) {
                 TextButton(onClick = { page = FlowPage.SETTINGS }, modifier = Modifier.height(48.dp).testTag("settings")) {
