@@ -56,3 +56,18 @@ Updated: 2026-11-19
 4. Perform owner-side Linux slot acceptance on the actual Codespace: verify at least two separate DEMO pairings receive distinct OS UIDs, slot roots, Wine prefixes, portable terminal trees, Xauthority files and Xvfb displays; confirm the root agent verifies each running terminal PID/start-time; exercise revoke/re-enrolment and prove one user's lifecycle cannot stop or inspect another user's terminal. The legacy single-terminal systemd worker is not evidence of this acceptance.
 5. On an owner-controlled DEMO account, complete broker login, identity-matched fresh EA heartbeat, quote verification, one explicitly approved DEMO order, broker deal/ticket evidence, SL/TP, close, history reconciliation, restart/reconnect, and duplicate-suppression checks. No broker credentials are requested in chat or stored in the repository.
 6. Keep production deployment, persistent-host acceptance, management-to-Bridge trust configuration, production signing, and any reconsideration of LIVE separate from this DEMO/test work. Do not merge or mark the PR ready solely because CI is green.
+
+
+## Live Codespaces two-user runtime acceptance
+
+The offline CI suite validates the isolation code and its failure guards; it does not establish that two real MT5 terminals are running as separate operating-system users on the owner's Codespaces host. A read-only runtime audit is now provided at `scripts/linux-host/accept_two_user_runtime.py`.
+
+After two different broker pairings have each been provisioned as DEMO and have reached `READY` on the actual Codespaces host, run from the checked-out repository:
+
+```bash
+sudo -E python3 scripts/linux-host/accept_two_user_runtime.py --expected-users 2
+```
+
+The script fails closed unless it can verify at least two READY slot manifests; distinct pairing/job IDs, Unix usernames and UIDs, Wine prefixes, portable terminal trees, Xauthority files, Xvfb displays and real process identities; root-agent reservation checks; per-slot ownership and restrictive permissions; denial of cross-user Xauthority reads and writes; removal of startup credential files; and a healthy loopback host-agent report. It emits sanitized JSON and does not print account identifiers or credentials.
+
+This audit is strictly read-only: it does not create users, launch or stop MT5, revoke pairings, modify host files, or submit trades. It must be run on the real Codespaces host while both DEMO sessions are running. A passing unit test or hosted GitHub runner cannot substitute for that live-host result. Android API 34 instrumentation and the captured Bot UI screen evidence remain separate gates; screenshots alone do not prove MT5 Android feature parity.
