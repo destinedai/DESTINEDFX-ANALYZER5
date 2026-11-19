@@ -51,10 +51,13 @@ class DerivDemoBotService : Service() {
         private const val STATUS_REASON = "service_status_reason"
         private const val MAX_RECONNECT_ATTEMPTS = 5
 
-        private fun secureStore(context: Context): com.example.security.SecretsManager? =
-            runCatching { com.example.security.SecretsManager(context.applicationContext) }
-                .getOrNull()
-                ?.takeIf { it.isSecureStorageAvailable }
+        private fun secureStore(context: Context): com.example.security.SecretsManager? {
+            val applicationStore = (context.applicationContext as? MyApplication)
+                ?.let { app -> runCatching { app.secretsManager }.getOrNull() }
+            val store = applicationStore
+                ?: runCatching { com.example.security.SecretsManager(context.applicationContext) }.getOrNull()
+            return store?.takeIf { it.isSecureStorageAvailable }
+        }
         private fun derivUtcDayKey(nowMs: Long = System.currentTimeMillis()): String {
             val formatter = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
             formatter.timeZone = java.util.TimeZone.getTimeZone("UTC")
