@@ -138,10 +138,12 @@ class SecretsManager internal constructor(
             migrateLegacyTradeSyncPreferences()
             migrateLegacyTradeReportPreferences()
             migrateLegacyMt5RiskAlertPreferences()
-            migrateLegacyCrashLog(ctx.filesDir)
             // Remove legacy operator-entered balance hints; they are not current broker evidence.
             prefs.edit().remove(MT5_BALANCE).commit()
         }
+        // Delete the old unencrypted crash file even when secure storage is unavailable.
+        // In that case the diagnostic is discarded instead of retained in plaintext.
+        migrateLegacyCrashLog(ctx.filesDir)
     }
 
     /**
