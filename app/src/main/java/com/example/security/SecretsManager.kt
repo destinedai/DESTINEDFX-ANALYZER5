@@ -44,7 +44,6 @@ class SecretsManager internal constructor(
         private const val MT5_LAST_LOGIN_MS = "mt5_last_login_ms"
         private const val OANDA_KEY = "oanda_api_key"
         private const val OANDA_ACC = "oanda_account_id"
-        private const val CONFIGURED_EQUITY = "configured_equity"
         private const val SELECTED_STRATEGY = "selected_strategy_id"
         private const val BROKER_SYMBOL_OVERRIDES = "broker_symbol_overrides"
         private const val DERIV_API_TOKEN = "deriv_api_token" // legacy, migrated on first read
@@ -139,7 +138,7 @@ class SecretsManager internal constructor(
             migrateLegacyTradeReportPreferences()
             migrateLegacyMt5RiskAlertPreferences()
             // Remove legacy operator-entered balance hints; they are not current broker evidence.
-            prefs.edit().remove(MT5_BALANCE).commit()
+            prefs.edit().remove(MT5_BALANCE).remove("configured_equity").commit()
         }
         // Delete the old unencrypted crash file even when secure storage is unavailable.
         // In that case the diagnostic is discarded instead of retained in plaintext.
@@ -605,7 +604,6 @@ class SecretsManager internal constructor(
     fun saveMT5LastLoginMs(v: Long): Boolean = isSecureStorageAvailable && v >= 0L && prefs.edit().putLong(MT5_LAST_LOGIN_MS, v).commit()
     fun saveOandaApiKey(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(OANDA_KEY, v).commit()
     fun saveOandaAccountId(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(OANDA_ACC, v).commit()
-    fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
     fun saveBotSymbol(v: String) { if (isSecureStorageAvailable && v.isNotBlank()) prefs.edit().putString(BOT_SYMBOL, v.trim()).apply() }
     fun getBotSymbol(): String = if (isSecureStorageAvailable) prefs.getString(BOT_SYMBOL, "EUR/USD") ?: "EUR/USD" else "EUR/USD"
@@ -1188,7 +1186,6 @@ class SecretsManager internal constructor(
     fun getMT5LastLoginMs(): Long      = prefs.getLong(MT5_LAST_LOGIN_MS, 0L)
     fun getOandaApiKey(): String       = prefs.getString(OANDA_KEY, "") ?: ""
     fun getOandaAccountId(): String    = prefs.getString(OANDA_ACC, "") ?: ""
-    fun getConfiguredEquity(): Double  = prefs.getString(CONFIGURED_EQUITY, "0.0")?.toDoubleOrNull() ?: 0.0
     fun getSelectedStrategy(): String  = prefs.getString(SELECTED_STRATEGY, "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0"
 
 
