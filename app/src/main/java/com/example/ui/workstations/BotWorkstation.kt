@@ -228,12 +228,24 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                     lastProcessedSessionSnapshot = sessionSnapshotKey
                     runCatching {
-                        val syncPrefs = reportContext.getSharedPreferences("destinedfx_trade_sync", android.content.Context.MODE_PRIVATE)
-                        val syncKey = bridgeProfileKey.lowercase()
-                        val records = mutableListOf<JSONObject>(); var cursor = syncPrefs.getInt("${syncKey}_cursor", 0); var updatedAfter = syncPrefs.getString("${syncKey}_watermark", "0")?.toDoubleOrNull() ?: 0.0; var next: Int; var watermark = updatedAfter
-                        do { val page = bridgeClient.tradeHistory(cursor, updatedAfter); next = page.cursor; watermark = maxOf(watermark, page.watermark); records += page.trades; if (next <= cursor) break; cursor = next } while (true)
+                        val secureStore = viewModel.app.secretsManager
+                        val records = mutableListOf<JSONObject>()
+                        var cursor = secureStore.getTradeSyncCursor(bridgeProfileKey)
+                        val updatedAfter = secureStore.getTradeSyncWatermark(bridgeProfileKey)
+                        var next: Int
+                        var watermark = updatedAfter
+                        do {
+                            val page = bridgeClient.tradeHistory(cursor, updatedAfter)
+                            next = page.cursor
+                            watermark = maxOf(watermark, page.watermark)
+                            records += page.trades
+                            if (next <= cursor) break
+                            cursor = next
+                        } while (true)
                         val result = TradeReportManager.sync(reportContext, records)
-                        syncPrefs.edit().putInt("${syncKey}_cursor", cursor).putString("${syncKey}_watermark", watermark.toString()).apply()
+                        check(secureStore.saveTradeSyncProgress(bridgeProfileKey, cursor, watermark)) {
+                            "Encrypted trade synchronization checkpoint could not be saved."
+                        }
                         reportStatus = "Trade reports: ${result.generated} synchronized/generated, ${result.failed} failed"
                     }.onFailure { reportStatus = "Trade reports: sync unavailable; retrying (${it.javaClass.simpleName})" }
                     val cmd = fresh.raw.optJSONObject("last_command")
