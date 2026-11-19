@@ -28,7 +28,7 @@ class CoreWorkspaceScreenshotTest {
     val composeRule = createAndroidComposeRule<WorkspaceScreenshotActivity>()
 
     @Test
-    fun capturesSixDedicatedWorkspacesAtCompactAndStandardPhoneWidths() {
+    fun capturesAllAppWorkspacesAtCompactAndStandardPhoneWidths() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val outputDirectory = File(instrumentation.targetContext.filesDir, "ui-review")
         outputDirectory.deleteRecursively()
