@@ -11,6 +11,8 @@ import com.example.data.broker.LoginMode
 import com.example.data.broker.SavedBrokerAccountProfile
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.io.File
+import com.destinedfx.core.security.Redactor
 
 /**
  * Institutional Keystore-backed secrets manager.
@@ -101,6 +103,7 @@ class SecretsManager internal constructor(
         private const val TRADE_SYNC_PREFIX = "trade_sync_v1_"
         private const val TRADE_REPORT_FINGERPRINT_PREFIX = "trade_report_fingerprint_v1_"
         private const val MT5_RISK_ALERT_PREFIX = "mt5_risk_alert_v1_"
+        private const val LAST_CRASH_LOG = "last_crash_log_encrypted_v1"
     }
 
     val isSecureStorageAvailable: Boolean
@@ -135,6 +138,7 @@ class SecretsManager internal constructor(
             migrateLegacyTradeSyncPreferences()
             migrateLegacyTradeReportPreferences()
             migrateLegacyMt5RiskAlertPreferences()
+            migrateLegacyCrashLog(ctx.filesDir)
             // Remove legacy operator-entered balance hints; they are not current broker evidence.
             prefs.edit().remove(MT5_BALANCE).commit()
         }
@@ -367,6 +371,33 @@ class SecretsManager internal constructor(
     fun markMt5DailyRiskAlertSent(profile: String, day: String, threshold: Int): Boolean =
         isSecureStorageAvailable && prefs.edit()
             .putBoolean(mt5RiskAlertKey(profile, day, threshold), true).commit()
+
+    private fun migrateLegacyCrashLog(directory: File) {
+        val legacy = File(directory, "last_crash.txt")
+        if (!legacy.isFile) return
+        runCatching {
+            val text = legacy.readText().take(16_000)
+            if (text.isNotBlank() && !prefs.contains(LAST_CRASH_LOG)) {
+                saveLastCrashLog(text)
+            }
+        }
+        // Never leave the old unencrypted diagnostic file behind, including on an
+        // installation where Android Keystore is unavailable.
+        runCatching { legacy.delete() }
+    }
+
+    fun saveLastCrashLog(text: String): Boolean {
+        if (!isSecureStorageAvailable || text.isBlank()) return false
+        val sanitized = Redactor.redact(text).take(16_000)
+        if (sanitized.isBlank()) return false
+        return prefs.edit().putString(LAST_CRASH_LOG, sanitized).commit()
+    }
+
+    fun getLastCrashLog(): String? =
+        if (isSecureStorageAvailable) prefs.getString(LAST_CRASH_LOG, null)?.takeIf { it.isNotBlank() } else null
+
+    fun clearLastCrashLog(): Boolean =
+        isSecureStorageAvailable && prefs.edit().remove(LAST_CRASH_LOG).commit()
 
     fun saveCTraderOAuth(
         clientId: String,
