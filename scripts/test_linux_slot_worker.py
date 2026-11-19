@@ -73,6 +73,16 @@ def test_slot_worker_internal_agent_request_strips_health_ready_suffix(monkeypat
     assert requests == ["http://127.0.0.1:8787/internal/slot/reservation"]
 
 
+def test_slot_worker_rejects_non_loopback_host_agent_url(monkeypatch):
+    monkeypatch.setattr(linux_slot_worker, "HOST_AGENT_URL", "https://attacker.example/health/ready")
+    try:
+        linux_slot_worker._agent("/internal/slot/reservation", {})
+    except linux_slot_worker.SlotWorkerError as exc:
+        assert exc.code == "HOST_AGENT_ROUTE_INVALID"
+    else:
+        raise AssertionError("Root slot attestations must remain on the loopback host agent")
+
+
 def test_slot_file_writer_atomically_replaces_existing_marker(monkeypatch, tmp_path):
     target = tmp_path / "terminal" / ".destinedfx-worker.json"
     target.parent.mkdir(parents=True)
