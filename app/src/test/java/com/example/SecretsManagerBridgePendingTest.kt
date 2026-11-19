@@ -257,7 +257,7 @@ class SecretsManagerBridgePendingTest {
         }
         assertTrue(manager.saveDerivBotRecoveryConfiguration("R_100", "smc-confluence-1.0.0", "M15"))
         assertTrue(manager.setDerivBotRecoveryEnabled(true))
-        assertFalse(manager.saveDerivBotRecoveryConfiguration("R_100", "bad\\nstrategy", "M15"))
+        assertFalse(manager.saveDerivBotRecoveryConfiguration("R_100", "bad\nstrategy", "M15"))
         assertTrue(manager.saveTradeSyncProgress("FBS_DEMO", 3, 100.5))
         assertEquals(3, manager.getTradeSyncCursor("FBS_DEMO"))
         assertEquals(100.5, manager.getTradeSyncWatermark("FBS_DEMO"), 0.0)
