@@ -35,9 +35,8 @@ internal fun manualPlanRewardToRisk(entry: Double, stopLoss: Double, takeProfit:
 }
 
 /**
- * Dedicated Risk-Reward & Position Sizing Calculator.
- * Labels demo equity explicitly and verifies that risk does not exceed 1% of equity.
- * Displays calculated vs final lots, tick size, tick value, and estimated loss at SL.
+ * Hypothetical risk/reward calculator. Manual equity is a scenario input only:
+ * it is never persisted as account balance and cannot authorize an execution.
  */
 @Composable
 fun RiskRewardCalculatorComponent(
@@ -83,7 +82,7 @@ fun RiskRewardCalculatorComponent(
 
     val sizingResult = remember(equity, riskPct, entry, sl, spec) {
         if (spec != null && entry > 0.0 && sl > 0.0 && equity > 0.0 && riskIsValid) {
-            val acc = AccountState(balance = equity, equity = equity, freeMargin = equity, leverage = 100, currency = "USD")
+            val acc = AccountState(balance = equity, equity = equity, freeMargin = null, leverage = null, currency = "USD")
             RiskEngine.positionSize(acc, riskPct, entry, sl, spec)
         } else null
     }
@@ -153,11 +152,8 @@ fun RiskRewardCalculatorComponent(
             ) {
                 OutlinedTextField(
                     value = equityText,
-                    onValueChange = {
-                        equityText = it
-                        it.toDoubleOrNull()?.let { v -> viewModel.saveConfiguredEquity(v) }
-                    },
-                    label = { Text("Manual Equity (USD)") },
+                    onValueChange = { equityText = it },
+                    label = { Text("Scenario equity (USD)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1.2f),
                     singleLine = true
@@ -171,6 +167,13 @@ fun RiskRewardCalculatorComponent(
                     singleLine = true
                 )
             }
+
+            Text(
+                "SCENARIO ONLY · This manually entered equity is not a broker balance, is not synced to the Bot, and cannot authorize an order.",
+                fontSize = 10.sp,
+                color = WarningAmber,
+                lineHeight = 14.sp
+            )
 
             // Price Inputs: Entry, SL, TP
             Row(
@@ -210,7 +213,7 @@ fun RiskRewardCalculatorComponent(
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
-                    Text("Max Allowed Loss (1%):", fontSize = 11.sp, color = TextSecondary)
+                    Text("Scenario max loss (1%):", fontSize = 11.sp, color = TextSecondary)
                     Text(
                         "$${String.format(Locale.US, "%.2f", maxRiskDollars)}",
                         fontSize = 15.sp,
@@ -267,11 +270,11 @@ fun RiskRewardCalculatorComponent(
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("FINAL POSITION SIZE:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) ProfitGreen else LossRed)
+                                Text("SCENARIO LOT ESTIMATE:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) ProfitGreen else LossRed)
                                 Text("${gatedSizingResult.lots} LOTS (stepped down)", fontSize = 13.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextPrimary)
                             }
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Estimated Loss at SL:", fontSize = 11.sp, color = TextSecondary)
+                                Text("Scenario loss at SL:", fontSize = 11.sp, color = TextSecondary)
                                 Text("$${String.format(Locale.US, "%.2f", gatedSizingResult.moneyRiskActual)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) TextPrimary else LossRed)
                             }
                             Text(
@@ -318,7 +321,7 @@ fun RiskRewardCalculatorComponent(
                             .padding(12.dp)
                     ) {
                         Text(
-                            text = "Enter valid Entry and Stop Loss prices to compute lot sizing.",
+                            text = "Enter scenario equity, Entry and Stop Loss to calculate a hypothetical size. Broker account conditions are not used.",
                             fontSize = 11.sp,
                             color = TextSecondary
                         )
