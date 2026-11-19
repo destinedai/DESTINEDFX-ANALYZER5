@@ -545,7 +545,9 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     assert res.status_code==200 and res.json()['account']=={'login':'99881','server':'Broker','password':'topsecret','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','cost_model':'OBSERVED_ROUND_TURN','commission_per_lot':0.0,'cost_evidence':''}
     state=client.get('/v1/app/state',headers=ah).json()['managed_execution']
     assert state['worker_status']=='LEASED' and state['status']!='READY'
-    assert client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True}).status_code==202
+    blocked=client.post('/v1/app/managed-account',headers=ah,json={'login':'98765','server':'S','password':'p','access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True})
+    assert blocked.status_code==409
+    assert blocked.json()['detail']['code']=='PAIRING_TERMINAL_ALREADY_ACTIVE'
 
 def test_worker_account_mode_unverified_failure_is_reported_safely(monkeypatch):
     managed_env(monkeypatch)
@@ -1287,6 +1289,10 @@ def test_profile_reenrollment_invalidates_associated_live_lease(monkeypatch):
         'Authorization':'Bearer '+pairing['demo_app_token'],
         'X-Management-Identity':management_identity_assertion(),
     }
+    # Simulate the worker-confirmed completion of this demo terminal's revoke.
+    # Re-enrolment must not replace credentials while its prior terminal is active.
+    with app.tx(True) as c:
+        c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE id=?",(job,))
     re_enrolled=client.post('/v1/app/managed-account',headers=demo_headers,json={
         'login':'600001','server':'Broker-Demo','password':'new-demo-password',
         'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True,
@@ -1426,6 +1432,9 @@ def test_live_profile_reenrollment_clears_its_own_server_lease(monkeypatch):
     assert authorize_live_fixture(pairing,headers,job,actual).status_code==200
     before=client.get('/v1/app/state',headers=headers).json()
     assert before['managed_execution']['live_authorized'] is True
+    # Only a completed worker revoke frees this pairing for credential rotation.
+    with app.tx(True) as c:
+        c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE id=?",(job,))
     re_enrolled=client.post('/v1/app/managed-account',headers=headers,json={
         'login':actual['login'],'server':actual['server'],'password':'rotated-live-password',
         'access_type':'MASTER','account_mode':'LIVE','broker_brand':'FBS','consent':True,
