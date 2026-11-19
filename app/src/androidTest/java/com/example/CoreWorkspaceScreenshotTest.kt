@@ -60,6 +60,16 @@ class CoreWorkspaceScreenshotTest {
                         }.isSuccess
                     }
                     composeRule.onNodeWithTag("workspace_header_title").assertIsDisplayed()
+                    if (screen.title == "Bot") {
+                        val accountsTitle = composeRule.onNodeWithTag("broker_flow_header_title")
+                        accountsTitle.assertIsDisplayed()
+                        accountsTitle.assertTextEquals("Accounts")
+                        val headerHeightPx = accountsTitle.fetchSemanticsNode().boundsInRoot.height
+                        assertTrue(
+                            "Broker Accounts title wrapped on ${widthDp}dp phone viewport",
+                            headerHeightPx <= 28f,
+                        )
+                    }
                     composeRule.waitForIdle()
                     SystemClock.sleep(150)
                     val image = instrumentation.uiAutomation.takeScreenshot()
