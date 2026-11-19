@@ -47,10 +47,14 @@ class DerivDemoBotService : Service() {
         const val EXTRA_TIMEFRAME = "timeframe"
         private const val CHANNEL_ID = "deriv_demo_bot"
         private const val NOTIFICATION_ID = 1701
-        private const val PREFS = "deriv_bot_config"
         private const val STATUS_STATE = "service_status_state"
         private const val STATUS_REASON = "service_status_reason"
         private const val MAX_RECONNECT_ATTEMPTS = 5
+
+        private fun secureStore(context: Context): com.example.security.SecretsManager? =
+            runCatching { com.example.security.SecretsManager(context.applicationContext) }
+                .getOrNull()
+                ?.takeIf { it.isSecureStorageAvailable }
         private fun derivUtcDayKey(nowMs: Long = System.currentTimeMillis()): String {
             val formatter = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
             formatter.timeZone = java.util.TimeZone.getTimeZone("UTC")
@@ -73,9 +77,9 @@ class DerivDemoBotService : Service() {
 
         fun restorePersistedStatus(context: Context) {
             if (_state.value in setOf("STARTING", "CONNECTING", "RECONCILING", "RUNNING")) return
-            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val savedState = prefs.getString(STATUS_STATE, "STOPPED").orEmpty()
-            val savedReason = prefs.getString(STATUS_REASON, "BOT NOT RUNNING — not started").orEmpty()
+            val secure = secureStore(context)
+            val savedState = secure?.getDerivBotServiceState() ?: "STOPPED"
+            val savedReason = secure?.getDerivBotServiceReason() ?: "BOT NOT RUNNING — secure storage unavailable"
             if (savedState in setOf("STARTING", "CONNECTING", "RECONCILING", "RUNNING")) {
                 publishStatus(context, "STOPPED", "BOT NOT RUNNING — previous service state was not re-verified after process restart. Tap Start to reconnect.")
             } else {
@@ -87,10 +91,7 @@ class DerivDemoBotService : Service() {
         private fun publishStatus(context: Context, state: String, reason: String, disableRecovery: Boolean = false) {
             _state.value = state
             _statusReason.value = reason
-            val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putString(STATUS_STATE, state).putString(STATUS_REASON, reason)
-            if (disableRecovery) editor.putBoolean("enabled", false)
-            editor.apply()
+            secureStore(context)?.saveDerivBotServiceStatus(state, reason, disableRecovery)
         }
 
         fun start(context: android.content.Context, symbol: String, strategy: String, timeframe: String) {
@@ -167,7 +168,7 @@ class DerivDemoBotService : Service() {
                     !DerivMultiplierRules.isSupportedUnderlying(symbol) ||
                     strategy !in StrategyRegistry.managedStrategyIds ||
                     Timeframe.parse(timeframe) == null) {
-                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
+                    (application as? MyApplication)?.secretsManager?.setDerivBotRecoveryEnabled(false)
                     stopSafely("BOT NOT RUNNING — incomplete or unsupported start intent; trading remains stopped")
                     return START_NOT_STICKY
                 }
@@ -186,9 +187,13 @@ class DerivDemoBotService : Service() {
                     stopSafely("BOT NOT RUNNING — select DEMO and complete current account verification and explicit acceptance first")
                     return START_NOT_STICKY
                 }
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .putString(EXTRA_SYMBOL, symbol).putString(EXTRA_STRATEGY, strategy)
-                    .putString(EXTRA_TIMEFRAME, timeframe).putBoolean("enabled", true).apply()
+                val secure = startApp?.secretsManager
+                if (secure == null || !secure.isSecureStorageAvailable ||
+                    !secure.saveDerivBotRecoveryConfiguration(symbol, strategy, timeframe) ||
+                    !secure.setDerivBotRecoveryEnabled(true)) {
+                    stopSafely("BOT NOT RUNNING — encrypted Bot recovery settings could not be saved; trading remains stopped")
+                    return START_NOT_STICKY
+                }
                 update("STARTING — verifying selected account; no order requests will be sent")
                 loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
             }
@@ -197,17 +202,17 @@ class DerivDemoBotService : Service() {
                 // persisted REAL configuration into a new live session.
                 val app = application as? MyApplication
                 val mode = app?.secretsManager?.getDerivAccountMode()?.lowercase()
-                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-                val symbol = prefs.getString(EXTRA_SYMBOL, null)?.trim().orEmpty()
-                val strategy = prefs.getString(EXTRA_STRATEGY, null)?.trim().orEmpty()
-                val timeframe = prefs.getString(EXTRA_TIMEFRAME, null)?.trim().orEmpty()
+                val secure = app?.secretsManager
+                val symbol = secure?.getDerivBotRecoverySymbol().orEmpty()
+                val strategy = secure?.getDerivBotRecoveryStrategy().orEmpty()
+                val timeframe = secure?.getDerivBotRecoveryTimeframe().orEmpty()
                 val hasCredentials = app?.secretsManager?.getDerivApiToken("demo")?.isNotBlank() == true &&
                     app?.secretsManager?.getDerivAppId()?.isNotBlank() == true &&
                     app?.secretsManager?.getDerivCredentialGeneration("demo")?.isNotBlank() == true &&
                     app?.let { runCatching { it.modeArmingPolicy }.isSuccess } == true
                 val accepted = app?.secretsManager?.hasCurrentDerivDemoAcceptance() == true
                 if (DerivBotRecoveryPolicy.canRecoverAfterProcessDeath(
-                        mode.orEmpty(), prefs.getBoolean("enabled", false), hasCredentials, accepted,
+                        mode.orEmpty(), secure?.isDerivBotRecoveryEnabled() == true, hasCredentials, accepted,
                         symbol, strategy, timeframe, hasNotificationPermission(this)
                     )) {
                     stopRequested = false
@@ -677,7 +682,7 @@ class DerivDemoBotService : Service() {
 
     private fun stopSafely(message: String = "Stopped — no new entry requests") {
         stopRequested = true
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", false).apply()
+        (application as? MyApplication)?.secretsManager?.setDerivBotRecoveryEnabled(false)
         loopJob?.cancel()
         loopJob = null
         healthJob?.cancel()
