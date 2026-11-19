@@ -36,6 +36,19 @@ val managementApiOrigin = providers.gradleProperty("managementApiOrigin").orNull
     ?.takeIf { it.isNotBlank() }
   ?: "__CONFIGURATION_REQUIRED__"
 val managementApiOriginBuildValue = managementApiOrigin.replace("\\", "\\\\").replace("\"", "\\\"")
+val codespacesGithubClientIdRaw = providers.gradleProperty("codespacesGithubClientId").orNull?.trim()
+  ?: System.getenv("CODESPACES_GITHUB_CLIENT_ID")?.trim()
+  ?: rootProject.file(".env").takeIf { it.isFile }?.readLines()
+    ?.firstOrNull { it.trim().startsWith("CODESPACES_GITHUB_CLIENT_ID=") }
+    ?.substringAfter("=")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'")
+    .orEmpty()
+val codespacesGithubClientId = codespacesGithubClientIdRaw
+  .takeUnless { it.isBlank() || it == "__CONFIGURATION_REQUIRED__" }
+  .orEmpty()
+require(codespacesGithubClientId.isBlank() || codespacesGithubClientId.matches(Regex("[A-Za-z0-9._-]{8,128}"))) {
+  "CODESPACES_GITHUB_CLIENT_ID must be the public Client ID of your GitHub OAuth App."
+}
+val codespacesGithubClientIdBuildValue = codespacesGithubClientId.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
   namespace = "com.example"
@@ -51,6 +64,7 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
     buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
+    buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
     ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
@@ -68,6 +82,7 @@ android {
     release {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
       buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
+      buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -76,6 +91,7 @@ android {
     debug {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
       buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
+      buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
     }
   }
 
@@ -161,6 +177,9 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.security.crypto)
+  // SQLCipher encrypts all Room user/trade/execution records at rest; 4.17.0 supports Room 2 and Android API 23+.
+  implementation("net.zetetic:sqlcipher-android:4.17.0@aar")
+  implementation("androidx.sqlite:sqlite:2.6.2")
   implementation(libs.androidx.biometric)
   implementation(libs.coil.compose)
   implementation(libs.play.services.auth)

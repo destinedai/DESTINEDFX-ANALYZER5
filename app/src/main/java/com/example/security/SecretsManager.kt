@@ -10,6 +10,7 @@ import com.example.data.broker.ModeArmingAuditEvent
 import com.example.data.broker.LoginMode
 import com.example.data.broker.SavedBrokerAccountProfile
 import java.security.MessageDigest
+import java.security.SecureRandom
 
 /**
  * Institutional Keystore-backed secrets manager.
@@ -84,11 +85,18 @@ class SecretsManager internal constructor(
         private const val GITHUB_CODESPACES_ACCESS_TOKEN = "codespaces_github_access_token"
         private const val GITHUB_CODESPACES_REFRESH_TOKEN = "codespaces_github_refresh_token"
         private const val GITHUB_CODESPACES_ACCESS_EXPIRES_AT = "codespaces_github_access_expires_at"
+        private val APP_DATABASE_KEY_LOCK = Any()
+        private const val APP_DATABASE_PASSPHRASE = "app_database_passphrase_v1"
+        private const val BOT_SYMBOL = "bot_symbol_encrypted"
+        private const val BOT_STRATEGY = "bot_strategy_encrypted"
+        private const val BOT_TIMEFRAME = "bot_timeframe_encrypted"
+        private const val BOT_RISK_PERCENT = "bot_risk_percent_encrypted"
+        private const val BOT_THEME_MODE = "bot_theme_mode_encrypted"
     }
 
     val isSecureStorageAvailable: Boolean
     private val prefs: android.content.SharedPreferences
-    // Trading selections are non-secret preferences and must remain independent from Analyzer state.
+    // Legacy preference file is read once and cleared after migration into encrypted prefs.
     private val botConfigPrefs = ctx.getSharedPreferences("destinedfx_bot_config", Context.MODE_PRIVATE)
     /** Live trading authorization is deliberately process-memory-only and never restored after restart. */
     @Volatile private var derivRealLease: DerivRealAuthorizationLease? = null
@@ -108,6 +116,53 @@ class SecretsManager internal constructor(
             UnavailableSharedPreferences
         }
         isSecureStorageAvailable = prefs !== UnavailableSharedPreferences
+        if (isSecureStorageAvailable) migrateLegacyBotPreferences()
+    }
+
+    /**
+     * Returns a high-entropy SQLCipher passphrase whose source is Android Keystore-backed
+     * encrypted preferences. Existing malformed keys are never replaced automatically:
+     * doing so would make an existing encrypted database unreadable.
+     */
+    fun getOrCreateAppDatabasePassphrase(): ByteArray {
+        check(isSecureStorageAvailable) { "Secure storage is unavailable; encrypted database key cannot be loaded." }
+        synchronized(APP_DATABASE_KEY_LOCK) {
+            val stored = prefs.getString(APP_DATABASE_PASSPHRASE, null)
+            if (stored != null) {
+                check(stored.matches(Regex("[0-9a-f]{64}"))) {
+                    "Stored database key is invalid; refusing to replace it or create a new database."
+                }
+                return stored.toByteArray(Charsets.US_ASCII)
+            }
+            val random = ByteArray(32)
+            SecureRandom().nextBytes(random)
+            val encoded = random.joinToString("") { "%02x".format(it) }
+            random.fill(0)
+            check(prefs.edit().putString(APP_DATABASE_PASSPHRASE, encoded).commit()) {
+                "Encrypted database key could not be saved; database initialization is blocked."
+            }
+            return encoded.toByteArray(Charsets.US_ASCII)
+        }
+    }
+
+    private fun migrateLegacyBotPreferences() {
+        val old = botConfigPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        if (!prefs.contains(BOT_SYMBOL)) (old["symbol"] as? String)?.takeIf { it.isNotBlank() }?.let { edit.putString(BOT_SYMBOL, it) }
+        if (!prefs.contains(BOT_STRATEGY)) (old["strategy"] as? String)?.takeIf { it.isNotBlank() }?.let { edit.putString(BOT_STRATEGY, it) }
+        if (!prefs.contains(BOT_TIMEFRAME)) (old["timeframe"] as? String)?.takeIf { it.isNotBlank() }?.let { edit.putString(BOT_TIMEFRAME, it) }
+        if (!prefs.contains(BOT_RISK_PERCENT)) {
+            (old["risk_percent"] as? String)?.toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 }
+                ?.let { edit.putString(BOT_RISK_PERCENT, it.toString()) }
+        }
+        if (!prefs.contains(BOT_THEME_MODE)) {
+            (old["theme_mode"] as? String)?.takeIf { it in setOf("System", "Light", "Dark") }
+                ?.let { edit.putString(BOT_THEME_MODE, it) }
+        }
+        // Clear the legacy plaintext preference file only after the encrypted write commits.
+        if (edit.commit()) botConfigPrefs.edit().clear().commit()
     }
 
     fun saveCTraderOAuth(
@@ -311,23 +366,25 @@ class SecretsManager internal constructor(
     fun saveOandaAccountId(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(OANDA_ACC, v).commit()
     fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
-    fun saveBotSymbol(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("symbol", v.trim()).apply() }
-    fun getBotSymbol(): String = botConfigPrefs.getString("symbol", "EUR/USD") ?: "EUR/USD"
-    fun saveBotStrategy(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("strategy", v.trim()).apply() }
-    fun getBotStrategy(): String = botConfigPrefs.getString("strategy", "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0"
-    fun saveBotTimeframe(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("timeframe", v.trim()).apply() }
-    fun getBotTimeframe(): String = botConfigPrefs.getString("timeframe", "M15") ?: "M15"
+    fun saveBotSymbol(v: String) { if (isSecureStorageAvailable && v.isNotBlank()) prefs.edit().putString(BOT_SYMBOL, v.trim()).apply() }
+    fun getBotSymbol(): String = if (isSecureStorageAvailable) prefs.getString(BOT_SYMBOL, "EUR/USD") ?: "EUR/USD" else "EUR/USD"
+    fun saveBotStrategy(v: String) { if (isSecureStorageAvailable && v.isNotBlank()) prefs.edit().putString(BOT_STRATEGY, v.trim()).apply() }
+    fun getBotStrategy(): String = if (isSecureStorageAvailable) prefs.getString(BOT_STRATEGY, "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0" else "smc-confluence-1.0.0"
+    fun saveBotTimeframe(v: String) { if (isSecureStorageAvailable && v.isNotBlank()) prefs.edit().putString(BOT_TIMEFRAME, v.trim()).apply() }
+    fun getBotTimeframe(): String = if (isSecureStorageAvailable) prefs.getString(BOT_TIMEFRAME, "M15") ?: "M15" else "M15"
     fun saveBotRiskPercent(v: Double): Boolean {
-        if (!v.isFinite() || v <= 0.0 || v > 1.0) return false
-        botConfigPrefs.edit().putString("risk_percent", v.toString()).apply()
-        return true
+        if (!isSecureStorageAvailable || !v.isFinite() || v <= 0.0 || v > 1.0) return false
+        return prefs.edit().putString(BOT_RISK_PERCENT, v.toString()).commit()
     }
-    fun getBotRiskPercent(): Double = botConfigPrefs.getString("risk_percent", "0.25")?.toDoubleOrNull()
-        ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 } ?: 0.25
-    fun getThemeMode(): String = botConfigPrefs.getString("theme_mode", "System")
-        ?.takeIf { it in setOf("System", "Light", "Dark") } ?: "System"
-    fun saveThemeMode(mode: String): Boolean = mode in setOf("System", "Light", "Dark") &&
-        botConfigPrefs.edit().putString("theme_mode", mode).commit()
+    fun getBotRiskPercent(): Double = if (isSecureStorageAvailable) {
+        prefs.getString(BOT_RISK_PERCENT, "0.25")?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 } ?: 0.25
+    } else 0.25
+    fun getThemeMode(): String = if (isSecureStorageAvailable) {
+        prefs.getString(BOT_THEME_MODE, "System")?.takeIf { it in setOf("System", "Light", "Dark") } ?: "System"
+    } else "System"
+    fun saveThemeMode(mode: String): Boolean = isSecureStorageAvailable &&
+        mode in setOf("System", "Light", "Dark") && prefs.edit().putString(BOT_THEME_MODE, mode).commit()
 
     /** Management API bearer token is opaque and isolated from trading/broker credentials. */
     fun saveManagementAccessToken(token: String, expiresAtMs: Long): Boolean =

@@ -137,14 +137,15 @@ class MyApplication : Application() {
 
     fun initializeDependencies() {
         try {
-            // Initialize
-            val dbInstance = AppDatabase.getDatabase(this@MyApplication)
-            _db = dbInstance
+            // Secure storage must be initialized before Room so the database passphrase can
+            // be loaded from Android Keystore-backed encrypted preferences.
             val secrets = SecretsManager(this@MyApplication)
             _secretsManager = secrets
+            storageAvailable.value = secrets.isSecureStorageAvailable
+            val dbInstance = AppDatabase.getDatabase(this@MyApplication, secrets)
+            _db = dbInstance
             _modeArmingPolicy = ModeArmingPolicy(auditSink = secrets::appendModeArmingAudit)
             _universalConnectorDispatcher = UniversalConnectorDispatcher(emptyMap(), modeArmingPolicy)
-            storageAvailable.value = secrets.isSecureStorageAvailable
             _riskRepository = RiskRepositoryImpl(this@MyApplication)
             
             val derivMarketDataGateway = com.example.data.deriv.DerivMarketDataGateway()
