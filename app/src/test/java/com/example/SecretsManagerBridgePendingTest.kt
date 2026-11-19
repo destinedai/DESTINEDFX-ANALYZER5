@@ -205,6 +205,69 @@ class SecretsManagerBridgePendingTest {
         assertEquals("", manager.getDerivAppId())
     }
 
+    @Test fun backgroundBotAndReportStateMigratesFromLegacyPreferencesIntoEncryptedStorage() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        context.getSharedPreferences("deriv_bot_config", 0).edit()
+            .putString("symbol", "R_100")
+            .putString("strategy", "smc-confluence-1.0.0")
+            .putString("timeframe", "M15")
+            .putBoolean("enabled", true)
+            .putString("service_status_state", "STOPPED")
+            .putString("service_status_reason", "BOT NOT RUNNING — legacy fixture")
+            .commit()
+        context.getSharedPreferences("destinedfx_trade_sync", 0).edit()
+            .putInt("fbs_demo_cursor", 9)
+            .putString("fbs_demo_watermark", "1731600000.5")
+            .commit()
+        context.getSharedPreferences("destinedfx_trade_reports", 0).edit()
+            .putString("OPEN_TRADE_DEMO_fixture.pdf", "legacy-fingerprint")
+            .commit()
+        context.getSharedPreferences("mt5_daily_risk_alerts", 0).edit()
+            .putBoolean("FBS_DEMO_2026-11-19_80", true)
+            .commit()
+
+        val manager = SecretsManager(context)
+        if (!manager.isSecureStorageAvailable) return
+
+        assertEquals("R_100", manager.getDerivBotRecoverySymbol())
+        assertEquals("smc-confluence-1.0.0", manager.getDerivBotRecoveryStrategy())
+        assertEquals("M15", manager.getDerivBotRecoveryTimeframe())
+        assertTrue(manager.isDerivBotRecoveryEnabled())
+        assertEquals("STOPPED", manager.getDerivBotServiceState())
+        assertEquals("BOT NOT RUNNING — legacy fixture", manager.getDerivBotServiceReason())
+        assertEquals(9, manager.getTradeSyncCursor("FBS_DEMO"))
+        assertEquals(1731600000.5, manager.getTradeSyncWatermark("FBS_DEMO"), 0.0)
+        assertEquals("legacy-fingerprint", manager.getTradeReportFingerprint("OPEN_TRADE_DEMO_fixture.pdf"))
+        assertTrue(manager.wasMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
+
+        assertTrue(context.getSharedPreferences("deriv_bot_config", 0).all.isEmpty())
+        assertTrue(context.getSharedPreferences("destinedfx_trade_sync", 0).all.isEmpty())
+        assertTrue(context.getSharedPreferences("destinedfx_trade_reports", 0).all.isEmpty())
+        assertTrue(context.getSharedPreferences("mt5_daily_risk_alerts", 0).all.isEmpty())
+    }
+
+    @Test fun encryptedDerivBotStateAndTradeCheckpointsValidateInputs() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) {
+            assertFalse(manager.saveDerivBotRecoveryConfiguration("R_100", "smc-confluence-1.0.0", "M15"))
+            assertFalse(manager.setDerivBotRecoveryEnabled(true))
+            assertFalse(manager.saveTradeSyncProgress("FBS_DEMO", 3, 100.0))
+            assertFalse(manager.markMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
+            return
+        }
+        assertTrue(manager.saveDerivBotRecoveryConfiguration("R_100", "smc-confluence-1.0.0", "M15"))
+        assertTrue(manager.setDerivBotRecoveryEnabled(true))
+        assertFalse(manager.saveDerivBotRecoveryConfiguration("R_100", "bad\\nstrategy", "M15"))
+        assertTrue(manager.saveTradeSyncProgress("FBS_DEMO", 3, 100.5))
+        assertEquals(3, manager.getTradeSyncCursor("FBS_DEMO"))
+        assertEquals(100.5, manager.getTradeSyncWatermark("FBS_DEMO"), 0.0)
+        assertFalse(manager.saveTradeSyncProgress("FBS_DEMO", -1, 100.5))
+        assertFalse(manager.saveTradeSyncProgress("FBS_DEMO", 3, Double.NaN))
+        assertTrue(manager.markMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
+        assertTrue(manager.wasMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
+        assertFalse(manager.wasMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-20", 80))
+    }
+
     @Test fun manualMt5BalancePersistenceIsDisabledAndCannotBeReadAsBrokerEvidence() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         assertFalse(manager.saveMT5AccountBalance(12_345.67))
