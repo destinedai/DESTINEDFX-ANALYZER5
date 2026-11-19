@@ -144,4 +144,38 @@ class PresentationReadinessTest {
         assertFalse(result.tradingEligible)
         assertEquals("Not eligible to trade", result.eligibilityLabel)
     }
+    @Test
+    fun timestampedCandleSnapshotMustBeFreshForReadiness() {
+        val now = 1_800_000_000_000L
+        val fresh = deriveMarketReadiness(
+            ticker = liveTicker(now),
+            candleSource = "fixture-provider",
+            candlesAvailable = true,
+            chartDisplayed = true,
+            signal = executableSignal(now),
+            nowMs = now,
+            candleRetrievedAtMs = now - 1_000L,
+            latestClosedCandleAtMs = now - 60_000L,
+            timeframe = "M1"
+        )
+        assertTrue(fresh.candlesConfirmed)
+        assertTrue(fresh.analysisCompleted)
+        assertTrue(fresh.tradingEligible)
+
+        val staleSnapshot = deriveMarketReadiness(
+            ticker = liveTicker(now),
+            candleSource = "fixture-provider",
+            candlesAvailable = true,
+            chartDisplayed = true,
+            signal = executableSignal(now),
+            nowMs = now,
+            candleRetrievedAtMs = now - 30_001L,
+            latestClosedCandleAtMs = now - 60_000L,
+            timeframe = "M1"
+        )
+        assertFalse(staleSnapshot.candlesConfirmed)
+        assertFalse(staleSnapshot.analysisCompleted)
+        assertFalse(staleSnapshot.tradingEligible)
+    }
+
 }
