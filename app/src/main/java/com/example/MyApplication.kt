@@ -123,7 +123,9 @@ class MyApplication : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 val crashText = com.destinedfx.core.security.CrashRecorder.format(thread.name, throwable, System.currentTimeMillis())
-                com.destinedfx.core.security.CrashLogManager(filesDir).writeCrash(crashText)
+                // Crash details are redacted and retained only in Android Keystore-backed storage.
+                // If initialization has not established secure storage, do not write them in plaintext.
+                _secretsManager?.takeIf { it.isSecureStorageAvailable }?.saveLastCrashLog(crashText)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.e("MyApplication", "Crash write failed: ${e.javaClass.simpleName}")
