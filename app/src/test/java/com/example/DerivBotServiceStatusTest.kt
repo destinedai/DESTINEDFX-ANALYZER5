@@ -2,6 +2,7 @@ package com.example
 
 import androidx.test.core.app.ApplicationProvider
 import com.example.service.DerivDemoBotService
+import com.example.security.SecretsManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -22,25 +23,30 @@ class DerivBotServiceStatusTest {
 
         DerivDemoBotService.recordStartBlocked(context, reason)
 
-        val prefs = context.getSharedPreferences("deriv_bot_config", 0)
+        val secure = SecretsManager(context)
         assertEquals("STOPPED", DerivDemoBotService.state.value)
         assertEquals(reason, DerivDemoBotService.statusReason.value)
-        assertEquals(reason, prefs.getString("service_status_reason", null))
-        assertFalse(prefs.getBoolean("enabled", true))
+        if (secure.isSecureStorageAvailable) {
+            assertEquals("STOPPED", secure.getDerivBotServiceState())
+            assertEquals(reason, secure.getDerivBotServiceReason())
+            assertFalse(secure.isDerivBotRecoveryEnabled())
+        }
+        assertTrue(context.getSharedPreferences("deriv_bot_config", 0).all.isEmpty())
     }
 
     @Test
     fun previousRunningSnapshotIsNeverRestoredAsCurrentRunning() {
-        DerivDemoBotService.recordStartBlocked(context, "BOT NOT RUNNING — test reset")
-        context.getSharedPreferences("deriv_bot_config", 0).edit()
-            .putString("service_status_state", "RUNNING")
-            .putString("service_status_reason", "Running — prior process")
-            .commit()
-
+        val secure = SecretsManager(context)
+        if (!secure.isSecureStorageAvailable) return
+        assertTrue(secure.saveDerivBotRecoveryConfiguration("R_100", "smc-confluence-1.0.0", "M15"))
+        assertTrue(secure.setDerivBotRecoveryEnabled(true))
+        assertTrue(secure.saveDerivBotServiceStatus("RUNNING", "Running — prior process"))
+        
         DerivDemoBotService.restorePersistedStatus(context)
 
         assertEquals("STOPPED", DerivDemoBotService.state.value)
         assertTrue(DerivDemoBotService.statusReason.value.startsWith("BOT NOT RUNNING"))
         assertFalse(DerivDemoBotService.statusReason.value.contains("prior process"))
+        assertTrue(secure.isDerivBotRecoveryEnabled())
     }
 }
