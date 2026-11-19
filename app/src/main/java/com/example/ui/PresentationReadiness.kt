@@ -32,10 +32,13 @@ fun deriveMarketReadiness(
         nowMs - ticker.lastUpdateMillis in 0..15_000L
     val candlesConfirmed = candlesAvailable && candlesFresh && candleSource.isNotBlank()
     val currentMarketDataReady = quoteLive && candlesConfirmed
+    val signalFresh = signal?.timestamp?.let {
+        it > 0L && it <= nowMs && nowMs - it <= 15_000L
+    } == true
     // A retained signal may describe an earlier candle/quote snapshot. It cannot imply
-    // current trading eligibility after either input has gone stale or unavailable.
-    val analysisCompleted = signal != null && currentMarketDataReady
-    val tradingEligible = signal?.executable == true && currentMarketDataReady
+    // current trading eligibility after its own scan timestamp or either data input expires.
+    val analysisCompleted = signal != null && signalFresh && currentMarketDataReady
+    val tradingEligible = signal?.executable == true && signalFresh && currentMarketDataReady
     return MarketReadiness(
         quoteLive = quoteLive,
         candlesConfirmed = candlesConfirmed,
@@ -47,6 +50,7 @@ fun deriveMarketReadiness(
         chartLabel = if (chartDisplayed) "Native chart rendered" else "Chart candle rendering unverified",
         analysisLabel = when {
             signal == null -> "Analysis not completed"
+            !signalFresh -> "Prior analysis — rescan to refresh"
             !currentMarketDataReady -> "Prior analysis — waiting for fresh verified data"
             else -> "Analysis completed"
         },
