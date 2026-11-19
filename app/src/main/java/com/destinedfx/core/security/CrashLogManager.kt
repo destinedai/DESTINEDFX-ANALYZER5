@@ -34,17 +34,5 @@ class CrashLogManager(private val directory: File) {
         return null
     }
 
-    fun writeCrash(crashReport: String): Boolean {
-        return try {
-            if (!directory.exists()) {
-                directory.mkdirs()
-            }
-            val file = File(directory, CRASH_FILE_NAME)
-            file.writeText(crashReport)
-            true
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            false
-        }
-    }
-}
+    @Deprecated("Crash diagnostics must be retained through Keystore-backed SecretsManager storage.")
+    fun writeCrash(crashReport: String): Boolean = false}
