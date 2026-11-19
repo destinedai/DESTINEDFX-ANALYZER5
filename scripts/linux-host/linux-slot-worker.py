@@ -156,7 +156,12 @@ def _api(method: str, path: str, payload: dict | None = None, timeout: int = 20)
 
 
 def _agent(path: str, payload: dict, timeout: int = 5) -> dict:
-    url = f"{HOST_AGENT_URL}{path}"
+    base_url = HOST_AGENT_URL.rstrip("/")
+    if base_url.endswith("/health/ready"):
+        base_url = base_url[:-len("/health/ready")]
+    if not base_url or not path.startswith("/internal/slot/"):
+        raise SlotWorkerError("HOST_AGENT_ROUTE_INVALID")
+    url = f"{base_url}{path}"
     raw = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
     request = urllib.request.Request(
         url, data=raw,
@@ -266,11 +271,23 @@ def _attestation(job: dict, reservation: SlotReservation) -> dict[str, Any]:
 
 def _write_slot_file(reservation: SlotReservation, path: Path, text: str) -> None:
     # File content travels over stdin, never argv or process environment.
+    # Write beside the destination and atomically replace it: status markers
+    # are updated several times during a terminal lifecycle.
     code = (
-        "import os,sys; p=sys.argv[1]; "
-        "fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600); "
-        "f=os.fdopen(fd,'w',encoding='utf-8',newline='\\n'); "
-        "f.write(sys.stdin.read()); f.flush(); os.fsync(f.fileno()); f.close()"
+        "import os,sys,tempfile\n"
+        "p=sys.argv[1]; parent=os.path.dirname(p) or '.'\n"
+        "fd,tmp=tempfile.mkstemp(prefix='.'+os.path.basename(p)+'.', suffix='.tmp', dir=parent)\n"
+        "try:\n"
+        " os.fchmod(fd,0o600)\n"
+        " with os.fdopen(fd,'w',encoding='utf-8',newline='\\n') as stream:\n"
+        "  stream.write(sys.stdin.read()); stream.flush(); os.fsync(stream.fileno())\n"
+        " os.replace(tmp,p)\n"
+        " dirfd=os.open(parent,os.O_RDONLY|getattr(os,'O_DIRECTORY',0))\n"
+        " try: os.fsync(dirfd)\n"
+        " finally: os.close(dirfd)\n"
+        "finally:\n"
+        " try: os.unlink(tmp)\n"
+        " except FileNotFoundError: pass\n"
     )
     manager = _MANAGER
     manager.run_as_slot(reservation, ["python3", "-c", code, str(path)],
