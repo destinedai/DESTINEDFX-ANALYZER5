@@ -21,6 +21,19 @@ import java.util.concurrent.TimeUnit
  * components. GitHub's forwarding domain is supplied by the Codespace environment; the
  * mobile client uses the documented default and verifies it against the Bridge's host check.
  */
+/** OAuth scope needed for the Codespaces API plus rotating native-device refresh tokens. */
+internal const val CODESPACES_OAUTH_SCOPES = "codespace offline_access"
+
+internal fun hasCodespacesOAuthScope(rawScopes: String): Boolean =
+    rawScopes.split(Regex("[,\\s]+")).any { it == "codespace" }
+
+/** Reject a token response unless GitHub confirms that the OAuth app received Codespaces access. */
+private fun requireCodespacesOAuthScope(json: JSONObject) {
+    check(hasCodespacesOAuthScope(json.optString("scope"))) {
+        "GitHub did not grant the required codespace OAuth scope. Re-authorize the OAuth App and approve Codespaces access."
+    }
+}
+
 internal fun codespacesBridgeOrigin(
     codespaceName: String,
     forwardingDomain: String = "app.github.dev"
@@ -64,7 +77,7 @@ internal fun codespacesBridgeIsolationNotice(isolationStatus: String): String =
         else -> "Per-user terminal isolation is UNKNOWN; broker credential registration remains blocked."
     }
 
-/** Owner-only GitHub Codespaces lifecycle client. No GitHub App secret is packaged in the APK. */
+/** Owner-only GitHub Codespaces lifecycle client. No OAuth client secret is packaged in the APK. */
 class CodespacesLifecycleClient(
     private val secrets: SecretsManager,
     private val http: OkHttpClient = OkHttpClient.Builder()
@@ -109,7 +122,7 @@ class CodespacesLifecycleClient(
     suspend fun beginDeviceAuthorization(): DeviceAuthorization = withContext(Dispatchers.IO) {
         val body = FormBody.Builder()
             .add("client_id", clientId())
-            .add("scope", "offline_access")
+            .add("scope", CODESPACES_OAUTH_SCOPES)
             .build()
         val request = Request.Builder().url(DEVICE_CODE_URL)
             .header("Accept", "application/json").post(body).build()
@@ -297,11 +310,12 @@ class CodespacesLifecycleClient(
     }
 
     private fun saveTokenResponse(json: JSONObject) {
+        requireCodespacesOAuthScope(json)
         val access = json.optString("access_token")
         val refresh = json.optString("refresh_token")
         val expires = json.optLong("expires_in", 0L)
         require(access.isNotBlank() && refresh.isNotBlank() && expires > 0L) {
-            "GitHub did not return an expiring access token and refresh token. Ensure offline_access is enabled for this GitHub App."
+            "GitHub did not return an expiring access token and refresh token. Ensure offline_access is enabled for this OAuth App."
         }
         val expiry = System.currentTimeMillis() + expires.coerceAtMost(31_536_000L) * 1000L
         check(secrets.saveCodespacesGitHubTokens(access, refresh, expiry)) {
