@@ -335,7 +335,13 @@ fun CodespacesHostControls(
         OutlinedButton(
             enabled = !busy,
             onClick = {
-                runCatching { uriHandler.openUri("https://github.com/settings/applications") }
+                val safeClientId = clientId.trim()
+                val target = if (safeClientId.matches(Regex("[A-Za-z0-9._-]{8,128}"))) {
+                    "https://github.com/settings/connections/applications/" + safeClientId
+                } else {
+                    "https://github.com/settings/applications"
+                }
+                runCatching { uriHandler.openUri(target) }
                     .onFailure { message = "Open GitHub Settings → Applications to revoke DestinedFX's OAuth grant." }
             }
         ) { Text("GITHUB AUTHORIZATION SETTINGS", fontSize = 9.sp) }
