@@ -1268,10 +1268,18 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             InsightCard("ENGINE SAFEGUARDS & QUANT CONTROLS") {
                 InsightLine("Active Strategy", strat)
                 val verifiedDisplayBalance = verifiedRemoteSnapshotForBot?.balance?.takeIf { it.isFinite() && it >= 0.0 }
-                InsightLine(
-                    if (verifiedDisplayBalance != null) "Verified MT5 Balance" else "Configured Capital (not live balance)",
-                    if (verifiedDisplayBalance != null) "${verifiedRemoteSnapshotForBot?.currency?.takeIf { it.isNotBlank() } ?: "Currency"} ${java.lang.String.format(java.util.Locale.US, "%.2f", verifiedDisplayBalance)}" else java.lang.String.format(java.util.Locale.US, "%.2f", capital)
-                )
+                if (verifiedDisplayBalance != null) {
+                    InsightLine(
+                        "Verified MT5 Balance",
+                        "${verifiedRemoteSnapshotForBot?.currency?.takeIf { it.isNotBlank() } ?: "Currency"} ${java.lang.String.format(java.util.Locale.US, "%.2f", verifiedDisplayBalance)}"
+                    )
+                } else {
+                    InsightLine("MT5 Broker Balance", "UNAVAILABLE — fresh authenticated terminal snapshot required")
+                    InsightLine(
+                        "Configured sizing capital (not broker data)",
+                        java.lang.String.format(java.util.Locale.US, "%.2f", capital)
+                    )
+                }
                 InsightLine("NFP Safeguard", if (nfpArmed) "ARMED (High-Impact Guard Active)" else "DISARMED")
                 InsightLine("News / Halt Guard", if (isHalted) "HALTED (News Filter Lock)" else "No engine halt; broker/risk checks still apply")
                 InsightLine("Deterministic MTF Scan", if (isMultiScanning) "SCANNING (H1 / M15 / H4)" else consensusStatus)
