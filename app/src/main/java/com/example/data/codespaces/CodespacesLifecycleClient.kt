@@ -1,6 +1,7 @@
 package com.example.data.codespaces
 
 import android.net.Uri
+import com.example.BuildConfig
 import com.example.security.SecretsManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -90,7 +91,7 @@ class CodespacesLifecycleClient(
         val intervalSeconds: Long
     )
 
-    data class PollResult(val authorized: Boolean, val message: String)
+    data class PollResult(val authorized: Boolean, val message: String, val slowDown: Boolean = false)
     data class LifecycleResult(
         val accepted: Boolean,
         val codespaceName: String,
@@ -98,9 +99,12 @@ class CodespacesLifecycleClient(
         val message: String
     )
 
-    private fun clientId(): String = secrets.getCodespacesGitHubClientId()
-        .takeIf { it.isNotBlank() }
-        ?: throw IllegalStateException("Enter the GitHub App Client ID first.")
+    private fun clientId(): String =
+        BuildConfig.CODESPACES_GITHUB_CLIENT_ID.trim()
+            .takeIf { it.matches(Regex("[A-Za-z0-9._-]{8,128}")) }
+            ?: secrets.getCodespacesGitHubClientId()
+                .takeIf { it.matches(Regex("[A-Za-z0-9._-]{8,128}")) }
+            ?: throw IllegalStateException("Configure the public GitHub OAuth App Client ID in this build or enter it in the Bot host controls.")
 
     suspend fun beginDeviceAuthorization(): DeviceAuthorization = withContext(Dispatchers.IO) {
         val body = FormBody.Builder()
@@ -136,7 +140,7 @@ class CodespacesLifecycleClient(
         val json = executeJson(request, allowOAuthError = true)
         when (val error = json.optString("error")) {
             "authorization_pending" -> PollResult(false, "Waiting for GitHub authorization.")
-            "slow_down" -> PollResult(false, "GitHub requested a slower authorization check. Try again shortly.")
+            "slow_down" -> PollResult(false, "GitHub requested a slower authorization check.", slowDown = true)
             "access_denied" -> throw IllegalStateException("GitHub authorization was denied.")
             "expired_token", "incorrect_device_code" ->
                 throw IllegalStateException("The GitHub device code expired. Start authorization again.")

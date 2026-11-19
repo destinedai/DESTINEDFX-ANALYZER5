@@ -65,6 +65,8 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
         composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
         composeRule.onNodeWithTag("mt5_mode_hint_notice").assertIsDisplayed()
+        composeRule.onNodeWithTag("mt5_login_verification_path").assertIsDisplayed()
+        composeRule.onNodeWithText("TEST LOGIN & VERIFY").assertIsDisplayed()
         composeRule.onNodeWithTag("field_login").performTextInput("123456")
         composeRule.onNodeWithTag("field_password").performTextInput("fixture-password")
         composeRule.onNodeWithTag("server_field").performTextInput("Fixture-Demo")
@@ -97,5 +99,27 @@ class MetaTraderBrokerFlowTest {
             composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
             composeRule.onNodeWithTag("broker_back").performClick()
         }
+    }
+
+    @Test
+    fun brokerMetricsAreUnavailableWhenTheLastVerifiedSnapshotIsStaleOrFutureDated() {
+        val now = 1_800_000_000_000L
+        val details = VerifiedAccountDetails(
+            login = "123456",
+            server = "Broker-Demo",
+            mode = "DEMO",
+            currency = "USD",
+            balance = 1_250.0,
+            equity = 1_240.0,
+            freeMargin = 1_100.0,
+            marginLevel = 250.0,
+            leverage = 100,
+            retrievedAtMs = now - 5_000L,
+        )
+        assertEquals(1_250.0, displayableVerifiedAccountMetric(details.balance, details, now)!!, 0.0)
+        assertNull(displayableVerifiedAccountMetric(details.balance, details, now + 16_000L))
+        assertNull(displayableVerifiedAccountMetric(details.balance, details.copy(retrievedAtMs = now + 1L), now))
+        assertNull(displayableVerifiedAccountMetric(Double.NaN, details, now))
+        assertNull(displayableVerifiedAccountMetric(-1.0, details, now))
     }
 }

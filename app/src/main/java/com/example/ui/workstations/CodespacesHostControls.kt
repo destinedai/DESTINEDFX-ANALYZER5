@@ -9,6 +9,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -19,6 +20,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.BuildConfig
 import com.example.data.codespaces.CodespacesLifecycleClient
 import com.example.data.codespaces.codespacesBridgeConfigurationAllowsOriginSave
 import com.example.data.codespaces.codespacesBridgeIsolationNotice
@@ -36,12 +38,48 @@ fun CodespacesHostControls(
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
     val github = remember(secrets) { CodespacesLifecycleClient(secrets) }
-    var clientId by remember { mutableStateOf(secrets.getCodespacesGitHubClientId()) }
+    val packagedClientId = BuildConfig.CODESPACES_GITHUB_CLIENT_ID.trim()
+    var clientId by remember {
+        mutableStateOf(packagedClientId.ifBlank { secrets.getCodespacesGitHubClientId() })
+    }
     var device by remember { mutableStateOf<CodespacesLifecycleClient.DeviceAuthorization?>(null) }
     var message by remember { mutableStateOf("Connect the GitHub App once to control the DestinedFX Codespace from this phone.") }
     var busy by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(secrets.getCodespacesGitHubAccessToken().isNotBlank()) }
     var deviceCodeExpiresAt by remember { mutableStateOf(0L) }
+
+    // GitHub Device Flow is polled automatically. The user still approves the device code
+    // in GitHub's own page; the app never simulates or skips that owner consent.
+    LaunchedEffect(device?.deviceCode) {
+        val request = device ?: return@LaunchedEffect
+        val expiresAt = System.currentTimeMillis() + request.expiresInSeconds * 1_000L
+        var intervalSeconds = request.intervalSeconds.coerceIn(1L, 30L)
+        while (System.currentTimeMillis() < expiresAt) {
+            kotlinx.coroutines.delay(intervalSeconds * 1_000L)
+            if (device?.deviceCode != request.deviceCode) return@LaunchedEffect
+            try {
+                val result = github.checkDeviceAuthorization(request.deviceCode)
+                if (result.authorized) {
+                    authorized = true
+                    device = null
+                    message = result.message
+                    return@LaunchedEffect
+                }
+                message = result.message + " Approval is checked automatically."
+                if (result.slowDown) intervalSeconds = (intervalSeconds + 5L).coerceAtMost(30L)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                device = null
+                message = error.message ?: "GitHub device authorization failed."
+                return@LaunchedEffect
+            }
+        }
+        if (device?.deviceCode == request.deviceCode) {
+            device = null
+            message = "The GitHub device code expired. Tap AUTHORIZE GITHUB to start again."
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -58,38 +96,47 @@ fun CodespacesHostControls(
             fontSize = 10.sp,
             color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
         )
-        OutlinedTextField(
-            value = clientId,
-            onValueChange = { clientId = it },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !busy,
-            label = { Text("GitHub App Client ID (public)") },
-            singleLine = true
-        )
+        if (packagedClientId.isBlank()) {
+            OutlinedTextField(
+                value = clientId,
+                onValueChange = { clientId = it },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy,
+                label = { Text("GitHub App Client ID (public)") },
+                singleLine = true
+            )
+        } else {
+            Text("GitHub OAuth App Client ID: configured in this APK (public identifier; no client secret is bundled).",
+                fontSize = 10.sp, color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                enabled = !busy && secrets.isSecureStorageAvailable,
-                onClick = {
-                    if (secrets.saveCodespacesGitHubClientId(clientId)) {
-                        message = "GitHub App Client ID saved in encrypted app storage."
-                    } else {
-                        message = "Client ID was not saved. Check the value and secure storage."
+            if (packagedClientId.isBlank()) {
+                OutlinedButton(
+                    enabled = !busy && secrets.isSecureStorageAvailable,
+                    onClick = {
+                        if (secrets.saveCodespacesGitHubClientId(clientId)) {
+                            message = "GitHub App Client ID saved in encrypted app storage."
+                        } else {
+                            message = "Client ID was not saved. Check the value and secure storage."
+                        }
                     }
-                }
-            ) { Text("SAVE CLIENT ID", fontSize = 9.sp) }
+                ) { Text("SAVE CLIENT ID", fontSize = 9.sp) }
+            }
             Button(
-                enabled = !busy && clientId.isNotBlank() && secrets.isSecureStorageAvailable,
+                enabled = !busy && (packagedClientId.isNotBlank() || clientId.isNotBlank()) && secrets.isSecureStorageAvailable,
                 onClick = {
                     scope.launch {
                         busy = true
                         try {
-                            check(secrets.saveCodespacesGitHubClientId(clientId)) {
-                                "Save a valid GitHub App Client ID first."
+                            if (packagedClientId.isBlank()) {
+                                check(secrets.saveCodespacesGitHubClientId(clientId)) {
+                                    "Enter a valid public GitHub OAuth App Client ID first."
+                                }
                             }
                             val result = github.beginDeviceAuthorization()
                             device = result
                             deviceCodeExpiresAt = System.currentTimeMillis() + result.expiresInSeconds * 1000L
-                            message = "Enter the one-time code at GitHub, approve the requested Codespaces permissions, then tap CHECK AUTHORIZATION."
+                            message = "Approve the one-time device code in GitHub. This app checks authorization automatically and saves the refreshable token securely."
                         } catch (error: Exception) {
                             message = error.message ?: "GitHub device authorization could not start."
                         } finally {
@@ -110,25 +157,14 @@ fun CodespacesHostControls(
                 }
             ) { Text("OPEN GITHUB DEVICE PAGE") }
             OutlinedButton(
-                enabled = !busy && System.currentTimeMillis() < deviceCodeExpiresAt,
+                enabled = !busy,
                 onClick = {
-                    scope.launch {
-                        busy = true
-                        try {
-                            val result = github.checkDeviceAuthorization(request.deviceCode)
-                            message = result.message
-                            authorized = result.authorized
-                            if (result.authorized) device = null
-                        } catch (error: Exception) {
-                            device = null
-                            message = error.message ?: "GitHub authorization could not be completed."
-                        } finally {
-                            busy = false
-                        }
-                    }
+                    device = null
+                    message = "GitHub device authorization cancelled. No token was saved."
                 }
-            ) { Text("CHECK AUTHORIZATION") }
-            Text("The code expires in about " + (request.expiresInSeconds / 60L) + " minute(s).", fontSize = 9.sp)
+            ) { Text("CANCEL DEVICE AUTHORIZATION") }
+            Text("Expires in about " + (request.expiresInSeconds / 60L) +
+                " minute(s). Authorization is checked automatically; no repeated tap is required.", fontSize = 9.sp)
         }
 
         Text(

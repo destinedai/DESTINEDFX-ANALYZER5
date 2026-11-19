@@ -379,7 +379,10 @@ fun MetaTraderBrokerFlow(
                         colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant),
                     ) { Text("Open a real account", color = TextPrimary) }
                 }
-                Text("Login to an existing account", color = TextPrimary, fontSize = 18.sp)
+                Text(
+                    if (spec.connector == LoginConnector.MT5_TERMINAL) "Test and verify an existing MT5 broker login" else "Login to an existing account",
+                    color = TextPrimary, fontSize = 18.sp
+                )
                 if (spec.connector == LoginConnector.MT5_TERMINAL) {
                     Text(
                         "Unverified connection hint only. The terminal determines the account mode after login.",
@@ -433,9 +436,10 @@ fun MetaTraderBrokerFlow(
                         keyboardActions = loginKeyboardActions(),
                     )
                     Text(
-                        "The app securely requests the one-time Codespaces pairing approval after management sign-in. No terminal code needs to be copied.",
+                        "This test sends your broker login through the authenticated HTTPS Bridge to your owner-authorized host. The MT5 terminal performs the actual broker login; the EA then verifies the exact account identity and fresh heartbeat. No trade is submitted by this test.",
                         color = TextSecondary,
                         fontSize = 10.sp,
+                        modifier = Modifier.testTag("mt5_login_verification_path")
                     )
                     DropdownMenu(serverMenu, { serverMenu = false }) {
                         ServerOptions.build(spec, emptyList(), emptyList()).forEach { option ->
@@ -515,7 +519,8 @@ fun MetaTraderBrokerFlow(
                     enabled = !busy && LoginRules.canSubmitLogin(spec, form, modeHintChosen),
                     onClick = { connect(spec, form) },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
-                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("LOGIN")
+                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White)
+                    else Text(if (spec.connector == LoginConnector.MT5_TERMINAL) "TEST LOGIN & VERIFY" else "LOGIN")
                 }
                 if (busy) TextButton(onClick = { busy = false }, modifier = Modifier.height(48.dp)) { Text("CANCEL") }
                 }

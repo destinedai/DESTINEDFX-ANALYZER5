@@ -251,6 +251,15 @@ data class VerifiedAccountDetails(
         retrievedAtMs > 0L && retrievedAtMs <= nowMs && nowMs - retrievedAtMs <= maxAgeMs
 }
 
+internal fun displayableVerifiedAccountMetric(
+    value: Double?,
+    details: VerifiedAccountDetails,
+    nowMs: Long,
+    maxAgeMs: Long = 15_000L
+): Double? = value?.takeIf {
+    details.isFreshAt(nowMs, maxAgeMs) && it.isFinite() && it >= 0.0
+}
+
 internal fun matchesVerifiedAccountIdentity(
     current: VerifiedAccountDetails?,
     refreshed: VerifiedAccountDetails,

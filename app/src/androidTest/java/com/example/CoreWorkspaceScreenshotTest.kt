@@ -137,4 +137,28 @@ class CoreWorkspaceScreenshotTest {
         val descriptor = instrumentation.uiAutomation.executeShellCommand(command)
         return ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
     }
+
+    @Test
+    fun everyWorkspaceRouteRendersAtStandardPhoneWidth() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        setLogicalDisplay(instrumentation, 390, 844)
+        try {
+            composeRule.waitForIdle()
+            for (screen in DestinedFXScreen.allScreens) {
+                composeRule.activity.showWorkspace(screen)
+                composeRule.waitUntil(timeoutMillis = 10_000L) {
+                    runCatching {
+                        composeRule.onNodeWithTag("workspace_header_title").assertTextEquals(screen.title)
+                    }.isSuccess
+                }
+                composeRule.onNodeWithTag("workspace_header_title").assertIsDisplayed()
+                composeRule.waitForIdle()
+            }
+        } finally {
+            runShell(instrumentation, "wm size reset")
+            runShell(instrumentation, "wm density reset")
+            composeRule.waitForIdle()
+        }
+    }
+
 }
