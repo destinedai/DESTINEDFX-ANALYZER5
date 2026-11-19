@@ -205,7 +205,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     linux_health_ok = (
         "host = linux_host_report()" in bridge
         and "linux_slot_isolation(host)" in bridge
-        and "'VERIFIED' if LINUX_HOST_MODE" in bridge
+        and "'VERIFIED' if isolation_verified" in bridge
         and "PER_USER_TERMINAL_ISOLATION_REQUIRED" in bridge
     )
     add_check(
@@ -255,7 +255,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         and "New-ScheduledTaskTrigger -AtLogOn -User $owner" in windows_installer
         and "-User $owner -Password $taskPassword" in windows_installer
         and "LogonType Interactive" not in windows_installer
-        and "Task Scheduler stores its protected task credential" in windows_owner_setup
+        and "Task Scheduler" in windows_owner_setup and "Windows DPAPI" in windows_owner_setup
     )
     add_check(
         checks,
