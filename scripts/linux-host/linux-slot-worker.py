@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any
 
@@ -156,11 +157,23 @@ def _api(method: str, path: str, payload: dict | None = None, timeout: int = 20)
 
 
 def _agent(path: str, payload: dict, timeout: int = 5) -> dict:
-    base_url = HOST_AGENT_URL.rstrip("/")
-    if base_url.endswith("/health/ready"):
-        base_url = base_url[:-len("/health/ready")]
-    if not base_url or not path.startswith("/internal/slot/"):
+    parsed = urlsplit(HOST_AGENT_URL)
+    health_path = parsed.path.rstrip("/")
+    if health_path.endswith("/health/ready"):
+        health_path = health_path[:-len("/health/ready")]
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed.username or parsed.password or parsed.query or parsed.fragment
+        or health_path not in {"", "/"}
+        or path not in {
+            "/internal/slot/reservation",
+            "/internal/slot/discover",
+            "/internal/slot/process",
+        }
+    ):
         raise SlotWorkerError("HOST_AGENT_ROUTE_INVALID")
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
     url = f"{base_url}{path}"
     raw = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
     request = urllib.request.Request(
