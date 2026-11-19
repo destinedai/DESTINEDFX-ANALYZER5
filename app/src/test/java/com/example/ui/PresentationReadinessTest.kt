@@ -105,6 +105,27 @@ class PresentationReadinessTest {
     }
 
     @Test
+    fun retainedExecutableSignalExpiresEvenWhenCurrentMarketFeedsAreFresh() {
+        val now = 1_800_000_000_000L
+        val result = deriveMarketReadiness(
+            ticker = liveTicker(now),
+            candleSource = "fixture-provider",
+            candlesAvailable = true,
+            chartDisplayed = true,
+            signal = executableSignal(now - 15_001L),
+            candlesFresh = true,
+            nowMs = now
+        )
+
+        assertTrue(result.quoteLive)
+        assertTrue(result.candlesConfirmed)
+        assertFalse(result.analysisCompleted)
+        assertFalse(result.tradingEligible)
+        assertEquals("Prior analysis — rescan to refresh", result.analysisLabel)
+        assertEquals("Not eligible to trade", result.eligibilityLabel)
+    }
+
+    @Test
     fun delayedOrNonExecutableSignalNeverPassesTradingReadiness() {
         val now = 1_800_000_000_000L
         val result = deriveMarketReadiness(
