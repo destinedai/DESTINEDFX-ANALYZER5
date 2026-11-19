@@ -746,11 +746,12 @@ private fun AccountSummary(
                     fontSize = 11.sp,
                 )
             }
-            MetricLine("Balance", details.balance, details.currency)
-            MetricLine("Equity", details.equity, details.currency)
-            MetricLine("Free margin", details.freeMargin, details.currency)
-            MetricLine("Leverage", details.leverage?.toDouble(), "x")
-            MetricLine("Margin level", details.marginLevel, "%")
+            // Never keep a last-known balance looking current after the verified heartbeat ages out.
+            MetricLine("Balance", details.balance.takeIf { !stale }, details.currency.takeIf { !stale })
+            MetricLine("Equity", details.equity.takeIf { !stale }, details.currency.takeIf { !stale })
+            MetricLine("Free margin", details.freeMargin.takeIf { !stale }, details.currency.takeIf { !stale })
+            MetricLine("Leverage", details.leverage?.toDouble().takeIf { !stale }, "x")
+            MetricLine("Margin level", details.marginLevel.takeIf { !stale }, "%")
             if (details.hostProfile == HostProfile.EPHEMERAL) {
                 Text("Test host, DEMO only, stops when idle", color = WarningAmber, fontSize = 12.sp, modifier = Modifier.testTag("ephemeral_host_notice"))
             }
