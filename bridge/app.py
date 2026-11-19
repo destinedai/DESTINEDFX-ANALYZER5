@@ -583,6 +583,7 @@ class WorkerClaim(BaseModel):
     worker_id:str=Field(min_length=1,max_length=128)
     active_terminals:int=Field(default=0,ge=0,le=16)
     max_terminals:int=Field(default=1,ge=1,le=16)
+    pause_provisioning:bool=False
     attestation:dict|None=None
 class WorkerProvision(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -1664,7 +1665,7 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
             "SELECT COUNT(*) FROM worker_jobs WHERE worker_id=? AND kind='PROVISION' AND status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until>=?",
             (x.worker_id,t)
         ).fetchone()[0]
-        at_capacity = x.active_terminals >= x.max_terminals or leased_provisions >= x.max_terminals
+        at_capacity = x.pause_provisioning or x.active_terminals >= x.max_terminals or leased_provisions >= x.max_terminals
         if at_capacity or draining:
             r=c.execute("SELECT * FROM worker_jobs WHERE kind='REVOKE' AND (status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?)) ORDER BY created LIMIT 1",(t,)).fetchone()
         else:
