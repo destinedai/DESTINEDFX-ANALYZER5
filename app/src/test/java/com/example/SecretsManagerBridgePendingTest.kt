@@ -204,4 +204,11 @@ class SecretsManagerBridgePendingTest {
         assertEquals("", manager.getDerivApiToken())
         assertEquals("", manager.getDerivAppId())
     }
+
+    @Test fun manualMt5BalancePersistenceIsDisabledAndCannotBeReadAsBrokerEvidence() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        assertFalse(manager.saveMT5AccountBalance(12_345.67))
+        assertEquals(0.0, manager.getMT5AccountBalance(), 0.0)
+    }
+
 }

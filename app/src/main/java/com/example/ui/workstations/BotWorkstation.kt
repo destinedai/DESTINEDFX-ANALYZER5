@@ -1391,10 +1391,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             var showOpenDemoDialog by remember { mutableStateOf(false) }
             var showOpenRealDialog by remember { mutableStateOf(false) }
 
-            val storedBal = remember {
-                viewModel.app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 } ?: 0.0
-            }
-            var mt5BalanceInput by remember { mutableStateOf(String.format(java.util.Locale.US, "%.2f", storedBal)) }
             var selectedLeverage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5Leverage().takeIf { it > 0 } ?: 0) }
             var expandedLeverage by remember { mutableStateOf(false) }
             val currentSessionStatus = viewModel.app.secretsManager.getMT5SessionStatus()

@@ -116,7 +116,11 @@ class SecretsManager internal constructor(
             UnavailableSharedPreferences
         }
         isSecureStorageAvailable = prefs !== UnavailableSharedPreferences
-        if (isSecureStorageAvailable) migrateLegacyBotPreferences()
+        if (isSecureStorageAvailable) {
+            migrateLegacyBotPreferences()
+            // Remove legacy operator-entered balance hints; they are not current broker evidence.
+            prefs.edit().remove(MT5_BALANCE).commit()
+        }
     }
 
     /**
@@ -356,7 +360,12 @@ class SecretsManager internal constructor(
     fun saveMT5InvestorPassword(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_INVESTOR_PW, v).commit()
     fun saveMT5AccountNumber(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_AC, v).commit()
     fun saveMT5BrokerServer(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_SV, v).commit()
-    fun saveMT5AccountBalance(v: Double): Boolean = isSecureStorageAvailable && v.isFinite() && prefs.edit().putString(MT5_BALANCE, v.toString()).commit()
+    /**
+     * Legacy UI code must never persist an operator-entered estimate as a broker balance.
+     * Current account balance is supplied only by a fresh, identity-matched broker snapshot.
+     */
+    @Deprecated("Use a fresh verified broker account snapshot; manual balance persistence is disabled.")
+    fun saveMT5AccountBalance(v: Double): Boolean = false
     fun saveMT5AccountType(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_ACCOUNT_TYPE, v).commit()
     fun saveMT5Leverage(v: Int): Boolean = isSecureStorageAvailable && v > 0 && prefs.edit().putInt(MT5_LEVERAGE, v).commit()
     fun saveMT5SessionStatus(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_SESSION_STATUS, v).commit()
@@ -938,7 +947,8 @@ class SecretsManager internal constructor(
     fun getMT5InvestorPassword(): String = prefs.getString(MT5_INVESTOR_PW, "") ?: ""
     fun getMT5AccountNumber(): String  = prefs.getString(MT5_AC,  "") ?: ""
     fun getMT5BrokerServer(): String   = prefs.getString(MT5_SV,  "") ?: ""
-    fun getMT5AccountBalance(): Double = prefs.getString(MT5_BALANCE, "0.0")?.toDoubleOrNull() ?: 0.0
+    @Deprecated("Manual stored balances are not broker evidence; use a fresh verified account snapshot.")
+    fun getMT5AccountBalance(): Double = 0.0
     fun getMT5AccountType(): String    = prefs.getString(MT5_ACCOUNT_TYPE, "Demo") ?: "Demo"
     fun getMT5Leverage(): Int          = prefs.getInt(MT5_LEVERAGE, 0)
     fun getMT5SessionStatus(): String  = prefs.getString(MT5_SESSION_STATUS, "DISCONNECTED") ?: "DISCONNECTED"
