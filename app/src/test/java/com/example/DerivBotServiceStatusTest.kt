@@ -31,7 +31,14 @@ class DerivBotServiceStatusTest {
             assertEquals(reason, secure.getDerivBotServiceReason())
             assertFalse(secure.isDerivBotRecoveryEnabled())
         }
-        assertTrue(context.getSharedPreferences("deriv_bot_config", 0).all.isEmpty())
+        val legacy = context.getSharedPreferences("deriv_bot_config", 0)
+        if (secure.isSecureStorageAvailable) {
+            assertTrue("Legacy recovery preferences must be cleared after encrypted migration", legacy.all.isEmpty())
+        } else {
+            // Preserve the only copy until the Keystore-backed migration can commit.
+            // Boot recovery independently fails closed while secure storage is unavailable.
+            assertTrue("Legacy preferences must remain intact when encrypted migration cannot run", legacy.getBoolean("enabled", false))
+        }
     }
 
     @Test
