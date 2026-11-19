@@ -1443,6 +1443,10 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
         isolation=linux_slot_isolation(host)
         if not isolation.get('enabled') or not isolation.get('ready'):
             raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user MT5 slot capacity'})
+        # Codespaces Linux slots are ephemeral and the slot worker is DEMO-only.
+        # Reject LIVE before encrypting broker credentials or creating a job.
+        if HOST_PROFILE != 'PERSISTENT' or x.account_mode != 'DEMO':
+            raise HTTPException(409,detail={'code':'LINUX_HOST_DEMO_ONLY','message':'This Linux Codespaces worker accepts DEMO MT5 profiles only; LIVE requires a separately approved persistent Windows host'})
     p=auth(authorization,'app')
     if not x_management_identity:
         raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate to the DestinedFX management account before registering broker credentials'})
@@ -1483,6 +1487,18 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     elif not _isolation_evidence_verified():
         isolation_pending=True
     with tx(True) as c:
+        active_job=c.execute(
+            """SELECT id,status FROM worker_jobs
+               WHERE pairing_id=? AND kind='PROVISION'
+                 AND status IN ('QUEUED','AWAITING_ATTESTATION','LEASED','PROVISIONING','AUTHENTICATING','READY')
+               ORDER BY created DESC LIMIT 1""",
+            (p['id'],)
+        ).fetchone()
+        if active_job:
+            raise HTTPException(409,detail={
+                'code':'PAIRING_TERMINAL_ALREADY_ACTIVE',
+                'message':'This broker pairing already has a queued, provisioning or active terminal. Revoke and confirm cleanup before registering it again.',
+            })
         # A pairing may transition from DEMO to LIVE only after the DEMO acceptance
         # is recorded; the active managed profile remains the single current execution
         # profile while the acceptance/link preserve the prior profile identity.
@@ -1765,6 +1781,15 @@ def worker_update(job_id:str,x:WorkerUpdate,authorization:str|None=Header(defaul
         if r['status'] not in ('LEASED','PROVISIONING','AUTHENTICATING'): raise HTTPException(409,'Job is not active')
         lease=time.time()+120 if x.status in ('PROVISIONING','AUTHENTICATING','LEASED') else r['lease_until']
         c.execute('UPDATE worker_jobs SET status=?,lease_until=?,error_code=?,error_message=? WHERE id=?',(x.status,lease,code or None,message or None,job_id))
+        if r['kind']=='REVOKE' and x.status=='REVOKED':
+            # Release the old provision job only after the worker confirms that
+            # this pairing's isolated terminal and Unix identity were removed.
+            c.execute(
+                """UPDATE worker_jobs SET status='REVOKED',lease_until=NULL
+                   WHERE pairing_id=? AND kind='PROVISION'
+                     AND status IN ('QUEUED','AWAITING_ATTESTATION','LEASED','PROVISIONING','AUTHENTICATING','READY')""",
+                (r['pairing_id'],)
+            )
     return {'updated':True}
 
 
