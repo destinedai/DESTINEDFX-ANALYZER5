@@ -32,6 +32,7 @@ from cryptography.fernet import Fernet
 with open(sys.argv[1], 'x', encoding='utf-8') as f:
     f.write('CREDENTIALS_FERNET_KEY=' + Fernet.generate_key().decode() + '\n')
     f.write('WORKER_TOKEN=' + secrets.token_urlsafe(48) + '\n')
+    f.write('WORKER_BOOTSTRAP_TOKEN=' + secrets.token_urlsafe(48) + '\n')
     f.write('HOST_AGENT_TOKEN=' + secrets.token_urlsafe(48) + '\n')
 PY
 fi
@@ -41,6 +42,11 @@ chmod 600 "$STATE/bridge.env"
 if ! grep -q '^HOST_AGENT_TOKEN=' "$STATE/bridge.env"; then
   umask 077
   printf 'HOST_AGENT_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >>"$STATE/bridge.env"
+  chmod 600 "$STATE/bridge.env"
+fi
+if ! grep -q '^WORKER_BOOTSTRAP_TOKEN=' "$STATE/bridge.env"; then
+  umask 077
+  printf 'WORKER_BOOTSTRAP_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >>"$STATE/bridge.env"
   chmod 600 "$STATE/bridge.env"
 fi
 set -a
@@ -108,18 +114,22 @@ if [[ ! "$SLOT_MAX_CONFIG" =~ ^[0-9]+$ ]] || (( SLOT_MAX_CONFIG < 1 || SLOT_MAX_
 fi
 DESTINEDFX_SLOT_MAX_TERMINALS="$(python3 - "$SLOT_MAX_CONFIG" <<'PY'
 import os, sys
-available = 0
+values = {}
 try:
     for line in open('/proc/meminfo', encoding='ascii'):
-        if line.startswith('MemAvailable:'):
-            available = int(line.split()[1]) * 1024
-            break
+        if ':' in line:
+            key, value = line.split(':', 1)
+            values[key] = int(value.split()[0]) * 1024
 except (OSError, ValueError, IndexError):
     pass
-# One isolated Wine/MT5 terminal needs a conservative 3 GiB available-memory
-# budget. Never invent one slot when the measured host is below that floor.
-memory_slots = available // (3 * 1024**3)
-print(min(int(sys.argv[1]), os.cpu_count() or 1, memory_slots) if memory_slots > 0 else 0)
+available = values.get('MemAvailable', 0)
+total = values.get('MemTotal', 0)
+# Keep 2 GiB for the OS and reserve 3 GiB per slot. Also require 3 GiB
+# currently available before launching the first MT5 session.
+memory_slots = max(0, (total - 2 * 1024**3) // (3 * 1024**3))
+if available < 3 * 1024**3:
+    memory_slots = 0
+print(min(int(sys.argv[1]), os.cpu_count() or 1, memory_slots))
 PY
 )"
 export DESTINEDFX_SLOT_MAX_TERMINALS
@@ -196,6 +206,22 @@ export BRIDGE_HOST_PROFILE=EPHEMERAL HOST_GENERATION HOST_IDLE_TIMEOUT_SECONDS="
   "$STATE/venv/bin/python" -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers --timeout-keep-alive 5 --limit-concurrency 50
 ) >>"$RUNTIME/bridge.log" 2>&1 &
 track_pid "$!" "uvicorn app:app"
+for _ in $(seq 1 30); do
+  if curl -fs --max-time 2 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+if ! curl -fs --max-time 2 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+  fail 'Bridge failed to start; no worker identity or broker provisioning will be enabled.'; exit 1
+fi
+WORKER_IDENTITY_FILE="$STATE/worker-identity.token"
+chmod 700 "$STATE"
+(
+  cd "$ROOT/bridge"
+  "$STATE/venv/bin/python" owner_ctl.py ensure-worker "$DESTINEDFX_WORKER_ID" "$WORKER_IDENTITY_FILE"
+)
+chmod 600 "$WORKER_IDENTITY_FILE"
+# Do not pass the operator bootstrap secret to the worker process.
+unset WORKER_BOOTSTRAP_TOKEN
 
 # Multi-user Linux runner: each pairing receives a distinct OS identity,
 # Wine prefix, private portable MT5 tree, Xauthority cookie and Xvfb display.
@@ -204,7 +230,8 @@ track_pid "$!" "uvicorn app:app"
   # shellcheck disable=SC1090
   source "$STATE/bridge.env"
   set +a
-  export DESTINEDFX_WORKER_TOKEN="$WORKER_TOKEN"
+  export DESTINEDFX_WORKER_TOKEN_FILE="$WORKER_IDENTITY_FILE"
+  unset DESTINEDFX_WORKER_TOKEN
   export DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true
   export DESTINEDFX_CONTROL_PLANE_URL=http://127.0.0.1:8000
   export HOST_AGENT_TOKEN HOST_AGENT_URL
