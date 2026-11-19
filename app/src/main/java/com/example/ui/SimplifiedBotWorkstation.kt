@@ -308,7 +308,6 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 channelId, "LIVE lease renewal reminders", android.app.NotificationManager.IMPORTANCE_HIGH
             ))
         }
-        val prefs = context.getSharedPreferences("mode_renewal_reminders", android.content.Context.MODE_PRIVATE)
         while (true) {
             val now = System.currentTimeMillis()
             val activeLeases = buildList {
@@ -333,8 +332,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             }
             activeLeases.filter { it.expiresAtMs - now in 1..120_000L }.forEach { lease ->
                 val reminderKey = lease.identity.fingerprint() + ":" + lease.expiresAtMs
-                val preferenceKey = "notified_" + reminderKey
-                if (!prefs.getBoolean(preferenceKey, false) && DerivDemoBotService.hasNotificationPermission(context)) {
+                val reminderSent = secrets.wasLiveLeaseRenewalReminderSent(
+                    lease.identity.fingerprint(), lease.expiresAtMs
+                )
+                if (!reminderSent && DerivDemoBotService.hasNotificationPermission(context)) {
                     val openApp = android.app.PendingIntent.getActivity(
                         context, reminderKey.hashCode(),
                         Intent(context, com.example.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
@@ -348,7 +349,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         .setContentIntent(openApp).setAutoCancel(true)
                         .addAction(0, "Review renewal", openApp)
                         .setCategory(androidx.core.app.NotificationCompat.CATEGORY_STATUS).build())
-                    prefs.edit().putBoolean(preferenceKey, true).apply()
+                    check(secrets.markLiveLeaseRenewalReminderSent(
+                        lease.identity.fingerprint(), lease.expiresAtMs
+                    )) { "Encrypted LIVE lease renewal reminder state could not be saved." }
                 }
             }
             delay(10_000L)
