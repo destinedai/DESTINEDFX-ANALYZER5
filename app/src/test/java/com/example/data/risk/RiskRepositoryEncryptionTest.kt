@@ -52,7 +52,7 @@ class RiskRepositoryEncryptionTest {
         assertEquals(2_450.0, repository.getStartDayEquity(), 0.0)
         assertEquals(2_400.0, repository.getStartWeekEquity(), 0.0)
         assertTrue(secrets.getEncryptedRiskProfile() != null)
-        assertTrue("Legacy risk DataStore must be cleared after encrypted migration", legacy.data.first().isEmpty())
+        assertTrue("Legacy risk DataStore must be cleared after encrypted migration", legacy.data.first().asMap().isEmpty())
         assertFalse("The legacy risk validation interface has no broker provenance", repository.validateTradeRisk(10.0))
     }
 
