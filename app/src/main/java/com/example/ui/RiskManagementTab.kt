@@ -158,7 +158,7 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
                     }
                     HorizontalDivider(color = CardBorder)
                     Text("Hard limits", fontSize = 12.sp, fontWeight = FontWeight.Black, color = TextPrimary)
-                    Text("• Position sizing is calculated against configured equity.\n• Stops are not narrowed to force a valid trade.\n• Plans below 2.0R must remain WAIT / non-executable.\n• An invalidated setup cannot remain actionable.",
+                    Text("• Verified account sizing uses fresh broker-origin balance, equity, free margin and leverage.\n• Without a verified account snapshot, the calculator is scenario-only and cannot authorize an order.\n• Stops are not narrowed to force a valid trade.\n• Plans below 2.0R must remain WAIT / non-executable.\n• An invalidated setup cannot remain actionable.",
                         fontSize = 11.sp, color = TextSecondary, lineHeight = 18.sp)
                 }
             }
