@@ -77,6 +77,6 @@ jobs:
       - name: Run offline MT5 diagnostic tests
         run: python3 scripts/test_mt5_diagnostics.py
       - name: Run Wine and Linux-host regression tests
-        run: pytest -q scripts/test_wine_guard.py scripts/test_linux_host.py scripts/test_linux_isolation.py scripts/test_linux_slot_worker.py bridge/test_app.py
+        run: pytest -q scripts/test_wine_guard.py scripts/test_linux_host.py scripts/test_linux_isolation.py scripts/test_codespaces_two_user_acceptance.py scripts/test_linux_slot_worker.py bridge/test_app.py
       - name: Run offline Codespaces shell contract
         run: bash deploy/codespaces/test-codespaces.sh
