@@ -34,6 +34,54 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
+ * Convert an MT5 Bridge snapshot into account data only after exact account, server, mode,
+ * broker identity and a fresh terminal heartbeat have all been verified.
+ */
+internal fun verifiedManagedMt5AccountSnapshot(
+    profileKey: String,
+    expectedLogin: String,
+    expectedServer: String,
+    expectedMode: String,
+    snapshot: MT5RemoteBridgeClient.Snapshot,
+    nowMs: Long = System.currentTimeMillis()
+): com.example.data.broker.BrokerAccountSnapshot? {
+    val (brand, profileMode) = AccountSessionRegistry.brandAndMode(profileKey) ?: return null
+    val heartbeatAge = snapshot.raw.optLong("heartbeat_age_seconds", Long.MAX_VALUE)
+    val staleAfter = snapshot.raw.optLong("heartbeat_stale_seconds", 15L).coerceIn(1L, 15L)
+    val retrievedAt = if (heartbeatAge in 0L..staleAfter) nowMs - heartbeatAge * 1_000L else 0L
+    val exactIdentity = expectedLogin.isNotBlank() && expectedServer.isNotBlank() &&
+        expectedMode.equals(profileMode, ignoreCase = true) &&
+        snapshot.actualLogin == expectedLogin &&
+        snapshot.actualServer == expectedServer &&
+        snapshot.actualAccountMode == profileMode &&
+        snapshot.profileMode == profileMode
+    val terminalReady = snapshot.connected && snapshot.terminalOnline &&
+        snapshot.heartbeatFresh && snapshot.terminalConnected &&
+        snapshot.accountVerified && snapshot.brokerIdentityVerified &&
+        snapshot.managedState.equals("READY", ignoreCase = true)
+    val values = listOf(snapshot.balance, snapshot.equity, snapshot.margin, snapshot.freeMargin)
+    if (!exactIdentity || !terminalReady || retrievedAt <= 0L ||
+        values.any { value -> value == null || !value.isFinite() || value < 0.0 } ||
+        snapshot.currency.isBlank() || snapshot.leverage == null || snapshot.leverage <= 0
+    ) return null
+
+    return com.example.data.broker.BrokerAccountSnapshot(
+        providerId = brand,
+        origin = com.example.data.broker.DataOrigin.BROKER_API,
+        status = com.example.data.broker.BrokerConnectionStatus.CONNECTED,
+        retrievedAtMs = retrievedAt,
+        environment = profileMode,
+        currency = snapshot.currency,
+        balance = snapshot.balance,
+        equity = snapshot.equity,
+        margin = snapshot.margin,
+        freeMargin = snapshot.freeMargin,
+        validity = com.example.data.broker.DataValidity.FRESH,
+        leverage = snapshot.leverage
+    ).takeIf { it.isDisplayable(nowMs = nowMs, maxAgeMs = staleAfter * 1_000L) }
+}
+
+/**
  * App-side monitor only. The Windows MT5 terminal/EA remains responsible for autonomous
  * trading and broker-side safety enforcement. This service keeps account telemetry alive
  * when the Bot screen is not composed.
