@@ -240,8 +240,10 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     slot_memory_ok = (
         "3 * 1024 ** 3" in linux_slots
         and "INSUFFICIENT_MEMORY_FOR_MT5_SLOT" in linux_slots
-        and "memory_slots = available // (3 * 1024**3)" in codespaces_start
+        and "memory_slots = max(0, (total - 2 * 1024**3) // (3 * 1024**3))" in codespaces_start
+        and "if available < 3 * 1024**3:" in codespaces_start
         and "DESTINEDFX_SLOT_MAX_TERMINALS < 1" in codespaces_start
+        and "DESTINEDFX_WORKER_TOKEN_FILE" in codespaces_start
     )
     add_check(
         checks,
