@@ -35,4 +35,5 @@ class CrashLogManager(private val directory: File) {
     }
 
     @Deprecated("Crash diagnostics must be retained through Keystore-backed SecretsManager storage.")
-    fun writeCrash(crashReport: String): Boolean = false}
+    fun writeCrash(crashReport: String): Boolean = false
+}
