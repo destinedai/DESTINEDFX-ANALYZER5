@@ -73,7 +73,7 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
         composeRule.onNodeWithTag("server_field").performTextInput("Fixture-Demo")
         composeRule.onNodeWithTag("login_button").assertIsNotEnabled()
-        composeRule.onNodeWithTag("login_mode_demo").performClick()
+        composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
         composeRule.onNodeWithText("Forgot password?").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("broker_back").assertIsDisplayed().performClick()
