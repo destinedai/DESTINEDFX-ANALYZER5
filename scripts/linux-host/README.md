@@ -1,6 +1,6 @@
 # Linux MT5 host runtime
 
-These owner-operated scripts add a one-terminal Linux host path. They do not prove that MetaTrader 5 or the DestinedFX EA works on any free VM shape. They do not create a broker account or submit an order. All log examples in tests are synthetic fixtures and are labelled as such.
+The legacy owner-managed systemd `linux-worker.py` path is a single-terminal service and is not multi-user isolation. The Codespaces path uses the separate `linux-slot-worker.py` plus `linux_isolation.py` to provision per-pairing identities and terminal trees, with root host-agent attestation. Neither path proves that MetaTrader 5 or the DestinedFX EA works on any free VM shape. These scripts do not create broker accounts or submit orders. All log examples in tests are synthetic fixtures and are labelled as such.
 
 ## Host health and journal evidence
 
