@@ -95,7 +95,8 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         candleSource = viewModel.marketDataSource(symbol, timeframe),
         candlesAvailable = candles.isNotEmpty(),
         chartDisplayed = candles.isNotEmpty(),
-        signal = currentSignal
+        signal = currentSignal,
+        candlesFresh = viewModel.isDataFresh(symbol)
     )
     val quoteAgeSeconds = activeTicker?.lastUpdateMillis?.takeIf { it > 0L }?.let {
         ((System.currentTimeMillis() - it).coerceAtLeast(0L) / 1000L)
