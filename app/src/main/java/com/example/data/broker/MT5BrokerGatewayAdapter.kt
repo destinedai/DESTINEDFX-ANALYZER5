@@ -90,7 +90,8 @@ class MT5BrokerGatewayAdapter(
                     equity = metrics.equity,
                     margin = metrics.margin,
                     freeMargin = metrics.freeMargin,
-                    validity = DataValidity.FRESH
+                    validity = DataValidity.FRESH,
+                    leverage = metrics.leverage.takeIf { it > 0 }
                 )
             } else {
                 BrokerAccountSnapshot.unavailable("MT5", _connectionStatus.value, "SESSION_NOT_CONNECTED")
