@@ -30,7 +30,7 @@ jobs:
       - name: Run offline Deriv DEMO smoke-harness tests
         run: python -m pytest -q scripts/test_deriv_demo_smoke.py
       - name: Run Linux MT5 host runtime and recovery tests
-        run: python -m pytest -q scripts/test_linux_host.py scripts/test_linux_isolation.py scripts/test_linux_slot_worker.py scripts/test_linux_worker.py scripts/test_linux_tools.py
+        run: python -m pytest -q scripts/test_linux_host.py scripts/test_linux_isolation.py scripts/test_codespaces_two_user_acceptance.py scripts/test_linux_slot_worker.py scripts/test_linux_worker.py scripts/test_linux_tools.py
       - name: Run bridge tests
         run: python -m pytest -q bridge
       - name: Build and smoke-test the owner Docker bridge image
