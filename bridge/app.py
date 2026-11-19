@@ -213,10 +213,18 @@ def host_agent_slot_request(path, payload):
         raise HTTPException(503,detail={'code':'SLOT_ATTESTATION_UNAVAILABLE','message':'Isolated slot verification is unavailable'})
     secret=os.getenv('HOST_AGENT_TOKEN','').strip()
     parsed=urlparse(HOST_AGENT_URL)
-    if len(secret)<32 or parsed.scheme!='http' or parsed.hostname not in LOOPBACK_HOSTS:
+    health_path=parsed.path.rstrip('/')
+    if health_path.endswith('/health/ready'):
+        health_path=health_path[:-len('/health/ready')]
+    if (len(secret)<32 or parsed.scheme!='http' or parsed.hostname not in LOOPBACK_HOSTS
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or health_path not in ('','/')):
         raise HTTPException(503,detail={'code':'SLOT_ATTESTATION_UNAVAILABLE','message':'Root host-agent authentication is not configured'})
+    # HOST_AGENT_URL is the readiness URL used by linux_host_report(); internal
+    # slot checks must target the same loopback agent origin, not append to /health/ready.
+    agent_origin=f'{parsed.scheme}://{parsed.netloc}'
     raw=json.dumps(payload,separators=(',',':'),allow_nan=False).encode('utf-8')
-    req=urllib.request.Request(f'{parsed.scheme}://{parsed.netloc}{path}',data=raw,headers={
+    req=urllib.request.Request(f'{agent_origin}{path}',data=raw,headers={
         'Authorization':'Bearer '+secret,'Content-Type':'application/json','Accept':'application/json'
     },method='POST')
     try:
