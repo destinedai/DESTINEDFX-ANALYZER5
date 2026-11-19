@@ -97,7 +97,6 @@ class MT5AccountSessionService : Service() {
     companion object {
         private const val CHANNEL_ID = "destinedfx_mt5_account_monitor"
         private const val NOTIFICATION_ID = 1702
-        private const val ALERT_PREFS = "mt5_daily_risk_alerts"
 
         fun start(context: Context) {
             val intent = Intent(context, MT5AccountSessionService::class.java)
@@ -137,7 +136,8 @@ class MT5AccountSessionService : Service() {
 
     private fun publishRiskAlerts(snapshots: Map<String, MT5RemoteBridgeClient.Snapshot>) {
         val manager = getSystemService(NotificationManager::class.java) ?: return
-        val prefs = getSharedPreferences(ALERT_PREFS, MODE_PRIVATE)
+        val secrets = (application as? MyApplication)?.secretsManager ?: return
+        if (!secrets.isSecureStorageAvailable) return
         val day = utcDayKey()
         snapshots.forEach { (profile, snapshot) ->
             val config = snapshot.raw.optJSONObject("configuration") ?: return@forEach
@@ -150,8 +150,10 @@ class MT5AccountSessionService : Service() {
                 status == "WARNING_80" || used >= 80.0 -> 80
                 else -> return@forEach
             }
-            val key = "${profile}_${day}_${threshold}"
-            if (prefs.getBoolean(key, false)) return@forEach
+            if (secrets.wasMt5DailyRiskAlertSent(profile, day, threshold)) return@forEach
+            // Commit the encrypted dedupe marker before delivery so a process restart cannot
+            // fan out duplicate risk alerts for the same account/day/threshold.
+            if (!secrets.markMt5DailyRiskAlertSent(profile, day, threshold)) return@forEach
             val title = when (threshold) {
                 100 -> "DestinedFX · Daily loss lock reached"
                 90 -> "DestinedFX · 90% daily loss warning"
@@ -166,7 +168,6 @@ class MT5AccountSessionService : Service() {
                 .setAutoCancel(true)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .build())
-            prefs.edit().putBoolean(key, true).apply()
         }
     }
 
