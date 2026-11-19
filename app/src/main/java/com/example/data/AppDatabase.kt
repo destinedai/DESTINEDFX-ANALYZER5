@@ -147,7 +147,7 @@ abstract class AppDatabase : RoomDatabase() {
                                     else -> values.put(column, cursor.getString(index))
                                 }
                             }
-                            check(target.insert(table, SupportSQLiteDatabase.CONFLICT_REPLACE, values) != -1L) {
+                            check(target.insert(table, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE, values) != -1L) {
                                 "A legacy record could not be copied from $table."
                             }
                         }
