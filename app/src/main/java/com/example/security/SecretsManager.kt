@@ -9,6 +9,7 @@ import com.example.data.broker.ModeDemoAcceptance
 import com.example.data.broker.ModeArmingAuditEvent
 import com.example.data.broker.LoginMode
 import com.example.data.broker.SavedBrokerAccountProfile
+import com.example.domain.model.RiskProfile
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.io.File
@@ -103,6 +104,18 @@ class SecretsManager internal constructor(
         private const val TRADE_REPORT_FINGERPRINT_PREFIX = "trade_report_fingerprint_v1_"
         private const val MT5_RISK_ALERT_PREFIX = "mt5_risk_alert_v1_"
         private const val LAST_CRASH_LOG = "last_crash_log_encrypted_v1"
+        private const val RISK_PROFILE_SAVED = "risk_profile_saved_v1"
+        private const val RISK_ACCOUNT_BALANCE = "risk_account_balance_v1"
+        private const val RISK_FIXED_PERCENT = "risk_fixed_percent_v1"
+        private const val RISK_MAX_DAILY_DD = "risk_max_daily_dd_v1"
+        private const val RISK_MAX_WEEKLY_DD = "risk_max_weekly_dd_v1"
+        private const val RISK_CURRENT_DAILY_DD = "risk_current_daily_dd_v1"
+        private const val RISK_CURRENT_WEEKLY_DD = "risk_current_weekly_dd_v1"
+        private const val RISK_MINIMUM_RR = "risk_minimum_rr_v1"
+        private const val RISK_TRADING_HALTED = "risk_trading_halted_v1"
+        private const val RISK_START_DAY_EQUITY = "risk_start_day_equity_v1"
+        private const val RISK_START_WEEK_EQUITY = "risk_start_week_equity_v1"
+        private const val RISK_LAST_ROLLOVER = "risk_last_rollover_v1"
     }
 
     val isSecureStorageAvailable: Boolean
@@ -399,6 +412,98 @@ class SecretsManager internal constructor(
 
     fun clearLastCrashLog(): Boolean =
         isSecureStorageAvailable && prefs.edit().remove(LAST_CRASH_LOG).commit()
+
+    /** Read a risk profile only from encrypted Android Keystore preferences. */
+    fun getEncryptedRiskProfile(): RiskProfile? {
+        if (!isSecureStorageAvailable || !prefs.getBoolean(RISK_PROFILE_SAVED, false)) return null
+        return runCatching {
+            val balance = prefs.getString(RISK_ACCOUNT_BALANCE, null)?.toDoubleOrNull() ?: return null
+            val risk = prefs.getString(RISK_FIXED_PERCENT, null)?.toDoubleOrNull() ?: return null
+            val maxDay = prefs.getString(RISK_MAX_DAILY_DD, null)?.toDoubleOrNull() ?: return null
+            val maxWeek = prefs.getString(RISK_MAX_WEEKLY_DD, null)?.toDoubleOrNull() ?: return null
+            val currentDay = prefs.getString(RISK_CURRENT_DAILY_DD, "0.0")?.toDoubleOrNull() ?: return null
+            val currentWeek = prefs.getString(RISK_CURRENT_WEEKLY_DD, "0.0")?.toDoubleOrNull() ?: return null
+            val minimumRr = prefs.getString(RISK_MINIMUM_RR, "2.0")?.toDoubleOrNull() ?: return null
+            val profile = RiskProfile(
+                accountBalance = balance,
+                fixedRiskPercentage = risk,
+                maxDailyDrawdownPercentage = maxDay,
+                maxWeeklyDrawdownPercentage = maxWeek,
+                currentDailyDrawdown = currentDay,
+                currentWeeklyDrawdown = currentWeek,
+                minimumRR = minimumRr,
+                isTradingHalted = prefs.getBoolean(RISK_TRADING_HALTED, false)
+            )
+            profile.takeIf {
+                listOf(balance, risk, maxDay, maxWeek, currentDay, currentWeek, minimumRr).all { v -> v.isFinite() } &&
+                    balance >= 0.0 && risk in 0.1..1.0 &&
+                    maxDay in 0.1..100.0 && maxWeek in 0.1..100.0 &&
+                    currentDay >= 0.0 && currentWeek >= 0.0 && minimumRr >= 2.0
+            }
+        }.getOrNull()
+    }
+
+    fun saveEncryptedRiskProfile(profile: RiskProfile): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val values = listOf(
+            profile.accountBalance, profile.fixedRiskPercentage,
+            profile.maxDailyDrawdownPercentage, profile.maxWeeklyDrawdownPercentage,
+            profile.currentDailyDrawdown, profile.currentWeeklyDrawdown, profile.minimumRR
+        )
+        if (values.any { !it.isFinite() } || profile.accountBalance < 0.0 ||
+            profile.fixedRiskPercentage !in 0.1..1.0 ||
+            profile.maxDailyDrawdownPercentage !in 0.1..100.0 ||
+            profile.maxWeeklyDrawdownPercentage !in 0.1..100.0 ||
+            profile.currentDailyDrawdown < 0.0 || profile.currentWeeklyDrawdown < 0.0 ||
+            profile.minimumRR < 2.0
+        ) return false
+        return prefs.edit()
+            .putString(RISK_ACCOUNT_BALANCE, profile.accountBalance.toString())
+            .putString(RISK_FIXED_PERCENT, profile.fixedRiskPercentage.toString())
+            .putString(RISK_MAX_DAILY_DD, profile.maxDailyDrawdownPercentage.toString())
+            .putString(RISK_MAX_WEEKLY_DD, profile.maxWeeklyDrawdownPercentage.toString())
+            .putString(RISK_CURRENT_DAILY_DD, profile.currentDailyDrawdown.toString())
+            .putString(RISK_CURRENT_WEEKLY_DD, profile.currentWeeklyDrawdown.toString())
+            .putString(RISK_MINIMUM_RR, profile.minimumRR.toString())
+            .putBoolean(RISK_TRADING_HALTED, profile.isTradingHalted)
+            .putBoolean(RISK_PROFILE_SAVED, true)
+            .commit()
+    }
+
+    fun getRiskStartDayEquity(): Double =
+        if (isSecureStorageAvailable) prefs.getString(RISK_START_DAY_EQUITY, "0.0")?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0 else 0.0
+
+    fun getRiskStartWeekEquity(): Double =
+        if (isSecureStorageAvailable) prefs.getString(RISK_START_WEEK_EQUITY, "0.0")?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0 else 0.0
+
+    fun getRiskLastRolloverMillis(): Long =
+        if (isSecureStorageAvailable) prefs.getLong(RISK_LAST_ROLLOVER, 0L).coerceAtLeast(0L) else 0L
+
+    /** Store risk drawdown and period baselines atomically inside encrypted preferences. */
+    fun saveRiskEquityRollover(
+        startDayEquity: Double,
+        startWeekEquity: Double,
+        lastRolloverMillis: Long,
+        currentDailyDrawdown: Double,
+        currentWeeklyDrawdown: Double
+    ): Boolean {
+        if (!isSecureStorageAvailable || !prefs.getBoolean(RISK_PROFILE_SAVED, false) ||
+            listOf(startDayEquity, startWeekEquity, currentDailyDrawdown, currentWeeklyDrawdown)
+                .any { !it.isFinite() } ||
+            startDayEquity < 0.0 || startWeekEquity < 0.0 ||
+            currentDailyDrawdown < 0.0 || currentWeeklyDrawdown < 0.0 ||
+            lastRolloverMillis < 0L
+        ) return false
+        return prefs.edit()
+            .putString(RISK_CURRENT_DAILY_DD, currentDailyDrawdown.toString())
+            .putString(RISK_CURRENT_WEEKLY_DD, currentWeeklyDrawdown.toString())
+            .putString(RISK_START_DAY_EQUITY, startDayEquity.toString())
+            .putString(RISK_START_WEEK_EQUITY, startWeekEquity.toString())
+            .putLong(RISK_LAST_ROLLOVER, lastRolloverMillis)
+            .commit()
+    }
 
     fun saveCTraderOAuth(
         clientId: String,
