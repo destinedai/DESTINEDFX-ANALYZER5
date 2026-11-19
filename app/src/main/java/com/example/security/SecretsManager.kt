@@ -116,6 +116,7 @@ class SecretsManager internal constructor(
         private const val RISK_START_DAY_EQUITY = "risk_start_day_equity_v1"
         private const val RISK_START_WEEK_EQUITY = "risk_start_week_equity_v1"
         private const val RISK_LAST_ROLLOVER = "risk_last_rollover_v1"
+        private const val LIVE_LEASE_REMINDER_PREFIX = "live_lease_reminder_v1_"
     }
 
     val isSecureStorageAvailable: Boolean
@@ -126,6 +127,7 @@ class SecretsManager internal constructor(
     private val tradeSyncPrefs = ctx.getSharedPreferences("destinedfx_trade_sync", Context.MODE_PRIVATE)
     private val tradeReportPrefs = ctx.getSharedPreferences("destinedfx_trade_reports", Context.MODE_PRIVATE)
     private val mt5RiskAlertPrefs = ctx.getSharedPreferences("mt5_daily_risk_alerts", Context.MODE_PRIVATE)
+    private val modeRenewalReminderPrefs = ctx.getSharedPreferences("mode_renewal_reminders", Context.MODE_PRIVATE)
     /** Live trading authorization is deliberately process-memory-only and never restored after restart. */
     @Volatile private var derivRealLease: DerivRealAuthorizationLease? = null
 
@@ -150,6 +152,7 @@ class SecretsManager internal constructor(
             migrateLegacyTradeSyncPreferences()
             migrateLegacyTradeReportPreferences()
             migrateLegacyMt5RiskAlertPreferences()
+            migrateLegacyModeRenewalReminders()
             // Remove legacy operator-entered balance hints; they are not current broker evidence.
             prefs.edit().remove(MT5_BALANCE).remove("configured_equity").commit()
         }
@@ -412,6 +415,36 @@ class SecretsManager internal constructor(
 
     fun clearLastCrashLog(): Boolean =
         isSecureStorageAvailable && prefs.edit().remove(LAST_CRASH_LOG).commit()
+
+    private fun migrateLegacyModeRenewalReminders() {
+        val old = modeRenewalReminderPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        val migrated = mutableListOf<String>()
+        old.forEach { (legacyKey, value) ->
+            if (value !is Boolean || !legacyKey.startsWith("notified_") || legacyKey.length > 256) return@forEach
+            val destination = LIVE_LEASE_REMINDER_PREFIX + sha256Hex(legacyKey.removePrefix("notified_"))
+            if (!prefs.contains(destination)) edit.putBoolean(destination, value)
+            migrated += legacyKey
+        }
+        if (migrated.isNotEmpty() && edit.commit()) {
+            val cleanup = modeRenewalReminderPrefs.edit()
+            migrated.forEach { cleanup.remove(it) }
+            cleanup.commit()
+        }
+    }
+
+    fun wasLiveLeaseRenewalReminderSent(identityFingerprint: String, expiresAtMs: Long): Boolean {
+        if (!isSecureStorageAvailable || !identityFingerprint.matches(Regex("[0-9a-fA-F]{64}")) || expiresAtMs <= 0L) return false
+        return prefs.getBoolean(LIVE_LEASE_REMINDER_PREFIX + sha256Hex(identityFingerprint.lowercase() + ":" + expiresAtMs), false)
+    }
+
+    fun markLiveLeaseRenewalReminderSent(identityFingerprint: String, expiresAtMs: Long): Boolean {
+        if (!isSecureStorageAvailable || !identityFingerprint.matches(Regex("[0-9a-fA-F]{64}")) || expiresAtMs <= 0L) return false
+        return prefs.edit()
+            .putBoolean(LIVE_LEASE_REMINDER_PREFIX + sha256Hex(identityFingerprint.lowercase() + ":" + expiresAtMs), true)
+            .commit()
+    }
 
     /** Read a risk profile only from encrypted Android Keystore preferences. */
     fun getEncryptedRiskProfile(): RiskProfile? {
