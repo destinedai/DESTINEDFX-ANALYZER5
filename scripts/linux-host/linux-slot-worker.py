@@ -8,9 +8,11 @@ have been independently verified by the root host agent.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import pwd
+import stat
 import shutil
 import signal
 import subprocess
@@ -45,7 +47,8 @@ MANIFEST_DIR = STATE / "isolated-slots"
 SLOT_ROOT = Path(os.environ.get("DESTINEDFX_SLOT_ROOT", "/home/destinedfx-slots")).resolve()
 SLOT_RUNTIME = RUNTIME / "slot-runtime"
 CONTROL_URL = os.environ.get("DESTINEDFX_CONTROL_PLANE_URL", "http://127.0.0.1:8000").rstrip("/")
-WORKER_TOKEN = os.environ.get("DESTINEDFX_WORKER_TOKEN", "")
+WORKER_TOKEN = ""
+WORKER_TOKEN_FILE = os.environ.get("DESTINEDFX_WORKER_TOKEN_FILE", "")
 WORKER_ID = os.environ.get("DESTINEDFX_WORKER_ID", "codespaces-host-01")
 HOST_AGENT_TOKEN = os.environ.get("HOST_AGENT_TOKEN", "")
 HOST_AGENT_URL = os.environ.get("HOST_AGENT_URL", "http://127.0.0.1:8787").rstrip("/")
@@ -70,6 +73,27 @@ def _log(message: str) -> None:
     print(f"destinedfx-slot-worker: {message}", flush=True)
 
 
+def _load_worker_token() -> str:
+    """Load the named worker credential from a private file, never command-line args."""
+    if WORKER_TOKEN_FILE:
+        path = Path(WORKER_TOKEN_FILE)
+        try:
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
+                    stat.S_IMODE(info.st_mode) & 0o077 or info.st_nlink != 1):
+                raise SlotWorkerError("WORKER_TOKEN_FILE_PERMISSIONS_INVALID")
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            raise SlotWorkerError("WORKER_TOKEN_FILE_UNAVAILABLE") from None
+    else:
+        # Kept for isolated unit fixtures only. Codespaces production uses
+        # DESTINEDFX_WORKER_TOKEN_FILE and never injects the credential as env.
+        value = os.environ.get("DESTINEDFX_WORKER_TOKEN", "").strip()
+    if not value or len(value) > 512 or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise SlotWorkerError("WORKER_TOKEN_UNAVAILABLE")
+    return value
+
+
 def _require_stop_config() -> None:
     if not Path(os.environ.get("BRIDGE_DB_PATH", str(STATE / "bridge.sqlite3"))).is_file():
         raise SlotWorkerError("BRIDGE_DATABASE_UNAVAILABLE")
@@ -83,10 +107,10 @@ def _require_stop_config() -> None:
 
 
 def _require_config() -> None:
+    global WORKER_TOKEN
     if CONTROL_URL != "http://127.0.0.1:8000":
         raise SlotWorkerError("CONTROL_PLANE_MUST_BE_LOOPBACK")
-    if not WORKER_TOKEN or len(WORKER_TOKEN) > 512 or any(ord(x) < 32 for x in WORKER_TOKEN):
-        raise SlotWorkerError("WORKER_TOKEN_UNAVAILABLE")
+    WORKER_TOKEN = _load_worker_token()
     if not HOST_AGENT_TOKEN or len(HOST_AGENT_TOKEN) < 32:
         raise SlotWorkerError("HOST_AGENT_TOKEN_UNAVAILABLE")
     if not HOST_GENERATION or len(HOST_GENERATION) > 128:
@@ -99,21 +123,29 @@ def _require_config() -> None:
         raise SlotWorkerError("EA_SOURCE_MISSING")
 
 
-def _memory_available_bytes() -> int:
+def _memory_bytes(field: str) -> int:
     try:
         for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
-            if line.startswith("MemAvailable:"):
+            if line.startswith(field + ":"):
                 return int(line.split()[1]) * 1024
     except (OSError, ValueError, IndexError):
         pass
     return 0
 
 
+def _memory_available_bytes() -> int:
+    return _memory_bytes("MemAvailable")
+
+
+def _memory_total_bytes() -> int:
+    return _memory_bytes("MemTotal")
+
+
 def capacity() -> int:
-    """Require at least 3 GiB of available RAM for each isolated MT5 terminal."""
+    """Static concurrent capacity with a 2 GiB OS reserve and 3 GiB per slot."""
     cpus = os.cpu_count() or 1
-    available_bytes = _memory_available_bytes()
-    memory_slots = available_bytes // (3 * 1024 ** 3)
+    total_bytes = _memory_total_bytes()
+    memory_slots = max(0, (total_bytes - 2 * 1024 ** 3) // (3 * 1024 ** 3))
     if cpus < 1 or memory_slots < 1:
         return 0
     return min(MAX_SLOT_CONFIG, cpus, int(memory_slots))
@@ -529,16 +561,20 @@ def _stop_pairing(job: dict) -> str:
     return "REVOKED"
 
 
-def run_once() -> str:
-    _require_config()
+def _run_once_unlocked() -> str:
     active_before = _active_manifests()
     max_slots = capacity()
     if max_slots < 1:
         raise SlotWorkerError("INSUFFICIENT_MEMORY_FOR_MT5_SLOT")
+    active_count = min(len(active_before), max_slots)
+    # Do not admit another terminal unless a fresh 3 GiB budget remains. The
+    # Bridge still accepts REVOKE jobs while provisioning is paused.
+    pause_provisioning = _memory_available_bytes() < 3 * 1024 ** 3
     payload = {
         "worker_id": WORKER_ID,
-        "active_terminals": min(len(active_before), max_slots),
+        "active_terminals": active_count,
         "max_terminals": max_slots,
+        "pause_provisioning": pause_provisioning,
     }
     job = _api("POST", "/v1/worker/jobs/claim", payload, timeout=20)
     if job.get("kind") == "REVOKE":
@@ -629,6 +665,31 @@ def run_once() -> str:
         _write_manifest(row)
         _log(f"job failed safely: {str(code)[:64]}")
         return "OPERATOR_REVIEW"
+
+
+def run_once() -> str:
+    """Serialize all slot claims/reservations on this host with an OS file lock."""
+    _require_config()
+    RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(RUNTIME, 0o700)
+    lock_path = RUNTIME / "linux-slot-worker.lock"
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(lock_path, flags, 0o600)
+    except OSError:
+        raise SlotWorkerError("SLOT_WORKER_LOCK_UNAVAILABLE") from None
+    try:
+        os.fchmod(fd, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "WORKER_ALREADY_ACTIVE"
+        return _run_once_unlocked()
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def stop_all() -> int:
