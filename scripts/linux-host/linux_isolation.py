@@ -439,7 +439,9 @@ class LinuxSlotManager:
             linux_user=username, linux_uid=uid, slot_root=slot_root,
             job_root=job_root, wine_prefix=wine_prefix, terminal_home=terminal_home,
             terminal_path=terminal_path, xauthority=xauthority, display=display,
-            xvfb_pid=proc.pid, xvfb_start_ticks=ticks,
+            # Attest the real Xvfb process found under the dedicated slot UID,
+            # never the short-lived sudo wrapper returned by Popen.
+            xvfb_pid=xvfb_pid, xvfb_start_ticks=xvfb_ticks,
         )
 
     def _slot_argv(self, reservation: SlotReservation, argv: list[str]) -> list[str]:
