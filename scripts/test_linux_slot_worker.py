@@ -50,6 +50,51 @@ def test_low_available_ram_pauses_new_provisioning_claims(monkeypatch):
     assert calls[0]["max_terminals"] == 2
 
 
+def test_slot_worker_internal_agent_request_strips_health_ready_suffix(monkeypatch):
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def read(self, _limit):
+            return b'{"verified":true}'
+
+    def fake_open(request, timeout):
+        requests.append(request.full_url)
+        return Response()
+
+    monkeypatch.setattr(linux_slot_worker, "HOST_AGENT_URL", "http://127.0.0.1:8787/health/ready")
+    monkeypatch.setattr(linux_slot_worker, "HOST_AGENT_TOKEN", "fixture-host-agent-token-123456789012")
+    monkeypatch.setattr(linux_slot_worker.urllib.request, "urlopen", fake_open)
+    assert linux_slot_worker._agent("/internal/slot/reservation", {}) == {"verified": True}
+    assert requests == ["http://127.0.0.1:8787/internal/slot/reservation"]
+
+
+def test_slot_file_writer_atomically_replaces_existing_marker(monkeypatch, tmp_path):
+    target = tmp_path / "terminal" / ".destinedfx-worker.json"
+    target.parent.mkdir(parents=True)
+
+    class LocalSlotRunner:
+        def run_as_slot(self, _reservation, argv, *, input_text=None, timeout=20):
+            return subprocess.run(
+                [sys.executable, *argv[1:]],
+                input=input_text,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=True,
+            )
+
+    monkeypatch.setattr(linux_slot_worker, "_MANAGER", LocalSlotRunner(), raising=False)
+    linux_slot_worker._write_slot_file(object(), target, '{"status":"LAUNCH_PENDING"}')
+    linux_slot_worker._write_slot_file(object(), target, '{"status":"AUTHENTICATING"}')
+    assert target.read_text(encoding="utf-8") == '{"status":"AUTHENTICATING"}'
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert not list(target.parent.glob(".*.tmp"))
+
+
 def test_worker_token_is_loaded_from_owner_only_file(monkeypatch, tmp_path):
     token_file = tmp_path / "worker.token"
     token_file.write_text("named-worker.fixture-token")
