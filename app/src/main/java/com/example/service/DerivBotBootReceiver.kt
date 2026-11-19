@@ -25,11 +25,11 @@ class DerivBotBootReceiver : BroadcastReceiver() {
             runCatching { MT5AccountSessionService.start(context) }
         }
 
-        val prefs = context.getSharedPreferences("deriv_bot_config", Context.MODE_PRIVATE)
-        val symbol = prefs.getString(DerivDemoBotService.EXTRA_SYMBOL, null)?.trim().orEmpty()
-        val strategy = prefs.getString(DerivDemoBotService.EXTRA_STRATEGY, null)?.trim().orEmpty()
-        val timeframe = prefs.getString(DerivDemoBotService.EXTRA_TIMEFRAME, null)?.trim().orEmpty()
-        val enabled = prefs.getBoolean("enabled", false)
+        if (!secure.isSecureStorageAvailable) return
+        val symbol = secure.getDerivBotRecoverySymbol()
+        val strategy = secure.getDerivBotRecoveryStrategy()
+        val timeframe = secure.getDerivBotRecoveryTimeframe()
+        val enabled = secure.isDerivBotRecoveryEnabled()
         if (!enabled) return
         val mode = secure.getDerivAccountMode()
         val hasCredentials = secure.isSecureStorageAvailable &&
