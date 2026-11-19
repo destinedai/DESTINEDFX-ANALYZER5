@@ -909,9 +909,9 @@ open class DestinedFXViewModel(
     }
 
 
-    // Strategy & Configured Equity Persistence
+    // Strategy preferences are encrypted. Manual calculator scenarios are intentionally
+    // separate from accountCapital and are never restored as broker balance/equity.
     val selectedStrategyId = MutableStateFlow(if (isPreview) "smc-confluence-1.0.0" else app.secretsManager.getSelectedStrategy())
-    val configuredEquity = MutableStateFlow(if (isPreview) 0.0 else app.secretsManager.getConfiguredEquity())
 
     fun selectStrategy(id: String) {
         selectedStrategyId.value = id
@@ -920,13 +920,6 @@ open class DestinedFXViewModel(
             app.secretsManager.saveSelectedStrategy(id)
             runSignalScan(selectedTicker.value, selectedTimeframe.value)
         }
-    }
-
-    fun saveConfiguredEquity(v: Double) {
-        val clean = if (v.isFinite() && v > 0.0) v else 0.0
-        configuredEquity.value = clean
-        accountCapital.value = clean
-        if (!isPreview) app.secretsManager.saveConfiguredEquity(clean)
     }
 
     // Live Real-Time Trade Signal State for Signals Tab
@@ -1037,20 +1030,48 @@ open class DestinedFXViewModel(
             return@withContext PreExecutionCheck(false, 0.0, 0.0, "News Gate: ${newsVerdict.detail}. Automated execution blocked.")
         }
 
-        val eq = configuredEquity.value
-        val maxRiskDollar = eq * 0.01
         if (spec == null) {
             return@withContext PreExecutionCheck(false, 0.0, 0.0, "Broker specification for $symbol is unavailable.")
         }
 
-        val acc = com.destinedfx.core.risk.AccountState(balance = eq, equity = eq, freeMargin = eq, leverage = 100, currency = "USD")
+        // A manual calculator value is a hypothetical scenario, never account evidence.
+        // Execution checks require a fresh broker API snapshot with actual margin and leverage.
+        val activeGateway = app.brokerManager.activeBroker.value
+        val account = activeGateway.accountSnapshot.value?.takeIf {
+            it.isDisplayable(nowMs = now, maxAgeMs = 15_000L)
+        } ?: return@withContext PreExecutionCheck(
+            false, 0.0, 0.0,
+            "BROKER_ACCOUNT_SNAPSHOT_UNAVAILABLE: a fresh authenticated balance, equity, free margin, leverage and currency are required. Manual scenario equity cannot authorize execution."
+        )
+        val balance = account.balance
+        val equity = account.equity
+        val freeMargin = account.freeMargin
+        val leverage = account.leverage
+        val currency = account.currency
+        if (account.origin != com.example.data.broker.DataOrigin.BROKER_API ||
+            balance == null || equity == null || freeMargin == null || leverage == null || leverage <= 0 ||
+            currency.isNullOrBlank() ||
+            listOf(balance, equity, freeMargin).any { !it.isFinite() || it < 0.0 } ||
+            minOf(balance, equity) <= 0.0
+        ) {
+            return@withContext PreExecutionCheck(
+                false, 0.0, 0.0,
+                "BROKER_ACCOUNT_SNAPSHOT_INVALID: account values or leverage are incomplete; no manual or default values are substituted."
+            )
+        }
+        val riskBase = minOf(balance, equity)
+        val maxRiskDollar = riskBase * 0.01
+        val acc = com.destinedfx.core.risk.AccountState(
+            balance = balance, equity = equity, freeMargin = freeMargin,
+            leverage = leverage, currency = currency
+        )
         val sizing = com.destinedfx.core.risk.RiskEngine.positionSize(acc, 1.0, entryPrice, stopLoss, spec)
         when (sizing) {
             is SizingResult.Sized -> {
                 if (sizing.moneyRiskActual > maxRiskDollar + 1e-6) {
                     return@withContext PreExecutionCheck(
                         false, sizing.lots, sizing.moneyRiskActual,
-                        "Estimated loss ($${String.format(java.util.Locale.US, "%.2f", sizing.moneyRiskActual)}) exceeds 1% limit ($${String.format(java.util.Locale.US, "%.2f", maxRiskDollar)})."
+                        "Estimated loss (${currency} ${String.format(java.util.Locale.US, "%.2f", sizing.moneyRiskActual)}) exceeds 1% limit (${currency} ${String.format(java.util.Locale.US, "%.2f", maxRiskDollar)})."
                     )
                 }
                 return@withContext PreExecutionCheck(true, sizing.lots, sizing.moneyRiskActual, "Safety checks verified.")
@@ -1286,11 +1307,12 @@ open class DestinedFXViewModel(
                     if (isConn) {
                         val sym = selectedTicker.value
                         brokerQuote.value = activeBroker.getBrokerQuote(sym).getOrNull()
-                        val bal = activeBroker.accountMetrics.value?.balance ?: 0.0
-                        accountCapital.value = if (bal > 0.0) bal else configuredEquity.value
+                        val snapshot = activeBroker.accountSnapshot.value
+                            ?.takeIf { it.isDisplayable(maxAgeMs = 15_000L) }
+                        accountCapital.value = snapshot?.equity ?: 0.0
                     } else {
                         brokerQuote.value = null
-                        accountCapital.value = configuredEquity.value
+                        accountCapital.value = 0.0
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
