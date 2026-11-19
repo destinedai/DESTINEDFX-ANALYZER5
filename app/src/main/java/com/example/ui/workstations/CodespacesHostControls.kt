@@ -1,5 +1,8 @@
 package com.example.ui.workstations
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,16 +41,16 @@ fun CodespacesHostControls(
 ) {
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
     val github = remember(secrets) { CodespacesLifecycleClient(secrets) }
     val packagedClientId = BuildConfig.CODESPACES_GITHUB_CLIENT_ID.trim()
     var clientId by remember {
         mutableStateOf(packagedClientId.ifBlank { secrets.getCodespacesGitHubClientId() })
     }
     var device by remember { mutableStateOf<CodespacesLifecycleClient.DeviceAuthorization?>(null) }
-    var message by remember { mutableStateOf("Connect the GitHub App once to control the DestinedFX Codespace from this phone.") }
+    var message by remember { mutableStateOf("Connect your GitHub OAuth App to control the DestinedFX Codespace from this phone.") }
     var busy by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(secrets.getCodespacesGitHubAccessToken().isNotBlank()) }
-    var deviceCodeExpiresAt by remember { mutableStateOf(0L) }
 
     // GitHub Device Flow is polled automatically. The user still approves the device code
     // in GitHub's own page; the app never simulates or skips that owner consent.
@@ -92,7 +96,7 @@ fun CodespacesHostControls(
             color = androidx.compose.material3.MaterialTheme.colorScheme.primary
         )
         Text(
-            "Owner-only GitHub control. The GitHub App must enable Device Flow and grant Codespaces read plus Codespaces lifecycle admin write. Only this repository's Codespace is selectable.",
+            "Owner-only GitHub OAuth Device Flow. This app requests the codespace and offline_access scopes so it can manage this repository's Codespace and refresh its short-lived token. No OAuth client secret is bundled.",
             fontSize = 10.sp,
             color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -102,7 +106,7 @@ fun CodespacesHostControls(
                 onValueChange = { clientId = it },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !busy,
-                label = { Text("GitHub App Client ID (public)") },
+                label = { Text("GitHub OAuth App Client ID (public)") },
                 singleLine = true
             )
         } else {
@@ -115,7 +119,7 @@ fun CodespacesHostControls(
                     enabled = !busy && secrets.isSecureStorageAvailable,
                     onClick = {
                         if (secrets.saveCodespacesGitHubClientId(clientId)) {
-                            message = "GitHub App Client ID saved in encrypted app storage."
+                            message = "GitHub OAuth App Client ID saved in encrypted app storage."
                         } else {
                             message = "Client ID was not saved. Check the value and secure storage."
                         }
@@ -135,8 +139,7 @@ fun CodespacesHostControls(
                             }
                             val result = github.beginDeviceAuthorization()
                             device = result
-                            deviceCodeExpiresAt = System.currentTimeMillis() + result.expiresInSeconds * 1000L
-                            message = "Approve the one-time device code in GitHub. This app checks authorization automatically and saves the refreshable token securely."
+                            message = "Approve the one-time device code in GitHub. This app requests Codespaces access and refresh-token access, checks authorization automatically, and saves the token securely."
                         } catch (error: Exception) {
                             message = error.message ?: "GitHub device authorization could not start."
                         } finally {
@@ -144,18 +147,32 @@ fun CodespacesHostControls(
                         }
                     }
                 }
-            ) { Text("AUTHORIZE GITHUB", fontSize = 9.sp) }
+            ) { Text(if (authorized) "REAUTHORIZE GITHUB" else "AUTHORIZE GITHUB", fontSize = 9.sp) }
         }
 
         device?.let { request ->
             Text("One-time code: " + request.userCode, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            OutlinedButton(
-                enabled = !busy,
-                onClick = {
-                    runCatching { uriHandler.openUri(request.verificationUri) }
-                        .onFailure { message = "Open github.com/login/device in your browser and enter the code above." }
-                }
-            ) { Text("OPEN GITHUB DEVICE PAGE") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        if (clipboard == null) {
+                            message = "Clipboard unavailable. Enter the one-time code manually on GitHub."
+                        } else {
+                            clipboard.setPrimaryClip(ClipData.newPlainText("GitHub device code", request.userCode))
+                            message = "GitHub device code copied. Complete approval in the GitHub device page."
+                        }
+                    }
+                ) { Text("COPY CODE") }
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = {
+                        runCatching { uriHandler.openUri(request.verificationUri) }
+                            .onFailure { message = "Open github.com/login/device in your browser and enter the code above." }
+                    }
+                ) { Text("OPEN GITHUB DEVICE PAGE") }
+            }
             OutlinedButton(
                 enabled = !busy,
                 onClick = {
@@ -168,8 +185,8 @@ fun CodespacesHostControls(
         }
 
         Text(
-            if (authorized) "GitHub owner token: saved securely on this device"
-            else "GitHub owner token: not connected",
+            if (authorized) "GitHub OAuth authorization: saved securely on this device"
+            else "GitHub OAuth authorization: not connected",
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold
         )
@@ -310,11 +327,18 @@ fun CodespacesHostControls(
                     busy = true
                     github.revokeLocalAuthorization()
                     authorized = false
-                    message = "GitHub tokens cleared from this phone. Revoke the GitHub App authorization separately in GitHub Settings."
+                    message = "GitHub OAuth tokens cleared from this phone. The OAuth grant is still active until you revoke it in GitHub Settings."
                     busy = false
                 }
             }
         ) { Text("CLEAR SAVED GITHUB TOKENS", fontSize = 9.sp) }
+        OutlinedButton(
+            enabled = !busy,
+            onClick = {
+                runCatching { uriHandler.openUri("https://github.com/settings/applications") }
+                    .onFailure { message = "Open GitHub Settings → Applications to revoke DestinedFX's OAuth grant." }
+            }
+        ) { Text("GITHUB AUTHORIZATION SETTINGS", fontSize = 9.sp) }
         Text(message, fontSize = 10.sp, color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
