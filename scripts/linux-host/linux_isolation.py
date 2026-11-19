@@ -380,6 +380,19 @@ class LinuxSlotManager:
         username = username_for_pairing(pairing_id)
         slot_root = self.slots_root / pairing_key(pairing_id)
         username, uid, gid = self._ensure_account(pairing_id, slot_root)
+        # One pairing gets exactly one concurrently active terminal. A re-enrolment
+        # must revoke the previous job first; reusing the same Unix UID for a second
+        # live Wine prefix would weaken the per-pairing isolation boundary.
+        if slot_root.exists():
+            for marker in slot_root.glob("*/terminal/.destinedfx-worker.json"):
+                try:
+                    value = json.loads(marker.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError):
+                    raise IsolationError("PAIRING_SLOT_MARKER_UNREADABLE") from None
+                if value.get("status") in {
+                    "LAUNCH_PENDING", "AUTHENTICATING", "READY", "OPERATOR_REVIEW"
+                }:
+                    raise IsolationError("PAIRING_TERMINAL_ALREADY_ACTIVE")
         job_root = slot_root / job_id
         wine_prefix = job_root / "wine"
         terminal_home = job_root / "terminal"
