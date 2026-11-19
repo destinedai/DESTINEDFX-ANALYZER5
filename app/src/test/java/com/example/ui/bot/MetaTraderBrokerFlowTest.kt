@@ -65,7 +65,7 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithText("CLOSE").performClick()
         composeRule.onNodeWithTag("add_account").performClick()
         composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
-        composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
+        composeRule.onNodeWithText("Test and verify an existing MT5 broker login").assertIsDisplayed()
         composeRule.onNodeWithTag("mt5_mode_hint_notice").assertIsDisplayed()
         composeRule.onNodeWithTag("mt5_login_verification_path").assertIsDisplayed()
         composeRule.onNodeWithText("TEST LOGIN & VERIFY").assertIsDisplayed()
@@ -92,7 +92,7 @@ class MetaTraderBrokerFlowTest {
         listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
             composeRule.onNodeWithTag("broker_list").performScrollToNode(hasTestTag("broker_${brand}_MT5"))
             composeRule.onNodeWithTag("broker_${brand}_MT5").performClick()
-            composeRule.onNodeWithText("Login to an existing account").assertIsDisplayed()
+            composeRule.onNodeWithText("Test and verify an existing MT5 broker login").assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_login_fields_help").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
             composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
