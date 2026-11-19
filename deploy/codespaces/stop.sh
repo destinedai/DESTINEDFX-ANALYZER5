@@ -9,14 +9,15 @@ SLOT_RUNTIME="$RUNTIME/slot-runtime"
 PASS=0
 
 stop_recorded() {
-  local file="$1" expected="$2" pid cmdline
+  local file="$1" expected="$2" pid cmdline owner
   [[ -s "$file" ]] || return 0
   pid="$(cat "$file" 2>/dev/null || true)"
   [[ "$pid" =~ ^[0-9]+$ && -n "$expected" ]] || { rm -f "$file"; return 0; }
   kill -0 "$pid" 2>/dev/null || { rm -f "$file"; return 0; }
   cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
-  if [[ "$cmdline" != *"$expected"* ]]; then
-    printf 'WARN: left PID %s untouched because identity did not match %s.\n' "$pid" "$expected" >&2
+  owner="$(awk '/^Uid:/ {print $3}' "/proc/$pid/status" 2>/dev/null || true)"
+  if [[ "$cmdline" != *"$expected"* || "$owner" != "$EUID" ]]; then
+    printf 'WARN: left PID %s untouched because command or owner identity did not match %s.\n' "$pid" "$expected" >&2
     rm -f "$file"
     return 1
   fi
@@ -115,7 +116,33 @@ GUI_INSTALLER_WAS_TRACKED=0
 stop_recorded "$RUNTIME/installer-gui.pid" "install-mt5.sh --gui" || true
 stop_recorded "$RUNTIME/x11vnc.pid" "x11vnc" || true
 stop_recorded "$RUNTIME/novnc.pid" "websockify" || true
-stop_recorded "$RUNTIME/xvfb.pid" "Xvfb :99" || true
+
+# An Xvfb adopted from the devcontainer is borrowed, not owned. Never stop it.
+XVFB_OWNERSHIP=""
+if [[ -s "$RUNTIME/xvfb.ownership" ]]; then
+  XVFB_OWNERSHIP="$(cat "$RUNTIME/xvfb.ownership" 2>/dev/null || true)"
+fi
+case "$XVFB_OWNERSHIP" in
+  started)
+    stop_recorded "$RUNTIME/xvfb.pid" "Xvfb :99" || true
+    ;;
+  adopted)
+    if [[ -s "$RUNTIME/xvfb.pid" ]]; then
+      python3 "$ROOT/deploy/codespaces/display_processes.py" check-xvfb "$(cat "$RUNTIME/xvfb.pid")" >/dev/null 2>&1 || true
+    fi
+    rm -f "$RUNTIME/xvfb.pid"
+    printf 'PASS: left pre-existing adopted Xvfb running; this service did not own it.\n'
+    ;;
+  "")
+    # Compatibility with PID records from older launchers.
+    stop_recorded "$RUNTIME/xvfb.pid" "Xvfb :99" || true
+    ;;
+  *)
+    printf 'WARN: unknown Xvfb ownership marker; left display process untouched.\n' >&2
+    XVFB_OWNERSHIP="adopted"
+    rm -f "$RUNTIME/xvfb.pid"
+    ;;
+esac
 
 if (( GUI_INSTALLER_WAS_TRACKED )) && command -v wineserver >/dev/null 2>&1; then
   GUI_WINEPREFIX="${DESTINEDFX_MT5_GUI_WINEPREFIX:-${WINEPREFIX:-$HOME/.mt5}}"
@@ -132,6 +159,10 @@ while IFS='|' read -r pid expected; do
     printf 'WARN: skipped legacy or unverified PID record.\n' >&2
     continue
   }
+  if [[ "$expected" == "Xvfb :99" && "$XVFB_OWNERSHIP" == "adopted" ]]; then
+    printf 'PASS: skipped adopted Xvfb PID %s because it is not owned by this service.\n' "$pid"
+    continue
+  fi
   if kill -0 "$pid" 2>/dev/null; then
     cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
     if [[ "$cmdline" != *"$expected"* ]]; then
@@ -156,5 +187,5 @@ while IFS='|' read -r pid expected; do
   fi
 done < "$RUNTIME/pids"
 
-rm -f "$RUNTIME/pids"
+rm -f "$RUNTIME/pids" "$RUNTIME/xvfb.ownership"
 printf 'PASS: stop completed; private credentials were retained in the Codespaces-only state directory.\n'

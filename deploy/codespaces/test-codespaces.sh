@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/launch-mt5.sh" "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" "$ROOT/scripts/linux-host/wine-guard.sh" "$ROOT/scripts/linux-host/wine-probe.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
+for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/vnc-up.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/launch-mt5.sh" "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" "$ROOT/scripts/linux-host/wine-guard.sh" "$ROOT/scripts/linux-host/wine-probe.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
 [[ -x "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" ]] || fail 'Wine MT5 compatibility gate missing or not executable'
 [[ -x "$ROOT/scripts/linux-host/wine-guard.sh" ]] || fail 'Wine version guard missing or not executable'
 [[ -x "$ROOT/scripts/linux-host/wine-probe.sh" ]] || fail 'Wine startup probe missing or not executable'
@@ -54,6 +54,14 @@ grep -Fq 'MT5 terminal readiness remains unverified' "$ROOT/deploy/codespaces/gu
 grep -Fq 'mt5_terminal_ready NOT_VERIFIED' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'terminal readiness must remain unverified absent owner evidence'
 grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
 grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
+if grep -Fq 'Xvfb :99 -screen 0 1280x800x24' "$ROOT/deploy/codespaces/start.sh"; then fail 'start.sh must delegate Xvfb ownership to vnc-up.sh'; fi
+grep -Fq 'display_processes.py check-xvfb' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'existing Xvfb must be identity-verified before adoption'
+grep -Fq 'cleanup-legacy' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'legacy unauthenticated VNC services must be safely reconciled'
+grep -Fq -- '--listen 127.0.0.1' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC websocket must bind to loopback only'
+grep -Fq 'xvfb.ownership' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must distinguish owned and adopted Xvfb'
+grep -Fq 'MetaEditor64.exe' "$ROOT/deploy/codespaces/start.sh" || fail 'MetaEditor filename case fallback missing'
+grep -Fq 'not_loopback_only' "$ROOT/deploy/codespaces/vnc-selfcheck.py" || fail 'VNC self-check must reject wildcard noVNC listeners'
+python3 "$ROOT/deploy/codespaces/test_display_processes.py" || fail 'display process identity tests failed'
 grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
 grep -Fq -- '--heartbeat=30' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC websocket heartbeat missing'
 grep -Fq -- 'cacheBust=' "$ROOT/deploy/codespaces/gui.sh" || fail 'noVNC cache-busting URL missing'

@@ -89,9 +89,19 @@ if ! TERMINAL_EXE="$(find_terminal)"; then
   fail 'MT5 terminal template is missing; install the official terminal before enabling managed account sessions.'; exit 1
 fi
 TERMINAL_ROOT="$(dirname "$TERMINAL_EXE")"
-METAEDITOR_EXE="$TERMINAL_ROOT/metaeditor64.exe"
-if [[ ! -f "$METAEDITOR_EXE" ]]; then
-  fail 'MetaEditor is missing from the MT5 terminal template; isolated EA compilation is required.'; exit 1
+find_metaeditor() {
+  local candidate
+  for candidate in \
+      "$TERMINAL_ROOT/metaeditor64.exe" \
+      "$TERMINAL_ROOT/MetaEditor64.exe" \
+      "$TERMINAL_ROOT/MetaEditor.exe"; do
+    [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+METAEDITOR_EXE=""
+if ! METAEDITOR_EXE="$(find_metaeditor)"; then
+  fail 'MetaEditor is missing from the MT5 terminal template (checked supported filename casing); isolated EA compilation is required.'; exit 1
 fi
 export MT5_TERMINAL_EXE="$TERMINAL_EXE"
 export DESTINEDFX_MT5_TERMINAL_TEMPLATE="$TERMINAL_ROOT"
@@ -177,10 +187,7 @@ chmod 600 "$RUNTIME/pids"
 cleanup() { "$ROOT/deploy/codespaces/stop.sh" >/dev/null 2>&1 || true; }
 trap cleanup EXIT INT TERM
 
-if ! pgrep -f '^Xvfb :99 ' >/dev/null 2>&1; then
-  Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >>"$RUNTIME/xvfb.log" 2>&1 &
-  track_pid "$!" "Xvfb :99"
-fi
+# vnc-up.sh is the single owner of Xvfb creation/adoption and PID tracking.
 export DISPLAY=:99
 bash "$ROOT/deploy/codespaces/vnc-up.sh"
 sudo -n env PATH="$PATH" HOST_AGENT_TOKEN_FILE="$HOST_AGENT_TOKEN_FILE" \
