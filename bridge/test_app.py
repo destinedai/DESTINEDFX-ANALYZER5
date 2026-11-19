@@ -1289,10 +1289,14 @@ def test_profile_reenrollment_invalidates_associated_live_lease(monkeypatch):
         'Authorization':'Bearer '+pairing['demo_app_token'],
         'X-Management-Identity':management_identity_assertion(),
     }
-    # Simulate the worker-confirmed completion of this demo terminal's revoke.
-    # Re-enrolment must not replace credentials while its prior terminal is active.
+    # Simulate the worker-confirmed completion of the DEMO terminal's revoke.
+    # The LIVE job returned by live_ready() belongs to a different pairing.
     with app.tx(True) as c:
-        c.execute("UPDATE worker_jobs SET status='REVOKED',lease_until=NULL WHERE id=?",(job['job_id'],))
+        c.execute(
+            """UPDATE worker_jobs SET status='REVOKED',lease_until=NULL
+               WHERE pairing_id=? AND kind='PROVISION'""",
+            (pairing['demo_pairing_id'],),
+        )
     re_enrolled=client.post('/v1/app/managed-account',headers=demo_headers,json={
         'login':'600001','server':'Broker-Demo','password':'new-demo-password',
         'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True,
