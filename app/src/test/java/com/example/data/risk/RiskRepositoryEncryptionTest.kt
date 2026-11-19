@@ -1,6 +1,7 @@
 package com.example.data.risk
 
 import android.content.Context
+import androidx.datastore.preferences.core.edit
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -68,7 +69,7 @@ class RiskRepositoryEncryptionTest {
         assertEquals(0.0, profile.accountBalance, 0.0)
         assertEquals(1.0, profile.fixedRiskPercentage, 0.0)
         assertFalse(repository.validateTradeRisk(10.0))
-        assertTrue("Only plaintext copy must remain intact until encrypted migration succeeds", legacy.data.first().isNotEmpty())
+        assertTrue("Only plaintext copy must remain intact until encrypted migration succeeds", legacy.data.first().asMap().isNotEmpty())
         assertFalse(unavailable.saveEncryptedRiskProfile(profile))
     }
 }
