@@ -8,6 +8,15 @@ import org.junit.Test
 
 class CodespacesBridgeDiscoveryTest {
     @Test
+    fun githubDeviceFlowRequestsCodespacesPermissionAndRefreshTokens() {
+        assertEquals("codespace offline_access", CODESPACES_OAUTH_SCOPES)
+        assertTrue(hasCodespacesOAuthScope("codespace offline_access"))
+        assertTrue(hasCodespacesOAuthScope("read:user,codespace,offline_access"))
+        assertFalse(hasCodespacesOAuthScope("offline_access"))
+        assertFalse(hasCodespacesOAuthScope("notcodespace offline_access"))
+    }
+
+    @Test
     fun buildsTheDocumentedHttpsOriginForPort8000() {
         assertEquals(
             "https://steady-lizard-abc123-8000.app.github.dev",
