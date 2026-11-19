@@ -294,6 +294,28 @@ class SecretsManagerBridgePendingTest {
         assertFalse(legacy.exists())
     }
 
+    @Test fun liveLeaseRenewalReminderMarkersMigrateIntoEncryptedStorage() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val fingerprint = "a".repeat(64)
+        val expiresAt = 1_800_000_000_000L
+        val legacy = context.getSharedPreferences("mode_renewal_reminders", 0)
+        val legacyKey = "notified_${fingerprint}:${expiresAt}"
+        legacy.edit().putBoolean(legacyKey, true).commit()
+
+        val manager = SecretsManager(context)
+        if (manager.isSecureStorageAvailable) {
+            assertTrue(manager.wasLiveLeaseRenewalReminderSent(fingerprint, expiresAt))
+            assertTrue("Legacy notification markers clear only after encrypted migration", legacy.all.isEmpty())
+            assertFalse(manager.markLiveLeaseRenewalReminderSent("not-a-sha256-fingerprint", expiresAt))
+            assertFalse(manager.wasLiveLeaseRenewalReminderSent(fingerprint, expiresAt + 1L))
+            assertTrue(manager.markLiveLeaseRenewalReminderSent("b".repeat(64), expiresAt))
+            assertTrue(manager.wasLiveLeaseRenewalReminderSent("b".repeat(64), expiresAt))
+        } else {
+            assertTrue("Preserve the old reminder marker until encryption is available", legacy.getBoolean(legacyKey, false))
+            assertFalse(manager.markLiveLeaseRenewalReminderSent(fingerprint, expiresAt))
+        }
+    }
+
     @Test fun manualMt5BalancePersistenceIsDisabledAndCannotBeReadAsBrokerEvidence() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         assertFalse(manager.saveMT5AccountBalance(12_345.67))
