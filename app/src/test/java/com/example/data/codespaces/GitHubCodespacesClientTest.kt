@@ -153,12 +153,39 @@ class GitHubCodespacesClientTest {
         assertEquals("codespace-generated-name", found.single().name)
         assertEquals(2, found.single().machineCpus)
         client.startCodespace(found.single())
-        assertEquals("/user/codespaces?per_page=100", mock.takeRequest().path)
+        assertEquals("/user/codespaces?per_page=100&page=1", mock.takeRequest().path)
         assertEquals("/user/codespaces/codespace-generated-name", mock.takeRequest().path)
         val startRequest = mock.takeRequest()
         assertEquals("/user/codespaces/codespace-generated-name/start", startRequest.path)
         assertEquals("POST", startRequest.method)
         assertTrue(startRequest.getHeader("Authorization")!!.startsWith("Bearer ghu_"))
+    }
+
+    @Test
+    fun discoveryPaginatesBeyondFirstHundredAndDeduplicatesCodespaces() = runBlocking {
+        saveUsableTokens()
+        val mock = server()
+        val firstPage = org.json.JSONArray()
+        repeat(100) { index ->
+            firstPage.put(org.json.JSONObject()
+                .put("name", "codespace-$index")
+                .put("state", "Shutdown")
+                .put("repository", org.json.JSONObject().put("full_name", "destinedai/DESTINEDFX-ANALYZER5"))
+                .put("git_status", org.json.JSONObject().put("ref", "refs/heads/free/phone-only-v1"))
+                .put("machine", org.json.JSONObject().put("cpus", 2)))
+        }
+        val secondPage = org.json.JSONArray().put(org.json.JSONObject()
+            .put("name", "codespace-100")
+            .put("state", "Available")
+            .put("repository", org.json.JSONObject().put("full_name", "destinedai/DESTINEDFX-ANALYZER5"))
+            .put("git_status", org.json.JSONObject().put("ref", "refs/heads/free/phone-only-v1"))
+            .put("machine", org.json.JSONObject().put("cpus", 2)))
+        mock.enqueue(MockResponse().setBody(org.json.JSONObject().put("codespaces", firstPage).toString()))
+        mock.enqueue(MockResponse().setBody(org.json.JSONObject().put("codespaces", secondPage).toString()))
+        val found = client(mock).listTargetCodespaces()
+        assertEquals(101, found.size)
+        assertEquals("/user/codespaces?per_page=100&page=1", mock.takeRequest().path)
+        assertEquals("/user/codespaces?per_page=100&page=2", mock.takeRequest().path)
     }
 
     @Test
