@@ -97,3 +97,18 @@ MetaQuotes Virtual Hosting is not offered by this design. It runs a terminal and
 [5]: https://www.metatrader5.com/en/terminal/help/virtual_hosting/virtual_hosting_migration "MetaTrader 5 Virtual Hosting migration"
 [6]: https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/ "Cloudflare Access Service Tokens, headers and rotation"
 [7]: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/ "Cloudflare Access JWT assertion verification, JWKS, issuer, and audience"
+
+## LIVE infrastructure preflight
+
+After the management backend and persistent Windows Bridge have been deployed, run the read-only preflight from a machine that can reach both HTTPS endpoints:
+
+```powershell
+python scripts/live_activation_preflight.py `
+  --management-url https://YOUR-MANAGEMENT-ORIGIN `
+  --bridge-url https://YOUR-OWNER-HOST.ts.net `
+  --write-public-key .\management-step-up-public.pem
+```
+
+The script compares the backend's published Ed25519 public-key fingerprint with the public-key fingerprint actually loaded by the Bridge, verifies that the Bridge reports a persistent host and durable managed-execution configuration, and checks whether a real terminal pairing is ready. The optional output is a public key only; it can be supplied to `install-owner-stack.ps1 -ManagementStepUpPublicKeyPath`. Do not copy a private key to the Bridge. The key file written here is not itself proof that the DPAPI bundle was updated; rerun the preflight after the installer/supervisor restart and require the Bridge fingerprint check to pass.
+
+The script is read-only apart from the optional local public PEM output. It does not enable LIVE, read account credentials, fabricate the DEMO PASS record, provision MT5 accounts, or submit orders. A successful result still does not replace each user's same-broker DEMO acceptance, LIVE account pairing, fresh EA identity/risk telemetry, and explicit password/typed-confirmation step-up. A pending `NO_VERIFIED_TERMINAL_PAIRING` result means the infrastructure is configured but the actual MT5 terminal has not yet established a verified fresh heartbeat.
