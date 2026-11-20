@@ -449,6 +449,33 @@ def test_configuration_health_is_distinct_from_terminal_readiness(monkeypatch):
     assert configured.json()['managed_execution']=='configured'
     assert client.get('/health/ready').status_code == 503
 
+def test_configuration_health_exposes_only_matching_step_up_public_key_fingerprint(monkeypatch):
+    managed_env(monkeypatch)
+    response=client.get('/health/config')
+    assert response.status_code == 200
+    body=response.json()
+    public_key=app.TEST_STEP_UP_PRIVATE_KEY.public_key()
+    der=public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    expected=__import__('hashlib').sha256(der).hexdigest()
+    assert body['management_step_up_key_fingerprint_sha256']==expected
+    assert body['management_step_up_issuer']=='destinedfx-management'
+    assert body['management_step_up_audience']=='destinedfx-bridge'
+    assert 'private' not in str(body).lower()
+
+
+def test_configuration_health_reports_missing_or_invalid_step_up_key(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app,'MANAGEMENT_STEP_UP_PUBLIC_KEY','not-a-valid-public-key')
+    response=client.get('/health/config')
+    assert response.status_code == 200
+    body=response.json()
+    assert body['management_step_up_key_fingerprint_sha256']==''
+    assert body['management_step_up_issuer']==''
+    assert body['management_step_up_audience']==''
+
 def test_worker_attestation_is_signed_bound_and_single_use(monkeypatch):
     managed_env(monkeypatch)
     p, ah = managed_pair()
