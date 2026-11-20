@@ -354,15 +354,34 @@ def _graceful_stop(
     ):
         _write_status("STOP_FAILED", reason="START_PROCESS_IDENTITY_CHANGED")
         return False
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        _write_status("STOP_FAILED", reason="PIDFD_SIGNALING_UNAVAILABLE")
+        return False
     try:
-        # Signal only the process whose PID/start-time/UID/executable/argv were
-        # checked above. stop.sh has already performed the child-service cleanup.
-        child.terminate()
+        pidfd = os.pidfd_open(child.pid, 0)
     except ProcessLookupError:
         return True
     except OSError:
-        _write_status("STOP_FAILED", reason="START_PROCESS_STOP_FAILED")
+        _write_status("STOP_FAILED", reason="START_PROCESS_PIDFD_OPEN_FAILED")
         return False
+    try:
+        # Revalidate the whole start-manager identity after pidfd_open, then
+        # signal the pinned process descriptor to close the PID-reuse window.
+        pinned_identity = _proc_identity(child.pid)
+        if (
+            not _start_manager_identity_matches(pinned_identity, str(START_SCRIPT))
+            or pinned_identity["start_ticks"] != start_ticks
+        ):
+            _write_status("STOP_FAILED", reason="START_PROCESS_IDENTITY_CHANGED")
+            return False
+        signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        _write_status("STOP_FAILED", reason="START_PROCESS_PIDFD_SIGNAL_FAILED")
+        return False
+    finally:
+        os.close(pidfd)
 
     try:
         child.wait(timeout=15)
