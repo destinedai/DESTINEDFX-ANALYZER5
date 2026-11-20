@@ -164,7 +164,7 @@ track_pid() {
       fail "Could not capture complete process identity for $expected."
       return 1
     }
-  printf '%s|%s\\n' "$pid" "${record##*/}" >>"$RUNTIME/pids"
+  printf '%s|%s\n' "$pid" "${record##*/}" >>"$RUNTIME/pids"
   chmod 600 "$RUNTIME/pids"
 }
 if [[ -f "$RUNTIME/pids" && -s "$RUNTIME/pids" ]]; then
