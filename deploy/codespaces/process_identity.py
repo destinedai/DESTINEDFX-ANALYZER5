@@ -75,7 +75,7 @@ def capture_identity(
     while True:
         current = snapshot(pid, proc_root)
         if current and current["state"] not in {"Z", "X"}:
-            args_text = "\0".join(current["args"])
+            args_text = " ".join(current["args"])
             exe_matches = not expected_exe or current["exe"] == os.path.realpath(expected_exe)
             fragment_matches = not expected_fragment or expected_fragment in args_text
             if current["uid"] == expected_uid and exe_matches and fragment_matches:
