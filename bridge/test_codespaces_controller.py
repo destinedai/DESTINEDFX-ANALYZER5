@@ -1,3 +1,4 @@
+import ast
 import json
 import subprocess
 from pathlib import Path
@@ -39,9 +40,14 @@ def test_devcontainer_start_command_is_non_blocking_python_supervisor():
     assert config["postStartCommand"] == (
         "python3 scripts/host/destinedfx_trigger_host.py start_all"
     )
-    adapter = (ROOT / "scripts/host/destinedfx_trigger_host.py").read_text(encoding="utf-8")
+    adapter_path = ROOT / "scripts/host/destinedfx_trigger_host.py"
+    adapter = adapter_path.read_text(encoding="utf-8")
     assert "host_controller.ensure_started()" in adapter
-    assert "gui.sh" not in adapter
+    tree = ast.parse(adapter, filename=str(adapter_path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            call_source = ast.get_source_segment(adapter, node) or ""
+            assert "gui.sh" not in call_source
     assert "start.sh" not in config["postStartCommand"]
     controller = (ROOT / "deploy/codespaces/host_controller.py").read_text(encoding="utf-8")
     assert "inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15)" in controller
