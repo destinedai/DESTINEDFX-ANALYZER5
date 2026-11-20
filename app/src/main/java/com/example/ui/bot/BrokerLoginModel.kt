@@ -208,6 +208,8 @@ object ConnectFailures {
         "PROVIDER_DATA_STALE" to "Provider session or account data is not fresh.",
         "SECURE_STORAGE_UNAVAILABLE" to "Secure device storage is unavailable; provider login is blocked.",
         "CONNECT_TIMEOUT" to "The terminal did not answer in time. Retry.",
+        "HOST_CAPACITY_TIMEOUT" to "Your broker login is queued because the isolated MT5 host is at capacity. The request is retained; tap TEST LOGIN & VERIFY again to resume the same account without resubmitting its password.",
+        "PAIRING_TERMINAL_ALREADY_ACTIVE" to "This broker profile already has another account provisioning or connected. Revoke it and wait for verified cleanup before switching accounts.",
         "FORM_INCOMPLETE" to "Fill in every field first.",
         "LOGIN_FAILED_UNCLASSIFIED" to "Login failed for a reason the host could not classify.",
     ) + BridgeGatewayFailure.values().associate { it.name to it.userMessage }
@@ -217,7 +219,11 @@ object ConnectFailures {
 }
 
 enum class ConnectStage(val label: String) {
-    SENT("Sent"), TERMINAL_LOGGING_IN("Terminal logging in"), HEARTBEAT("Heartbeat"), VERIFIED("Verified")
+    SENT("Sent"),
+    HOST_QUEUED("Waiting for an isolated MT5 slot"),
+    TERMINAL_LOGGING_IN("MT5 terminal logging in"),
+    HEARTBEAT("Authenticated terminal heartbeat"),
+    VERIFIED("Broker account verified")
 }
 
 data class LoginAccountChoice(val id: String, val label: String, val mode: LoginMode)
@@ -307,7 +313,7 @@ class ProviderConnectBackend(private val verifier: ProviderLoginVerifier) : Conn
 class ConnectUseCase(
     private val backend: ConnectBackend,
     private val pollIntervalMs: Long = 2_000,
-    private val timeoutMs: Long = 120_000,
+    private val timeoutMs: Long = DEFAULT_TIMEOUT_MS,
     private val clock: () -> Long = System::currentTimeMillis,
     private val pause: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -333,7 +339,9 @@ class ConnectUseCase(
                         account = seen.account,
                     )
                 }
-                if (clock() >= deadline) return failed("CONNECT_TIMEOUT")
+                if (clock() >= deadline) {
+                    return failed(if (reached == ConnectStage.HOST_QUEUED) "HOST_CAPACITY_TIMEOUT" else "CONNECT_TIMEOUT")
+                }
                 pause(pollIntervalMs)
             }
         } catch (e: BridgeGatewayException) {
@@ -348,6 +356,11 @@ class ConnectUseCase(
     }
 
     private fun failed(code: String) = ConnectOutcome.Failed(code, ConnectFailures.sentence(code))
+
+    companion object {
+        /** Linux/Windows MT5 provisioning and EA authentication may outlast a short phone HTTP timeout. */
+        const val DEFAULT_TIMEOUT_MS = 480_000L
+    }
 }
 
 /** Shared evidence gate used by both the primary Bot workspace and the broker-login adapter. */
