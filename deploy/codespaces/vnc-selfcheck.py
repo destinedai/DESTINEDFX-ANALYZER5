@@ -6,7 +6,6 @@ import os
 import socket
 import importlib.util
 import time
-import stat
 from pathlib import Path
 
 STATE = Path(os.environ.get(
@@ -33,26 +32,9 @@ failures: list[str] = []
 
 def read_configured_password() -> str | None:
     try:
-        info = PASSWORD.lstat()
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or PASSWORD.is_symlink()
-            or info.st_mode & 0o077
-            or info.st_uid != UID
-        ):
-            return None
-        lines = PASSWORD.read_text(encoding="ascii").splitlines()
-    except (OSError, UnicodeError):
+        return RFB_MODULE.read_password_file(PASSWORD, UID)
+    except (OSError, ValueError):
         return None
-    for line in lines:
-        if not line.strip() or line.startswith("#") or "__SKIP__" in line:
-            continue
-        value = line.split("__COMM__", 1)[0].rstrip()
-        if value == "__EMPTY__":
-            return ""
-        return value
-    return None
-
 
 def process(pid_file: str, expected: str, *, require_record: bool = True) -> tuple[int, list[str]] | None:
     path = RUNTIME / pid_file
