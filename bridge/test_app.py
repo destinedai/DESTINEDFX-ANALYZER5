@@ -2491,6 +2491,26 @@ def test_linux_shared_terminal_refuses_broker_credentials_before_storage_or_job_
         assert c.execute('SELECT COUNT(*) FROM worker_jobs').fetchone()[0] == 0
 
 
+def test_host_shutdown_safe_alias_uses_the_same_owner_and_safety_gate(monkeypatch, tmp_path):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
+    monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    p = pair()
+    headers = {
+        'Authorization': 'Bearer ' + p['app_token'],
+        'X-Management-Identity': p['_management_identity_assertion'],
+    }
+    response = client.post('/v1/app/host/shutdown-safe', headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()['status'] == 'PREPARED'
+    assert response.json()['backup_verified'] is True
+    blocked = client.post('/v1/app/commands', headers=headers, json=command_req('STOP'))
+    assert blocked.status_code == 409
+    assert blocked.json()['detail']['code'] == 'HOST_SHUTDOWN_PREPARED'
+
+
 def test_manual_host_stop_is_owner_gated_and_blocks_commands_until_cancelled(monkeypatch, tmp_path):
     managed_env(monkeypatch)
     monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
