@@ -97,6 +97,8 @@ grep -Fq 'chmod 700 "$STATE" "$RUNTIME"' "$ROOT/deploy/codespaces/start.sh" || f
 grep -Fq 'chmod 600 "$STATE/bridge.env"' "$ROOT/deploy/codespaces/start.sh" || fail 'private credentials file mode missing'
 pass 'generated credentials are constrained to private state modes'
 grep -Fq 'linux-slot-worker.py" --loop --interval 3' "$ROOT/deploy/codespaces/start.sh" || fail 'start.sh must run the isolated Linux slot connect-job worker'
+grep -Fq 'linux-slot-worker.py --loop --interval 3' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'first-run check must detect the actual isolated Linux slot worker'
+if grep -Fq 'pgrep -f "linux-worker.py --loop"' "$ROOT/deploy/codespaces/first-run-check.sh"; then fail 'first-run check must not mistake legacy linux-worker for Codespaces slot worker'; fi
 grep -Fq 'DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true' "$ROOT/deploy/codespaces/start.sh" || fail 'loopback control plane opt-in missing'
 grep -Fq 'unset WINEPREFIX MT5_JOURNAL_DIR DESTINEDFX_EA_SET_PATH' "$ROOT/deploy/codespaces/start.sh" || fail 'shared Wine prefix, journal and preset overrides must remain unset'
 grep -Fq 'export DESTINEDFX_ISOLATED_SLOTS=true' "$ROOT/deploy/codespaces/start.sh" || fail 'per-user isolated MT5 slots must be enabled'
