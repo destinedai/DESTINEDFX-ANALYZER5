@@ -22,7 +22,7 @@ def write_process(proc: Path, pid: int, *, uid: int = 1000, state: str = "S",
         ])) + b"\0"
     )
     # /proc/<pid>/stat starttime is field 22; after state (field 3), it is tail index 19.
-    stat_tail = " ".join(["0"] * 18 + [str(start_ticks)])
+    stat_tail = " ".join(["0"] * 19 + [str(start_ticks)])
     (base / "stat").write_text(f"{pid} (python3) {state} {stat_tail}")
     executable = proc / "python3.12"
     executable.write_text("fixture")
