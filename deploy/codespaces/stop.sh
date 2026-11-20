@@ -7,6 +7,17 @@ BRIDGE_DB="$STATE/bridge.sqlite3"
 SLOT_ROOT="${DESTINEDFX_SLOT_ROOT:-/home/destinedfx-slots}"
 SLOT_RUNTIME="$RUNTIME/slot-runtime"
 PASS=0
+MODE="${1:-full}"
+if [[ "$MODE" == "--preflight" ]]; then
+  [[ "$#" -eq 1 ]] || { printf 'FAIL: stop preflight takes no additional arguments.\n' >&2; exit 2; }
+  if ! python3 "$ROOT/scripts/linux-host/linux-slot-worker.py" --check-stop; then
+    printf 'FAIL: local stop preflight did not verify broker state and isolated-slot cleanup prerequisites.\n' >&2
+    exit 2
+  fi
+  printf 'PASS: STOP PREFLIGHT acknowledged by stop.sh; no services or trading processes were stopped.\n'
+  exit 0
+fi
+[[ "$MODE" == "full" && "$#" -le 1 ]] || { printf 'FAIL: unsupported stop.sh mode.\n' >&2; exit 2; }
 
 stop_recorded() {
   local file="$1" expected="$2" pid cmdline owner
