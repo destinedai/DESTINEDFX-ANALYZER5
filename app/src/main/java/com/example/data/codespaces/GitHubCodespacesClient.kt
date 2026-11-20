@@ -17,6 +17,12 @@ import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
+data class GitHubCodespacesEndpoints(
+    val deviceCodeUrl: String = "https://github.com/login/device/code",
+    val accessTokenUrl: String = "https://github.com/login/oauth/access_token",
+    val apiBaseUrl: String = "https://api.github.com"
+)
+
 /**
  * Device-flow GitHub App client for the signed-in owner.
  *
@@ -30,7 +36,8 @@ class GitHubCodespacesClient(
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(25, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val endpoints: GitHubCodespacesEndpoints = GitHubCodespacesEndpoints()
 ) {
     data class DeviceAuthorization(
         val deviceCode: String,
@@ -64,8 +71,6 @@ class GitHubCodespacesClient(
         const val DAILY_WALL_MINUTES = 90L
         const val LOW_BUDGET_WARNING_CORE_HOURS = 10.0
         private const val API = "https://api.github.com"
-        private const val DEVICE_CODE_URL = "https://github.com/login/device/code"
-        private const val ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
         private const val DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
         private const val AUTH_EARLY_REFRESH_MS = 60_000L
         private const val USER_AGENT = "DestinedFX-Android-Codespaces"
@@ -112,7 +117,7 @@ class GitHubCodespacesClient(
         token: String,
         method: String = "GET"
     ): JSONObject {
-        require(url.startsWith(API + "/")) { "Blocked non-GitHub API URL." }
+        require(url.startsWith(endpoints.apiBaseUrl.trimEnd('/') + "/")) { "Blocked non-GitHub API URL." }
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/vnd.github+json")
@@ -143,14 +148,14 @@ class GitHubCodespacesClient(
             "Android Keystore-backed storage is unavailable; GitHub tokens will not be stored."
         }
         val body = postForm(
-            DEVICE_CODE_URL,
+            endpoints.deviceCodeUrl,
             mapOf("client_id" to clientId(), "scope" to "offline_access")
         )
         val deviceCode = body.optString("device_code")
         val userCode = body.optString("user_code")
         val verificationUri = body.optString("verification_uri")
         val expiresIn = body.optLong("expires_in", 0L)
-        val interval = body.optLong("interval", 5L).coerceAtLeast(5L)
+        val interval = body.optLong("interval", 5L).coerceAtLeast(1L)
         require(deviceCode.isNotBlank() && userCode.isNotBlank() &&
             verificationUri == "https://github.com/login/device" && expiresIn in 60L..1800L) {
             "GitHub returned an incomplete device authorization response."
@@ -173,7 +178,7 @@ class GitHubCodespacesClient(
             delay(interval * 1000L)
             val result = withContext(Dispatchers.IO) {
                 postForm(
-                    ACCESS_TOKEN_URL,
+                    endpoints.accessTokenUrl,
                     mapOf(
                         "client_id" to clientId(),
                         "device_code" to authorization.deviceCode,
@@ -252,7 +257,7 @@ class GitHubCodespacesClient(
 
     suspend fun listTargetCodespaces(): List<Codespace> = withContext(Dispatchers.IO) {
         val token = validAccessToken()
-        val url = "$API/user/codespaces?per_page=100"
+        val url = "${endpoints.apiBaseUrl.trimEnd('/')}/user/codespaces?per_page=100"
         val body = apiRequest(url, token)
         val rows = body.optJSONArray("codespaces") ?: JSONArray()
         val matches = mutableListOf<Codespace>()
@@ -279,7 +284,7 @@ class GitHubCodespacesClient(
     suspend fun getCodespace(name: String): Codespace = withContext(Dispatchers.IO) {
         requireValidName(name)
         val token = validAccessToken()
-        val item = apiRequest("$API/user/codespaces/${encodeSegment(name)}", token)
+        val item = apiRequest("${endpoints.apiBaseUrl.trimEnd('/')}/user/codespaces/${encodeSegment(name)}", token)
         val repository = item.optJSONObject("repository")?.optString("full_name").orEmpty()
         val ref = normalizeRef(item.optJSONObject("git_status")?.optString("ref").orEmpty())
         require(repository == EXPECTED_REPOSITORY && ref == EXPECTED_REF) {
@@ -298,17 +303,17 @@ class GitHubCodespacesClient(
     suspend fun startCodespace(codespace: Codespace) = withContext(Dispatchers.IO) {
         validateTarget(codespace)
         val token = validAccessToken()
-        val current = apiRequest("$API/user/codespaces/${encodeSegment(codespace.name)}", token)
+        val current = apiRequest("${endpoints.apiBaseUrl.trimEnd('/')}/user/codespaces/${encodeSegment(codespace.name)}", token)
         requireTarget(current)
-        apiRequest("$API/user/codespaces/${encodeSegment(codespace.name)}/start", token, "POST")
+        apiRequest("${endpoints.apiBaseUrl.trimEnd('/')}/user/codespaces/${encodeSegment(codespace.name)}/start", token, "POST")
     }
 
     suspend fun stopCodespace(codespace: Codespace) = withContext(Dispatchers.IO) {
         validateTarget(codespace)
         val token = validAccessToken()
-        val current = apiRequest("$API/user/codespaces/${encodeSegment(codespace.name)}", token)
+        val current = apiRequest("${endpoints.apiBaseUrl.trimEnd('/')}/user/codespaces/${encodeSegment(codespace.name)}", token)
         requireTarget(current)
-        apiRequest("$API/user/codespaces/${encodeSegment(codespace.name)}/stop", token, "POST")
+        apiRequest("${endpoints.apiBaseUrl.trimEnd('/')}/user/codespaces/${encodeSegment(codespace.name)}/stop", token, "POST")
     }
 
     fun recordCodespaceStarted(codespace: Codespace) {
