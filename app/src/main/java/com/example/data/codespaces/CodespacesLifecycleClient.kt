@@ -28,6 +28,17 @@ import java.util.concurrent.TimeUnit
  */
 internal const val CODESPACES_OAUTH_SCOPES = "offline_access"
 
+internal fun deviceFlowPollIntervalSeconds(serverIntervalSeconds: Long, expiresInSeconds: Long): Long {
+    val expiry = expiresInSeconds.coerceAtLeast(1L)
+    return serverIntervalSeconds.coerceAtLeast(1L).coerceAtMost(expiry)
+}
+
+internal fun nextDeviceFlowPollIntervalSeconds(currentIntervalSeconds: Long, expiresInSeconds: Long): Long {
+    val current = deviceFlowPollIntervalSeconds(currentIntervalSeconds, expiresInSeconds)
+    val expiry = expiresInSeconds.coerceAtLeast(1L)
+    return (current + 5L).coerceAtMost(expiry)
+}
+
 internal fun hasUsableExpiringGitHubAppToken(
     accessToken: String,
     refreshToken: String,
@@ -138,7 +149,7 @@ class CodespacesLifecycleClient(
             verificationUri == "https://github.com/login/device" && expires > 0L) {
             "GitHub did not return a valid device authorization request."
         }
-        DeviceAuthorization(deviceCode, userCode, verificationUri, expires, interval.coerceIn(1L, 30L))
+        DeviceAuthorization(deviceCode, userCode, verificationUri, expires, deviceFlowPollIntervalSeconds(interval, expires))
     }
 
     suspend fun checkDeviceAuthorization(deviceCode: String): PollResult = withContext(Dispatchers.IO) {
