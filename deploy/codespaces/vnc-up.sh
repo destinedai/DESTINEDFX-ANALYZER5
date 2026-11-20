@@ -5,6 +5,7 @@ STATE="${DESTINEDFX_CODESPACES_STATE_DIR:-$HOME/.local/share/destinedfx-codespac
 RUNTIME="$STATE/runtime"
 PASSWORD_FILE="$RUNTIME/vnc.pass"
 DISPLAY_HELPER="$ROOT/deploy/codespaces/display_processes.py"
+PROCESS_IDENTITY="$ROOT/deploy/codespaces/process_identity.py"
 mkdir -p "$STATE" "$RUNTIME"
 chmod 700 "$STATE" "$RUNTIME"
 
@@ -16,50 +17,46 @@ write_pid() {
   chmod 600 "$RUNTIME/$name.pid"
 }
 track_started_pid() {
-  local pid="$1" expected="$2"
-  [[ -f "$RUNTIME/pids" ]] || return 0
-  if ! grep -Fqx "$pid|$expected" "$RUNTIME/pids"; then
-    printf '%s|%s\n' "$pid" "$expected" >>"$RUNTIME/pids"
+  local pid="$1" expected="$2" record
+  record="$RUNTIME/process-$pid.identity.json"
+  python3 "$PROCESS_IDENTITY" capture --pid "$pid" --record "$record" \
+    --expected-uid "$EUID" --expected-fragment "$expected" || fail "could not record exact identity for $expected"
+  if [[ -f "$RUNTIME/pids" ]] && ! grep -Fqx "$pid|${record##*/}" "$RUNTIME/pids"; then
+    printf '%s|%s\\n' "$pid" "${record##*/}" >>"$RUNTIME/pids"
     chmod 600 "$RUNTIME/pids"
   fi
 }
 stop_recorded() {
-  local file="$1" expected="$2" pid cmdline owner
+  local file="$1" expected="$2" pid record
   [[ -s "$file" ]] || return 0
   pid="$(cat "$file" 2>/dev/null || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  kill -0 "$pid" 2>/dev/null || { rm -f "$file"; return 0; }
-  [[ -r "/proc/$pid/cmdline" && -r "/proc/$pid/status" ]] || return 1
-  cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
-  owner="$(awk '/^Uid:/ {print $3}' "/proc/$pid/status" 2>/dev/null || true)"
-  [[ "$cmdline" == *"$expected"* && "$owner" == "$EUID" ]] || return 1
-  kill -TERM "$pid" 2>/dev/null || return 1
-  for _ in {1..50}; do
-    kill -0 "$pid" 2>/dev/null || { rm -f "$file"; return 0; }
-    cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
-    owner="$(awk '/^Uid:/ {print $3}' "/proc/$pid/status" 2>/dev/null || true)"
-    if [[ "$cmdline" != *"$expected"* || "$owner" != "$EUID" ]]; then
-      rm -f "$file"
-      return 0
-    fi
-    sleep 0.1
-  done
-  fail "recorded process $pid did not stop gracefully"
+  [[ "$pid" =~ ^[0-9]+$ && -n "$expected" ]] || fail "invalid recorded PID for $expected"
+  record="$RUNTIME/process-$pid.identity.json"
+  [[ -s "$record" ]] || fail "missing full process identity for $expected; process left untouched"
+  python3 "$PROCESS_IDENTITY" stop --record "$record" --timeout 5 || fail "could not safely stop $expected"
+  rm -f "$file"
 }
 wait_alive() {
-  local name="$1" file="$2" expected="$3" pid cmdline owner
+  local name="$1" file="$2" expected="$3" pid record
   for _ in {1..30}; do
     if [[ -s "$file" ]]; then
       pid="$(cat "$file" 2>/dev/null || true)"
-      if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-        cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
-        owner="$(awk '/^Uid:/ {print $3}' "/proc/$pid/status" 2>/dev/null || true)"
-        [[ "$cmdline" == *"$expected"* && "$owner" == "$EUID" ]] && return 0
+      if [[ "$pid" =~ ^[0-9]+$ ]]; then
+        if [[ "$expected" == "Xvfb :99" ]]; then
+          if [[ -s "$RUNTIME/process-$pid.identity.json" ]]; then
+            python3 "$PROCESS_IDENTITY" verify --record "$RUNTIME/process-$pid.identity.json" >/dev/null 2>&1 && return 0
+          else
+            python3 "$DISPLAY_HELPER" check-xvfb "$pid" >/dev/null 2>&1 && return 0
+          fi
+        else
+          record="$RUNTIME/process-$pid.identity.json"
+          python3 "$PROCESS_IDENTITY" verify --record "$record" >/dev/null 2>&1 && return 0
+        fi
       fi
     fi
     sleep 0.2
   done
-  fail "$name did not remain running with the expected process identity"
+  fail "$name did not remain running with its recorded PID/start-time/UID/executable/argv identity"
 }
 wait_port() {
   local port="$1"
@@ -126,7 +123,7 @@ elif (( ${#XVFB_PIDS[@]} == 1 )); then
   prior_pid="$(cat "$RUNTIME/xvfb.pid" 2>/dev/null || true)"
   if [[ "$prior_ownership" == started ]]; then
     [[ "$prior_pid" == "$XVFB_PID" ]] || fail 'previously owned Xvfb PID changed; refusing to silently reclassify display ownership'
-    grep -Fqx "$XVFB_PID|Xvfb :99" "$RUNTIME/pids" 2>/dev/null || fail 'previously owned Xvfb lacks its managed process record; refusing ownership reclassification'
+    [[ -s "$RUNTIME/process-$XVFB_PID.identity.json" ]] && python3 "$PROCESS_IDENTITY" verify --record "$RUNTIME/process-$XVFB_PID.identity.json" >/dev/null || fail 'previously owned Xvfb lacks a matching complete process identity record; refusing ownership reclassification'
     printf 'started\n' >"$RUNTIME/xvfb.ownership"
   else
     printf 'adopted\n' >"$RUNTIME/xvfb.ownership"
