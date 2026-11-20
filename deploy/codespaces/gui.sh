@@ -29,25 +29,28 @@ else
 fi
 
 if [[ -s "$INSTALLER_IDENTITY" ]]; then
-  python3 "$PROCESS_IDENTITY" verify --record "$INSTALLER_IDENTITY" >/dev/null 2>&1 || fail 'an installer identity record exists but no longer matches; refusing duplicate launch and leaving all processes untouched'
-  printf 'PASS: installer process matches the saved PID/start-time/UID/executable/argv identity; reusing the existing owner wizard.\n'
-else
-  # shellcheck disable=SC1091
-  source "$ROOT/deploy/codespaces/installer-pins.env"
-  (
-    exec "$ROOT/scripts/linux-host/install-mt5.sh" --gui \
-      --expected-sha256 "$MT5_LINUX_SCRIPT_SHA256" \
-      --expected-setup-sha256 "$MT5_SETUP_SHA256"
-  ) >>"$RUNTIME/installer-gui.log" 2>&1 &
-  INSTALLER_PID="$!"
-  printf '%s\n' "$INSTALLER_PID" >"$RUNTIME/installer-gui.pid"
-  chmod 600 "$RUNTIME/installer-gui.pid"
-  python3 "$PROCESS_IDENTITY" capture --pid "$INSTALLER_PID" \
-    --record "$INSTALLER_IDENTITY" --expected-uid "$EUID" || fail 'could not record installer PID/start-time/UID/executable/argv; refusing unverified installer management'
-  sleep 2
-  if ! python3 "$PROCESS_IDENTITY" verify --record "$INSTALLER_IDENTITY" >/dev/null 2>&1; then
-    printf 'WARN: installer process identity changed after launch (for example, during exec); it was not signalled and must not be relaunched until manually inspected.\n' >&2
-  fi
+  # A prior wizard may have exited without completing. Retire only when the
+  # recorded PID is absent/zombie and still matches the exact saved identity;
+  # a live wizard or reused PID is never signalled or overwritten.
+  python3 "$PROCESS_IDENTITY" retire --record "$INSTALLER_IDENTITY" >/dev/null || \
+    fail 'a prior installer process is still running or its PID identity changed; leaving it untouched'
+  rm -f "$RUNTIME/installer-gui.pid"
+fi
+# shellcheck disable=SC1091
+source "$ROOT/deploy/codespaces/installer-pins.env"
+(
+  exec "$ROOT/scripts/linux-host/install-mt5.sh" --gui \
+    --expected-sha256 "$MT5_LINUX_SCRIPT_SHA256" \
+    --expected-setup-sha256 "$MT5_SETUP_SHA256"
+) >>"$RUNTIME/installer-gui.log" 2>&1 &
+INSTALLER_PID="$!"
+printf '%s\n' "$INSTALLER_PID" >"$RUNTIME/installer-gui.pid"
+chmod 600 "$RUNTIME/installer-gui.pid"
+python3 "$PROCESS_IDENTITY" capture --pid "$INSTALLER_PID" \
+  --record "$INSTALLER_IDENTITY" --expected-uid "$EUID" || fail 'could not record installer PID/start-time/UID/executable/argv; refusing unverified installer management'
+sleep 2
+if ! python3 "$PROCESS_IDENTITY" verify --record "$INSTALLER_IDENTITY" >/dev/null 2>&1; then
+  printf 'WARN: installer process identity changed after launch; it was not signalled and must be manually inspected.\n' >&2
 fi
 
 printf 'PASS: private installer GUI started.\n'
