@@ -1345,7 +1345,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             "available" -> if (hostApiStatus?.optBoolean("shutdown_prepared") == true) "STOPPING"
                 else if (
                     hostApiStatus?.optString("host_lifecycle_status").orEmpty() in setOf("ACTIVE", "WARNING") &&
-                    hostApiStatus.optJSONObject("slot_isolation")?.optBoolean("ready") == true &&
+                    hostApiStatus?.optJSONObject("slot_isolation")?.optBoolean("ready") == true &&
                     mt5Snapshot?.heartbeatFresh == true && mt5Snapshot?.terminalOnline == true
                 ) "ACTIVE" else "DEGRADED"
             "starting", "creating" -> "STARTING"
@@ -1539,12 +1539,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             showHostStopConfirmation = false
                             scope.launch {
                                 hostLifecycleBusy = true
-                                val target = selectedGithubCodespace
                                 val hostBridge = bridge
                                 var stopRequestAccepted = false
                                 try {
                                     check(githubSignedIn) { "GitHub App authorization is required." }
-                                    check(target != null) { "Discover and select the owner's Codespace first." }
+                                    val target = selectedGithubCodespace ?: error("Discover and select the owner's Codespace first.")
                                     check(hostBridge?.hasPairing() == true) { "A paired owner Bridge account is required for safe shutdown checks." }
                                     githubHostOperationState = "STOPPING"
                                     val preflight = hostBridge!!.prepareHostStop()
@@ -1573,7 +1572,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                         githubHostMessage = "Stop is processing. The safety gate remains armed; refresh before another action."
                                     }
                                 } catch (error: Exception) {
-                                    val latest = target?.let { runCatching { githubCodespacesClient.getCodespace(it.name) }.getOrNull() }
+                                    val latest = runCatching { githubCodespacesClient.getCodespace(target.name) }.getOrNull()
                                     val currentState = latest?.state.orEmpty()
                                     if (currentState.equals("Shutdown", true) || currentState.equals("Stopping", true)) {
                                         selectedGithubCodespace = latest
