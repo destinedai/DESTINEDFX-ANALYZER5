@@ -27,6 +27,8 @@ try {
     $env:BRIDGE_DB_PATH=Join-Path (Join-Path $base 'data') 'bridge.sqlite3'
     $env:BRIDGE_BASE_URL=$bridgeOrigin.Trim()
     $env:ALLOW_LOOPBACK_HTTP='true'
+    $env:BRIDGE_HOST_PROFILE='PERSISTENT'
+    $env:EXECUTION_STORAGE_DURABLE='true'
     $env:DESTINEDFX_WORKER_ID=$workerId
     $env:PYTHONUNBUFFERED='1'
 } catch {
@@ -194,7 +196,7 @@ try {
     }
 } finally {
     foreach($proc in @($worker,$bridge)){if($proc -and -not $proc.HasExited){Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue}}
-    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','CREDENTIALS_FERNET_KEY','WORKER_BOOTSTRAP_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','DESTINEDFX_WORKER_RENEWAL_CHECK_SECONDS','DESTINEDFX_WORKER_RENEWAL_MARGIN_SECONDS','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
+    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','BRIDGE_HOST_PROFILE','EXECUTION_STORAGE_DURABLE','CREDENTIALS_FERNET_KEY','WORKER_BOOTSTRAP_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','DESTINEDFX_WORKER_RENEWAL_CHECK_SECONDS','DESTINEDFX_WORKER_RENEWAL_MARGIN_SECONDS','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
     $env:CREDENTIALS_FERNET_KEY=$null;$env:WORKER_BOOTSTRAP_TOKEN=$null;$env:DESTINEDFX_WORKER_TOKEN=$null
     if($mutexOwned){$mutex.ReleaseMutex()}
     if($mutex){$mutex.Dispose()}
