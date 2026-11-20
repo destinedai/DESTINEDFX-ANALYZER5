@@ -169,7 +169,7 @@ def test_verified_process_receives_only_sigterm_and_record_clears_after_exit(tmp
 def test_pidfd_revalidation_closes_pid_reuse_window_before_signal(tmp_path):
     path = record(tmp_path)
     with patch.object(identity.os, "pidfd_open", return_value=88) as open_pidfd, \
-         patch.object(identity.os, "close") as close_fd, \
+         patch.object(identity.os, "close", wraps=os.close) as close_fd, \
          patch.object(identity.signal, "pidfd_send_signal") as send_signal, \
          patch.object(identity, "snapshot", side_effect=[process(), process(start_ticks=101)]):
         try:
@@ -186,7 +186,7 @@ def test_pidfd_revalidation_closes_pid_reuse_window_before_signal(tmp_path):
 def test_pidfd_success_signals_only_the_pinned_verified_process(tmp_path):
     path = record(tmp_path)
     with patch.object(identity.os, "pidfd_open", return_value=89) as open_pidfd, \
-         patch.object(identity.os, "close") as close_fd, \
+         patch.object(identity.os, "close", wraps=os.close) as close_fd, \
          patch.object(identity.signal, "pidfd_send_signal") as send_signal, \
          patch.object(identity, "snapshot", side_effect=[process(), process(), None]):
         stopped = identity.stop_record(
