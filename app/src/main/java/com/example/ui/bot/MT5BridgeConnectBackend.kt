@@ -31,6 +31,24 @@ class MT5BridgeConnectBackend(private val client: MT5ManagedAccountGateway) : Co
         // Keep only non-secret identity fields for later heartbeat comparison.
         requestedForm = form.copy(password = "", ownerBootstrapCode = "")
         try {
+            // A phone may stop waiting while a one-slot Codespace is still provisioning. Reuse
+            // the exact queued/active request instead of posting the password a second time.
+            if (client.hasPairing()) {
+                val current = client.state()
+                val managed = current.raw.optJSONObject("managed_execution")
+                val activeWorkerStates = setOf(
+                    "QUEUED", "AWAITING_ATTESTATION", "LEASED", "PROVISIONING", "AUTHENTICATING", "READY"
+                )
+                if (current.workerStatus.uppercase() in activeWorkerStates) {
+                    val sameAccount = managed?.optString("broker_brand").equals(spec.id.removeSuffix("_MT5"), true) &&
+                        managed?.optString("account_mode").equals(form.mode.name, true) &&
+                        managed?.optString("access_type").equals(form.type.wireValue, true) &&
+                        managed?.optString("requested_login") == form.login.trim() &&
+                        managed?.optString("requested_server") == form.server.trim()
+                    if (sameAccount) return
+                    throw ConnectSubmissionFailure("PAIRING_TERMINAL_ALREADY_ACTIVE")
+                }
+            }
             client.registerManagedAccount(
                 MT5ManagedAccountLogin(
                     brokerBrand = spec.id.removeSuffix("_MT5"),
