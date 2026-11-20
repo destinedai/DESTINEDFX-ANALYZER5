@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import signal
 from pathlib import Path
 
 MODULE = Path(__file__).with_name("destinedfx_trigger_host.py")
@@ -73,14 +75,42 @@ def test_idle_shutdown_only_signals_verified_supervisor_after_backup_and_recheck
     record = {"pid": 555, "start_ticks": 12345}
     read_calls = iter([record, None])
     monkeypatch.setattr(trigger.host_controller, "_read_json", lambda path: next(read_calls))
-    monkeypatch.setattr(trigger.host_controller, "_record_matches", lambda *args: True)
-    monkeypatch.setattr(trigger.host_controller, "_proc_identity", lambda pid: {"pid": pid, "uid": 1000, "start_ticks": 12345, "state": "S", "exe": "/usr/bin/python3.12", "args": ["python3", "host_controller.py", "supervise"]})
-    monkeypatch.setattr(trigger.host_controller, "_supervisor_identity_matches", lambda *args: True)
     signals = []
-    monkeypatch.setattr(trigger.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(
+        trigger.host_controller,
+        "signal_supervisor_record",
+        lambda saved, expected: signals.append((saved["pid"], expected)) or True,
+    )
     stopped = []
     monkeypatch.setattr(trigger, "record_usage_stop", lambda: stopped.append(True))
     result = trigger.idle_shutdown()
     assert result["status"] == "STOPPED"
     assert signals and signals[0][0] == 555
+    assert signals[0][1] == str(Path(trigger.host_controller.__file__).resolve())
     assert stopped == [True]
+
+
+def test_supervisor_signal_uses_pidfd_and_revalidates_after_open(monkeypatch):
+    record = {"pid": 321, "start_ticks": 9876}
+    fd = os.open(os.devnull, os.O_RDONLY)
+    matches = iter([True, True])
+    signals = []
+    monkeypatch.setattr(trigger.host_controller, "_record_matches", lambda *args: next(matches))
+    monkeypatch.setattr(trigger.os, "pidfd_open", lambda pid, flags: fd)
+    monkeypatch.setattr(trigger.host_controller.signal, "pidfd_send_signal",
+                        lambda pidfd, sig: signals.append((pidfd, sig)))
+    assert trigger.host_controller.signal_supervisor_record(record, "/expected/host_controller.py")
+    assert signals == [(fd, signal.SIGTERM)]
+
+
+def test_supervisor_signal_refuses_pid_reuse_after_pidfd_open(monkeypatch):
+    record = {"pid": 321, "start_ticks": 9876}
+    fd = os.open(os.devnull, os.O_RDONLY)
+    matches = iter([True, False])
+    signals = []
+    monkeypatch.setattr(trigger.host_controller, "_record_matches", lambda *args: next(matches))
+    monkeypatch.setattr(trigger.os, "pidfd_open", lambda pid, flags: fd)
+    monkeypatch.setattr(trigger.host_controller.signal, "pidfd_send_signal",
+                        lambda pidfd, sig: signals.append((pidfd, sig)))
+    assert not trigger.host_controller.signal_supervisor_record(record, "/expected/host_controller.py")
+    assert signals == []
