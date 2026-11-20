@@ -39,20 +39,12 @@ fi
 check_cmd xvfb 'command -v Xvfb >/dev/null && Xvfb -help >/dev/null 2>&1' 'Rebuild the Codespaces environment with Xvfb installed.'
 check_cmd host_agent 'curl -fsS --max-time 5 http://127.0.0.1:8787/health/ready >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/host-agent.log.'
 check_cmd bridge_loopback 'curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/bridge.log.'
-check_cmd runner_loop 'python3 -c "import os,sys; expected=os.path.realpath(sys.argv[1]); found=False; entries=os.scandir(\"/proc\"); [None for _ in ()];\nfor entry in entries:\n if entry.name.isdigit() and int(entry.name)!=os.getpid():\n  try:\n   args=[os.fsdecode(x) for x in open(\"/proc/\"+entry.name+\"/cmdline\",\"rb\").read().split(bytes([0])) if x]; found |= len(args)>=5 and os.path.realpath(args[1])==expected and args[2:5]==[\"--loop\",\"--interval\",\"3\"]\n  except OSError: pass\nsys.exit(0 if found else 1)" "$ROOT/scripts/linux-host/linux-slot-worker.py"' 'Run bash deploy/codespaces/start.sh and inspect runtime/linux-slot-worker.log.'
-import os, sys
-expected=os.path.realpath(sys.argv[1])
-for entry in os.scandir("/proc"):
-    if not entry.name.isdigit() or int(entry.name)==os.getpid():
-        continue
-    try:
-        args=[os.fsdecode(x) for x in open(f"/proc/{entry.name}/cmdline","rb").read().split(b"\\0") if x]
-        if len(args)>=4 and os.path.realpath(args[1])==expected and args[2:4]==["--loop","--interval"]:
-            if len(args)>=5 and args[4]=="3": raise SystemExit(0)
-    except (OSError,ValueError):
-        continue
-raise SystemExit(1)
-PY' 'Run bash deploy/codespaces/start.sh and inspect runtime/linux-slot-worker.log.'
+if python3 "$ROOT/scripts/linux-host/check_slot_worker.py" "$ROOT/scripts/linux-host/linux-slot-worker.py" > "$RUNTIME/slot-worker-check.log" 2>&1; then
+  record runner_loop PASS 'isolated linux-slot-worker.py process identity verified' 'No action.'
+else
+  detail="$(tr '\n' ' ' < "$RUNTIME/slot-worker-check.log" 2>/dev/null || true)"
+  record runner_loop FAIL "${detail:-isolated slot worker not running}" 'Run bash deploy/codespaces/start.sh and inspect runtime/linux-slot-worker.log.'
+fi
 
 diagnostic_output="$(DESTINEDFX_CODESPACES_STATE_DIR="$STATE" DESTINEDFX_RUNTIME_DIR="$RUNTIME" \
   python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" 2>&1 || true)"
