@@ -2235,7 +2235,7 @@ def revoke_github_app_authorization(
         raise HTTPException(503,detail={'code':'GITHUB_REVOCATION_NOT_CONFIGURED','message':'GitHub App revocation configuration is invalid'})
     credentials=base64.b64encode((client_id+':'+client_secret).encode()).decode()
     body=json.dumps({'access_token':x.access_token},separators=(',',':')).encode()
-    url='https://api.github.com/applications/'+quote(client_id,safe='')+'/token'
+    url='https://api.github.com/applications/'+quote(client_id,safe='')+'/grant'
     req=urllib.request.Request(url,data=body,headers={
         'Authorization':'Basic '+credentials,
         'Accept':'application/vnd.github+json',
