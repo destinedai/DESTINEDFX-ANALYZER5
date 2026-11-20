@@ -18,7 +18,7 @@ def process(**changes):
     row = {
         "pid": 4242,
         "start_ticks": 100,
-        "uid": 1000,
+        "uid": os.geteuid(),
         "exe": os.path.realpath("/usr/bin/python3"),
         "args": ["/usr/bin/python3", "/workspace/worker.py", "--loop", "--interval", "3"],
         "state": "S",
@@ -76,7 +76,7 @@ def test_capture_records_complete_linux_process_identity(tmp_path):
     path = tmp_path / "runtime" / "worker.identity.json"
     with patch.object(identity, "snapshot", return_value=process()):
         captured = identity.capture_identity(
-            4242, expected_uid=1000,
+            4242, expected_uid=os.geteuid(),
             expected_fragment="worker.py --loop",
             expected_exe="/usr/bin/python3",
             timeout_seconds=0,
@@ -91,21 +91,21 @@ def test_capture_records_complete_linux_process_identity(tmp_path):
 def test_capture_rejects_wrong_uid_executable_or_expected_argv():
     with patch.object(identity, "snapshot", return_value=process(uid=2000)):
         try:
-            identity.capture_identity(4242, expected_uid=1000, timeout_seconds=0)
+            identity.capture_identity(4242, expected_uid=os.geteuid(), timeout_seconds=0)
         except identity.IdentityError:
             pass
         else:
             raise AssertionError("wrong UID must be rejected")
     with patch.object(identity, "snapshot", return_value=process(exe="/tmp/python3")):
         try:
-            identity.capture_identity(4242, expected_uid=1000, expected_exe="/usr/bin/python3", timeout_seconds=0)
+            identity.capture_identity(4242, expected_uid=os.geteuid(), expected_exe="/usr/bin/python3", timeout_seconds=0)
         except identity.IdentityError:
             pass
         else:
             raise AssertionError("wrong executable must be rejected")
     with patch.object(identity, "snapshot", return_value=process(args=["/usr/bin/python3", "other.py"])):
         try:
-            identity.capture_identity(4242, expected_uid=1000, expected_fragment="worker.py", timeout_seconds=0)
+            identity.capture_identity(4242, expected_uid=os.geteuid(), expected_fragment="worker.py", timeout_seconds=0)
         except identity.IdentityError:
             pass
         else:
@@ -236,3 +236,29 @@ def test_malformed_and_world_accessible_identity_records_fail_closed(tmp_path):
         pass
     else:
         raise AssertionError("unknown identity record version must be rejected")
+
+
+
+def test_user_owned_record_cannot_claim_root_process_identity(tmp_path):
+    if os.geteuid() == 0:
+        return
+    path = tmp_path / "runtime" / "root-agent.identity.json"
+    identity.write_record(path, process(uid=0))
+    try:
+        identity.read_record(path)
+    except identity.IdentityError as exc:
+        assert "file owner" in str(exc)
+    else:
+        raise AssertionError("a user-owned file must not impersonate a root process record")
+
+
+def test_symlink_process_identity_record_is_rejected(tmp_path):
+    target = record(tmp_path)
+    link = target.parent / "linked.identity.json"
+    link.symlink_to(target)
+    try:
+        identity.read_record(link)
+    except identity.IdentityError:
+        pass
+    else:
+        raise AssertionError("process identity records must not follow symlinks")
