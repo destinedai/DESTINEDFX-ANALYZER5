@@ -8,7 +8,7 @@
     "cpus": 2
   },
   "postCreateCommand": "bash deploy/codespaces/post-create.sh",
-  "postStartCommand": "python3 deploy/codespaces/host_controller.py ensure-started",
+  "postStartCommand": "python3 scripts/host/destinedfx_trigger_host.py start_all",
   "forwardPorts": [8000, 6080],
   "portsAttributes": {
     "8000": {
