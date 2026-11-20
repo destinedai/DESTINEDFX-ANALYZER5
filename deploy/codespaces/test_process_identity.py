@@ -32,6 +32,45 @@ def record(tmp_path: Path):
     return path
 
 
+def test_root_service_discovery_requires_unique_exact_uid_exe_and_argv():
+    from unittest.mock import patch
+
+    good = process(uid=0, exe="/usr/bin/python3",
+                   args=["python3", "/repo/scripts/linux-host/host-agent.py", "--host", "127.0.0.1", "--port", "8787"])
+    wrong = process(uid=0, exe="/usr/bin/python3",
+                    args=["python3", "/repo/other.py", "--host", "127.0.0.1", "--port", "8787"])
+    entries = [Path("/proc/101"), Path("/proc/102")]
+    with patch.object(Path, "iterdir", return_value=entries), \
+         patch.object(identity, "snapshot", side_effect=[good, wrong]):
+        found = identity.find_and_capture_identity(
+            expected_uid=0,
+            expected_exe="/usr/bin/python3",
+            expected_args=["/repo/scripts/linux-host/host-agent.py", "--host", "127.0.0.1", "--port", "8787"],
+        )
+    assert found["pid"] == 4242
+    assert found["uid"] == 0
+    assert found["args"] == good["args"]
+
+
+def test_root_service_discovery_rejects_ambiguous_matches():
+    from unittest.mock import patch
+
+    good = process(uid=0, exe="/usr/bin/python3",
+                   args=["python3", "/repo/scripts/linux-host/host-agent.py", "--host", "127.0.0.1", "--port", "8787"])
+    with patch.object(Path, "iterdir", return_value=[Path("/proc/101"), Path("/proc/102")]), \
+         patch.object(identity, "snapshot", side_effect=[good, {**good, "pid": 4243}]):
+        try:
+            identity.find_and_capture_identity(
+                expected_uid=0,
+                expected_exe="/usr/bin/python3",
+                expected_args=["/repo/scripts/linux-host/host-agent.py", "--host", "127.0.0.1", "--port", "8787"],
+            )
+        except identity.IdentityError as exc:
+            assert "exactly one" in str(exc)
+        else:
+            raise AssertionError("ambiguous root services must not be adopted")
+
+
 def test_capture_records_complete_linux_process_identity(tmp_path):
     path = tmp_path / "runtime" / "worker.identity.json"
     with patch.object(identity, "snapshot", return_value=process()):
