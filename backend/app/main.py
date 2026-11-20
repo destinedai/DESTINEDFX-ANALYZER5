@@ -162,6 +162,30 @@ def me(user: models.User = Depends(current_user)):
     return user
 
 
+@app.get("/api/v1/auth/bridge-verification-key")
+def bridge_verification_key():
+    """Publish only the Bridge's Ed25519 verification key; never expose the backend private key."""
+    pem = settings.step_up_private_key_pem.get_secret_value().strip()
+    if not pem:
+        raise HTTPException(503, "Management step-up signing is not configured")
+    try:
+        key = serialization.load_pem_private_key(pem.encode(), password=None)
+        if not isinstance(key, Ed25519PrivateKey):
+            raise ValueError("unsupported signing key")
+        public_pem = key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+    except Exception as exc:
+        raise HTTPException(503, "Management step-up signing is not configured") from exc
+    return {
+        "algorithm": "EdDSA",
+        "public_key_pem": public_pem,
+        "issuer": settings.step_up_issuer,
+        "audience": settings.step_up_audience,
+    }
+
+
 @app.post("/api/v1/auth/live-step-up")
 def live_step_up(
     body: dict,
