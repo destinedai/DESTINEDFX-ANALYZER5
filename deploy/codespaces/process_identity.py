@@ -145,11 +145,27 @@ def verify_record(path: Path, proc_root: Path = Path("/proc")) -> bool:
     return same_identity(record, snapshot(int(record["pid"]), proc_root))
 
 
+def _pidfd_send_term(pid: int, record: dict[str, Any], proc_root: Path) -> None:
+    """Signal the process pinned by pidfd, after rechecking the complete identity."""
+    if proc_root != Path("/proc"):
+        raise IdentityError("pidfd signalling is disabled for synthetic proc roots")
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        raise IdentityError("Linux pidfd signalling is unavailable; refusing a racy PID signal")
+    pidfd = os.pidfd_open(pid, 0)
+    try:
+        current = snapshot(pid, proc_root)
+        if not same_identity(record, current):
+            raise IdentityError("process identity changed after pidfd open; no signal was sent")
+        signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+    finally:
+        os.close(pidfd)
+
+
 def stop_record(
     path: Path,
     *,
     proc_root: Path = Path("/proc"),
-    kill_process: Callable[[int, int], None] = os.kill,
+    kill_process: Callable[[int, int], None] | None = None,
     timeout_seconds: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -164,7 +180,11 @@ def stop_record(
     if not same_identity(record, current):
         raise IdentityError("PID no longer matches its recorded start-time/UID/executable/argv; left untouched")
     try:
-        kill_process(pid, signal.SIGTERM)
+        if kill_process is not None:
+            # Dependency injection is used only by isolated unit tests.
+            kill_process(pid, signal.SIGTERM)
+        else:
+            _pidfd_send_term(pid, record, proc_root)
     except ProcessLookupError:
         path.unlink(missing_ok=True)
         return True
@@ -181,7 +201,6 @@ def stop_record(
             raise IdentityError("process identity changed after SIGTERM; no further signal was sent")
         sleep(0.1)
     raise IdentityError("verified process did not stop after SIGTERM; refusing SIGKILL escalation")
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
