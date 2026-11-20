@@ -66,8 +66,8 @@ def write_public_key(path: Path, pem: str, overwrite: bool = False) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(prefix=f".{dest.name}.", dir=dest.parent)
     try:
-        with os.fdopen(fd, "w", encoding="ascii", newline="\\n") as f:
-            f.write(pem.rstrip() + "\\n"); f.flush(); os.fsync(f.fileno())
+        with os.fdopen(fd, "w", encoding="ascii", newline="\n") as f:
+            f.write(pem.rstrip() + "\n"); f.flush(); os.fsync(f.fileno())
         if os.name != "nt": os.chmod(temp, stat.S_IRUSR | stat.S_IWUSR)
         os.replace(temp, dest)
     except Exception:
