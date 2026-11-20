@@ -155,7 +155,7 @@ class GitHubCodespacesClient(
         val userCode = body.optString("user_code")
         val verificationUri = body.optString("verification_uri")
         val expiresIn = body.optLong("expires_in", 0L)
-        val interval = body.optLong("interval", 5L).coerceAtLeast(1L)
+        val interval = body.optLong("interval", 5L).coerceAtLeast(5L)
         require(deviceCode.isNotBlank() && userCode.isNotBlank() &&
             verificationUri == "https://github.com/login/device" && expiresIn in 60L..1800L) {
             "GitHub returned an incomplete device authorization response."
@@ -198,7 +198,7 @@ class GitHubCodespacesClient(
                     interval = (result.optLong("interval", interval + 5L)).coerceAtLeast(interval + 5L)
                     onWaiting?.invoke((deadline - System.currentTimeMillis()).coerceAtLeast(0L) / 1000L)
                 }
-                "expired_token" -> throw IllegalStateException("GitHub device code expired. Start a new sign-in.")
+                "expired_token", "token_expired" -> throw IllegalStateException("GitHub device code expired. Start a new sign-in.")
                 "access_denied" -> throw IllegalStateException("GitHub authorization was denied.")
                 "device_flow_disabled" -> throw IllegalStateException("Enable Device Flow in the GitHub App settings.")
                 else -> throw IllegalStateException("GitHub device authorization failed: ${result.optString("error").ifBlank { "UNKNOWN" }}")
@@ -257,28 +257,34 @@ class GitHubCodespacesClient(
 
     suspend fun listTargetCodespaces(): List<Codespace> = withContext(Dispatchers.IO) {
         val token = validAccessToken()
-        val url = "${endpoints.apiBaseUrl.trimEnd('/')}/user/codespaces?per_page=100"
-        val body = apiRequest(url, token)
-        val rows = body.optJSONArray("codespaces") ?: JSONArray()
-        val matches = mutableListOf<Codespace>()
-        for (index in 0 until rows.length()) {
-            val item = rows.optJSONObject(index) ?: continue
-            val repository = item.optJSONObject("repository")?.optString("full_name").orEmpty()
-            val ref = normalizeRef(item.optJSONObject("git_status")?.optString("ref").orEmpty())
-            if (repository != EXPECTED_REPOSITORY || ref != EXPECTED_REF) continue
-            val name = item.optString("name")
-            if (name.isBlank()) continue
-            val machine = item.optJSONObject("machine")
-            matches += Codespace(
-                name = name,
-                state = item.optString("state", "Unknown"),
-                repository = repository,
-                gitRef = ref,
-                machineCpus = machine?.optInt("cpus", 2)?.coerceIn(1, 64) ?: 2,
-                lastUsedAt = item.optString("last_used_at")
-            )
+        val matchesByName = linkedMapOf<String, Codespace>()
+        var page = 1
+        while (page <= 100) {
+            val url = "${endpoints.apiBaseUrl.trimEnd('/')}/user/codespaces?per_page=100&page=$page"
+            val body = apiRequest(url, token)
+            val rows = body.optJSONArray("codespaces") ?: JSONArray()
+            for (index in 0 until rows.length()) {
+                val item = rows.optJSONObject(index) ?: continue
+                val repository = item.optJSONObject("repository")?.optString("full_name").orEmpty()
+                val ref = normalizeRef(item.optJSONObject("git_status")?.optString("ref").orEmpty())
+                if (repository != EXPECTED_REPOSITORY || ref != EXPECTED_REF) continue
+                val name = item.optString("name")
+                if (name.isBlank()) continue
+                val machine = item.optJSONObject("machine")
+                matchesByName[name] = Codespace(
+                    name = name,
+                    state = item.optString("state", "Unknown"),
+                    repository = repository,
+                    gitRef = ref,
+                    machineCpus = machine?.optInt("cpus", 2)?.coerceIn(1, 64) ?: 2,
+                    lastUsedAt = item.optString("last_used_at")
+                )
+            }
+            if (rows.length() < 100) break
+            page += 1
         }
-        matches.sortedByDescending { it.lastUsedAt }
+        require(page <= 100) { "Codespaces listing exceeded the safety pagination limit." }
+        matchesByName.values.sortedByDescending { it.lastUsedAt }
     }
 
     suspend fun getCodespace(name: String): Codespace = withContext(Dispatchers.IO) {
