@@ -166,6 +166,7 @@ class GitHubCodespacesClientTest {
         assertEquals("/user/codespaces/codespace-generated-name/start", startRequest.path)
         assertEquals("POST", startRequest.method)
         assertTrue(startRequest.getHeader("Authorization")!!.startsWith("Bearer ghu_"))
+        assertEquals("2026-03-10", startRequest.getHeader("X-GitHub-Api-Version"))
     }
 
     @Test
