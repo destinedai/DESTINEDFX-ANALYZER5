@@ -1572,7 +1572,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                         githubHostMessage = "Stop is processing. The safety gate remains armed; refresh before another action."
                                     }
                                 } catch (error: Exception) {
-                                    val latest = runCatching { githubCodespacesClient.getCodespace(target.name) }.getOrNull()
+                                    val latest = selectedGithubCodespace?.let {
+                                        runCatching { githubCodespacesClient.getCodespace(it.name) }.getOrNull()
+                                    }
                                     val currentState = latest?.state.orEmpty()
                                     if (currentState.equals("Shutdown", true) || currentState.equals("Stopping", true)) {
                                         selectedGithubCodespace = latest
