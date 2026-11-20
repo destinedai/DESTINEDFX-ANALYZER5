@@ -1452,10 +1452,11 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
         isolation=linux_slot_isolation(host)
         if not isolation.get('enabled') or not isolation.get('ready'):
             raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user MT5 slot capacity'})
-        # Codespaces Linux slots are ephemeral and the slot worker is DEMO-only.
-        # Reject LIVE before encrypting broker credentials or creating a job.
-        if HOST_PROFILE != 'PERSISTENT' or x.account_mode != 'DEMO':
-            raise HTTPException(409,detail={'code':'LINUX_HOST_DEMO_ONLY','message':'This Linux Codespaces worker accepts DEMO MT5 profiles only; LIVE requires a separately approved persistent Windows host'})
+        # The isolated Linux slot worker is DEMO-only regardless of host profile.
+        # In particular, EPHEMERAL Codespaces must be able to enrol DEMO profiles,
+        # but LIVE must be rejected before credential encryption/storage or job creation.
+        if x.account_mode != 'DEMO':
+            raise HTTPException(409,detail={'code':'LINUX_HOST_DEMO_ONLY','message':'This isolated Linux MT5 worker accepts DEMO profiles only; LIVE requires a separately approved persistent Windows host'})
     p=auth(authorization,'app')
     if not x_management_identity:
         raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate to the DestinedFX management account before registering broker credentials'})
