@@ -115,7 +115,7 @@ def authenticate_socket(sock: socket.socket, password: str) -> None:
     except ValueError as exc:
         raise RfbAuthenticationError("invalid RFB server version") from exc
     if minor >= 7:
-        sock.sendall(b"RFB 003.008\n")
+        sock.sendall(b"RFB 003.008\n" if minor >= 8 else b"RFB 003.007\n")
         count = _read_exact(sock, 1)[0]
         if count == 0:
             raise RfbAuthenticationError("VNC server offered no security types")
