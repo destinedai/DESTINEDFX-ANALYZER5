@@ -149,7 +149,8 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         live_gate_ok,
         "LIVE remains blocked for ephemeral or unknown hosts; the Bot displays the host gate.",
     )
-\n    bridge_defaults_fail_closed = (
+
+    bridge_defaults_fail_closed = (
         "os.getenv('BRIDGE_HOST_PROFILE','EPHEMERAL')" in bridge
         and "os.getenv('EXECUTION_STORAGE_DURABLE','false')" in bridge
         and "if not durable_execution_enabled():" in bridge
