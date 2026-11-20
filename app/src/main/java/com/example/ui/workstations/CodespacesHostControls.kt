@@ -59,6 +59,7 @@ fun CodespacesHostControls(
     var busy by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(secrets.getCodespacesGitHubAccessToken().isNotBlank()) }
     var showStopHostConfirmation by remember { mutableStateOf(false) }
+    var showRevokeGitHubConfirmation by remember { mutableStateOf(false) }
 
     // GitHub Device Flow is polled automatically. The user still approves the device code
     // in GitHub's own page; the app never simulates or skips that owner consent.
@@ -309,17 +310,25 @@ fun CodespacesHostControls(
             }
         ) { Text("CANCEL STOP PREPARATION", fontSize = 9.sp) }
         OutlinedButton(
+            enabled = !busy && authorized && bridgeClient.managedConfigured(),
+            onClick = { showRevokeGitHubConfirmation = true }
+        ) { Text("REVOKE GITHUB APP ACCESS", fontSize = 9.sp) }
+        OutlinedButton(
             enabled = !busy && authorized,
             onClick = {
                 scope.launch {
                     busy = true
-                    github.revokeLocalAuthorization()
-                    authorized = false
-                    message = "GitHub App tokens cleared from this phone. The OAuth grant is still active until you revoke it in GitHub Settings."
+                    val cleared = github.revokeLocalAuthorization()
+                    authorized = !cleared
+                    message = if (cleared) {
+                        "Saved GitHub App tokens cleared from this phone only. The remote OAuth grant remains active until revoked in GitHub Settings."
+                    } else {
+                        "Device token clearing failed; the local authorization was not reported as cleared."
+                    }
                     busy = false
                 }
             }
-        ) { Text("CLEAR SAVED GITHUB TOKENS", fontSize = 9.sp) }
+        ) { Text("CLEAR DEVICE TOKENS ONLY", fontSize = 9.sp) }
         OutlinedButton(
             enabled = !busy,
             onClick = {
@@ -381,6 +390,54 @@ fun CodespacesHostControls(
                         enabled = !busy,
                         onClick = { showStopHostConfirmation = false }
                     ) { Text("CANCEL") }
+                }
+            )
+        }
+        if (showRevokeGitHubConfirmation) {
+            AlertDialog(
+                onDismissRequest = { if (!busy) showRevokeGitHubConfirmation = false },
+                title = { Text("Revoke DestinedFX GitHub App access?") },
+                text = {
+                    Text(
+                        "This asks the configured Bridge to revoke the complete GitHub App authorization grant using the server-held App credentials. " +
+                            "The grant is cleared from this phone only after GitHub confirms revocation. Codespaces start/stop from this phone will then require new authorization."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = !busy,
+                        onClick = {
+                            showRevokeGitHubConfirmation = false
+                            scope.launch {
+                                busy = true
+                                try {
+                                    val accessToken = secrets.getCodespacesGitHubAccessToken()
+                                    check(accessToken.isNotBlank()) { "No saved GitHub App access token is available for revocation." }
+                                    val response = bridgeClient.revokeCodespacesGitHubAuthorization(accessToken)
+                                    check(response.optBoolean("revoked", false)) {
+                                        "GitHub did not confirm revocation of the App authorization grant."
+                                    }
+                                    authorized = false
+                                    device = null
+                                    val cleared = github.revokeLocalAuthorization()
+                                    message = if (cleared) {
+                                        "GitHub confirmed DestinedFX App grant revocation; local access and refresh tokens were cleared."
+                                    } else {
+                                        "GitHub confirmed grant revocation, but local token clearing failed. This phone cannot use the revoked grant; clear residual device tokens in app storage."
+                                    }
+                                } catch (error: Exception) {
+                                    message = error.message ?: "GitHub App grant revocation was not confirmed; saved tokens were retained."
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        }
+                    ) { Text("REVOKE APP GRANT") }
+                },
+                dismissButton = {
+                    TextButton(enabled = !busy, onClick = { showRevokeGitHubConfirmation = false }) {
+                        Text("CANCEL")
+                    }
                 }
             )
         }
