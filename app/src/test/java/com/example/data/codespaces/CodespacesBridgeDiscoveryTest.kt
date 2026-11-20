@@ -71,6 +71,16 @@ class CodespacesBridgeDiscoveryTest {
     }
 
     @Test
+    fun hostStopRequiresGitHubShutdownStateConfirmation() {
+        assertTrue(isCodespaceStoppedState("Shutdown"))
+        assertTrue(isCodespaceStoppedState("Stopped"))
+        assertFalse(isCodespaceStoppedState("Available"))
+        assertFalse(isCodespaceStoppedState("ShuttingDown"))
+        assertFalse(isCodespaceStoppedState("Failed"))
+        assertFalse(isCodespaceStoppedState("UNKNOWN"))
+    }
+
+    @Test
     fun buildsTheDocumentedHttpsOriginForPort8000() {
         assertEquals(
             "https://steady-lizard-abc123-8000.app.github.dev",
