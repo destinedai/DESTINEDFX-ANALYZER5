@@ -577,6 +577,11 @@ async def limits(request:Request, call_next):
     if response.status_code==401: record_auth_failure(request)
     return response
 class Pair(BaseModel): model_config=ConfigDict(extra='forbid')
+class GitHubTokenRevoke(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    access_token:str=Field(min_length=20,max_length=4096)
+
+
 class ManagedAccount(BaseModel):
     model_config=ConfigDict(extra='forbid')
     login:str=Field(min_length=1,max_length=20); server:str=Field(min_length=1,max_length=128); password:str=Field(min_length=1,max_length=512); access_type:str; account_mode:str|None=None; consent:bool
@@ -2176,6 +2181,52 @@ def _require_pairing_owner(p, assertion):
     if (not p.get('owner_subject') or not p.get('owner_tenant') or
         identity.get('sub') != p['owner_subject'] or identity.get('tenant_id') != p['owner_tenant']):
         raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'Only the management user that owns this Bridge pairing may control the Codespace'})
+
+@app.post('/v1/app/github/revoke')
+def revoke_github_app_authorization(
+    x:GitHubTokenRevoke,
+    authorization:str|None=Header(default=None),
+    x_management_identity:str|None=Header(default=None)
+):
+    """Revoke the owner's GitHub App user token without shipping the App secret to Android."""
+    p=auth(authorization,'app')
+    _require_pairing_owner(p,x_management_identity)
+    if not x.access_token.startswith('ghu_') or any(ord(ch)<32 or ord(ch)==127 for ch in x.access_token):
+        raise HTTPException(422,detail={'code':'GITHUB_TOKEN_INVALID','message':'Only a GitHub App user access token can be revoked here'})
+    client_id=os.getenv('CODESPACES_GITHUB_CLIENT_ID','').strip()
+    client_secret=os.getenv('CODESPACES_GITHUB_CLIENT_SECRET','').strip()
+    if not client_id or not client_secret:
+        raise HTTPException(503,detail={
+            'code':'GITHUB_REVOCATION_NOT_CONFIGURED',
+            'message':'Remote revocation is not configured on this Bridge. Open GitHub Settings and revoke the app authorization there; local tokens have not been changed.',
+        })
+    if len(client_id)>128 or len(client_secret)>4096:
+        raise HTTPException(503,detail={'code':'GITHUB_REVOCATION_NOT_CONFIGURED','message':'GitHub App revocation configuration is invalid'})
+    credentials=base64.b64encode((client_id+':'+client_secret).encode()).decode()
+    body=json.dumps({'access_token':x.access_token},separators=(',',':')).encode()
+    url='https://api.github.com/applications/'+quote(client_id,safe='')+'/token'
+    req=urllib.request.Request(url,data=body,headers={
+        'Authorization':'Basic '+credentials,
+        'Accept':'application/vnd.github+json',
+        'X-GitHub-Api-Version':'2022-11-28',
+        'Content-Type':'application/json',
+        'User-Agent':'DestinedFX-Bridge',
+    },method='DELETE')
+    try:
+        with urllib.request.urlopen(req,timeout=8) as response:
+            if response.status not in (200,204):
+                raise HTTPException(503,detail={'code':'GITHUB_REVOCATION_FAILED','message':'GitHub did not confirm token revocation'})
+    except urllib.error.HTTPError as error:
+        # Do not include response body, token, secret or Basic header in logs or API output.
+        if error.code in (401,403,404,422):
+            raise HTTPException(409,detail={'code':'GITHUB_REVOCATION_REJECTED','message':'GitHub rejected the revocation request; check App configuration and token validity'}) from None
+        raise HTTPException(503,detail={'code':'GITHUB_REVOCATION_FAILED','message':'GitHub revocation service is temporarily unavailable'}) from None
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(503,detail={'code':'GITHUB_REVOCATION_FAILED','message':'GitHub revocation service is unavailable'}) from None
+    return {'revoked':True}
+
 
 @app.get('/v1/app/host/status')
 def app_host_status(authorization:str|None=Header(default=None)):
