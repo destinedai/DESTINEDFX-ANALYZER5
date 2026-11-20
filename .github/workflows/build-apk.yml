@@ -33,6 +33,8 @@ jobs:
         run: python -m pytest -q scripts/test_linux_host.py scripts/test_linux_isolation.py scripts/test_codespaces_two_user_acceptance.py scripts/test_linux_slot_worker.py scripts/linux-host/test_check_slot_worker.py scripts/host/test_destinedfx_trigger_host.py scripts/test_linux_worker.py scripts/test_linux_tools.py
       - name: Run bridge tests
         run: python -m pytest -q bridge
+      - name: Run LIVE activation preflight tests (read-only)
+        run: python -m pytest -q scripts/test_live_activation_preflight.py
       - name: Build and smoke-test the owner Docker bridge image
         run: |
           env BRIDGE_BASE_URL=https://bridge.ci.example.ts.net \
