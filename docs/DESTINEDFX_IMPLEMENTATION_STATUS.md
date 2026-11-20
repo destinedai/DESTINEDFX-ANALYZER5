@@ -2,13 +2,18 @@
 
 Updated: 2026-11-20
 
-## Nov 20 code review fixes (CI pending)
+## Nov 20 code review and lifecycle hardening (latest CI pending for head 7c7227e)
 
 - **Bridge Linux-host enrollment:** EPHEMERAL Codespaces with verified per-user slot isolation can enrol DEMO only. LIVE is rejected before managed-account credential storage or worker-job creation. Regression tests cover allowed DEMO enrollment, LIVE refusal, and unready isolation.
 - **Codespaces first-run worker check:** now inspects the exact isolated slot-worker process path/arguments under `/proc`, avoiding the legacy worker mismatch and self-matching `pgrep` issue.
 - **Xvfb ownership continuity:** repeated `vnc-up.sh` preserves the `started` marker only when prior PID and managed-process record agree; incomplete or mismatched prior ownership fails closed.
 - **Installer marker lifecycle:** a shared `scripts/linux-host/finalize-mt5-install.sh` now requires verified MetaQuotes installer provenance, terminal + MetaEditor files, and a successful isolated compile of the EA before writing `installer-verified`. Headless post-create uses it; the GUI fallback tells the owner to run it after completing the wizard. This compile acceptance does not prove the terminal can authenticate to a broker or that it opens cleanly without an owner-observed debugger dialog.
-- **Validation status:** these changes were pushed to PR #16; the matching GitHub Actions runs are pending/queued. Do not call them passed until the runs finish. No physical-phone, live Codespaces, two-user host, or broker DEMO acceptance is claimed.
+- **Process shutdown identity hardening:** Codespaces-managed VNC, user worker and root host-agent process records now bind PID, kernel start ticks, effective UID, resolved executable and the complete argv. Shutdown pins the PID with Linux pidfd, revalidates identity after opening it, and sends SIGTERM only; no PID-only legacy record is upgraded, and unresponsive processes are not force-killed. Root reads are protected against user-forged records and symlink/path replacement by owner-UID checks and descriptor-based reads.
+- **VNC authentication verification:** x11vnc uses a private `-passwdfile` first-line password file (not the distinct encrypted `-rfbauth` format). The Codespaces self-check now performs a real local RFB VNC challenge/response against port 5900 and confirms loopback-only listeners; it does not claim a browser-to-noVNC websocket handshake or MT5 terminal startup.
+- **GitHub authorization revocation:** the Bridge proxy now calls the GitHub App grant-revocation endpoint, rather than the single-token endpoint, so a confirmed result represents revocation of the app authorization grant. Android also fails closed unless both current and backup broker-safety reports are explicitly safe with no reasons.
+- **Android account freshness:** Connected Account balance/equity/free-margin are withheld as STALE unless the account-bound EA heartbeat and at least one terminal quote are within 15 seconds.
+- **Latest CI at the previous source head:** all four required workflows were green on `1126cfc4` (Build APK, Codespaces deployment diagnostics, MetaQuotes installer verification, Wine guard). The additional RFB handshake and process-record ownership hardening is on `7c7227e` and its matching CI is still pending; this older green result does not validate the newer files.
+- **Validation and owner boundary:** no physical-phone, live Codespaces, two-user host, browser-to-noVNC, or genuine broker DEMO acceptance is claimed.
 
 ## Bridge and account security
 
