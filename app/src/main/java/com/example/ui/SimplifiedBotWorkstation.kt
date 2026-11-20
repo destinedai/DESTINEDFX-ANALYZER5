@@ -2411,7 +2411,13 @@ private fun ConnectedBotDashboard(
     onStart: () -> Unit,
     onPause: () -> Unit,
     onStop: () -> Unit
-) {
+ ) {
+    val nowMs = System.currentTimeMillis()
+    val freshHostBalance = mt5Snapshot
+        ?.takeIf { snapshot -> snapshot.heartbeatFresh && snapshot.brokerQuotes?.any { quote ->
+            quote.timestampMs > 0L && (nowMs - quote.timestampMs) in 0L..15_000L
+        } == true }
+        ?.balance
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, ProfitGreen.copy(alpha = 0.5f))) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("VERIFIED CONNECTED ACCOUNT", color = ProfitGreen, fontSize = 10.sp, fontWeight = FontWeight.Black)
