@@ -6,6 +6,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 from pydantic import ValidationError
 os.environ['ALLOW_LOOPBACK_HTTP']='true'
+# Test-only storage is explicitly opted into; production defaults remain fail-closed.
+os.environ['BRIDGE_HOST_PROFILE']='EPHEMERAL'
+os.environ['EXECUTION_STORAGE_DURABLE']='true'
 os.environ['BRIDGE_DB_PATH']=f'/tmp/destinedfx-bridge-test-{os.getpid()}-{uuid.uuid4().hex}.sqlite3'
 os.environ['PAIR_RATE_LIMIT']='1000'
 try: os.unlink(os.environ['BRIDGE_DB_PATH'])
@@ -46,6 +49,13 @@ def demo_pass_document(login='600001',server='Broker-Demo',broker='FBS',**overri
 def test_bridge_tests_use_a_process_isolated_database():
     assert app.DB_PATH.startswith(f'/tmp/destinedfx-bridge-test-{os.getpid()}-')
     assert app.DB_PATH != '/tmp/destinedfx-bridge-test.sqlite3'
+\ndef test_unspecified_bridge_host_and_storage_defaults_fail_closed(monkeypatch):
+    monkeypatch.delenv('BRIDGE_HOST_PROFILE', raising=False)
+    monkeypatch.delenv('EXECUTION_STORAGE_DURABLE', raising=False)
+    assert app.configured_host_profile() == 'EPHEMERAL'
+    assert app.durable_execution_enabled() is False
+    with pytest.raises(ValueError, match='BRIDGE_HOST_PROFILE'):
+        app.configured_host_profile('UNKNOWN')
 
 def pair(subject='fixture-user',tenant='fixture-user'):
     assertion=management_identity_assertion(subject,tenant)
