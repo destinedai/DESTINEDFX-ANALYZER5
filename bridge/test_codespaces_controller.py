@@ -37,8 +37,11 @@ def test_devcontainer_start_command_is_non_blocking_python_supervisor():
         (ROOT / ".devcontainer/devcontainer.json").read_text(encoding="utf-8")
     )
     assert config["postStartCommand"] == (
-        "python3 deploy/codespaces/host_controller.py ensure-started"
+        "python3 scripts/host/destinedfx_trigger_host.py start_all"
     )
+    adapter = (ROOT / "scripts/host/destinedfx_trigger_host.py").read_text(encoding="utf-8")
+    assert "host_controller.ensure_started()" in adapter
+    assert "gui.sh" not in adapter
     assert "start.sh" not in config["postStartCommand"]
     controller = (ROOT / "deploy/codespaces/host_controller.py").read_text(encoding="utf-8")
     assert "inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15)" in controller
