@@ -183,6 +183,7 @@ dependencies {
   implementation(libs.androidx.biometric)
   implementation(libs.coil.compose)
   implementation(libs.play.services.auth)
+  implementation("androidx.browser:browser:1.8.0")
   implementation(libs.converter.moshi)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
