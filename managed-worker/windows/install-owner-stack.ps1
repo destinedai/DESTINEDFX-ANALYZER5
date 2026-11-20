@@ -4,6 +4,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
     [Parameter(Mandatory=$true)][ValidatePattern('^https://[A-Za-z0-9.-]+(?::[0-9]+)?$')][string]$TailnetOrigin,
+    [Parameter()][string]$ManagementStepUpPublicKeyPath,
     [switch]$AddBroker
 )
 $ErrorActionPreference = 'Stop'
@@ -47,6 +48,15 @@ if (-not (Test-Path (Join-Path $venvDir 'Scripts\python.exe'))) {
 $venvPython = Join-Path $venvDir 'Scripts\python.exe'
 & $venvPython -m pip install --disable-pip-version-check -r (Join-Path $bridgeDir 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Bridge dependency installation failed.' }
+$managementStepUpPublicKeyPem = ''
+if ($ManagementStepUpPublicKeyPath) {
+    $stepUpKeyPath = (Resolve-Path -LiteralPath $ManagementStepUpPublicKeyPath).Path
+    $keyValidation = & $venvPython -c 'import sys; from cryptography.hazmat.primitives import serialization; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey; key=serialization.load_pem_public_key(open(sys.argv[1],"rb").read()); assert isinstance(key,Ed25519PublicKey); print("ED25519_PUBLIC_KEY_VALID")' $stepUpKeyPath
+    if ($LASTEXITCODE -ne 0 -or $keyValidation -notmatch 'ED25519_PUBLIC_KEY_VALID') {
+        throw 'Management step-up key must be a valid Ed25519 PUBLIC PEM derived from the backend signing key; private keys are not accepted here.'
+    }
+    $managementStepUpPublicKeyPem = [IO.File]::ReadAllText($stepUpKeyPath)
+}
 if ($AddBroker) {
     $eaSource = (& $venvPython -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["ea_source"])' $workerConfig).Trim()
 } else {
@@ -108,12 +118,21 @@ if ($resume) {
         }
         if ($null -eq $secretObject.PSObject.Properties['cf_access_client_id']) { $secretObject | Add-Member -NotePropertyName cf_access_client_id -NotePropertyValue ''; $secretNeedsWrite = $true }
         if ($null -eq $secretObject.PSObject.Properties['cf_access_client_secret']) { $secretObject | Add-Member -NotePropertyName cf_access_client_secret -NotePropertyValue ''; $secretNeedsWrite = $true }
+        if ($null -eq $secretObject.PSObject.Properties['management_step_up_public_key']) { $secretObject | Add-Member -NotePropertyName management_step_up_public_key -NotePropertyValue ''; $secretNeedsWrite = $true }
+        if ($null -eq $secretObject.PSObject.Properties['management_step_up_issuer']) { $secretObject | Add-Member -NotePropertyName management_step_up_issuer -NotePropertyValue 'destinedfx-management'; $secretNeedsWrite = $true }
+        if ($null -eq $secretObject.PSObject.Properties['management_step_up_audience']) { $secretObject | Add-Member -NotePropertyName management_step_up_audience -NotePropertyValue 'destinedfx-bridge'; $secretNeedsWrite = $true }
     } catch { throw 'Existing owner-secrets.dpapi could not be decrypted or validated under this Windows user; stop and perform manual recovery without deleting state.' }
 } else {
-    $generated = & $venvPython -c 'import json,secrets; from cryptography.fernet import Fernet; print(json.dumps({"fernet_key":Fernet.generate_key().decode(),"worker_bootstrap_token":secrets.token_urlsafe(48),"worker_token":secrets.token_urlsafe(48),"cf_access_client_id":"","cf_access_client_secret":""}))'
+    $generated = & $venvPython -c 'import json,secrets; from cryptography.fernet import Fernet; print(json.dumps({"fernet_key":Fernet.generate_key().decode(),"worker_bootstrap_token":secrets.token_urlsafe(48),"worker_token":secrets.token_urlsafe(48),"cf_access_client_id":"","cf_access_client_secret":"","management_step_up_public_key":"","management_step_up_issuer":"destinedfx-management","management_step_up_audience":"destinedfx-bridge"}))'
     if ($LASTEXITCODE -ne 0) { throw 'Secret generation failed.' }
     $secretObject = $generated | ConvertFrom-Json
     $secretJson = $generated
+}
+if ($managementStepUpPublicKeyPem) {
+    $secretObject.management_step_up_public_key = $managementStepUpPublicKeyPem
+    $secretObject.management_step_up_issuer = 'destinedfx-management'
+    $secretObject.management_step_up_audience = 'destinedfx-bridge'
+    $secretNeedsWrite = $true
 }
 function TomlString([string]$Value) { '"' + $Value.Replace('\','\\').Replace('"','\"') + '"' }
 function Write-DpapiSecretBundle([object]$Bundle) {
