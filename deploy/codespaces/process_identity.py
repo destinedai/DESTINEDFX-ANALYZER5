@@ -133,8 +133,29 @@ def write_record(path: Path, identity: dict[str, Any]) -> None:
         isinstance(arg, str) for arg in identity["args"]
     ):
         raise IdentityError("process identity argv is invalid")
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path.parent, 0o700)
+    if os.geteuid() == 0:
+        # The parent belongs to the Codespaces user. A privileged writer must
+        # never follow a runtime-directory symlink or chmod an arbitrary path.
+        try:
+            parent_info = path.parent.lstat()
+            parent_real = path.parent.resolve(strict=True)
+        except OSError as exc:
+            raise IdentityError("root refuses an unavailable process identity directory") from exc
+        if (
+            not stat.S_ISDIR(parent_info.st_mode)
+            or path.parent.is_symlink()
+            or parent_info.st_mode & 0o077
+            or parent_real != Path(os.path.abspath(path.parent))
+        ):
+            raise IdentityError("root refuses a symlinked or non-private process identity directory")
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if path.parent.is_symlink() or not path.parent.is_dir():
+            raise IdentityError("process identity parent must be a real directory")
+        os.chmod(path.parent, 0o700)
+        parent_info = path.parent.lstat()
+        if parent_info.st_uid != os.geteuid() or parent_info.st_mode & 0o077:
+            raise IdentityError("process identity directory owner or permissions are unsafe")
     payload = {"version": VERSION, **{key: identity[key] for key in IDENTITY_FIELDS}}
     temporary_name = None
     try:
