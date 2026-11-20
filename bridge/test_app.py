@@ -311,6 +311,73 @@ def signed_worker_attestation(evidence):
     return normalized
 
 
+def test_ephemeral_linux_host_allows_isolated_demo_registration(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': True, 'slot_isolation': {'enabled': True, 'ready': True},
+    })
+    monkeypatch.setattr(app, 'durable_execution_enabled', lambda: True)
+    monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: False)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123456', 'server':'FBS-Demo', 'password':'demo-secret',
+        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS',
+        'consent':True,
+    })
+    assert response.status_code == 202, response.text
+    assert response.json()['status'] == 'AWAITING_WORKER_ATTESTATION'
+    with app.tx() as c:
+        account = c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
+        job = c.execute('SELECT status,requested_account_mode FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
+    assert account is not None and account['account_mode'] == 'DEMO'
+    assert 'demo-secret' not in str(dict(account))
+    assert job['status'] == 'AWAITING_ATTESTATION' and job['requested_account_mode'] == 'DEMO'
+
+
+def test_ephemeral_linux_host_rejects_live_before_storage_or_job(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': True, 'slot_isolation': {'enabled': True, 'ready': True},
+    })
+    monkeypatch.setattr(app, 'durable_execution_enabled', lambda: True)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123456', 'server':'FBS-Live', 'password':'live-secret',
+        'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS',
+        'consent':True,
+    })
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'LINUX_HOST_DEMO_ONLY'
+    with app.tx() as c:
+        assert c.execute('SELECT COUNT(*) FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+        assert c.execute('SELECT COUNT(*) FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+
+
+def test_ephemeral_linux_host_rejects_unready_isolation_before_storage(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': False, 'slot_isolation': {'enabled': True, 'ready': False},
+    })
+    monkeypatch.setattr(app, 'durable_execution_enabled', lambda: True)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123456', 'server':'FBS-Demo', 'password':'demo-secret',
+        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS',
+        'consent':True,
+    })
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'PER_USER_TERMINAL_ISOLATION_REQUIRED'
+    with app.tx() as c:
+        assert c.execute('SELECT COUNT(*) FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+        assert c.execute('SELECT COUNT(*) FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+
+
 def test_managed_registration_waits_for_verified_per_user_isolation(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: False)
