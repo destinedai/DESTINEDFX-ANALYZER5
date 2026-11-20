@@ -65,11 +65,51 @@ def _proc_start_ticks(pid: int) -> int | None:
 
 def _proc_cmdline(pid: int) -> str:
     try:
-        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(bytes([0]), b" ").decode(
             "utf-8", errors="replace"
         )
     except OSError:
         return ""
+
+
+def _proc_identity(pid: int) -> dict[str, Any] | None:
+    """Capture PID, start ticks, effective UID, executable and argv from /proc."""
+    base = Path("/proc") / str(pid)
+    try:
+        status = (base / "status").read_text(encoding="ascii")
+        uid_line = next(line for line in status.splitlines() if line.startswith("Uid:"))
+        effective_uid = int(uid_line.split()[2])
+        raw_stat = (base / "stat").read_text(encoding="ascii")
+        tail = raw_stat[raw_stat.rfind(")") + 2 :].split()
+        args = [
+            item.decode("utf-8", errors="replace")
+            for item in (base / "cmdline").read_bytes().split(bytes([0]))
+            if item
+        ]
+        return {
+            "pid": pid,
+            "start_ticks": int(tail[19]),
+            "state": tail[0],
+            "uid": effective_uid,
+            "exe": os.path.realpath(base / "exe"),
+            "args": args,
+        }
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def _supervisor_identity_matches(identity: dict[str, Any] | None, expected: str) -> bool:
+    if not identity or identity["state"] in {"Z", "X"}:
+        return False
+    args = identity["args"]
+    return (
+        identity["uid"] == os.geteuid()
+        and identity["exe"] == os.path.realpath(sys.executable)
+        and len(args) == 3
+        and os.path.realpath(args[0]) == os.path.realpath(sys.executable)
+        and os.path.realpath(args[1]) == os.path.realpath(expected)
+        and args[2] == "supervise"
+    )
 
 
 def _record_matches(record: dict[str, Any] | None, expected: str) -> bool:
@@ -80,11 +120,40 @@ def _record_matches(record: dict[str, Any] | None, expected: str) -> bool:
         ticks = int(record["start_ticks"])
     except (KeyError, TypeError, ValueError):
         return False
-    return (
-        pid > 1
-        and _proc_start_ticks(pid) == ticks
-        and expected in _proc_cmdline(pid)
-    )
+    identity = _proc_identity(pid)
+    if not identity or identity["start_ticks"] != ticks:
+        return False
+    if record.get("uid") is not None and int(record["uid"]) != identity["uid"]:
+        return False
+    if record.get("exe") and os.path.realpath(str(record["exe"])) != identity["exe"]:
+        return False
+    return _supervisor_identity_matches(identity, expected)
+
+
+def _supervisor_record(pid: int, identity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "pid": pid,
+        "start_ticks": identity["start_ticks"],
+        "uid": identity["uid"],
+        "exe": identity["exe"],
+        "cmdline": identity["args"],
+        "script": str(Path(__file__).resolve()),
+    }
+
+
+def _find_supervisors(expected: str) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return found
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        identity = _proc_identity(int(entry.name))
+        if _supervisor_identity_matches(identity, expected):
+            found.append(identity)
+    return found
 
 
 def _write_status(status: str, **extra: Any) -> None:
@@ -129,9 +198,21 @@ def _start_command() -> subprocess.Popen[bytes]:
         except OSError:
             pass
         raise RuntimeError("Could not establish startup process identity")
+    identity = _proc_identity(child.pid)
+    if not identity or identity["start_ticks"] != ticks or identity["uid"] != os.geteuid() or
+        identity["exe"] != os.path.realpath("/usr/bin/bash") or
+        identity["args"] != ["bash", str(START_SCRIPT)]:
+        try:
+            child.terminate()
+        except OSError:
+            pass
+        raise RuntimeError("Startup manager process identity could not be verified")
     _atomic_json(
         START_PID,
-        {"pid": child.pid, "start_ticks": ticks, "script": str(START_SCRIPT)},
+        {
+            "pid": child.pid, "start_ticks": ticks, "uid": identity["uid"],
+            "exe": identity["exe"], "cmdline": identity["args"], "script": str(START_SCRIPT),
+        },
     )
     return child
 
@@ -144,12 +225,30 @@ def ensure_started() -> dict[str, Any]:
     RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(STATE, 0o700)
     os.chmod(RUNTIME, 0o700)
+    expected_script = str(Path(__file__).resolve())
     current = _read_json(SUPERVISOR_PID)
-    if _record_matches(current, str(Path(__file__).resolve())):
+    if _record_matches(current, expected_script):
+        identity = _proc_identity(int(current["pid"]))
+        if identity:
+            _atomic_json(SUPERVISOR_PID, _supervisor_record(int(current["pid"]), identity))
         return {"status": "ALREADY_SUPERVISED", "pid": current["pid"]}
 
+    discovered = _find_supervisors(expected_script)
+    if len(discovered) > 1:
+        raise RuntimeError("Multiple verified host supervisors are running; refusing duplicate startup")
+    if len(discovered) == 1:
+        identity = discovered[0]
+        _atomic_json(SUPERVISOR_PID, _supervisor_record(int(identity["pid"]), identity))
+        return {"status": "RECOVERED_SUPERVISOR", "pid": identity["pid"]}
+
     if current:
-        # Never signal a PID whose start time or command no longer matches.
+        try:
+            old_pid = int(current.get("pid", 0))
+            old_ticks = int(current.get("start_ticks", 0))
+        except (TypeError, ValueError):
+            old_pid, old_ticks = 0, 0
+        if old_pid > 1 and old_ticks > 0 and _proc_start_ticks(old_pid) == old_ticks:
+            raise RuntimeError("Supervisor PID record points to a live process with mismatched identity")
         try:
             SUPERVISOR_PID.unlink()
         except FileNotFoundError:
@@ -173,10 +272,14 @@ def ensure_started() -> dict[str, Any]:
     ticks = _proc_start_ticks(process.pid)
     if ticks is None:
         raise RuntimeError("Host supervisor failed to establish its process identity")
-    _atomic_json(
-        SUPERVISOR_PID,
-        {"pid": process.pid, "start_ticks": ticks, "script": str(Path(__file__).resolve())},
-    )
+    identity = _proc_identity(process.pid)
+    if not _supervisor_identity_matches(identity, expected_script) or identity["start_ticks"] != ticks:
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        raise RuntimeError("Host supervisor process identity could not be verified")
+    _atomic_json(SUPERVISOR_PID, _supervisor_record(process.pid, identity))
     return {"status": "SUPERVISOR_STARTED", "pid": process.pid}
 
 
