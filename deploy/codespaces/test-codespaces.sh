@@ -73,7 +73,9 @@ grep -Fq 'STOP_SCRIPT' "$ROOT/deploy/codespaces/host_controller.py" || fail 'hos
 grep -Fq -- '--preflight' "$ROOT/deploy/codespaces/stop.sh" || fail 'safe host shutdown must require local stop.sh preflight'
 grep -Fq -- '--check-stop' "$ROOT/deploy/codespaces/stop.sh" || fail 'stop preflight must verify isolated-slot cleanup prerequisites'
 grep -Fq 'stop_script_ack' "$ROOT/bridge/app.py" || fail 'Bridge host shutdown must return local stop.sh acknowledgement'
-grep -Fq 'stop_script_status' "$ROOT/app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt" || fail 'Android must require local stop.sh acknowledgement before GitHub stop'
+grep -Fq 'isSafeHostStopPreflight(preflight)' "$ROOT/app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt" || fail 'Android must validate the complete stop preflight before GitHub stop'
+grep -Fq 'stop_script_status' "$ROOT/app/src/main/java/com/example/data/codespaces/HostStopPreflight.kt" || fail 'Android host preflight must require the stop.sh acknowledgement'
+grep -Fq 'PREFLIGHT_PASSED' "$ROOT/app/src/main/java/com/example/data/codespaces/HostStopPreflight.kt" || fail 'Android must require the exact stop.sh preflight result'
 if grep -Eq '(Popen|subprocess[.](run|call|check_call|check_output)|exec)[^#]*gui[.]sh' "$ROOT/scripts/host/destinedfx_trigger_host.py"; then fail 'normal host start must never invoke the GUI installer'; fi
 grep -Fq 'check_slot_worker.py' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'first-run check must use the tested slot worker process checker'
 grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
