@@ -120,3 +120,54 @@ def test_non_vnc_security_type_is_rejected():
         client.close()
         thread.join(timeout=2)
     assert not thread.is_alive()
+
+
+def test_password_file_uses_exact_first_line_without_marker_reinterpretation(tmp_path):
+    import os
+
+    path = tmp_path / "vnc.pass"
+    password = "#A__COMM__B123456789"
+    path.write_text(password + "\\nignored second line\\n", encoding="ascii")
+    path.chmod(0o600)
+    assert rfb.read_password_file(path, os.geteuid()) == password
+
+
+def test_password_file_requires_private_owner_and_rejects_symlinks(tmp_path):
+    import os
+
+    target = tmp_path / "target.pass"
+    target.write_text("valid-vnc-password\\n", encoding="ascii")
+    target.chmod(0o600)
+    link = tmp_path / "link.pass"
+    link.symlink_to(target)
+    try:
+        rfb.read_password_file(link, os.geteuid())
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("symlinked VNC password file must be rejected")
+
+    public = tmp_path / "public.pass"
+    public.write_text("valid-vnc-password\\n", encoding="ascii")
+    public.chmod(0o644)
+    try:
+        rfb.read_password_file(public, os.geteuid())
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("public VNC password file must be rejected")
+
+
+def test_password_file_rejects_non_ascii_and_short_first_line(tmp_path):
+    import os
+
+    for name, data in (("short.pass", "short\\n"), ("nonascii.pass", "pässword-long\\n")):
+        path = tmp_path / name
+        path.write_text(data, encoding="utf-8")
+        path.chmod(0o600)
+        try:
+            rfb.read_password_file(path, os.geteuid())
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid VNC password first line must be rejected")
