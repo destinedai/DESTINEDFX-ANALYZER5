@@ -112,7 +112,7 @@ def find_and_capture_identity(
             current["uid"] == expected_uid
             and current["exe"] == executable
             and len(args) == len(expected_args) + 1
-            and Path(args[0]).name.startswith(Path(executable).name)
+            and bool(args[0])
             and args[1:] == expected_args
         ):
             matches.append({key: current[key] for key in IDENTITY_FIELDS})
