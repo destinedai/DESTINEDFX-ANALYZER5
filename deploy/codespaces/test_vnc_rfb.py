@@ -104,7 +104,7 @@ def test_non_vnc_security_type_is_rejected():
             server.sendall(b"RFB 003.008\n")
             _read_exact(server, 12)
             server.sendall(b"\x01\x01")  # None authentication only
-            _read_exact(server, 1)
+            # Server closes after advertising an unsupported security type.
         finally:
             server.close()
     thread = threading.Thread(target=server_thread, daemon=True)
