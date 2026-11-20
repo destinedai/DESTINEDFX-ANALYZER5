@@ -209,9 +209,13 @@ def _start_command() -> subprocess.Popen[bytes]:
             pass
         raise RuntimeError("Could not establish startup process identity")
     identity = _proc_identity(child.pid)
-    if not identity or identity["start_ticks"] != ticks or identity["uid"] != os.geteuid() or
-        identity["exe"] != os.path.realpath("/usr/bin/bash") or
-        identity["args"] != ["bash", str(START_SCRIPT)]:
+    if (
+        not identity
+        or identity["start_ticks"] != ticks
+        or identity["uid"] != os.geteuid()
+        or identity["exe"] != os.path.realpath("/usr/bin/bash")
+        or identity["args"] != ["bash", str(START_SCRIPT)]
+    ):
         try:
             child.terminate()
         except OSError:
@@ -344,7 +348,10 @@ def _graceful_stop(
         return False
 
     current_identity = _proc_identity(child.pid)
-    if not _start_manager_identity_matches(current_identity, str(START_SCRIPT)) or current_identity["start_ticks"] != start_ticks:
+    if (
+        not _start_manager_identity_matches(current_identity, str(START_SCRIPT))
+        or current_identity["start_ticks"] != start_ticks
+    ):
         _write_status("STOP_FAILED", reason="START_PROCESS_IDENTITY_CHANGED")
         return False
     try:
@@ -364,7 +371,10 @@ def _graceful_stop(
         if child.poll() is not None:
             return True
         current_identity = _proc_identity(child.pid)
-        if not _start_manager_identity_matches(current_identity, str(START_SCRIPT)) or current_identity["start_ticks"] != start_ticks:
+        if (
+            not _start_manager_identity_matches(current_identity, str(START_SCRIPT))
+            or current_identity["start_ticks"] != start_ticks
+        ):
             _write_status("STOP_FAILED", reason="START_PROCESS_IDENTITY_CHANGED")
             return False
         try:
