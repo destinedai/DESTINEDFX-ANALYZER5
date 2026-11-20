@@ -117,7 +117,8 @@ grep -Fq 'linux-slot-worker.py" --loop --interval 3' "$ROOT/deploy/codespaces/st
 grep -Fq 'linux-slot-worker.py' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'first-run check must inspect the isolated Linux slot worker process identity'
 if grep -Fq 'pgrep -f "linux-worker.py --loop"' "$ROOT/deploy/codespaces/first-run-check.sh"; then fail 'first-run check must not mistake legacy linux-worker for Codespaces slot worker'; fi
 if grep -Fq 'pgrep -f "linux-worker.py --loop"' "$ROOT/deploy/codespaces/first-run-check.sh"; then fail 'first-run check must not mistake legacy linux-worker for Codespaces slot worker'; fi
-grep -Fq 'linux-slot-worker.py --loop --interval 3' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'first-run check must detect the actual isolated Linux slot worker'
+grep -Fq 'scripts/linux-host/linux-slot-worker.py' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'first-run check must pass the isolated slot worker script to its process-identity checker'
+grep -Fq 'args[2:5] == ["--loop", "--interval", "3"]' "$ROOT/scripts/linux-host/check_slot_worker.py" || fail 'slot-worker identity checker must verify the exact loop arguments'
 if grep -Fq 'pgrep -f "linux-worker.py --loop"' "$ROOT/deploy/codespaces/first-run-check.sh"; then fail 'first-run check must not mistake legacy linux-worker for Codespaces slot worker'; fi
 grep -Fq 'DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true' "$ROOT/deploy/codespaces/start.sh" || fail 'loopback control plane opt-in missing'
 grep -Fq 'unset WINEPREFIX MT5_JOURNAL_DIR DESTINEDFX_EA_SET_PATH' "$ROOT/deploy/codespaces/start.sh" || fail 'shared Wine prefix, journal and preset overrides must remain unset'
