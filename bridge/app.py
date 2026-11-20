@@ -2208,7 +2208,7 @@ def revoke_github_app_authorization(
     req=urllib.request.Request(url,data=body,headers={
         'Authorization':'Basic '+credentials,
         'Accept':'application/vnd.github+json',
-        'X-GitHub-Api-Version':'2022-11-28',
+        'X-GitHub-Api-Version':'2026-03-10',
         'Content-Type':'application/json',
         'User-Agent':'DestinedFX-Bridge',
     },method='DELETE')
