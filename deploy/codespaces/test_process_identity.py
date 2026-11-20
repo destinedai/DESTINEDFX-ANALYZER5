@@ -262,3 +262,37 @@ def test_symlink_process_identity_record_is_rejected(tmp_path):
         pass
     else:
         raise AssertionError("process identity records must not follow symlinks")
+
+
+
+def test_privileged_writer_refuses_public_runtime_directory_without_chmod(tmp_path):
+    public_dir = tmp_path / "public-runtime"
+    public_dir.mkdir()
+    public_dir.chmod(0o755)
+    record_path = public_dir / "root-agent.identity.json"
+    with patch.object(identity.os, "geteuid", return_value=0):
+        try:
+            identity.write_record(record_path, process(uid=0))
+        except identity.IdentityError as exc:
+            assert "non-private" in str(exc)
+        else:
+            raise AssertionError("root must refuse a public runtime directory")
+    assert public_dir.stat().st_mode & 0o777 == 0o755
+    assert not record_path.exists()
+
+
+def test_privileged_writer_refuses_symlinked_runtime_directory(tmp_path):
+    target = tmp_path / "private-target"
+    target.mkdir()
+    target.chmod(0o700)
+    link = tmp_path / "runtime-link"
+    link.symlink_to(target, target_is_directory=True)
+    with patch.object(identity.os, "geteuid", return_value=0):
+        try:
+            identity.write_record(link / "root-agent.identity.json", process(uid=0))
+        except identity.IdentityError:
+            pass
+        else:
+            raise AssertionError("root must refuse a symlinked runtime directory")
+    assert target.stat().st_mode & 0o777 == 0o700
+    assert not (target / "root-agent.identity.json").exists()
