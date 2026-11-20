@@ -48,7 +48,7 @@ fun CodespacesHostControls(
         mutableStateOf(packagedClientId.ifBlank { secrets.getCodespacesGitHubClientId() })
     }
     var device by remember { mutableStateOf<CodespacesLifecycleClient.DeviceAuthorization?>(null) }
-    var message by remember { mutableStateOf("Connect your GitHub OAuth App to control the DestinedFX Codespace from this phone.") }
+    var message by remember { mutableStateOf("Connect your GitHub App to control the DestinedFX Codespace from this phone.") }
     var busy by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(secrets.getCodespacesGitHubAccessToken().isNotBlank()) }
 
@@ -96,7 +96,7 @@ fun CodespacesHostControls(
             color = androidx.compose.material3.MaterialTheme.colorScheme.primary
         )
         Text(
-            "Owner-only GitHub OAuth Device Flow. This app requests the codespace and offline_access scopes so it can manage this repository's Codespace and refresh its short-lived token. No OAuth client secret is bundled.",
+            "Owner-only GitHub App Device Flow. This app requests the codespace and offline_access scopes so it can manage this repository's Codespace and refresh its short-lived token. No OAuth client secret is bundled.",
             fontSize = 10.sp,
             color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -106,11 +106,11 @@ fun CodespacesHostControls(
                 onValueChange = { clientId = it },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !busy,
-                label = { Text("GitHub OAuth App Client ID (public)") },
+                label = { Text("GitHub App Client ID (public)") },
                 singleLine = true
             )
         } else {
-            Text("GitHub OAuth App Client ID: configured in this APK (public identifier; no client secret is bundled).",
+            Text("GitHub App Client ID: configured in this APK (public identifier; no client secret is bundled).",
                 fontSize = 10.sp, color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -119,7 +119,7 @@ fun CodespacesHostControls(
                     enabled = !busy && secrets.isSecureStorageAvailable,
                     onClick = {
                         if (secrets.saveCodespacesGitHubClientId(clientId)) {
-                            message = "GitHub OAuth App Client ID saved in encrypted app storage."
+                            message = "GitHub App Client ID saved in encrypted app storage."
                         } else {
                             message = "Client ID was not saved. Check the value and secure storage."
                         }
@@ -134,7 +134,7 @@ fun CodespacesHostControls(
                         try {
                             if (packagedClientId.isBlank()) {
                                 check(secrets.saveCodespacesGitHubClientId(clientId)) {
-                                    "Enter a valid public GitHub OAuth App Client ID first."
+                                    "Enter a valid public GitHub App Client ID first."
                                 }
                             }
                             val result = github.beginDeviceAuthorization()
@@ -185,8 +185,8 @@ fun CodespacesHostControls(
         }
 
         Text(
-            if (authorized) "GitHub OAuth authorization: saved securely on this device"
-            else "GitHub OAuth authorization: not connected",
+            if (authorized) "GitHub App authorization: saved securely on this device"
+            else "GitHub App authorization: not connected",
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold
         )
@@ -327,7 +327,7 @@ fun CodespacesHostControls(
                     busy = true
                     github.revokeLocalAuthorization()
                     authorized = false
-                    message = "GitHub OAuth tokens cleared from this phone. The OAuth grant is still active until you revoke it in GitHub Settings."
+                    message = "GitHub App tokens cleared from this phone. The OAuth grant is still active until you revoke it in GitHub Settings."
                     busy = false
                 }
             }
