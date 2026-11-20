@@ -1338,11 +1338,16 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)
         ) { Icon(Icons.Default.Stop, contentDescription = null); Text("EMERGENCY STOP · STOP NEW ENTRIES", fontWeight = FontWeight.Black) }
         val codespacesUsage = githubCodespacesClient.usageEstimate()
-        val githubSignedIn = secrets.getCodespacesGitHubAccessToken().isNotBlank() &&
-            secrets.getCodespacesGitHubAccessExpiresAtMillis() > System.currentTimeMillis()
+        val githubSignedIn = secrets.getCodespacesGitHubRefreshToken().isNotBlank() &&
+            secrets.getCodespacesGitHubRefreshExpiresAtMillis() > System.currentTimeMillis()
         val codespaceState = selectedGithubCodespace?.state.orEmpty()
         val hostDisplayState = when (codespaceState.lowercase()) {
-            "available" -> if (hostApiStatus?.optBoolean("shutdown_prepared") == true) "STOPPING" else if (hostApiStatus != null) "ACTIVE" else "DEGRADED"
+            "available" -> if (hostApiStatus?.optBoolean("shutdown_prepared") == true) "STOPPING"
+                else if (
+                    hostApiStatus?.optString("host_lifecycle_status") in setOf("ACTIVE", "WARNING") &&
+                    hostApiStatus.optJSONObject("slot_isolation")?.optBoolean("ready") == true &&
+                    mt5Snapshot?.heartbeatFresh == true && mt5Snapshot?.terminalOnline == true
+                ) "ACTIVE" else "DEGRADED"
             "starting", "creating" -> "STARTING"
             "stopping" -> "STOPPING"
             "shutdown" -> "SLEEPING"
