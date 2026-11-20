@@ -441,7 +441,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     if (selectedAccountMode == "LIVE") {
                         if (observedHostProfile != "PERSISTENT") {
                             Text(
-                                "LIVE IS BLOCKED: host profile is $observedHostProfile. A persistent, independently verified host is required; an ephemeral Codespaces host remains DEMO-only. This is an active safety gate, not a missing button.",
+                                "LIVE trading needs a verified persistent host.",
                                 color = LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold
                             )
                         }
@@ -461,14 +461,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         )
                     }
                     Text(
-                        "NEW MT5 ENTRIES: START activates the selected managed EA strategy. The EA submits broker Buy/Sell only after its own fresh-quote, account-identity, heartbeat, news, cost and risk checks. This phone UI does not send an arbitrary manual market order.",
+                        "START runs the selected EA after broker, quote, news and risk checks.",
                         color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "A queued/acknowledged command is not a fill. The Bot waits for EA acknowledgement and a fresh terminal snapshot; unresolved results stay UNKNOWN and are not blindly resent.",
+                        "Only broker-confirmed terminal results count as fills. Uncertain commands are never resent.",
                         color = TextSecondary, fontSize = 10.sp
                     )
-                    Text("Managed EA strategy support is registry-validated; support does not imply profitability or real-broker testing.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text("Strategy support does not guarantee performance.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     BridgeTelemetry(
                         if (bridgeMode) bridgeSnapshot else null, selectedAccountMode,
                         bridgeSecrets.getManagedMT5AccountLogin(bridgeProfileKey),
