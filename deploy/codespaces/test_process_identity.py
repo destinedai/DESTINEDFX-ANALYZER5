@@ -321,7 +321,7 @@ def test_retire_keeps_live_or_pid_reused_process_record(tmp_path):
         try:
             identity.retire_record_if_gone(path)
         except identity.IdentityError as exc:
-            assert "mismatched PID" in str(exc)
+            assert "PID no longer matches" in str(exc)
         else:
             raise AssertionError("PID-reused record must not be retired")
     assert path.exists()
