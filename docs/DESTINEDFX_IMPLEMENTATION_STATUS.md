@@ -1,6 +1,14 @@
 # DestinedFX implementation status
 
-Updated: 2026-11-19
+Updated: 2026-11-20
+
+## Nov 20 code review fixes (CI pending)
+
+- **Bridge Linux-host enrollment:** EPHEMERAL Codespaces with verified per-user slot isolation can enrol DEMO only. LIVE is rejected before managed-account credential storage or worker-job creation. Regression tests cover allowed DEMO enrollment, LIVE refusal, and unready isolation.
+- **Codespaces first-run worker check:** now inspects the exact isolated slot-worker process path/arguments under `/proc`, avoiding the legacy worker mismatch and self-matching `pgrep` issue.
+- **Xvfb ownership continuity:** repeated `vnc-up.sh` preserves the `started` marker only when prior PID and managed-process record agree; incomplete or mismatched prior ownership fails closed.
+- **Installer marker lifecycle:** a shared `scripts/linux-host/finalize-mt5-install.sh` now requires verified MetaQuotes installer provenance, terminal + MetaEditor files, and a successful isolated compile of the EA before writing `installer-verified`. Headless post-create uses it; the GUI fallback tells the owner to run it after completing the wizard. This compile acceptance does not prove the terminal can authenticate to a broker or that it opens cleanly without an owner-observed debugger dialog.
+- **Validation status:** these changes were pushed to PR #16; the matching GitHub Actions runs are pending/queued. Do not call them passed until the runs finish. No physical-phone, live Codespaces, two-user host, or broker DEMO acceptance is claimed.
 
 ## Bridge and account security
 
