@@ -98,7 +98,8 @@ bash "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" || fail 'invalid in
 grep -Fq 'finalize-mt5-install.sh" headless' "$ROOT/.devcontainer/postCreate.sh" || fail 'headless install must invoke the shared finalizer before accepting the marker'
 grep -Fq 'finalize-mt5-install.sh" gui' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'GUI install runner must invoke the shared finalizer after successful wizard exit'
 if grep -Fq 'finalize-mt5-install.sh gui' "$ROOT/deploy/codespaces/gui.sh"; then fail 'GUI launcher must not ask the owner to manually finalize a canceled/incomplete wizard'; fi
-grep -Fq 'authenticode_signer=MetaQuotes Ltd' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must verify installer provenance signer'
+grep -Fq 'authenticode_signer=MetaQuotes Ltd' "$ROOT/scripts/linux-host/installer_completion.py" || fail 'completion verifier must validate the MetaQuotes provenance signer'
+grep -Fq 'COMPLETION_HELPER" verify' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must execute the provenance and artifact verifier'
 grep -Fq 'MetaEditor' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must verify MetaEditor and compile the EA'
 grep -Fq 'DestinedFXTraderEA.ex5' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must require the compiled EA output'
 bash "$ROOT/deploy/codespaces/first-run-check.sh" >/tmp/destinedfx-first-run-check.out 2>&1 || true
