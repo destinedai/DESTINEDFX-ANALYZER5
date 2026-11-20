@@ -7,10 +7,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,6 +30,7 @@ import com.example.BuildConfig
 import com.example.data.codespaces.CodespacesLifecycleClient
 import com.example.data.codespaces.deviceFlowPollIntervalSeconds
 import com.example.data.codespaces.nextDeviceFlowPollIntervalSeconds
+import com.example.data.codespaces.isSafeHostStopPreflight
 import com.example.data.codespaces.codespacesBridgeConfigurationAllowsOriginSave
 import com.example.data.codespaces.codespacesBridgeIsolationNotice
 import com.example.data.trade.MT5RemoteBridgeClient
@@ -53,6 +56,7 @@ fun CodespacesHostControls(
     var message by remember { mutableStateOf("Connect your GitHub App to control the DestinedFX Codespace from this phone.") }
     var busy by remember { mutableStateOf(false) }
     var authorized by remember { mutableStateOf(secrets.getCodespacesGitHubAccessToken().isNotBlank()) }
+    var showStopHostConfirmation by remember { mutableStateOf(false) }
 
     // GitHub Device Flow is polled automatically. The user still approves the device code
     // in GitHub's own page; the app never simulates or skips that owner consent.
@@ -226,31 +230,7 @@ fun CodespacesHostControls(
             ) { Text("START HOST", fontSize = 10.sp) }
             OutlinedButton(
                 enabled = !busy && authorized && bridgeClient.managedConfigured(),
-                onClick = {
-                    scope.launch {
-                        busy = true
-                        var shutdownPrepared = false
-                        try {
-                            val preflight = bridgeClient.prepareHostStop()
-                            check(preflight.optString("status") == "PREPARED" &&
-                                preflight.optBoolean("backup_verified", false)) {
-                                "Bridge did not confirm a safe, backed-up shutdown."
-                            }
-                            shutdownPrepared = true
-                            val stopped = github.stopRepositoryCodespace()
-                            message = stopped.message + " Verified backup: " + preflight.optString("backup_name")
-                        } catch (error: Exception) {
-                            val detail = error.message ?: "STOP HOST failed; the Codespace was not reported as stopped."
-                            message = if (shutdownPrepared) {
-                                "$detail The stop result is uncertain; the Bridge safety lock remains closed. Check GitHub host status before cancelling preparation."
-                            } else {
-                                detail
-                            }
-                        } finally {
-                            busy = false
-                        }
-                    }
-                }
+                onClick = { showStopHostConfirmation = true }
             ) { Text("STOP HOST", fontSize = 10.sp) }
         }
         OutlinedButton(
@@ -347,6 +327,57 @@ fun CodespacesHostControls(
                     .onFailure { message = "Open GitHub Settings → Applications to revoke DestinedFX's OAuth grant." }
             }
         ) { Text("GITHUB AUTHORIZATION SETTINGS", fontSize = 9.sp) }
+        if (showStopHostConfirmation) {
+            AlertDialog(
+                onDismissRequest = { if (!busy) showStopHostConfirmation = false },
+                title = { Text("Safe shutdown? Check positions") },
+                text = {
+                    Text(
+                        "DestinedFX will check the live EA heartbeat, broker account state, open positions, pending orders, unresolved commands, and an integrity-verified backup. " +
+                            "The Bridge must also confirm deploy/codespaces/stop.sh preflight. If any state is unsafe, missing, or unknown, the Codespace will remain running. " +
+                            "This action does not close trades or cancel orders."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = !busy,
+                        onClick = {
+                            showStopHostConfirmation = false
+                            scope.launch {
+                                busy = true
+                                var shutdownPrepared = false
+                                try {
+                                    val preflight = bridgeClient.prepareHostStop()
+                                    check(isSafeHostStopPreflight(preflight)) {
+                                        "STOP HOST BLOCKED: the Bridge did not prove current and backup broker safety, integrity-verified backup, and stop.sh preflight acknowledgement. The Codespace was not stopped."
+                                    }
+                                    shutdownPrepared = true
+                                    val stopped = github.stopRepositoryCodespace()
+                                    message = stopped.message +
+                                        " · verified backup: " + preflight.optString("backup_name") +
+                                        " · stop.sh preflight: " + preflight.optString("stop_script_status")
+                                } catch (error: Exception) {
+                                    val detail = error.message ?: "STOP HOST failed; the Codespace was not reported as stopped."
+                                    message = if (shutdownPrepared) {
+                                        "$detail The result may be uncertain; the Bridge safety lock remains closed. Check GitHub host status before cancelling preparation."
+                                    } else {
+                                        detail
+                                    }
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        }
+                    ) { Text("CHECK SAFETY AND STOP HOST") }
+                },
+                dismissButton = {
+                    TextButton(
+                        enabled = !busy,
+                        onClick = { showStopHostConfirmation = false }
+                    ) { Text("CANCEL") }
+                }
+            )
+        }
         Text(message, fontSize = 10.sp, color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
