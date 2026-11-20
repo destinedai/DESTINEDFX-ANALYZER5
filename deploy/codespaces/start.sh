@@ -204,7 +204,6 @@ sudo -n env PATH="$PATH" HOST_AGENT_TOKEN_FILE="$HOST_AGENT_TOKEN_FILE" \
   DESTINEDFX_SLOT_RUNTIME="$DESTINEDFX_SLOT_RUNTIME" DESTINEDFX_HOST_OWNER_UID="$DESTINEDFX_HOST_OWNER_UID" \
   DESTINEDFX_SLOT_MAX_TERMINALS="$DESTINEDFX_SLOT_MAX_TERMINALS" WINE_BIN="$WINE_BIN" \
   python3 "$ROOT/scripts/linux-host/host-agent.py" --host 127.0.0.1 --port 8787 >>"$RUNTIME/host-agent.log" 2>&1 &
-track_pid "$!" "host-agent.py" 0
 for _ in $(seq 1 20); do
   if curl -fs --max-time 2 http://127.0.0.1:8787/health/ready >/dev/null 2>&1; then break; fi
   sleep 1
@@ -212,6 +211,15 @@ done
 if ! curl -fs --max-time 2 http://127.0.0.1:8787/health/ready >/dev/null 2>&1; then
   fail 'Root host agent failed its isolated-slot readiness check.'; exit 1
 fi
+HOST_AGENT_IDENTITY="$RUNTIME/process-host-agent.identity.json"
+HOST_AGENT_PID="$(sudo -n python3 "$PROCESS_IDENTITY" find-capture \
+  --record "$HOST_AGENT_IDENTITY" --expected-uid 0 --expected-exe "$(command -v python3)" \
+  --expected-args "$ROOT/scripts/linux-host/host-agent.py" --host 127.0.0.1 --port 8787)" || {
+    fail 'Could not identify the unique root host-agent process; refusing an untracked host.'
+    exit 1
+  }
+printf '%s|%s\n' "$HOST_AGENT_PID" "${HOST_AGENT_IDENTITY##*/}" >>"$RUNTIME/pids"
+chmod 600 "$RUNTIME/pids"
 HOST_STARTED_AT_EPOCH_SECONDS="$(date +%s)"
 export HOST_AGENT_TOKEN HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
 export BRIDGE_DB_PATH="$STATE/bridge.sqlite3" BRIDGE_BASE_URL=http://127.0.0.1:8000 ALLOW_LOOPBACK_HTTP=true BRIDGE_HOST_MODE=linux-host
