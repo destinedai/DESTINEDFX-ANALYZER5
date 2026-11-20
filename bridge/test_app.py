@@ -2491,6 +2491,50 @@ def test_linux_shared_terminal_refuses_broker_credentials_before_storage_or_job_
         assert c.execute('SELECT COUNT(*) FROM worker_jobs').fetchone()[0] == 0
 
 
+def test_github_token_revocation_fails_closed_without_bridge_app_secret(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.delenv('CODESPACES_GITHUB_CLIENT_ID', raising=False)
+    monkeypatch.delenv('CODESPACES_GITHUB_CLIENT_SECRET', raising=False)
+    p, headers = managed_pair()
+    token = 'ghu_' + ('fixture-token-' * 8)
+    response = client.post('/v1/app/github/revoke', headers=headers, json={'access_token': token})
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'GITHUB_REVOCATION_NOT_CONFIGURED'
+    assert token not in response.text
+
+
+def test_github_token_revocation_uses_server_side_app_secret_without_echo(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setenv('CODESPACES_GITHUB_CLIENT_ID', 'Iv1.fixtureclient')
+    monkeypatch.setenv('CODESPACES_GITHUB_CLIENT_SECRET', 'fixture-github-app-secret-not-for-mobile')
+    p, headers = managed_pair()
+    token = 'ghu_' + ('fixture-access-token-' * 4)
+    captured = {}
+
+    class Response:
+        status = 204
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+
+    def fake_urlopen(request, timeout):
+        captured['url'] = request.full_url
+        captured['method'] = request.get_method()
+        captured['auth'] = request.get_header('Authorization')
+        captured['body'] = request.data.decode()
+        captured['timeout'] = timeout
+        return Response()
+
+    monkeypatch.setattr(app.urllib.request, 'urlopen', fake_urlopen)
+    response = client.post('/v1/app/github/revoke', headers=headers, json={'access_token': token})
+    assert response.status_code == 200 and response.json() == {'revoked': True}
+    assert captured['url'] == 'https://api.github.com/applications/Iv1.fixtureclient/token'
+    assert captured['method'] == 'DELETE'
+    assert captured['auth'].startswith('Basic ')
+    assert token in captured['body']
+    assert 'fixture-github-app-secret-not-for-mobile' not in response.text
+    assert token not in response.text
+
+
 def test_host_shutdown_safe_alias_uses_the_same_owner_and_safety_gate(monkeypatch, tmp_path):
     managed_env(monkeypatch)
     monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
