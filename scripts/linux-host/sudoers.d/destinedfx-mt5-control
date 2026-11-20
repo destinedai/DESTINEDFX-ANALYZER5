@@ -1,0 +1,3 @@
+# Only the login runner may start, stop, or restart the MT5 terminal service.
+# Validate and install this file with mode 0440 using visudo.
+destinedfx ALL=(root) NOPASSWD: /usr/bin/systemctl start destinedfx-mt5.service, /usr/bin/systemctl stop destinedfx-mt5.service, /usr/bin/systemctl restart destinedfx-mt5.service

@@ -21,6 +21,8 @@ class UnavailableBrokerGateway(
 
     override val connectionStatus: StateFlow<BrokerConnectionStatus> = status.asStateFlow()
     override val accountMetrics: StateFlow<AccountMetrics?> = metrics.asStateFlow()
+    override val accountSnapshot: StateFlow<BrokerAccountSnapshot?> =
+        MutableStateFlow(BrokerAccountSnapshot.unavailable(brokerType.name, BrokerConnectionStatus.ERROR, "UNSUPPORTED_PROVIDER"))
     override val openPositions: StateFlow<List<Position>> = positions.asStateFlow()
 
     override suspend fun connect(): Result<Boolean> = Result.failure(unavailable)

@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+from pathlib import Path
+from urllib.parse import unquote
+
+ROOT = Path(__file__).parent
+TEMPLATE = json.loads((ROOT / "azuredeploy.json").read_text())
+BICEP = (ROOT / "main.bicep").read_text()
+README = (ROOT / "README.md").read_text()
+
+
+def test_subscription_template_has_only_student_vm_sizes_and_conservative_disk_guard() -> None:
+    params = TEMPLATE["parameters"]
+    assert params["vmSize"]["defaultValue"] == "Standard_B1s"
+    assert params["vmSize"]["allowedValues"] == ["Standard_B1s", "Standard_B2ats_v2", "Standard_B2pts_v2"]
+    assert params["osDiskSizeGb"]["allowedValues"] == [30]
+    assert params["budgetStartDate"]["defaultValue"] == "[utcNow('yyyy-MM-01')]"
+    assert "startDate: budgetStartDate" in BICEP
+    assert "2026-01-01" not in BICEP
+    assert "Standard_D" not in BICEP
+
+
+def test_template_has_no_public_ip_or_inbound_security_rules() -> None:
+    body = json.dumps(TEMPLATE)
+    assert "Microsoft.Network/publicIPAddresses" not in body
+    assert '"securityRules": []' in body
+    assert "publicIp" not in body
+
+
+def test_cloud_init_recognizes_new_slot_worker_but_keeps_uninstalled_runtime_blocked() -> None:
+    body = json.dumps(TEMPLATE)
+    assert "linux-slot-worker.py" in body
+    assert "linux_isolation.py" in body
+    assert "BLOCKED_OWNER_RUNTIME_SETUP" in body
+    assert "has not installed or enabled an isolated-slot" in body
+    assert "destinedfx-azure-first-boot.service" in body
+    assert "tailscale up --ssh --accept-dns=false" in body
+    assert "READY_FOR_OWNER_PAIRING_ONLY" not in body
+
+
+def test_student_subscription_access_is_an_explicit_owner_gate() -> None:
+    assert "active subscription" in README
+    assert "application was declined" in README
+    assert "No Azure resources are deployed" in README
+
+
+def test_deploy_button_decodes_to_pushed_compiled_template_path() -> None:
+    match = re.search(r"https://portal\.azure\.com/#create/Microsoft\.Template/uri/([^\s)]+)", README)
+    assert match
+    raw = unquote(match.group(1))
+    assert raw.endswith("/deploy/azure-students/azuredeploy.json")
+    assert "/free/phone-only-v1/" in raw
+
+
+def test_deploy_script_rejects_unlisted_size_before_azure_login() -> None:
+    proc = subprocess.run(
+        [
+            str(ROOT / "deploy.sh"),
+            "--resource-group", "rg",
+            "--location", "eastus",
+            "--ssh-public-key-file", "/does/not/exist",
+            "--budget-email", "owner@example.com",
+            "--vm-size", "Standard_D2s_v5",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 20
+    assert "outside the Azure for Students allow-list" in proc.stderr

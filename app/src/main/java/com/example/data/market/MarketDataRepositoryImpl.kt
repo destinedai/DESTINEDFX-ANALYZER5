@@ -4,11 +4,9 @@ import android.util.Log
 import com.example.domain.model.Candle
 import com.example.domain.model.MarketTicker
 import com.example.domain.model.Tick
-import com.destinedfx.core.marketdata.BinanceBookTickerStream
 import com.destinedfx.core.marketdata.ExponentialBackoff
 import com.destinedfx.core.marketdata.MarketQuote
 import com.destinedfx.core.marketdata.OandaPricingStream
-import com.destinedfx.core.marketdata.StreamEvent
 import com.example.domain.repository.MarketDataRepository
 import com.example.security.SecretsManager
 import kotlinx.coroutines.CoroutineScope
@@ -23,14 +21,17 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Public Deriv quote subscriptions must be translated back to the app's canonical symbols.
- * Crypto tickers are supplied by the public Binance stream instead.
+ * Map confirmed Deriv public symbols back to canonical analyzer symbols.
+ * The active-symbol directory is checked again before a request is sent.
  */
+internal const val DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS = 30_000L
+internal const val DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS = 32_000L
+internal const val DERIV_CANDLE_HISTORY_TIMEOUT_MS = 30_000L
+
 internal fun buildDerivCanonicalSymbolMap(
     symbols: List<String> = SymbolRegistry.getBackgroundSymbols()
 ): Map<String, String> =
     symbols.asSequence()
-        .filter { com.destinedfx.core.instrument.AssetClassifier.of(it) != com.destinedfx.core.marketdata.AssetClass.CRYPTO }
         .mapNotNull { canonical ->
             com.destinedfx.core.broker.DerivInstrumentResolver.resolve(canonical)?.let { it to canonical }
         }
@@ -54,12 +55,15 @@ internal fun canMergeQuoteIntoCandle(candleSource: String, quoteSource: String):
     val quote = quoteSource.trim().uppercase(java.util.Locale.ROOT)
     if (candle.isBlank() || quote.isBlank()) return false
     return when {
-        candle.startsWith("BINANCE") -> quote.contains("BINANCE")
         candle.startsWith("DERIV") -> quote.contains("DERIV")
         candle.startsWith("OANDA") -> quote.contains("OANDA")
         else -> false
     }
 }
+
+/** Analyzer market data uses Deriv's public market-data endpoint, not an MT5 execution account. */
+internal fun isExplicitDerivPublicSource(source: String): Boolean =
+    source.trim().uppercase(java.util.Locale.ROOT) == "DERIV_PUBLIC"
 
 /** Reject stale, zero, or future-dated feed timestamps instead of counting a negative age as fresh. */
 internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean =
@@ -93,7 +97,6 @@ class MarketDataRepositoryImpl(
         isPracticeModeProvider = { !secrets.getOandaAccountId().trim().startsWith("001-") }
     )
 
-    private val binanceProvider = BinanceProvider()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.e(TAG, "Uncaught in repository scope: ${e.javaClass.simpleName}") })
     private data class CachedCandles(val candles: List<Candle>, val timestamp: Long)
@@ -111,7 +114,7 @@ class MarketDataRepositoryImpl(
     private val _quoteDiagnostics = MutableStateFlow<Map<String, String>>(emptyMap())
     override val quoteDiagnostics: StateFlow<Map<String, String>> = _quoteDiagnostics.asStateFlow()
 
-    override val selectedApiSource = MutableStateFlow("TRADINGVIEW")
+    override val selectedApiSource = MutableStateFlow("DERIV_PUBLIC")
 
     private val activeSource = ConcurrentHashMap<String, String>()
     private val lastSourceLog = ConcurrentHashMap<String, Long>()
@@ -193,26 +196,31 @@ class MarketDataRepositoryImpl(
     }
 
     private suspend fun resolveDerivSymbol(canonicalSymbol: String): String? {
-        com.destinedfx.core.broker.DerivInstrumentResolver.resolve(canonicalSymbol)?.let { return it }
         val gateway = derivMarketDataGateway ?: return null
-        val names = derivLookupNames(canonicalSymbol)
-        if (names.all { it.isBlank() }) return null
-        val discovered = withTimeoutOrNull(18_000L) { gateway.fetchActiveSymbols() } ?: emptyList()
-        fun comparableDerivCode(value: String): String {
-            val normalizedCode = normalizeMarketSymbol(value)
-            return when {
-                normalizedCode.startsWith("FRX") -> normalizedCode.removePrefix("FRX")
-                normalizedCode.startsWith("CRY") -> normalizedCode.removePrefix("CRY")
-                else -> normalizedCode
+        val discovered = withTimeoutOrNull(DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS) { gateway.fetchActiveSymbols() } ?: emptyList()
+        if (discovered.isEmpty()) return null
+
+        // A hard-coded mapping is only a search hint. Never send a market request until
+        // the exact instrument code has also appeared in the provider's current directory.
+        val mappedCode = com.destinedfx.core.broker.DerivInstrumentResolver.resolve(canonicalSymbol)
+        val direct = mappedCode?.let { code -> discovered.firstOrNull { it.symbol.equals(code, ignoreCase = true) } }
+        val match = direct ?: run {
+            val names = derivLookupNames(canonicalSymbol)
+            if (names.isEmpty()) return null
+            fun comparableDerivCode(value: String): String {
+                val normalizedCode = normalizeMarketSymbol(value)
+                return when {
+                    normalizedCode.startsWith("FRX") -> normalizedCode.removePrefix("FRX")
+                    normalizedCode.startsWith("CRY") -> normalizedCode.removePrefix("CRY")
+                    else -> normalizedCode
+                }
             }
-        }
-        val match = discovered.firstOrNull { candidate ->
-            normalizeMarketSymbol(candidate.displayName) in names ||
-                normalizeMarketSymbol(candidate.symbol) in names ||
-                comparableDerivCode(candidate.symbol) in names
+            discovered.firstOrNull { candidate ->
+                normalizeMarketSymbol(candidate.displayName) in names ||
+                    normalizeMarketSymbol(candidate.symbol) in names || comparableDerivCode(candidate.symbol) in names
+            }
         } ?: return null
 
-        // Register only codes that actually appeared in Deriv's active symbol directory.
         com.destinedfx.core.broker.DerivInstrumentResolver.registerAlias(canonicalSymbol, match.symbol)
         dynamicCanonicalByDerivSymbol[match.symbol] = canonicalSymbol
         return match.symbol
@@ -236,7 +244,7 @@ class MarketDataRepositoryImpl(
                 symbol = sym, price = price, changePercent = 0.0, high = 0.0, low = 0.0,
                 spread = quote.spread ?: 0.0, bias = "NEUTRAL", confidence = 0,
                 lastUpdateMillis = quote.receivedAtMs, isLive = true,
-                source = "Deriv WebSocket",
+                source = "Deriv public WebSocket",
                 bid = quote.bid, ask = quote.ask, hasRealSpread = quote.spread != null, kind = "STREAM"
             )
         }
@@ -259,9 +267,8 @@ class MarketDataRepositoryImpl(
     }
 
     private suspend fun fetchLiveQuoteForSymbol(sym: String): MarketTicker? {
-        withTimeoutOrNull(3_000L) { PublicRestMarketFeed.getLiveQuote(sym) }?.let { return it }
         val preferred = selectedApiSource.value
-        if (preferred == "DERIV" && derivMarketDataGateway != null) {
+        if (isExplicitDerivPublicSource(preferred) && derivMarketDataGateway != null) {
             derivTickerForSymbol(sym, 15_000L, waitForFreshQuote = true)?.let { return it }
         }
         if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
@@ -271,9 +278,8 @@ class MarketDataRepositoryImpl(
     }
 
     private suspend fun fetchBackgroundQuoteForSymbol(sym: String): MarketTicker? {
-        withTimeoutOrNull(2_000L) { PublicRestMarketFeed.getLiveQuote(sym) }?.let { return it }
         val preferred = selectedApiSource.value
-        if (preferred == "DERIV" && derivMarketDataGateway != null) {
+        if (isExplicitDerivPublicSource(preferred) && derivMarketDataGateway != null) {
             derivTickerForSymbol(sym, 20_000L, waitForFreshQuote = false)?.let { return it }
         }
         if (preferred == "OANDA" && secrets.getOandaApiKey().isNotBlank()) {
@@ -343,8 +349,7 @@ class MarketDataRepositoryImpl(
     private val lastSourceUpdate = ConcurrentHashMap<String, Long>()
 
     private fun startLiveStreams() {
-        // TradingView scanner handles all crypto, forex, commodities and indices live polling every 2.5s.
-        // 1. OANDA Pricing Stream for Forex & Metals if user has configured an OANDA API key
+        // OANDA remains an explicitly selected, credentialed alternative feed. The default public feed is Deriv.
         scope.launch {
             val oandaSymbols = listOf(
                 "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",
@@ -354,7 +359,7 @@ class MarketDataRepositoryImpl(
             while (true) {
                 val apiKey = secrets.getOandaApiKey().trim()
                 val accountId = secrets.getOandaAccountId().trim()
-                if (apiKey.isNotBlank() && accountId.isNotBlank()) {
+                if (selectedApiSource.value == "OANDA" && apiKey.isNotBlank() && accountId.isNotBlank()) {
                     try {
                         val isPractice = !accountId.startsWith("001-")
                         val stream = OandaPricingStream(
@@ -400,95 +405,29 @@ class MarketDataRepositoryImpl(
             }
         }
 
-        // 3. Public Deriv stream. Subscribe explicitly and translate broker symbols back to
-        // canonical app symbols (e.g. frxEURUSD -> EUR/USD), because the signal engine looks up
-        // tickers by the canonical UI symbol. A WebSocket connection without subscriptions emits
-        // no quote stream and leaves the Analyzer permanently in WAIT / DATA_UNAVAILABLE.
-        derivMarketDataGateway?.let { derivGw ->
-            val canonicalByDerivSymbol = buildDerivCanonicalSymbolMap()
-
-            canonicalByDerivSymbol.keys.forEach { derivSymbol ->
-                // The latestQuotes flow below publishes the full, two-sided MarketQuote. This
-                // callback is deliberately side-effect free; registering it creates the
-                // subscription and lets the gateway restore it after reconnects.
-                derivGw.subscribeTicks(derivSymbol) { _ -> }
-            }
-
-            scope.launch {
-                derivGw.tickDiagnostics.collect { diagnostics ->
-                    val mapped = diagnostics.mapNotNull { (derivSymbol, message) ->
-                        val canonical = canonicalByDerivSymbol[derivSymbol]
-                            ?: dynamicCanonicalByDerivSymbol[derivSymbol]
-                            ?: return@mapNotNull null
-                        canonical to message
-                    }.toMap()
-                    _quoteDiagnostics.update { current -> current + mapped }
-                }
-            }
-
-            scope.launch {
-                derivGw.latestQuotes.collect { quotes ->
-                    val updated = quotes.mapNotNull { (derivSymbol, q) ->
-                        val canonicalSymbol = canonicalByDerivSymbol[derivSymbol]
-                            ?: dynamicCanonicalByDerivSymbol[derivSymbol]
-                            ?: return@mapNotNull null
-                        val price = (q.mid ?: q.last ?: 0.0)
-                        if (price <= 0.0) return@mapNotNull null
-
-                        canonicalSymbol to MarketTicker(
-                            symbol = canonicalSymbol,
-                            price = price,
-                            changePercent = 0.0,
-                            high = 0.0,
-                            low = 0.0,
-                            spread = q.spread ?: 0.0,
-                            bias = "NEUTRAL",
-                            confidence = 0,
-                            lastUpdateMillis = q.receivedAtMs,
-                            isLive = true,
-                            source = "Deriv WebSocket",
-                            bid = q.bid,
-                            ask = q.ask,
-                            hasRealSpread = q.spread != null,
-                            kind = "STREAM"
-                        )
-                    }.toMap()
-
-                    updated.forEach { (canonicalSymbol, ticker) ->
-                        if (shouldUpdateTicker(canonicalSymbol, ticker)) {
-                            _tickers.update { current -> current + (canonicalSymbol to ticker) }
-                            _quoteDiagnostics.update { current -> current - canonicalSymbol }
-                        }
-                    }
-                }
-            }
-        }
+        // Deriv public quotes and candles are subscribed on demand after their exact
+        // instrument codes are confirmed against active_symbols. They are not broker execution prices.
     }
 
     private suspend fun pollAllSymbolsParallel() {
         val symbols = SymbolRegistry.getBackgroundSymbols()
-        val tvQuotes = withTimeoutOrNull(4_000L) { PublicRestMarketFeed.fetchAllLiveQuotes(symbols) } ?: emptyMap()
-        // Every polled quote must pass freshness, source-arbitration, and validation gates.
-        // Updating the StateFlow map directly bypasses all three protections.
-        tvQuotes.forEach { (sym, ticker) ->
-            if (shouldUpdateTicker(sym, ticker)) {
-                _tickers.update { current -> current + (sym to ticker) }
-                _quoteDiagnostics.update { current -> current - sym }
-            }
+        val now = clock()
+        // Refresh stale entries too: caching the first accepted quote must not freeze a watchlist.
+        val needingRefresh = symbols.filter { symbol ->
+            classifyQuoteFreshness(_tickers.value[symbol], now) != QuoteFreshness.LIVE
         }
-
-        val missing = symbols.filter { sym -> _tickers.value[sym] == null }
-        if (missing.isNotEmpty()) {
+        if (needingRefresh.isNotEmpty()) {
             processPollingItemsIndependently(
-                items = missing,
+                items = needingRefresh,
                 parallelism = 4,
-                onError = { sym, error ->
-                    Log.w(TAG, "Quote poll failed symbol=$sym error=${error.javaClass.simpleName}")
-                }
+                onError = { sym, error -> Log.w(TAG, "Quote poll failed symbol=$sym error=" + error.javaClass.simpleName) }
             ) { sym ->
                 val ticker = fetchBackgroundQuoteForSymbol(sym)
                 if (ticker != null && shouldUpdateTicker(sym, ticker)) {
                     _tickers.update { current -> current + (sym to ticker) }
+                    _quoteDiagnostics.update { current -> current - sym }
+                } else if (_tickers.value[sym] == null) {
+                    _quoteDiagnostics.update { current -> current + (sym to "No fresh provider quote is currently available") }
                 }
             }
         }
@@ -573,11 +512,8 @@ class MarketDataRepositoryImpl(
             return@withContext cached.candles.takeLast(count)
         }
 
-        val aClass = com.destinedfx.core.instrument.AssetClassifier.of(symbol)
         var candles = emptyList<Candle>()
         var sourceUsed = ""
-        var isDelayed = false
-        var derivFetchAttempted = false
         var derivSymbol: String? = null
 
         val preferred = selectedApiSource.value
@@ -589,28 +525,19 @@ class MarketDataRepositoryImpl(
             if (candles.isNotEmpty()) sourceUsed = "OANDA"
         }
 
-        // Public Binance klines provide genuine OHLC bars for supported crypto symbols and
-        // do not require an API key. Quotes alone are not an OHLC fallback.
-        if (candles.isEmpty() && BinanceSymbols.toBinance(symbol) != null) {
-            candles = withTimeoutOrNull(7_000L) { binanceProvider.getCandles(symbol, timeframe, count) } ?: emptyList()
-            if (candles.isNotEmpty()) sourceUsed = "Binance Spot OHLC candles"
-        }
-
-        // Deriv WebSocket candles are a real OHLC fallback only when providers above return no bars.
-        if (candles.isEmpty() && derivMarketDataGateway != null) {
-            derivSymbol = withTimeoutOrNull(5_000L) { resolveDerivSymbol(symbol) }
+        // Public Deriv OHLC candles are used only after the exact code is found in active_symbols.
+        if (candles.isEmpty() && isExplicitDerivPublicSource(preferred) && derivMarketDataGateway != null) {
+            derivSymbol = withTimeoutOrNull(DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS) { resolveDerivSymbol(symbol) }
             if (derivSymbol != null) {
-                derivFetchAttempted = true
                 val weekly = tf == com.destinedfx.core.marketdata.Timeframe.W1
                 val granSec = if (weekly) 86_400 else (tf?.minutes ?: 60) * 60
                 val requestCount = if (weekly) (count * 7 + 14).coerceAtMost(1_800) else count
-                val fetched = withTimeoutOrNull(10_000L) {
+                val fetched = withTimeoutOrNull(DERIV_CANDLE_HISTORY_TIMEOUT_MS) {
                     derivMarketDataGateway.fetchCandles(derivSymbol, granSec, requestCount)
                 } ?: emptyList()
                 candles = if (weekly) aggregateDailyCandlesToWeekly(fetched).takeLast(count) else fetched
                 if (candles.isNotEmpty()) {
-                    sourceUsed = if (weekly) "Deriv daily candles aggregated into UTC weeks" else "Deriv WebSocket"
-                    isDelayed = false
+                    sourceUsed = if (weekly) "Deriv public daily candles aggregated into UTC weeks" else "Deriv public OHLC"
                 }
             }
         }
@@ -618,7 +545,7 @@ class MarketDataRepositoryImpl(
         val snapshotRetrievedAtMs = clock()
         candles = sanitizeOhlcCandles(candles, now)
         if (candles.isNotEmpty()) {
-            val finalSource = if (isDelayed) "$sourceUsed | DELAYED - analysis only" else sourceUsed
+            val finalSource = sourceUsed
             
             val currentCandleOpen = tf?.let { currentCandleOpenFor(now, it) } ?: candles.last().timestamp
             candles = candles.map { c ->
@@ -628,7 +555,7 @@ class MarketDataRepositoryImpl(
             }
 
             // Update the forming bar only with a quote from the same provider. Never mix
-            // TradingView scanner prices into Deriv/OANDA/Binance OHLC history.
+            // a quote from another venue into historical OHLC data.
             val ticker = _tickers.value[symbol]
             val canMergeQuote = ticker != null && canMergeQuoteIntoCandle(finalSource, ticker.source)
             val processedCandles = if (canMergeQuote && ticker != null && ticker.price > 0 && candles.isNotEmpty()) {
@@ -651,16 +578,16 @@ class MarketDataRepositoryImpl(
             _candleFetchErrors.update { it - key }
             return@withContext processedCandles.takeLast(count)
         } else {
-            val providerError = if (derivFetchAttempted && derivSymbol != null) {
-                derivMarketDataGateway?.getLastCandleError(derivSymbol)
+            val providerError = if (preferred == "DERIV_PUBLIC") {
+                derivMarketDataGateway?.getLastCandleError(derivSymbol ?: symbol)
             } else null
             val errorMsg = when {
-                !providerError.isNullOrBlank() -> "Deriv feed: " + providerError
-                derivSymbol == null && BinanceSymbols.toBinance(symbol) == null && secrets.getOandaApiKey().isBlank() ->
-                    "No configured keyless candle feed supports " + symbol +
-                        ". Select a supported public Deriv market or a Binance-listed crypto pair."
-                else -> "No valid OHLC candles received for " + symbol + " " + timeframe +
-                    ". Check network access and the upstream feed response."
+                !providerError.isNullOrBlank() -> "Deriv public feed could not verify or fetch " + symbol + " " + timeframe + ". Provider detail: " + providerError.take(240)
+                derivSymbol == null && preferred == "DERIV_PUBLIC" ->
+                    "The current provider directory has not verified an instrument for " + symbol + ". No substitute price series was used."
+                preferred == "OANDA" && secrets.getOandaApiKey().isBlank() ->
+                    "An OANDA market-data credential is not configured for " + symbol + "."
+                else -> "No fresh OHLC history was returned for " + symbol + " " + timeframe + ". No substitute candles were generated."
             }
             _candleFetchErrors.update { it + (key to errorMsg) }
             dataSourceMap.remove(key)

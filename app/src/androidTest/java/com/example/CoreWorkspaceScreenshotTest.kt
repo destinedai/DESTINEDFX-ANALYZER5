@@ -7,21 +7,28 @@ import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.provider.MediaStore
-import androidx.test.core.app.ActivityScenario
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.ui.DestinedFXScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class CoreWorkspaceScreenshotTest {
+    @get:Rule
+    val composeRule = createAndroidComposeRule<WorkspaceScreenshotActivity>()
+
     @Test
-    fun capturesSixDedicatedWorkspacesAtCompactAndStandardPhoneWidths() {
+    fun capturesAllAppWorkspacesAtCompactAndStandardPhoneWidths() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val outputDirectory = File(instrumentation.targetContext.filesDir, "ui-review")
         outputDirectory.deleteRecursively()
@@ -35,23 +42,36 @@ class CoreWorkspaceScreenshotTest {
             arrayOf(relativePath)
         )
 
-        val screens = listOf(
-            DestinedFXScreen.Analyzer,
-            DestinedFXScreen.Strategies,
-            DestinedFXScreen.Calendar,
-            DestinedFXScreen.Bot,
-            DestinedFXScreen.Risk,
-            DestinedFXScreen.Settings
-        )
-        val scenario = ActivityScenario.launch(WorkspaceScreenshotActivity::class.java)
+        val screens = DestinedFXScreen.allScreens
         try {
             val widthsAndHeights = listOf(320 to 800, 360 to 800, 390 to 844, 430 to 900)
             for ((widthDp, heightDp) in widthsAndHeights) {
                 setLogicalDisplay(instrumentation, widthDp, heightDp)
+                composeRule.waitForIdle()
                 for (screen in screens) {
-                    scenario.onActivity { it.showWorkspace(screen) }
-                    instrumentation.waitForIdleSync()
-                    SystemClock.sleep(250)
+                    composeRule.activity.showWorkspace(screen)
+                    // StateFlow collection and Compose rendering are asynchronous. Do not save a
+                    // stale frame under the next screen's filename: wait for the actual visible
+                    // workspace header to match the requested destination before taking a shot.
+                    composeRule.waitUntil(timeoutMillis = 10_000L) {
+                        runCatching {
+                            composeRule.onNodeWithTag("workspace_header_title")
+                                .assertTextEquals(screen.title)
+                        }.isSuccess
+                    }
+                    composeRule.onNodeWithTag("workspace_header_title").assertIsDisplayed()
+                    if (screen.title == "Bot") {
+                        val accountsTitle = composeRule.onNodeWithTag("broker_flow_header_title")
+                        accountsTitle.assertIsDisplayed()
+                        accountsTitle.assertTextEquals("Accounts")
+                        val headerHeightPx = accountsTitle.fetchSemanticsNode().boundsInRoot.height
+                        assertTrue(
+                            "Broker Accounts title wrapped on ${widthDp}dp phone viewport",
+                            headerHeightPx <= 28f,
+                        )
+                    }
+                    composeRule.waitForIdle()
+                    SystemClock.sleep(150)
                     val image = instrumentation.uiAutomation.takeScreenshot()
                     assertNotNull("Screenshot unavailable for ${screen.title} at ${widthDp}dp", image)
                     val fileName = "${screen.title.lowercase().replace(' ', '_')}_${widthDp}dp.png"
@@ -90,7 +110,7 @@ class CoreWorkspaceScreenshotTest {
                     image.recycle()
                 }
             }
-            assertEquals("Expected each of six workspaces at all four phone widths", 24, outputDirectory.listFiles()?.size)
+            assertEquals("Expected all app workspaces at all four phone widths", screens.size * 4, outputDirectory.listFiles()?.size)
             val exportedFileNames = mutableSetOf<String>()
             resolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -102,11 +122,11 @@ class CoreWorkspaceScreenshotTest {
                 val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
                 while (cursor.moveToNext()) exportedFileNames += cursor.getString(nameColumn)
             }
-            assertEquals("Expected all 24 screenshots exported through MediaStore", 24, exportedFileNames.size)
+            assertEquals("Expected all app workspace screenshots exported through MediaStore", screens.size * 4, exportedFileNames.size)
         } finally {
             runShell(instrumentation, "wm size reset")
             runShell(instrumentation, "wm density reset")
-            scenario.close()
+            composeRule.waitForIdle()
         }
     }
 
@@ -120,4 +140,28 @@ class CoreWorkspaceScreenshotTest {
         val descriptor = instrumentation.uiAutomation.executeShellCommand(command)
         return ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
     }
+
+    @Test
+    fun everyWorkspaceRouteRendersAtStandardPhoneWidth() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        setLogicalDisplay(instrumentation, 390, 844)
+        try {
+            composeRule.waitForIdle()
+            for (screen in DestinedFXScreen.allScreens) {
+                composeRule.activity.showWorkspace(screen)
+                composeRule.waitUntil(timeoutMillis = 10_000L) {
+                    runCatching {
+                        composeRule.onNodeWithTag("workspace_header_title").assertTextEquals(screen.title)
+                    }.isSuccess
+                }
+                composeRule.onNodeWithTag("workspace_header_title").assertIsDisplayed()
+                composeRule.waitForIdle()
+            }
+        } finally {
+            runShell(instrumentation, "wm size reset")
+            runShell(instrumentation, "wm density reset")
+            composeRule.waitForIdle()
+        }
+    }
+
 }

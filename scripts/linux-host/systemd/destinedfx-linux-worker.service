@@ -1,0 +1,24 @@
+[Unit]
+Description=DestinedFX one-shot Linux MT5 connect-job worker
+After=network-online.target destinedfx-mt5.service destinedfx-host-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=destinedfx
+Group=destinedfx
+WorkingDirectory=/opt/destinedfx
+EnvironmentFile=-/etc/destinedfx/worker.env
+LoadCredentialEncrypted=worker-token:/etc/credstore.encrypted/destinedfx-worker-token.cred
+ExecStart=/usr/bin/python3 /opt/destinedfx/scripts/linux-host/linux-worker.py --once
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+UMask=0077
+ReadOnlyPaths=/proc /sys
+ReadWritePaths=/var/lib/destinedfx
+TimeoutStartSec=330

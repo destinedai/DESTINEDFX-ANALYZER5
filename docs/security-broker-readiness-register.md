@@ -1,6 +1,6 @@
 # Security and Broker Readiness Register
 
-**Assessment baseline:** continuation branch `feat/trading-path-finalization` at `aaf35a0fa284b3712bc86dbabc9324ce3053b52a` (`ci: decouple APK delivery from emulator instrumentation`), stacked on PR #7. Previous security implementation commit: `ea21299d57cf7dde386b7863c25341f7e47730a8`. This continuation also includes a DST-aware ICT Silver Bullet session gate, closed-candle sweep/displacement/FVG/Consequent Encroachment checks, and explicitly unscored candidate confidence. This register is not a full penetration test, broker acceptance, or production approval.
+**Historical assessment baseline:** continuation branch `feat/trading-path-finalization` at `aaf35a0fa284b3712bc86dbabc9324ce3053b52a` (`ci: decouple APK delivery from emulator instrumentation`), stacked on PR #7. Previous security implementation commit: `ea21299d57cf7dde386b7863c25341f7e47730a8`. The current Phase 1 base and verification are recorded below under “Current Phase 1 baseline verification”; historical rows and findings remain tied to their noted source scope. This register is not a full penetration test, broker acceptance, or production approval.
 
 **Overall disposition: NO-GO for production or automated LIVE trading.** Source controls exist in selected paths, but this environment lacks an Android SDK/device, genuine broker DEMO credentials, an operator-owned Windows MT5 terminal/MetaEditor, and a durable configured managed bridge. No order was sent.
 
@@ -67,9 +67,13 @@ Severity labels here prioritize follow-up; they are not CVSS scores. No finding 
 7. Do not arm or submit REAL orders in this project continuation. Any controlled LIVE test requires new, separate, exact account/broker authorization after review of DEMO and security evidence.
 
 
-## Android CI remediation in this continuation
+## Current Phase 1 baseline verification (2026-11-06)
 
-**Current status: WORKFLOW IMPLEMENTED; Android JVM UNIT TESTED and DEBUG APK BUILT / SIGNATURE VERIFIED / ARTIFACT UPLOADED; EMULATOR VERIFIED remains BLOCKED.**
+The selected Phase 1 base `release/connection-finish-v1` at `25d9bacd504a0d93ce054f5c81d93f172acd9a51` already has a successful complete GitHub Actions run: [run 42198993467](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42198993467). Its Android emulator instrumentation job [127830799491](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42198993467/job/127830799491) completed successfully and reported **7 instrumentation tests executed, 0 failed**. This is exact-base CI evidence, not a result from the later Phase 1 commits and not real-device/broker acceptance. The old `adb: device offline` note below refers to an earlier continuation commit and is superseded for this selected base; the Phase 1 branch must still receive and pass its own CI run.
+
+## Historical Android CI remediation evidence
+
+**Historical status at commit `aaf35a0fa284b3712bc86dbabc9324ce3053b52a`:** workflow implementation and Android JVM/APK checks passed, but emulator instrumentation was blocked. This result is superseded for the selected Phase 1 base by successful exact-base run 42198993467 above.
 
 GitHub run [41663990011](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41663990011) on `94bfc513bf8d616f926dafd97404086f7cb648ad` had passed the Android JVM and Python suites plus genuine MetaEditor compilation, but instrumentation failed during APK split installation, started zero tests, and prevented artifact delivery in the prior single-job workflow. The protected `DESTINEDFX_DEBUG_KEYSTORE_B64` secret was absent in both runs; GitHub generated a fresh debug certificate, so upgrade compatibility with prior installations is not established.
 
@@ -77,4 +81,4 @@ The redesigned `.github/workflows/build-apk.yml` separates Python tests, Windows
 
 On run [41674333027](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/41674333027) at commit `aaf35a0fa284b3712bc86dbabc9324ce3053b52a`, the Python bridge, worker and EA test jobs passed and genuine MetaEditor compilation passed. Android XML reports showed **209 JVM tests executed, 0 failed**. The debug APK was built and signature-verified; package `com.aistudio.destinedfx.qwvzxp`, version `1.0.9` / code `9`, and native ABI metadata `arm64-v8a`, `x86_64` were checked. Artifact `DestinedFX-debug-apk` uploaded successfully. APK SHA-256: `5e019487b43f394b980976280ca264ecafaf4f3c85be5896c67fe22814b0198b`. Artifact ZIP SHA-256: `0b0dbb36f5d0744c369d35554bade90847aabc92c83114dc448f82e506871178`.
 
-The clean API 34 Google APIs x86_64 emulator still reported `adb: device offline` and the instrumentation action failed before tests started. The report-count guard therefore did not execute, and **0 instrumentation tests are verified**; Chaquopy was not verified inside Android. The action announced that no diagnostic files were available for upload, leaving the underlying emulator/ADB failure unresolved. No physical-device, TradingView rendering, live provider-candle, broker, Telegram, or persistent-worker acceptance was done in this continuation. This sandbox itself has no local Android SDK, so Android builds were run only by GitHub Actions.
+At the historical `aaf35a0fa284b3712bc86dbabc9324ce3053b52a` run, the clean API 34 Google APIs x86_64 emulator reported `adb: device offline`; **0 instrumentation tests were verified on that commit** and the underlying runner failure was unresolved there. This is not the latest selected-base result: run 42198993467 later completed the emulator job with **7 tests executed, 0 failed**. No physical-device, TradingView rendering, live provider-candle, broker, Telegram, or persistent-worker acceptance is implied by either run. This sandbox itself has no local Android SDK, so Android verification is via GitHub Actions.

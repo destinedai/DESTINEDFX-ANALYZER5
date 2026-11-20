@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.destinedfx.core.risk.AccountState
 import com.destinedfx.core.risk.RiskEngine
 import com.destinedfx.core.risk.SizingResult
+import com.example.data.broker.BrokerAccountSnapshot
 import com.example.ui.theme.*
 import java.util.Locale
 
@@ -35,9 +36,8 @@ internal fun manualPlanRewardToRisk(entry: Double, stopLoss: Double, takeProfit:
 }
 
 /**
- * Dedicated Risk-Reward & Position Sizing Calculator.
- * Labels demo equity explicitly and verifies that risk does not exceed 1% of equity.
- * Displays calculated vs final lots, tick size, tick value, and estimated loss at SL.
+ * Hypothetical risk/reward calculator. Manual equity is a scenario input only:
+ * it is never persisted as account balance and cannot authorize an execution.
  */
 @Composable
 fun RiskRewardCalculatorComponent(
@@ -45,9 +45,15 @@ fun RiskRewardCalculatorComponent(
     symbol: String,
     defaultBalance: Double = 0.0,
     defaultRisk: Double = 1.0,
+    verifiedAccount: BrokerAccountSnapshot? = null,
     modifier: Modifier = Modifier
 ) {
-    var equityText by remember { mutableStateOf(if (defaultBalance > 0.0) String.format(Locale.US, "%.2f", defaultBalance) else "") }
+    val liveAccount = verifiedAccount?.takeIf { it.isDisplayable() }
+    val liveEquity = liveAccount?.equity
+    var equityText by remember(symbol, liveAccount?.retrievedAtMs) {
+        mutableStateOf((liveEquity ?: defaultBalance).takeIf { it > 0.0 }
+            ?.let { String.format(Locale.US, "%.2f", it) }.orEmpty())
+    }
     var riskPercentText by remember { mutableStateOf(defaultRisk.toString()) }
 
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
@@ -77,15 +83,38 @@ fun RiskRewardCalculatorComponent(
     val entry = entryPriceText.toDoubleOrNull() ?: 0.0
     val sl = stopLossText.toDoubleOrNull() ?: 0.0
     val tp = takeProfitText.toDoubleOrNull() ?: 0.0
-    val maxRiskDollars = if (equity > 0.0 && riskIsValid) equity * (riskPct / 100.0) else 0.0
+    val accountCurrency = liveAccount?.currency?.takeIf { it.isNotBlank() } ?: "USD"
+    val riskBase = liveAccount?.let { account ->
+        listOfNotNull(account.balance, account.equity).minOrNull() ?: 0.0
+    } ?: equity
+    val maxRiskDollars = if (riskBase > 0.0 && riskIsValid) riskBase * (riskPct / 100.0) else 0.0
     val slDistance = if (entry > 0 && sl > 0) kotlin.math.abs(entry - sl) else 0.0
     val rrRatio = manualPlanRewardToRisk(entry, sl, tp)
 
-    val sizingResult = remember(equity, riskPct, entry, sl, spec) {
-        if (spec != null && entry > 0.0 && sl > 0.0 && equity > 0.0 && riskIsValid) {
-            val acc = AccountState(balance = equity, equity = equity, freeMargin = equity, leverage = 100, currency = "USD")
-            RiskEngine.positionSize(acc, riskPct, entry, sl, spec)
-        } else null
+    val sizingResult = run {
+        if (spec == null || entry <= 0.0 || sl <= 0.0 || equity <= 0.0 || !riskIsValid) {
+            null
+        } else {
+            val accountState = if (liveAccount != null) {
+                val balance = liveAccount.balance
+                val equityValue = liveAccount.equity
+                val freeMargin = liveAccount.freeMargin
+                val leverage = liveAccount.leverage
+                val currency = liveAccount.currency
+                if (balance == null || equityValue == null || freeMargin == null ||
+                    leverage == null || leverage <= 0 || currency.isNullOrBlank() ||
+                    equity != equityValue ||
+                    listOf(balance, equityValue, freeMargin).any { !it.isFinite() || it < 0.0 }
+                ) null else AccountState(
+                    balance = balance, equity = equityValue, freeMargin = freeMargin,
+                    leverage = leverage, currency = currency
+                )
+            } else {
+                // Explicitly hypothetical: never substitute assumed margin or leverage as broker data.
+                AccountState(balance = equity, equity = equity, freeMargin = null, leverage = null, currency = "USD")
+            }
+            accountState?.let { RiskEngine.positionSize(it, riskPct, entry, sl, spec) }
+        }
     }
     val gatedSizingResult = when {
         sizingResult is SizingResult.Sized && (rrRatio ?: 0.0) < RiskEngine.MINIMUM_REWARD_TO_RISK ->
@@ -153,12 +182,10 @@ fun RiskRewardCalculatorComponent(
             ) {
                 OutlinedTextField(
                     value = equityText,
-                    onValueChange = {
-                        equityText = it
-                        it.toDoubleOrNull()?.let { v -> viewModel.saveConfiguredEquity(v) }
-                    },
-                    label = { Text("Manual Equity (USD)") },
+                    onValueChange = { equityText = it },
+                    label = { Text(if (liveAccount != null) "Verified equity · $accountCurrency" else "Scenario equity (USD)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    enabled = liveAccount == null,
                     modifier = Modifier.weight(1.2f),
                     singleLine = true
                 )
@@ -171,6 +198,17 @@ fun RiskRewardCalculatorComponent(
                     singleLine = true
                 )
             }
+
+            Text(
+                if (liveAccount != null) {
+                    "VERIFIED BROKER SNAPSHOT · Balance, equity, currency, free margin and leverage come from the authenticated broker account. This remains a sizing estimate, not an execution authorization."
+                } else {
+                    "SCENARIO ONLY · This manually entered equity is not a broker balance, is not synced to the Bot, and cannot authorize an order."
+                },
+                fontSize = 10.sp,
+                color = WarningAmber,
+                lineHeight = 14.sp
+            )
 
             // Price Inputs: Entry, SL, TP
             Row(
@@ -210,9 +248,9 @@ fun RiskRewardCalculatorComponent(
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
-                    Text("Max Allowed Loss (1%):", fontSize = 11.sp, color = TextSecondary)
+                    Text(if (liveAccount != null) "Max broker risk budget (1%):" else "Scenario max loss (1%):", fontSize = 11.sp, color = TextSecondary)
                     Text(
-                        "$${String.format(Locale.US, "%.2f", maxRiskDollars)}",
+                        "$accountCurrency ${String.format(Locale.US, "%.2f", maxRiskDollars)}",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace,
@@ -267,15 +305,16 @@ fun RiskRewardCalculatorComponent(
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("FINAL POSITION SIZE:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) ProfitGreen else LossRed)
+                                Text(if (liveAccount != null) "BROKER-BASED SIZE ESTIMATE:" else "SCENARIO LOT ESTIMATE:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) ProfitGreen else LossRed)
                                 Text("${gatedSizingResult.lots} LOTS (stepped down)", fontSize = 13.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = TextPrimary)
                             }
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Estimated Loss at SL:", fontSize = 11.sp, color = TextSecondary)
-                                Text("$${String.format(Locale.US, "%.2f", gatedSizingResult.moneyRiskActual)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) TextPrimary else LossRed)
+                                Text(if (liveAccount != null) "Estimated broker loss at SL:" else "Scenario loss at SL:", fontSize = 11.sp, color = TextSecondary)
+                                Text("$accountCurrency ${String.format(Locale.US, "%.2f", gatedSizingResult.moneyRiskActual)}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (!isExceeding) TextPrimary else LossRed)
                             }
                             Text(
-                                "Enforced: Rounded down to broker step (${spec?.volumeStep ?: 0.01}). Never rounded up.",
+                                if (liveAccount != null) "Sizing uses verified broker metrics; the terminal still enforces actual margin, stops, costs and execution."
+                                else "Scenario only; broker lot step and actual account conditions have not been verified.",
                                 fontSize = 9.5.sp,
                                 color = TextSecondary
                             )
@@ -318,7 +357,7 @@ fun RiskRewardCalculatorComponent(
                             .padding(12.dp)
                     ) {
                         Text(
-                            text = "Enter valid Entry and Stop Loss prices to compute lot sizing.",
+                            text = "Enter scenario equity, Entry and Stop Loss to calculate a hypothetical size. Broker account conditions are not used.",
                             fontSize = 11.sp,
                             color = TextSecondary
                         )

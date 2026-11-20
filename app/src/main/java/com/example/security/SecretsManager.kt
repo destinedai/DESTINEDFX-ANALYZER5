@@ -4,7 +4,16 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.data.deriv.DerivRealAuthorizationLease
+import com.example.data.broker.ModeAccountIdentity
+import com.example.data.broker.ModeDemoAcceptance
+import com.example.data.broker.ModeArmingAuditEvent
+import com.example.data.broker.LoginMode
+import com.example.data.broker.SavedBrokerAccountProfile
+import com.example.domain.model.RiskProfile
 import java.security.MessageDigest
+import java.security.SecureRandom
+import java.io.File
+import com.destinedfx.core.security.Redactor
 
 /**
  * Institutional Keystore-backed secrets manager.
@@ -36,7 +45,6 @@ class SecretsManager internal constructor(
         private const val MT5_LAST_LOGIN_MS = "mt5_last_login_ms"
         private const val OANDA_KEY = "oanda_api_key"
         private const val OANDA_ACC = "oanda_account_id"
-        private const val CONFIGURED_EQUITY = "configured_equity"
         private const val SELECTED_STRATEGY = "selected_strategy_id"
         private const val BROKER_SYMBOL_OVERRIDES = "broker_symbol_overrides"
         private const val DERIV_API_TOKEN = "deriv_api_token" // legacy, migrated on first read
@@ -44,9 +52,18 @@ class SecretsManager internal constructor(
         private const val DERIV_API_TOKEN_REAL = "deriv_api_token_real"
         private const val DERIV_APP_ID = "deriv_app_id"
         private const val DERIV_ACCOUNT_MODE = "deriv_account_mode"
+        private const val DERIV_SAVE_TOKEN = "deriv_save_token"
+        private const val DERIV_DEMO_ACCEPTED = "deriv_demo_accepted"
+        private const val DERIV_DEMO_ACCEPTED_ACCOUNT = "deriv_demo_accepted_account"
+        private const val DERIV_DEMO_ACCEPTED_CURRENCY = "deriv_demo_accepted_currency"
+        private const val DERIV_DEMO_ACCEPTED_SESSION = "deriv_demo_accepted_session"
+        private const val DERIV_DEMO_ACCEPTED_CREDENTIAL = "deriv_demo_accepted_credential"
+        private const val DERIV_DEMO_ACCEPTED_AT = "deriv_demo_accepted_at"
         private const val DERIV_REAL_EXECUTION_ENABLED = "deriv_real_execution_enabled"
         private const val TG_STATUS = "telegram_connection_status"
         private const val TG_NOTIF_ENABLED = "telegram_notifications_enabled"
+        private const val CF_ACCESS_CLIENT_ID = "cf_access_client_id"
+        private const val CF_ACCESS_CLIENT_SECRET = "cf_access_client_secret"
         private const val MT5_BRIDGE_TOKEN = "mt5_remote_bridge_app_token"
         private const val MT5_MANAGED_SERVICE_URL = "mt5_managed_service_url"
         private const val MT5_BRIDGE_PENDING_ID = "mt5_remote_bridge_pending_id"
@@ -54,12 +71,65 @@ class SecretsManager internal constructor(
         private const val MT5_BRIDGE_SAFETY_ORIGINAL_ID = "mt5_remote_bridge_safety_original_id"
         private const val MT5_BRIDGE_SAFETY_ORIGINAL_ACTION = "mt5_remote_bridge_safety_original_action"
         private const val MT5_BRIDGE_SAFETY_STOP_ID = "mt5_remote_bridge_safety_stop_id"
+        private const val CTRADER_CLIENT_ID = "ctrader_client_id"
+        private const val CTRADER_CLIENT_SECRET = "ctrader_client_secret"
+        private const val CTRADER_REDIRECT_URI = "ctrader_redirect_uri"
+        private const val CTRADER_ACCESS_TOKEN = "ctrader_access_token"
+        private const val CTRADER_REFRESH_TOKEN = "ctrader_refresh_token"
+        private const val CTRADER_ACCESS_EXPIRES_AT_MS = "ctrader_access_expires_at_ms"
+        private const val BROKER_ACCOUNT_PROFILE_PREFIX = "broker_account_profile_"
+        private const val MANAGEMENT_ACCESS_TOKEN = "management_access_token"
+        private const val MANAGEMENT_ACCESS_EXPIRES_AT_MS = "management_access_expires_at_ms"
+        private const val MODE_DEMO_ACCEPTANCE_PREFIX = "mode_demo_acceptance_"
+        private const val MODE_ARMING_AUDIT = "mode_arming_audit_v1"
+        private val MODE_ARMING_AUDIT_LOCK = Any()
+        private const val GITHUB_CODESPACES_CLIENT_ID = "codespaces_github_app_client_id"
+        private const val GITHUB_CODESPACES_ACCESS_TOKEN = "codespaces_github_access_token"
+        private const val GITHUB_CODESPACES_REFRESH_TOKEN = "codespaces_github_refresh_token"
+        private const val GITHUB_CODESPACES_ACCESS_EXPIRES_AT = "codespaces_github_access_expires_at"
+        private const val GITHUB_CODESPACES_REFRESH_EXPIRES_AT = "codespaces_github_refresh_expires_at"
+        private const val GITHUB_CODESPACES_USAGE_LEDGER = "codespaces_github_usage_ledger_v1"
+        private val APP_DATABASE_KEY_LOCK = Any()
+        private const val APP_DATABASE_PASSPHRASE = "app_database_passphrase_v1"
+        private const val BOT_SYMBOL = "bot_symbol_encrypted"
+        private const val BOT_STRATEGY = "bot_strategy_encrypted"
+        private const val BOT_TIMEFRAME = "bot_timeframe_encrypted"
+        private const val BOT_RISK_PERCENT = "bot_risk_percent_encrypted"
+        private const val BOT_THEME_MODE = "bot_theme_mode_encrypted"
+        private const val DERIV_BOT_SYMBOL = "deriv_bot_symbol_v1"
+        private const val DERIV_BOT_STRATEGY = "deriv_bot_strategy_v1"
+        private const val DERIV_BOT_TIMEFRAME = "deriv_bot_timeframe_v1"
+        private const val DERIV_BOT_ENABLED = "deriv_bot_recovery_enabled_v1"
+        private const val DERIV_BOT_STATUS_STATE = "deriv_bot_service_state_v1"
+        private const val DERIV_BOT_STATUS_REASON = "deriv_bot_service_reason_v1"
+        private const val TRADE_SYNC_PREFIX = "trade_sync_v1_"
+        private const val TRADE_REPORT_FINGERPRINT_PREFIX = "trade_report_fingerprint_v1_"
+        private const val MT5_RISK_ALERT_PREFIX = "mt5_risk_alert_v1_"
+        private const val LAST_CRASH_LOG = "last_crash_log_encrypted_v1"
+        private const val RISK_PROFILE_SAVED = "risk_profile_saved_v1"
+        private const val RISK_ACCOUNT_BALANCE = "risk_account_balance_v1"
+        private const val RISK_FIXED_PERCENT = "risk_fixed_percent_v1"
+        private const val RISK_MAX_DAILY_DD = "risk_max_daily_dd_v1"
+        private const val RISK_MAX_WEEKLY_DD = "risk_max_weekly_dd_v1"
+        private const val RISK_CURRENT_DAILY_DD = "risk_current_daily_dd_v1"
+        private const val RISK_CURRENT_WEEKLY_DD = "risk_current_weekly_dd_v1"
+        private const val RISK_MINIMUM_RR = "risk_minimum_rr_v1"
+        private const val RISK_TRADING_HALTED = "risk_trading_halted_v1"
+        private const val RISK_START_DAY_EQUITY = "risk_start_day_equity_v1"
+        private const val RISK_START_WEEK_EQUITY = "risk_start_week_equity_v1"
+        private const val RISK_LAST_ROLLOVER = "risk_last_rollover_v1"
+        private const val LIVE_LEASE_REMINDER_PREFIX = "live_lease_reminder_v1_"
     }
 
     val isSecureStorageAvailable: Boolean
     private val prefs: android.content.SharedPreferences
-    // Trading selections are non-secret preferences and must remain independent from Analyzer state.
+    // Legacy preference files are read once and cleared only after a successful encrypted migration.
     private val botConfigPrefs = ctx.getSharedPreferences("destinedfx_bot_config", Context.MODE_PRIVATE)
+    private val derivBotConfigPrefs = ctx.getSharedPreferences("deriv_bot_config", Context.MODE_PRIVATE)
+    private val tradeSyncPrefs = ctx.getSharedPreferences("destinedfx_trade_sync", Context.MODE_PRIVATE)
+    private val tradeReportPrefs = ctx.getSharedPreferences("destinedfx_trade_reports", Context.MODE_PRIVATE)
+    private val mt5RiskAlertPrefs = ctx.getSharedPreferences("mt5_daily_risk_alerts", Context.MODE_PRIVATE)
+    private val modeRenewalReminderPrefs = ctx.getSharedPreferences("mode_renewal_reminders", Context.MODE_PRIVATE)
     /** Live trading authorization is deliberately process-memory-only and never restored after restart. */
     @Volatile private var derivRealLease: DerivRealAuthorizationLease? = null
 
@@ -78,7 +148,566 @@ class SecretsManager internal constructor(
             UnavailableSharedPreferences
         }
         isSecureStorageAvailable = prefs !== UnavailableSharedPreferences
+        if (isSecureStorageAvailable) {
+            migrateLegacyBotPreferences()
+            migrateLegacyDerivBotPreferences()
+            migrateLegacyTradeSyncPreferences()
+            migrateLegacyTradeReportPreferences()
+            migrateLegacyMt5RiskAlertPreferences()
+            migrateLegacyModeRenewalReminders()
+            // Remove legacy operator-entered balance hints; they are not current broker evidence.
+            prefs.edit().remove(MT5_BALANCE).remove("configured_equity").commit()
+        }
+        // Delete the old unencrypted crash file even when secure storage is unavailable.
+        // In that case the diagnostic is discarded instead of retained in plaintext.
+        migrateLegacyCrashLog(ctx.filesDir)
     }
+
+    /**
+     * Returns a high-entropy SQLCipher passphrase whose source is Android Keystore-backed
+     * encrypted preferences. Existing malformed keys are never replaced automatically:
+     * doing so would make an existing encrypted database unreadable.
+     */
+    fun getOrCreateAppDatabasePassphrase(): ByteArray {
+        check(isSecureStorageAvailable) { "Secure storage is unavailable; encrypted database key cannot be loaded." }
+        synchronized(APP_DATABASE_KEY_LOCK) {
+            val stored = prefs.getString(APP_DATABASE_PASSPHRASE, null)
+            if (stored != null) {
+                check(stored.matches(Regex("[0-9a-f]{64}"))) {
+                    "Stored database key is invalid; refusing to replace it or create a new database."
+                }
+                return stored.toByteArray(Charsets.US_ASCII)
+            }
+            val random = ByteArray(32)
+            SecureRandom().nextBytes(random)
+            val encoded = random.joinToString("") { "%02x".format(it) }
+            random.fill(0)
+            check(prefs.edit().putString(APP_DATABASE_PASSPHRASE, encoded).commit()) {
+                "Encrypted database key could not be saved; database initialization is blocked."
+            }
+            return encoded.toByteArray(Charsets.US_ASCII)
+        }
+    }
+
+    private fun migrateLegacyBotPreferences() {
+        val old = botConfigPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        if (!prefs.contains(BOT_SYMBOL)) (old["symbol"] as? String)?.takeIf { it.isNotBlank() }?.let { edit.putString(BOT_SYMBOL, it) }
+        if (!prefs.contains(BOT_STRATEGY)) (old["strategy"] as? String)?.takeIf { it.isNotBlank() }?.let { edit.putString(BOT_STRATEGY, it) }
+        if (!prefs.contains(BOT_TIMEFRAME)) (old["timeframe"] as? String)?.takeIf { it.isNotBlank() }?.let { edit.putString(BOT_TIMEFRAME, it) }
+        if (!prefs.contains(BOT_RISK_PERCENT)) {
+            (old["risk_percent"] as? String)?.toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 }
+                ?.let { edit.putString(BOT_RISK_PERCENT, it.toString()) }
+        }
+        if (!prefs.contains(BOT_THEME_MODE)) {
+            (old["theme_mode"] as? String)?.takeIf { it in setOf("System", "Light", "Dark") }
+                ?.let { edit.putString(BOT_THEME_MODE, it) }
+        }
+        // Clear the legacy plaintext preference file only after the encrypted write commits.
+        if (edit.commit()) botConfigPrefs.edit().clear().commit()
+    }
+
+    private fun migrateLegacyDerivBotPreferences() {
+        val old = derivBotConfigPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        (old["symbol"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_SYMBOL)) edit.putString(DERIV_BOT_SYMBOL, it.trim())
+        }
+        (old["strategy"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_STRATEGY)) edit.putString(DERIV_BOT_STRATEGY, it.trim())
+        }
+        (old["timeframe"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_TIMEFRAME)) edit.putString(DERIV_BOT_TIMEFRAME, it.trim())
+        }
+        (old["enabled"] as? Boolean)?.let {
+            if (!prefs.contains(DERIV_BOT_ENABLED)) edit.putBoolean(DERIV_BOT_ENABLED, it)
+        }
+        (old["service_status_state"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_STATUS_STATE)) edit.putString(DERIV_BOT_STATUS_STATE, it.take(32))
+        }
+        (old["service_status_reason"] as? String)?.takeIf { it.isNotBlank() }?.let {
+            if (!prefs.contains(DERIV_BOT_STATUS_REASON)) edit.putString(DERIV_BOT_STATUS_REASON, it.take(240))
+        }
+        // Retain the legacy copy unless the complete encrypted migration commits.
+        if (edit.commit()) derivBotConfigPrefs.edit().clear().commit()
+    }
+
+    private fun migrateLegacyTradeSyncPreferences() {
+        val old = tradeSyncPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        val migrated = mutableListOf<String>()
+        old.forEach { (key, value) ->
+            if (!key.matches(Regex("[a-z0-9_]{1,96}_(cursor|watermark)"))) return@forEach
+            val destination = TRADE_SYNC_PREFIX + key
+            if (!prefs.contains(destination)) {
+                when (value) {
+                    is Int -> edit.putInt(destination, value)
+                    is String -> edit.putString(destination, value)
+                    else -> return@forEach
+                }
+            }
+            migrated += key
+        }
+        if (migrated.isNotEmpty() && edit.commit()) {
+            val cleanup = tradeSyncPrefs.edit()
+            migrated.forEach { cleanup.remove(it) }
+            cleanup.commit()
+        }
+    }
+
+    private fun migrateLegacyTradeReportPreferences() {
+        val old = tradeReportPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        val migrated = mutableListOf<String>()
+        old.forEach { (fileName, value) ->
+            val fingerprint = value as? String ?: return@forEach
+            if (fileName.isBlank() || fileName.length > 180) return@forEach
+            val destination = TRADE_REPORT_FINGERPRINT_PREFIX + sha256Hex(fileName)
+            if (!prefs.contains(destination)) edit.putString(destination, fingerprint.take(128))
+            migrated += fileName
+        }
+        if (migrated.isNotEmpty() && edit.commit()) {
+            val cleanup = tradeReportPrefs.edit()
+            migrated.forEach { cleanup.remove(it) }
+            cleanup.commit()
+        }
+    }
+
+    private fun migrateLegacyMt5RiskAlertPreferences() {
+        val old = mt5RiskAlertPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        val migrated = mutableListOf<String>()
+        old.forEach { (legacyKey, value) ->
+            if (value !is Boolean || legacyKey.length !in 8..160) return@forEach
+            val destination = MT5_RISK_ALERT_PREFIX + sha256Hex(legacyKey)
+            if (!prefs.contains(destination)) edit.putBoolean(destination, value)
+            migrated += legacyKey
+        }
+        if (migrated.isNotEmpty() && edit.commit()) {
+            val cleanup = mt5RiskAlertPrefs.edit()
+            migrated.forEach { cleanup.remove(it) }
+            cleanup.commit()
+        }
+    }
+
+    fun saveDerivBotRecoveryConfiguration(symbol: String, strategy: String, timeframe: String): Boolean {
+        if (!isSecureStorageAvailable || symbol.isBlank() || symbol.length > 64 ||
+            strategy.isBlank() || strategy.length > 96 || timeframe.isBlank() || timeframe.length > 16 ||
+            listOf(symbol, strategy, timeframe).any { value -> value.any(Char::isISOControl) }) return false
+        return prefs.edit()
+            .putString(DERIV_BOT_SYMBOL, symbol.trim())
+            .putString(DERIV_BOT_STRATEGY, strategy.trim())
+            .putString(DERIV_BOT_TIMEFRAME, timeframe.trim())
+            .commit()
+    }
+
+    fun getDerivBotRecoverySymbol(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_SYMBOL, "").orEmpty() else ""
+
+    fun getDerivBotRecoveryStrategy(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_STRATEGY, "").orEmpty() else ""
+
+    fun getDerivBotRecoveryTimeframe(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_TIMEFRAME, "").orEmpty() else ""
+
+    fun isDerivBotRecoveryEnabled(): Boolean =
+        isSecureStorageAvailable && prefs.getBoolean(DERIV_BOT_ENABLED, false)
+
+    fun setDerivBotRecoveryEnabled(enabled: Boolean): Boolean =
+        isSecureStorageAvailable && prefs.edit().putBoolean(DERIV_BOT_ENABLED, enabled).commit()
+
+    fun saveDerivBotServiceStatus(state: String, reason: String, disableRecovery: Boolean = false): Boolean {
+        if (!isSecureStorageAvailable ||
+            state !in setOf("STOPPED", "STARTING", "CONNECTING", "RECONCILING", "RUNNING", "PAUSED", "ERROR") ||
+            reason.isBlank()) return false
+        val edit = prefs.edit()
+            .putString(DERIV_BOT_STATUS_STATE, state)
+            .putString(DERIV_BOT_STATUS_REASON, reason.take(240))
+        if (disableRecovery) edit.putBoolean(DERIV_BOT_ENABLED, false)
+        return edit.commit()
+    }
+
+    fun getDerivBotServiceState(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_STATUS_STATE, "STOPPED") ?: "STOPPED" else "STOPPED"
+
+    fun getDerivBotServiceReason(): String =
+        if (isSecureStorageAvailable) prefs.getString(DERIV_BOT_STATUS_REASON, "BOT NOT RUNNING — not started")
+            ?: "BOT NOT RUNNING — not started" else "BOT NOT RUNNING — secure storage unavailable"
+
+    private fun tradeSyncKey(profile: String, field: String): String {
+        val normalized = profile.trim().lowercase()
+        require(normalized.matches(Regex("[a-z0-9_]{1,96}")) && field in setOf("cursor", "watermark")) {
+            "Trade synchronization key is invalid."
+        }
+        return TRADE_SYNC_PREFIX + normalized + "_" + field
+    }
+
+    fun getTradeSyncCursor(profile: String): Int =
+        if (isSecureStorageAvailable) prefs.getInt(tradeSyncKey(profile, "cursor"), 0).coerceAtLeast(0) else 0
+
+    fun getTradeSyncWatermark(profile: String): Double =
+        if (isSecureStorageAvailable) prefs.getString(tradeSyncKey(profile, "watermark"), "0")
+            ?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0 else 0.0
+
+    fun saveTradeSyncProgress(profile: String, cursor: Int, watermark: Double): Boolean {
+        if (!isSecureStorageAvailable || cursor < 0 || !watermark.isFinite() || watermark < 0.0) return false
+        return prefs.edit()
+            .putInt(tradeSyncKey(profile, "cursor"), cursor)
+            .putString(tradeSyncKey(profile, "watermark"), watermark.toString())
+            .commit()
+    }
+
+    fun getTradeReportFingerprint(fileName: String): String? {
+        if (!isSecureStorageAvailable || fileName.isBlank() || fileName.length > 180) return null
+        return prefs.getString(TRADE_REPORT_FINGERPRINT_PREFIX + sha256Hex(fileName), null)
+    }
+
+    fun saveTradeReportFingerprint(fileName: String, fingerprint: String): Boolean {
+        if (!isSecureStorageAvailable || fileName.isBlank() || fileName.length > 180 ||
+            !fingerprint.matches(Regex("[0-9a-f]{64}"))) return false
+        return prefs.edit().putString(
+            TRADE_REPORT_FINGERPRINT_PREFIX + sha256Hex(fileName), fingerprint
+        ).commit()
+    }
+
+    private fun mt5RiskAlertKey(profile: String, day: String, threshold: Int): String {
+        require(profile.isNotBlank() && profile.length <= 128 &&
+            day.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")) && threshold in setOf(80, 90, 100)) {
+            "MT5 risk alert identity is invalid."
+        }
+        return MT5_RISK_ALERT_PREFIX + sha256Hex(profile + "_" + day + "_" + threshold)
+    }
+
+    fun wasMt5DailyRiskAlertSent(profile: String, day: String, threshold: Int): Boolean =
+        isSecureStorageAvailable && prefs.getBoolean(mt5RiskAlertKey(profile, day, threshold), false)
+
+    fun markMt5DailyRiskAlertSent(profile: String, day: String, threshold: Int): Boolean =
+        isSecureStorageAvailable && prefs.edit()
+            .putBoolean(mt5RiskAlertKey(profile, day, threshold), true).commit()
+
+    private fun migrateLegacyCrashLog(directory: File) {
+        val legacy = File(directory, "last_crash.txt")
+        if (!legacy.isFile) return
+        runCatching {
+            val text = legacy.readText().take(16_000)
+            if (text.isNotBlank() && !prefs.contains(LAST_CRASH_LOG)) {
+                saveLastCrashLog(text)
+            }
+        }
+        // Never leave the old unencrypted diagnostic file behind, including on an
+        // installation where Android Keystore is unavailable.
+        runCatching { legacy.delete() }
+    }
+
+    fun saveLastCrashLog(text: String): Boolean {
+        if (!isSecureStorageAvailable || text.isBlank()) return false
+        val sanitized = Redactor.redact(text).take(16_000)
+        if (sanitized.isBlank()) return false
+        return prefs.edit().putString(LAST_CRASH_LOG, sanitized).commit()
+    }
+
+    fun getLastCrashLog(): String? =
+        if (isSecureStorageAvailable) prefs.getString(LAST_CRASH_LOG, null)?.takeIf { it.isNotBlank() } else null
+
+    fun clearLastCrashLog(): Boolean =
+        isSecureStorageAvailable && prefs.edit().remove(LAST_CRASH_LOG).commit()
+
+    private fun migrateLegacyModeRenewalReminders() {
+        val old = modeRenewalReminderPrefs.all
+        if (old.isEmpty()) return
+        val edit = prefs.edit()
+        val migrated = mutableListOf<String>()
+        old.forEach { (legacyKey, value) ->
+            if (value !is Boolean || !legacyKey.startsWith("notified_") || legacyKey.length > 256) return@forEach
+            val destination = LIVE_LEASE_REMINDER_PREFIX + sha256Hex(legacyKey.removePrefix("notified_"))
+            if (!prefs.contains(destination)) edit.putBoolean(destination, value)
+            migrated += legacyKey
+        }
+        if (migrated.isNotEmpty() && edit.commit()) {
+            val cleanup = modeRenewalReminderPrefs.edit()
+            migrated.forEach { cleanup.remove(it) }
+            cleanup.commit()
+        }
+    }
+
+    fun wasLiveLeaseRenewalReminderSent(identityFingerprint: String, expiresAtMs: Long): Boolean {
+        if (!isSecureStorageAvailable || !identityFingerprint.matches(Regex("[0-9a-fA-F]{64}")) || expiresAtMs <= 0L) return false
+        return prefs.getBoolean(LIVE_LEASE_REMINDER_PREFIX + sha256Hex(identityFingerprint.lowercase() + ":" + expiresAtMs), false)
+    }
+
+    fun markLiveLeaseRenewalReminderSent(identityFingerprint: String, expiresAtMs: Long): Boolean {
+        if (!isSecureStorageAvailable || !identityFingerprint.matches(Regex("[0-9a-fA-F]{64}")) || expiresAtMs <= 0L) return false
+        return prefs.edit()
+            .putBoolean(LIVE_LEASE_REMINDER_PREFIX + sha256Hex(identityFingerprint.lowercase() + ":" + expiresAtMs), true)
+            .commit()
+    }
+
+    /** Read a risk profile only from encrypted Android Keystore preferences. */
+    fun getEncryptedRiskProfile(): RiskProfile? {
+        if (!isSecureStorageAvailable || !prefs.getBoolean(RISK_PROFILE_SAVED, false)) return null
+        return runCatching {
+            val balance = prefs.getString(RISK_ACCOUNT_BALANCE, null)?.toDoubleOrNull() ?: return null
+            val risk = prefs.getString(RISK_FIXED_PERCENT, null)?.toDoubleOrNull() ?: return null
+            val maxDay = prefs.getString(RISK_MAX_DAILY_DD, null)?.toDoubleOrNull() ?: return null
+            val maxWeek = prefs.getString(RISK_MAX_WEEKLY_DD, null)?.toDoubleOrNull() ?: return null
+            val currentDay = prefs.getString(RISK_CURRENT_DAILY_DD, "0.0")?.toDoubleOrNull() ?: return null
+            val currentWeek = prefs.getString(RISK_CURRENT_WEEKLY_DD, "0.0")?.toDoubleOrNull() ?: return null
+            val minimumRr = prefs.getString(RISK_MINIMUM_RR, "2.0")?.toDoubleOrNull() ?: return null
+            val profile = RiskProfile(
+                accountBalance = balance,
+                fixedRiskPercentage = risk,
+                maxDailyDrawdownPercentage = maxDay,
+                maxWeeklyDrawdownPercentage = maxWeek,
+                currentDailyDrawdown = currentDay,
+                currentWeeklyDrawdown = currentWeek,
+                minimumRR = minimumRr,
+                isTradingHalted = prefs.getBoolean(RISK_TRADING_HALTED, false)
+            )
+            profile.takeIf {
+                listOf(balance, risk, maxDay, maxWeek, currentDay, currentWeek, minimumRr).all { v -> v.isFinite() } &&
+                    balance >= 0.0 && risk in 0.1..1.0 &&
+                    maxDay in 0.1..100.0 && maxWeek in 0.1..100.0 &&
+                    currentDay >= 0.0 && currentWeek >= 0.0 && minimumRr >= 2.0
+            }
+        }.getOrNull()
+    }
+
+    fun saveEncryptedRiskProfile(profile: RiskProfile): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val values = listOf(
+            profile.accountBalance, profile.fixedRiskPercentage,
+            profile.maxDailyDrawdownPercentage, profile.maxWeeklyDrawdownPercentage,
+            profile.currentDailyDrawdown, profile.currentWeeklyDrawdown, profile.minimumRR
+        )
+        if (values.any { !it.isFinite() } || profile.accountBalance < 0.0 ||
+            profile.fixedRiskPercentage !in 0.1..1.0 ||
+            profile.maxDailyDrawdownPercentage !in 0.1..100.0 ||
+            profile.maxWeeklyDrawdownPercentage !in 0.1..100.0 ||
+            profile.currentDailyDrawdown < 0.0 || profile.currentWeeklyDrawdown < 0.0 ||
+            profile.minimumRR < 2.0
+        ) return false
+        return prefs.edit()
+            .putString(RISK_ACCOUNT_BALANCE, profile.accountBalance.toString())
+            .putString(RISK_FIXED_PERCENT, profile.fixedRiskPercentage.toString())
+            .putString(RISK_MAX_DAILY_DD, profile.maxDailyDrawdownPercentage.toString())
+            .putString(RISK_MAX_WEEKLY_DD, profile.maxWeeklyDrawdownPercentage.toString())
+            .putString(RISK_CURRENT_DAILY_DD, profile.currentDailyDrawdown.toString())
+            .putString(RISK_CURRENT_WEEKLY_DD, profile.currentWeeklyDrawdown.toString())
+            .putString(RISK_MINIMUM_RR, profile.minimumRR.toString())
+            .putBoolean(RISK_TRADING_HALTED, profile.isTradingHalted)
+            .putBoolean(RISK_PROFILE_SAVED, true)
+            .commit()
+    }
+
+    fun getRiskStartDayEquity(): Double =
+        if (isSecureStorageAvailable) prefs.getString(RISK_START_DAY_EQUITY, "0.0")?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0 else 0.0
+
+    fun getRiskStartWeekEquity(): Double =
+        if (isSecureStorageAvailable) prefs.getString(RISK_START_WEEK_EQUITY, "0.0")?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0 else 0.0
+
+    fun getRiskLastRolloverMillis(): Long =
+        if (isSecureStorageAvailable) prefs.getLong(RISK_LAST_ROLLOVER, 0L).coerceAtLeast(0L) else 0L
+
+    /** Store risk drawdown and period baselines atomically inside encrypted preferences. */
+    fun saveRiskEquityRollover(
+        startDayEquity: Double,
+        startWeekEquity: Double,
+        lastRolloverMillis: Long,
+        currentDailyDrawdown: Double,
+        currentWeeklyDrawdown: Double
+    ): Boolean {
+        if (!isSecureStorageAvailable || !prefs.getBoolean(RISK_PROFILE_SAVED, false) ||
+            listOf(startDayEquity, startWeekEquity, currentDailyDrawdown, currentWeeklyDrawdown)
+                .any { !it.isFinite() } ||
+            startDayEquity < 0.0 || startWeekEquity < 0.0 ||
+            currentDailyDrawdown < 0.0 || currentWeeklyDrawdown < 0.0 ||
+            lastRolloverMillis < 0L
+        ) return false
+        return prefs.edit()
+            .putString(RISK_CURRENT_DAILY_DD, currentDailyDrawdown.toString())
+            .putString(RISK_CURRENT_WEEKLY_DD, currentWeeklyDrawdown.toString())
+            .putString(RISK_START_DAY_EQUITY, startDayEquity.toString())
+            .putString(RISK_START_WEEK_EQUITY, startWeekEquity.toString())
+            .putLong(RISK_LAST_ROLLOVER, lastRolloverMillis)
+            .commit()
+    }
+
+    fun saveCTraderOAuth(
+        clientId: String,
+        clientSecret: String,
+        redirectUri: String,
+        accessToken: String,
+        refreshToken: String,
+        accessExpiresAtMs: Long
+    ): Boolean {
+        if (!isSecureStorageAvailable || listOf(clientId, clientSecret, redirectUri, accessToken, refreshToken).any { it.isBlank() } || accessExpiresAtMs <= 0L) return false
+        return prefs.edit()
+            .putString(CTRADER_CLIENT_ID, clientId)
+            .putString(CTRADER_CLIENT_SECRET, clientSecret)
+            .putString(CTRADER_REDIRECT_URI, redirectUri)
+            .putString(CTRADER_ACCESS_TOKEN, accessToken)
+            .putString(CTRADER_REFRESH_TOKEN, refreshToken)
+            .putLong(CTRADER_ACCESS_EXPIRES_AT_MS, accessExpiresAtMs)
+            .commit()
+    }
+
+    fun saveCTraderApplication(clientId: String, clientSecret: String, redirectUri: String): Boolean {
+        if (!isSecureStorageAvailable || listOf(clientId, clientSecret, redirectUri).any { it.isBlank() }) return false
+        return prefs.edit().putString(CTRADER_CLIENT_ID, clientId)
+            .putString(CTRADER_CLIENT_SECRET, clientSecret)
+            .putString(CTRADER_REDIRECT_URI, redirectUri).commit()
+    }
+
+    fun getCTraderClientId(): String = prefs.getString(CTRADER_CLIENT_ID, "").orEmpty()
+    fun getCTraderClientSecret(): String = prefs.getString(CTRADER_CLIENT_SECRET, "").orEmpty()
+    fun getCTraderRedirectUri(): String = prefs.getString(CTRADER_REDIRECT_URI, "").orEmpty()
+    fun getCTraderAccessToken(): String = prefs.getString(CTRADER_ACCESS_TOKEN, "").orEmpty()
+    fun getCTraderRefreshToken(): String = prefs.getString(CTRADER_REFRESH_TOKEN, "").orEmpty()
+    fun getCTraderAccessExpiresAtMs(): Long = prefs.getLong(CTRADER_ACCESS_EXPIRES_AT_MS, 0L)
+
+    fun saveBrokerAccountProfile(profile: SavedBrokerAccountProfile): Boolean {
+        if (!isSecureStorageAvailable || profile.specId !in setOf(
+                "DERIV_OPTIONS", "DERIV_CTRADER", "CTRADER",
+            ) || profile.accountId.isBlank() || profile.accountId.length > 128 ||
+            profile.accountId.any { it.isISOControl() } || profile.login.isBlank() || profile.login.length > 128 ||
+            profile.login.any { it.isISOControl() } || profile.server.length > 128 ||
+            profile.server.any { it.isISOControl() }
+        ) return false
+        val keyHash = sha256Hex("${profile.specId}\u0000${profile.accountId}\u0000${profile.mode.name}")
+        val value = org.json.JSONObject()
+            .put("spec_id", profile.specId)
+            .put("account_id", profile.accountId)
+            .put("login", profile.login)
+            .put("server", profile.server)
+            .put("mode", profile.mode.name)
+        return prefs.edit().putString(BROKER_ACCOUNT_PROFILE_PREFIX + keyHash, value.toString()).commit()
+    }
+
+    fun getBrokerAccountProfiles(): List<SavedBrokerAccountProfile> {
+        if (!isSecureStorageAvailable) return emptyList()
+        return prefs.all.entries.asSequence()
+            .filter { it.key.startsWith(BROKER_ACCOUNT_PROFILE_PREFIX) }
+            .mapNotNull { (key, raw) ->
+                val value = raw as? String ?: return@mapNotNull null
+                try {
+                    val json = org.json.JSONObject(value)
+                    SavedBrokerAccountProfile(
+                        specId = json.getString("spec_id"),
+                        accountId = json.getString("account_id"),
+                        server = json.optString("server"),
+                        mode = LoginMode.valueOf(json.getString("mode")),
+                        login = json.optString("login", json.getString("account_id")),
+                    ).takeIf { profile ->
+                        profile.specId in setOf("DERIV_OPTIONS", "DERIV_CTRADER", "CTRADER") &&
+                            profile.accountId.isNotBlank() &&
+                            key == BROKER_ACCOUNT_PROFILE_PREFIX +
+                            sha256Hex("${profile.specId}\u0000${profile.accountId}\u0000${profile.mode.name}")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SecretsManager", "Stored broker account profile could not be decoded.", e)
+                    null
+                }
+            }
+            .sortedWith(compareBy<SavedBrokerAccountProfile> { it.specId }.thenBy { it.mode.name }.thenBy { it.accountId })
+            .toList()
+    }
+
+    /** Non-secret fingerprint of the registered cTrader application credentials. */
+    fun getCTraderCredentialGeneration(): String {
+        if (!isSecureStorageAvailable) return ""
+        val id = getCTraderClientId()
+        val secret = getCTraderClientSecret()
+        val redirect = getCTraderRedirectUri()
+        if (id.isBlank() || secret.isBlank() || redirect.isBlank()) return ""
+        return sha256Hex(id + "\u0000" + secret + "\u0000" + redirect)
+    }
+
+    /** Persist owner acceptance only for the exact verified DEMO account and credential generation. */
+    fun savePathDemoAcceptance(identity: ModeAccountIdentity, evidenceDigest: String): Boolean {
+        if (!isSecureStorageAvailable || identity.mode != com.example.data.broker.AccountMode.DEMO ||
+            !identity.isValid() || !evidenceDigest.matches(Regex("[0-9a-fA-F]{64}"))) return false
+        val value = org.json.JSONObject()
+            .put("path", identity.path.name)
+            .put("broker", identity.broker)
+            .put("account_id", identity.accountId)
+            .put("server", identity.server)
+            .put("mode", identity.mode.name)
+            .put("credential_generation", identity.credentialGeneration)
+            .put("accepted_at_ms", System.currentTimeMillis())
+            .put("evidence_digest", evidenceDigest.lowercase())
+        return prefs.edit().putString(MODE_DEMO_ACCEPTANCE_PREFIX + identity.acceptanceKey(), value.toString()).commit()
+    }
+
+    fun getPathDemoAcceptance(identity: ModeAccountIdentity): ModeDemoAcceptance? {
+        if (!isSecureStorageAvailable || identity.mode != com.example.data.broker.AccountMode.DEMO) return null
+        val raw = prefs.getString(MODE_DEMO_ACCEPTANCE_PREFIX + identity.acceptanceKey(), null) ?: return null
+        return runCatching {
+            val obj = org.json.JSONObject(raw)
+            val saved = ModeAccountIdentity(
+                path = com.example.data.broker.ModePath.valueOf(obj.getString("path")),
+                broker = obj.getString("broker"),
+                accountId = obj.getString("account_id"),
+                server = obj.optString("server"),
+                mode = com.example.data.broker.AccountMode.valueOf(obj.getString("mode")),
+                credentialGeneration = obj.getString("credential_generation")
+            )
+            if (saved != identity) return null
+            ModeDemoAcceptance(saved, obj.getLong("accepted_at_ms"), obj.getString("evidence_digest"))
+        }.getOrNull()
+    }
+
+    /** Permanently invalidates a prior owner DEMO acceptance when credentials are rotated. */
+    fun clearPathDemoAcceptance(identity: ModeAccountIdentity): Boolean {
+        if (!isSecureStorageAvailable || identity.mode != com.example.data.broker.AccountMode.DEMO) return false
+        return prefs.edit().remove(MODE_DEMO_ACCEPTANCE_PREFIX + identity.acceptanceKey()).commit()
+    }
+
+    /** Append-only local arming audit containing hashes and reason codes only. */
+    fun appendModeArmingAudit(event: ModeArmingAuditEvent): Boolean {
+        if (!isSecureStorageAvailable || !event.identityFingerprint.matches(Regex("[0-9a-f]{64}")) ||
+            event.event.isBlank() || event.path.isBlank() || event.mode !in setOf("DEMO", "LIVE") ||
+            event.reasonCode.any { !it.isLetterOrDigit() && it != '_' }) return false
+        synchronized(MODE_ARMING_AUDIT_LOCK) {
+            return runCatching {
+                val rows = org.json.JSONArray(prefs.getString(MODE_ARMING_AUDIT, "[]").orEmpty())
+                if (rows.length() >= 2048) return false
+                rows.put(org.json.JSONObject()
+                    .put("event", event.event.take(48))
+                    .put("path", event.path.take(32))
+                    .put("mode", event.mode)
+                    .put("identity_fingerprint", event.identityFingerprint)
+                    .put("timestamp_ms", event.timestampMs)
+                    .put("allowed", event.allowed)
+                    .put("reason_code", event.reasonCode.take(64)))
+                prefs.edit().putString(MODE_ARMING_AUDIT, rows.toString()).commit()
+            }.getOrDefault(false)
+        }
+    }
+
+    fun modeArmingAuditCount(): Int =
+        if (!isSecureStorageAvailable) 0 else runCatching {
+            org.json.JSONArray(prefs.getString(MODE_ARMING_AUDIT, "[]")).length()
+        }.getOrDefault(0)
+
+    fun saveCTraderRefreshedToken(accessToken: String, refreshToken: String, accessExpiresAtMs: Long): Boolean {
+        if (!isSecureStorageAvailable || accessToken.isBlank() || refreshToken.isBlank() || accessExpiresAtMs <= 0L) return false
+        return prefs.edit().putString(CTRADER_ACCESS_TOKEN, accessToken)
+            .putString(CTRADER_REFRESH_TOKEN, refreshToken)
+            .putLong(CTRADER_ACCESS_EXPIRES_AT_MS, accessExpiresAtMs).commit()
+    }
+
+    fun clearCTraderOAuth(): Boolean = isSecureStorageAvailable && prefs.edit()
+        .remove(CTRADER_CLIENT_ID).remove(CTRADER_CLIENT_SECRET).remove(CTRADER_REDIRECT_URI)
+        .remove(CTRADER_ACCESS_TOKEN).remove(CTRADER_REFRESH_TOKEN).remove(CTRADER_ACCESS_EXPIRES_AT_MS)
+        .commit()
 
 
     fun saveTelegramToken(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(TG_TOK, v).commit()
@@ -102,7 +731,12 @@ class SecretsManager internal constructor(
     fun saveMT5InvestorPassword(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_INVESTOR_PW, v).commit()
     fun saveMT5AccountNumber(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_AC, v).commit()
     fun saveMT5BrokerServer(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_SV, v).commit()
-    fun saveMT5AccountBalance(v: Double): Boolean = isSecureStorageAvailable && v.isFinite() && prefs.edit().putString(MT5_BALANCE, v.toString()).commit()
+    /**
+     * Legacy UI code must never persist an operator-entered estimate as a broker balance.
+     * Current account balance is supplied only by a fresh, identity-matched broker snapshot.
+     */
+    @Deprecated("Use a fresh verified broker account snapshot; manual balance persistence is disabled.")
+    fun saveMT5AccountBalance(v: Double): Boolean = false
     fun saveMT5AccountType(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_ACCOUNT_TYPE, v).commit()
     fun saveMT5Leverage(v: Int): Boolean = isSecureStorageAvailable && v > 0 && prefs.edit().putInt(MT5_LEVERAGE, v).commit()
     fun saveMT5SessionStatus(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(MT5_SESSION_STATUS, v).commit()
@@ -110,44 +744,94 @@ class SecretsManager internal constructor(
     fun saveMT5LastLoginMs(v: Long): Boolean = isSecureStorageAvailable && v >= 0L && prefs.edit().putLong(MT5_LAST_LOGIN_MS, v).commit()
     fun saveOandaApiKey(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(OANDA_KEY, v).commit()
     fun saveOandaAccountId(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(OANDA_ACC, v).commit()
-    fun saveConfiguredEquity(v: Double) = prefs.edit().putString(CONFIGURED_EQUITY, v.toString()).apply()
     fun saveSelectedStrategy(v: String) = prefs.edit().putString(SELECTED_STRATEGY, v).apply()
-    fun saveBotSymbol(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("symbol", v.trim()).apply() }
-    fun getBotSymbol(): String = botConfigPrefs.getString("symbol", "EUR/USD") ?: "EUR/USD"
-    fun saveBotStrategy(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("strategy", v.trim()).apply() }
-    fun getBotStrategy(): String = botConfigPrefs.getString("strategy", "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0"
-    fun saveBotTimeframe(v: String) { if (v.isNotBlank()) botConfigPrefs.edit().putString("timeframe", v.trim()).apply() }
-    fun getBotTimeframe(): String = botConfigPrefs.getString("timeframe", "M15") ?: "M15"
+    fun saveBotSymbol(v: String) { if (isSecureStorageAvailable && v.isNotBlank()) prefs.edit().putString(BOT_SYMBOL, v.trim()).apply() }
+    fun getBotSymbol(): String = if (isSecureStorageAvailable) prefs.getString(BOT_SYMBOL, "EUR/USD") ?: "EUR/USD" else "EUR/USD"
+    fun saveBotStrategy(v: String) { if (isSecureStorageAvailable && v.isNotBlank()) prefs.edit().putString(BOT_STRATEGY, v.trim()).apply() }
+    fun getBotStrategy(): String = if (isSecureStorageAvailable) prefs.getString(BOT_STRATEGY, "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0" else "smc-confluence-1.0.0"
+    fun saveBotTimeframe(v: String) { if (isSecureStorageAvailable && v.isNotBlank()) prefs.edit().putString(BOT_TIMEFRAME, v.trim()).apply() }
+    fun getBotTimeframe(): String = if (isSecureStorageAvailable) prefs.getString(BOT_TIMEFRAME, "M15") ?: "M15" else "M15"
     fun saveBotRiskPercent(v: Double): Boolean {
-        if (!v.isFinite() || v <= 0.0 || v > 1.0) return false
-        botConfigPrefs.edit().putString("risk_percent", v.toString()).apply()
-        return true
+        if (!isSecureStorageAvailable || !v.isFinite() || v <= 0.0 || v > 1.0) return false
+        return prefs.edit().putString(BOT_RISK_PERCENT, v.toString()).commit()
     }
-    fun getBotRiskPercent(): Double = botConfigPrefs.getString("risk_percent", "0.25")?.toDoubleOrNull()
-        ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 } ?: 0.25
-    fun getThemeMode(): String = botConfigPrefs.getString("theme_mode", "System")
-        ?.takeIf { it in setOf("System", "Light", "Dark") } ?: "System"
-    fun saveThemeMode(mode: String): Boolean = mode in setOf("System", "Light", "Dark") &&
-        botConfigPrefs.edit().putString("theme_mode", mode).commit()
+    fun getBotRiskPercent(): Double = if (isSecureStorageAvailable) {
+        prefs.getString(BOT_RISK_PERCENT, "0.25")?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 } ?: 0.25
+    } else 0.25
+    fun getThemeMode(): String = if (isSecureStorageAvailable) {
+        prefs.getString(BOT_THEME_MODE, "System")?.takeIf { it in setOf("System", "Light", "Dark") } ?: "System"
+    } else "System"
+    fun saveThemeMode(mode: String): Boolean = isSecureStorageAvailable &&
+        mode in setOf("System", "Light", "Dark") && prefs.edit().putString(BOT_THEME_MODE, mode).commit()
+
+    /** Management API bearer token is opaque and isolated from trading/broker credentials. */
+    fun saveManagementAccessToken(token: String, expiresAtMs: Long): Boolean =
+        isSecureStorageAvailable && token.length in 32..256 && expiresAtMs > System.currentTimeMillis() &&
+            prefs.edit().putString(MANAGEMENT_ACCESS_TOKEN, token)
+                .putLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, expiresAtMs).commit()
+
+    fun getValidManagementAccessToken(nowMs: Long = System.currentTimeMillis()): String? {
+        if (!isSecureStorageAvailable) return null
+        val expiry = runCatching { prefs.getLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, 0L) }.getOrDefault(0L)
+        if (expiry <= nowMs) { clearManagementAccessToken(); return null }
+        return runCatching { prefs.getString(MANAGEMENT_ACCESS_TOKEN, null) }
+            .getOrNull()?.takeIf { it.length in 32..256 }
+    }
+
+    fun clearManagementAccessToken(): Boolean = isSecureStorageAvailable && prefs.edit()
+        .remove(MANAGEMENT_ACCESS_TOKEN).remove(MANAGEMENT_ACCESS_EXPIRES_AT_MS).commit()
+
     /** Deriv credentials are persisted only after encrypted Keystore storage is initialized. */
     fun saveDerivApiToken(v: String, mode: String = getDerivAccountMode()): Boolean {
         val normalizedMode = mode.trim().lowercase()
         if (!isSecureStorageAvailable || v.isBlank() || normalizedMode !in setOf("demo", "real")) return false
         invalidateDerivRealAuthorization()
         val key = if (normalizedMode == "real") DERIV_API_TOKEN_REAL else DERIV_API_TOKEN_DEMO
-        return prefs.edit().putString(key, v.trim()).remove(DERIV_API_TOKEN).commit()
+        return prefs.edit().putString(key, v.trim()).remove(DERIV_API_TOKEN)
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT).commit()
     }
+    fun saveDerivApiTokenIfAllowed(v: String, mode: String, save: Boolean): Boolean {
+        val normalizedMode = mode.trim().lowercase()
+        if (!isSecureStorageAvailable || v.isBlank() || normalizedMode !in setOf("demo", "real")) return false
+        invalidateDerivRealAuthorization()
+        val key = if (normalizedMode == "real") DERIV_API_TOKEN_REAL else DERIV_API_TOKEN_DEMO
+        val edit = prefs.edit().putBoolean(DERIV_SAVE_TOKEN, save)
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT)
+        if (save) edit.putString(key, v.trim()) else edit.remove(key)
+        return edit.remove(DERIV_API_TOKEN).commit()
+    }
+    fun isDerivApiTokenSaveEnabled(): Boolean = isSecureStorageAvailable && prefs.getBoolean(DERIV_SAVE_TOKEN, false)
     fun saveDerivAppId(v: String): Boolean {
         if (!isSecureStorageAvailable || v.isBlank() || !v.trim().all(Char::isDigit)) return false
         invalidateDerivRealAuthorization()
-        return prefs.edit().putString(DERIV_APP_ID, v.trim()).commit()
+        return prefs.edit().putString(DERIV_APP_ID, v.trim())
+            .remove(DERIV_DEMO_ACCEPTED).remove(DERIV_DEMO_ACCEPTED_ACCOUNT)
+            .remove(DERIV_DEMO_ACCEPTED_CURRENCY).remove(DERIV_DEMO_ACCEPTED_SESSION)
+            .remove(DERIV_DEMO_ACCEPTED_CREDENTIAL).remove(DERIV_DEMO_ACCEPTED_AT).commit()
     }
     /** Mode is explicit; selecting REAL is separate from arming live trading. */
     fun saveDerivAccountMode(v: String): Boolean {
         val mode = v.trim().lowercase()
         if (!isSecureStorageAvailable || mode !in setOf("demo", "real")) return false
         invalidateDerivRealAuthorization()
-        return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).commit()
+        return prefs.edit().putString(DERIV_ACCOUNT_MODE, mode).remove(DERIV_DEMO_ACCEPTED).commit()
+    }
+
+    fun saveDerivDemoAcceptance(accountId: String, currency: String, sessionId: String, credentialGeneration: String): Boolean {
+        if (!isSecureStorageAvailable || getDerivAccountMode() != "demo" || accountId.isBlank() || currency.isBlank() || sessionId.isBlank() || credentialGeneration.isBlank()) return false
+        return prefs.edit().putBoolean(DERIV_DEMO_ACCEPTED, true)
+            .putString(DERIV_DEMO_ACCEPTED_ACCOUNT, accountId.trim())
+            .putString(DERIV_DEMO_ACCEPTED_CURRENCY, currency.trim())
+            .putString(DERIV_DEMO_ACCEPTED_SESSION, sessionId.trim())
+            .putString(DERIV_DEMO_ACCEPTED_CREDENTIAL, credentialGeneration.trim())
+            .putLong(DERIV_DEMO_ACCEPTED_AT, System.currentTimeMillis()).commit()
+    }
+
+    fun hasCurrentDerivDemoAcceptance(accountId: String? = null, currency: String? = null, sessionId: String? = null, credentialGeneration: String? = null): Boolean {
+        if (!isSecureStorageAvailable || getDerivAccountMode() != "demo" || !prefs.getBoolean(DERIV_DEMO_ACCEPTED, false)) return false
+        return listOf(accountId to DERIV_DEMO_ACCEPTED_ACCOUNT, currency to DERIV_DEMO_ACCEPTED_CURRENCY, sessionId to DERIV_DEMO_ACCEPTED_SESSION, credentialGeneration to DERIV_DEMO_ACCEPTED_CREDENTIAL)
+            .all { (expected, key) -> expected == null || expected.isNotBlank() && expected == prefs.getString(key, "") }
     }
     fun enableDerivRealExecution(
         explicitConfirmation: Boolean,
@@ -219,7 +903,7 @@ class SecretsManager internal constructor(
         if (!isSecureStorageAvailable) return false
         invalidateDerivRealAuthorization()
         return prefs.edit().remove(DERIV_API_TOKEN).remove(DERIV_API_TOKEN_DEMO).remove(DERIV_API_TOKEN_REAL)
-            .remove(DERIV_APP_ID).remove(DERIV_ACCOUNT_MODE).commit()
+            .remove(DERIV_APP_ID).remove(DERIV_ACCOUNT_MODE).remove(DERIV_SAVE_TOKEN).commit()
     }
     fun saveTelegramConnectionStatus(status: String) = prefs.edit().putString(TG_STATUS, status).apply()
     fun saveTelegramNotificationsEnabled(enabled: Boolean) = prefs.edit().putBoolean(TG_NOTIF_ENABLED, enabled).apply()
@@ -232,6 +916,20 @@ class SecretsManager internal constructor(
         if (origin.isBlank()) return false
         return prefs.edit().putString(MT5_MANAGED_SERVICE_URL, origin).commit()
     }
+
+    /** Cloudflare Access service credentials remain in encrypted preferences and are never logged. */
+    fun getCloudflareAccessClientId(): String = if (isSecureStorageAvailable) prefs.getString(CF_ACCESS_CLIENT_ID, "") ?: "" else ""
+    fun getCloudflareAccessClientSecret(): String = if (isSecureStorageAvailable) prefs.getString(CF_ACCESS_CLIENT_SECRET, "") ?: "" else ""
+    fun saveCloudflareAccessServiceToken(clientId: String, clientSecret: String): Boolean {
+        if (!isSecureStorageAvailable || clientId.isBlank() || clientSecret.isBlank() ||
+            clientId.length > 512 || clientSecret.length > 2048 ||
+            clientId.any { it.isISOControl() } || clientSecret.any { it.isISOControl() }
+        ) return false
+        return prefs.edit().putString(CF_ACCESS_CLIENT_ID, clientId.trim())
+            .putString(CF_ACCESS_CLIENT_SECRET, clientSecret.trim()).commit()
+    }
+    fun clearCloudflareAccessServiceToken(): Boolean = isSecureStorageAvailable &&
+        prefs.edit().remove(CF_ACCESS_CLIENT_ID).remove(CF_ACCESS_CLIENT_SECRET).commit()
 
     /** Bridge app credentials are persisted only when Android encrypted preferences initialized successfully. */
     private fun managedProfile(profile: String): String = profile.trim().uppercase().also { require(it == "DEMO" || it == "LIVE") { "Profile must be DEMO or LIVE" } }
@@ -341,6 +1039,64 @@ class SecretsManager internal constructor(
     fun clearMT5BridgeAccountAppToken(profileKey: String): Boolean =
         isSecureStorageAvailable && prefs.edit().remove(mt5AccountKey("bridge_token", profileKey)).commit()
 
+    // GitHub Codespaces owner controls: a public GitHub App client ID plus
+    // per-owner OAuth tokens are stored separately from all broker credentials.
+    fun saveCodespacesGitHubClientId(value: String): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val clientId = value.trim()
+        if (clientId.isBlank() || clientId.length > 128 ||
+            !clientId.matches(Regex("[A-Za-z0-9._-]{8,128}"))) return false
+        return prefs.edit().putString(GITHUB_CODESPACES_CLIENT_ID, clientId).commit()
+    }
+
+    fun getCodespacesGitHubClientId(): String =
+        if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_CLIENT_ID, "") ?: "" else ""
+
+    fun saveCodespacesGitHubTokens(
+        accessToken: String,
+        refreshToken: String,
+        expiresAtMillis: Long,
+        refreshExpiresAtMillis: Long = 0L
+    ): Boolean {
+        if (!isSecureStorageAvailable || accessToken.isBlank() || refreshToken.isBlank() ||
+            accessToken.length > 4096 || refreshToken.length > 4096 || expiresAtMillis <= 0L ||
+            (refreshExpiresAtMillis != 0L && refreshExpiresAtMillis <= System.currentTimeMillis())) return false
+        val edit = prefs.edit()
+            .putString(GITHUB_CODESPACES_ACCESS_TOKEN, accessToken)
+            .putString(GITHUB_CODESPACES_REFRESH_TOKEN, refreshToken)
+            .putLong(GITHUB_CODESPACES_ACCESS_EXPIRES_AT, expiresAtMillis)
+        if (refreshExpiresAtMillis > 0L) edit.putLong(GITHUB_CODESPACES_REFRESH_EXPIRES_AT, refreshExpiresAtMillis)
+        else edit.remove(GITHUB_CODESPACES_REFRESH_EXPIRES_AT)
+        return edit.commit()
+    }
+
+    fun getCodespacesGitHubAccessToken(): String =
+        if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_ACCESS_TOKEN, "") ?: "" else ""
+
+    fun getCodespacesGitHubRefreshToken(): String =
+        if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_REFRESH_TOKEN, "") ?: "" else ""
+
+    fun getCodespacesGitHubAccessExpiresAtMillis(): Long =
+        if (isSecureStorageAvailable) prefs.getLong(GITHUB_CODESPACES_ACCESS_EXPIRES_AT, 0L) else 0L
+
+    fun getCodespacesGitHubRefreshExpiresAtMillis(): Long =
+        if (isSecureStorageAvailable) prefs.getLong(GITHUB_CODESPACES_REFRESH_EXPIRES_AT, 0L) else 0L
+
+    fun getCodespacesGitHubUsageLedgerJson(): String =
+        if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_USAGE_LEDGER, "") ?: "" else ""
+
+    fun saveCodespacesGitHubUsageLedgerJson(value: String): Boolean =
+        isSecureStorageAvailable && value.length <= 256_000 &&
+            prefs.edit().putString(GITHUB_CODESPACES_USAGE_LEDGER, value).commit()
+
+    fun clearCodespacesGitHubAuthorization(): Boolean =
+        isSecureStorageAvailable && prefs.edit()
+            .remove(GITHUB_CODESPACES_ACCESS_TOKEN)
+            .remove(GITHUB_CODESPACES_REFRESH_TOKEN)
+            .remove(GITHUB_CODESPACES_ACCESS_EXPIRES_AT)
+            .remove(GITHUB_CODESPACES_REFRESH_EXPIRES_AT)
+            .commit()
+
     /** Configured profile namespaces that have a saved opaque app token; no token values are returned. */
     fun getConfiguredMT5AccountProfileKeys(): List<String> {
         if (!isSecureStorageAvailable) return emptyList()
@@ -374,6 +1130,7 @@ class SecretsManager internal constructor(
             .putString("${prefix}_server", server.trim())
             .putString("${prefix}_access", accessType)
             .putBoolean("${prefix}_save_password", savePassword)
+            .putString("${prefix}_credential_generation", sha256Hex(login.trim() + "\u0000" + server.trim() + "\u0000" + password))
         if (savePassword) edit.putString("${prefix}_password", password)
         else edit.remove("${prefix}_password")
         return edit.commit()
@@ -389,13 +1146,35 @@ class SecretsManager internal constructor(
     fun getManagedMT5AccountPassword(profileKey: String): String = mt5AccountValue("password", profileKey)
     fun isManagedMT5AccountPasswordSaveEnabled(profileKey: String): Boolean =
         isSecureStorageAvailable && prefs.getBoolean(mt5AccountKey("save_password", profileKey), false)
+    fun getManagedMT5CredentialGeneration(profileKey: String): String = mt5AccountValue("credential_generation", profileKey)
 
     fun clearManagedMT5AccountProfile(profileKey: String): Boolean {
         if (!isSecureStorageAvailable) return false
         val prefix = mt5AccountKey("profile", profileKey).removeSuffix("_profile")
         return prefs.edit().remove("${prefix}_login").remove("${prefix}_server")
             .remove("${prefix}_access").remove("${prefix}_password")
-            .remove("${prefix}_save_password").commit()
+            .remove("${prefix}_save_password").remove("${prefix}_credential_generation").commit()
+    }
+
+    /** Stable account slots. Each slot is an independent encrypted namespace; no DEMO/LIVE values are shared. */
+    fun getManagedMT5AccountRegistry(): List<com.example.data.mt5.MT5AccountSlot> {
+        val slots = listOf("FBS", "EXNESS", "HFM", "DERIV").flatMap { brand ->
+            listOf("DEMO", "LIVE").map { mode ->
+                val key = "${brand}_${mode}"
+                com.example.data.mt5.MT5AccountSlot(
+                    accountId = key,
+                    broker = brand,
+                    platform = "MT5",
+                    accountMode = mode,
+                    login = getManagedMT5AccountLogin(key),
+                    server = getManagedMT5AccountServer(key),
+                    accessType = getManagedMT5AccountAccessType(key),
+                    connected = false,
+                    passwordSaved = isManagedMT5AccountPasswordSaveEnabled(key)
+                )
+            }
+        }
+        return slots
     }
 
     fun saveMT5BridgeAccountPendingCommand(requestId: String, action: String, profileKey: String): Boolean {
@@ -534,8 +1313,8 @@ class SecretsManager internal constructor(
     fun isDerivRealExecutionEnabled(nowMs: Long = System.currentTimeMillis()): Boolean =
         isSecureStorageAvailable && activeDerivRealLease(nowMs) != null
     /** A non-secret fingerprint changes when either the PAT or registered app ID changes. */
-    fun getDerivCredentialGeneration(): String {
-        val token = getDerivApiToken()
+    fun getDerivCredentialGeneration(mode: String = getDerivAccountMode()): String {
+        val token = getDerivApiToken(mode)
         val appId = getDerivAppId()
         if (token.isBlank() || appId.isBlank()) return ""
         return MessageDigest.getInstance("SHA-256")
@@ -557,7 +1336,8 @@ class SecretsManager internal constructor(
     fun getMT5InvestorPassword(): String = prefs.getString(MT5_INVESTOR_PW, "") ?: ""
     fun getMT5AccountNumber(): String  = prefs.getString(MT5_AC,  "") ?: ""
     fun getMT5BrokerServer(): String   = prefs.getString(MT5_SV,  "") ?: ""
-    fun getMT5AccountBalance(): Double = prefs.getString(MT5_BALANCE, "0.0")?.toDoubleOrNull() ?: 0.0
+    @Deprecated("Manual stored balances are not broker evidence; use a fresh verified account snapshot.")
+    fun getMT5AccountBalance(): Double = 0.0
     fun getMT5AccountType(): String    = prefs.getString(MT5_ACCOUNT_TYPE, "Demo") ?: "Demo"
     fun getMT5Leverage(): Int          = prefs.getInt(MT5_LEVERAGE, 0)
     fun getMT5SessionStatus(): String  = prefs.getString(MT5_SESSION_STATUS, "DISCONNECTED") ?: "DISCONNECTED"
@@ -565,12 +1345,15 @@ class SecretsManager internal constructor(
     fun getMT5LastLoginMs(): Long      = prefs.getLong(MT5_LAST_LOGIN_MS, 0L)
     fun getOandaApiKey(): String       = prefs.getString(OANDA_KEY, "") ?: ""
     fun getOandaAccountId(): String    = prefs.getString(OANDA_ACC, "") ?: ""
-    fun getConfiguredEquity(): Double  = prefs.getString(CONFIGURED_EQUITY, "0.0")?.toDoubleOrNull() ?: 0.0
     fun getSelectedStrategy(): String  = prefs.getString(SELECTED_STRATEGY, "smc-confluence-1.0.0") ?: "smc-confluence-1.0.0"
 
 
     fun hasCredentials() = getMT5AccountNumber().isNotBlank()
     fun clearAll()       { invalidateDerivRealAuthorization(); prefs.edit().clear().apply() }
+
+    private fun sha256Hex(value: String): String =
+        MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     fun getBrokerSymbolOverrides(): Map<String, String> {
         val jsonStr = prefs.getString(BROKER_SYMBOL_OVERRIDES, "") ?: ""

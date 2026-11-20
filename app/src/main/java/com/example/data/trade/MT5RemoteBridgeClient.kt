@@ -1,6 +1,12 @@
 package com.example.data.trade
 
 import com.example.security.SecretsManager
+import com.example.data.broker.ModeArmingPolicy
+import com.example.data.broker.ModeAccountIdentity
+import com.example.data.broker.ModePath
+import com.example.data.broker.AccountMode
+import com.example.data.broker.HostProfile
+import com.example.data.broker.ModeReadOnlyVerification
 import com.destinedfx.core.strategy.StrategyRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,30 +25,154 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** Android control/status client for the remote MT5 relay. Never places orders. */
+data class VerifiedBrokerQuote(
+    val symbol: String,
+    val bid: Double,
+    val ask: Double,
+    val digits: Int,
+    val timestampMs: Long,
+    val ageMs: Long,
+    val source: String = "MT5_TERMINAL"
+)
+
+/** Parses only finite, two-sided, fresh quotes returned by the account-bound terminal heartbeat. */
+internal fun parseVerifiedBrokerQuotes(
+    rows: org.json.JSONArray?,
+    nowMs: Long,
+    maxAgeMs: Long = 15_000L
+): List<VerifiedBrokerQuote>? {
+    if (rows == null) return null
+    if (nowMs <= 0L || maxAgeMs <= 0L) return emptyList()
+    val accepted = mutableListOf<VerifiedBrokerQuote>()
+    val seen = mutableSetOf<String>()
+    for (index in 0 until rows.length()) {
+        val row = rows.optJSONObject(index) ?: continue
+        val symbol = row.optString("symbol").trim()
+        val bid = row.optDouble("bid", Double.NaN)
+        val ask = row.optDouble("ask", Double.NaN)
+        val digits = row.optInt("digits", 5)
+        val timestampMs = row.optLong("timestamp_ms", 0L)
+        val rawAgeMs = nowMs - timestampMs
+        val ageMs = rawAgeMs.coerceAtLeast(0L)
+        val key = symbol.uppercase(java.util.Locale.ROOT)
+        if (symbol.isBlank() || symbol.any { it.code < 32 || it.code == 127 } ||
+            !bid.isFinite() || !ask.isFinite() || bid <= 0.0 || ask < bid ||
+            digits !in 0..12 || timestampMs <= 0L || rawAgeMs < -3_000L ||
+            rawAgeMs > maxAgeMs || !seen.add(key)) {
+            continue
+        }
+        accepted += VerifiedBrokerQuote(symbol, bid, ask, digits, timestampMs, ageMs)
+    }
+    return accepted
+}
+
+/**
+ * Missing or unknown isolation metadata must never be interpreted as a usable terminal host.
+ * WORKER_ATTESTATION_REQUIRED is a known non-Linux worker path; BLOCKED and unknown values fail closed.
+ */
+internal fun isManagedTerminalIsolationStatusAccepted(isolationStatus: String): Boolean =
+    isolationStatus.trim().uppercase(Locale.ROOT) in
+        setOf("VERIFIED", "WORKER_ATTESTATION_REQUIRED")
+
 class MT5RemoteBridgeClient(
     private val secrets: SecretsManager,
-    profile: String = "DEMO",
+    profile: String,
     private val sensitiveActionAuthorized: () -> Boolean = { false },
-    accountMode: String = profile,
-    brokerBrand: String = "FBS"
-) {
-    /** Local secure-storage namespace, e.g. FBS_DEMO or EXNESS_LIVE. */
+    accountMode: String,
+    brokerBrand: String,
+    private val modeArmingPolicy: ModeArmingPolicy? = null,
+    private val managementIdentityAssertionProvider: (suspend () -> String)? = null
+) : MT5ManagedAccountGateway {
+    override suspend fun registerManagedAccount(login: MT5ManagedAccountLogin): Snapshot {
+        require(login.brokerBrand == brokerBrand && login.accountMode == accountMode) {
+            "Managed login request does not match this broker-qualified profile."
+        }
+        return registerManagedAccount(
+            login = login.login,
+            password = login.password,
+            server = login.server,
+            accessType = login.accessType,
+            consent = true,
+            savePasswordLocally = login.savePasswordLocally,
+            ownerBootstrapCode = login.ownerBootstrapCode
+        )
+    }
+
+    /** Public liveness metadata is readable before pairing; do not call authenticated /state to learn host type. */
+    override suspend fun hostProfile(): HostProfile = hostLifecycle().hostProfile
+
+    /** Reads the Codespaces hard lifetime independently from its resettable idle timeout. */
+    suspend fun hostLifecycle(): HostLifecycle = withContext(Dispatchers.IO) {
+        val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException("CONFIGURATION_REQUIRED")
+        val req = Request.Builder().url(base + "/health").header("Accept", "application/json")
+            .apply { addOptionalAccessHeaders(this) }.get().build()
+        http.newCall(req).execute().use { response ->
+            val body = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrElse { JSONObject() }
+            if (!response.isSuccessful || body.optString("status") != "ok") {
+                throw BridgeHttpException(response.code, "HOST_STATUS_UNAVAILABLE")
+            }
+            val hostProfile = when (body.optString("host_profile").uppercase()) {
+                "PERSISTENT" -> HostProfile.PERSISTENT
+                "EPHEMERAL" -> HostProfile.EPHEMERAL
+                else -> HostProfile.EPHEMERAL
+            }
+            HostLifecycle(
+                hostProfile = hostProfile,
+                lifecycleStatus = body.optString("host_lifecycle_status", "UNKNOWN"),
+                maxLifetimeSeconds = body.optLong("max_lifetime_seconds").takeIf { it > 0L },
+                warningSeconds = body.optLong("host_warning_seconds", 3600L).coerceAtLeast(0L),
+                emergencyStopLeadSeconds = body.optLong("host_emergency_stop_lead_seconds", 600L).coerceAtLeast(0L),
+                expiryAtEpochSeconds = body.optLong("host_expiry_at_epoch_seconds").takeIf { it > 0L },
+                remainingSeconds = if (body.has("host_remaining_seconds") && !body.isNull("host_remaining_seconds"))
+                    body.optLong("host_remaining_seconds").coerceAtLeast(0L) else null,
+                shutdownPending = body.optBoolean("host_shutdown_pending", false)
+            )
+        }
+    }
+
+    /** Legacy mode-keyed storage namespace; neutral identity migration is still pending. */
     val profile: String = profile.trim().uppercase().also {
         require(it.matches(Regex("[A-Z0-9_-]{1,80}"))) { "Invalid broker account profile key." }
     }
-    /** Actual broker account mode remains DEMO or LIVE, independent of the local namespace. */
+    /** Legacy connection hint required by callers; only fresh terminal reports establish account mode. */
     val accountMode: String = accountMode.trim().uppercase().also {
         require(it == "DEMO" || it == "LIVE") { "Account mode must be DEMO or LIVE." }
     }
     val brokerBrand: String = brokerBrand.trim().uppercase().also {
         require(it in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
     }
+    init { require(this.profile == "${this.brokerBrand}_${this.accountMode}") { "MT5 profile must be the explicit broker/mode slot." } }
     private val http = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS)
-        .writeTimeout(5, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
+        .writeTimeout(5, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS)
+        .addInterceptor(BridgeGateway.interceptor).build()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
-    data class Pairing(val code: String, val expiresAt: String)
+    data class Pairing(val pairingId: String, val code: String, val expiresAt: String)
+    data class DemoAcceptance(
+        val acceptanceId: String,
+        val pairingId: String,
+        val identity: ModeAccountIdentity,
+        val acceptedAtMs: Long,
+        val expiresAtMs: Long,
+        val evidenceDigest: String
+    )
+    data class LiveChallenge(val pairingId: String, val challengeId: String, val typedConfirmation: String, val expiresAt: String)
+    data class ServiceReadiness(
+        val httpReachable: Boolean, val httpStatus: Int?, val serviceStatus: String,
+        val database: String, val managedExecution: String, val errorCode: String = "",
+        val perUserTerminalIsolation: String = "unknown"
+    )
+    data class HostLifecycle(
+        val hostProfile: HostProfile,
+        val lifecycleStatus: String,
+        val maxLifetimeSeconds: Long?,
+        val warningSeconds: Long,
+        val emergencyStopLeadSeconds: Long,
+        val expiryAtEpochSeconds: Long?,
+        val remainingSeconds: Long?,
+        val shutdownPending: Boolean
+    )
     data class CommandResult(
         val requestId: String, val queued: Boolean, val detail: String = "", val rejected: Boolean = false,
         val serverCommandId: String = "", val status: String = "",
@@ -50,15 +180,17 @@ class MT5RemoteBridgeClient(
     )
     data class CloseAllConfirmation(val token: String, val expiresAt: String, val tickets: List<String>)
     data class Snapshot(
-        val managedState: String, val accessType: String, val profileMode: String,
+        val hostProfile: HostProfile = HostProfile.EPHEMERAL,
+        val managedState: String, val workerStatus: String = "UNKNOWN", val accessType: String, val profileMode: String,
         val connected: Boolean, val terminalOnline: Boolean, val heartbeatFresh: Boolean,
         val state: String, val account: String, val actualLogin: String, val actualServer: String,
         val actualAccountMode: String, val liveAuthorized: Boolean, val tradeAllowed: Boolean,
-        val terminalConnected: Boolean, val accountVerified: Boolean,
+        val terminalConnected: Boolean, val accountVerified: Boolean, val brokerIdentityVerified: Boolean,
         val currency: String, val balance: Double?, val equity: Double?,
         val margin: Double?, val freeMargin: Double?, val marginLevel: Double?, val leverage: Int?,
         val positions: List<JSONObject>?, val activeOrders: List<JSONObject>?, val closedDeals: List<JSONObject>?,
-        val snapshotsValid: Boolean, val lastSignal: JSONObject?, val newsVerdict: JSONObject?, val raw: JSONObject
+        val snapshotsValid: Boolean, val lastSignal: JSONObject?, val newsVerdict: JSONObject?, val raw: JSONObject,
+        val brokerQuotes: List<VerifiedBrokerQuote>? = null
     )
 
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
@@ -67,8 +199,55 @@ class MT5RemoteBridgeClient(
     fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
     fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
     fun hasPairing(): Boolean = secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()
+    /** Pre-login configuration check. Unlike /health/ready, this does not require a paired terminal heartbeat. */
+    suspend fun checkServiceConfiguration(): ServiceReadiness = withContext(Dispatchers.IO) {
+        val base = validateBaseUrl(baseUrl()) ?: return@withContext ServiceReadiness(false, null, "CONFIGURATION_REQUIRED", "unknown", "unknown")
+        val req = Request.Builder().url(base + "/health/config").header("Accept", "application/json")
+            .apply { addOptionalAccessHeaders(this) }.get().build()
+        try {
+            http.newCall(req).execute().use { response ->
+                val body = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrElse { JSONObject() }
+                val detail = body.optJSONObject("detail")
+                ServiceReadiness(
+                    httpReachable = true,
+                    httpStatus = response.code,
+                    serviceStatus = body.optString("status", if (response.isSuccessful) "unknown" else "not_configured"),
+                    database = body.optString("database", "unknown"),
+                    managedExecution = body.optString("managed_execution", "unknown"),
+                    errorCode = detail?.optString("code").orEmpty(),
+                    perUserTerminalIsolation = body.optString("per_user_terminal_isolation", "unknown")
+                )
+            }
+        } catch (e: BridgeGatewayException) {
+            ServiceReadiness(false, null, e.failure.name, "unknown", "unknown", e.failure.name)
+        } catch (_: Exception) {
+            ServiceReadiness(false, null, "unreachable", "unknown", "unknown")
+        }
+    }
 
-    /** Registers one mode-scoped pairing. The bridge stores broker credentials encrypted; this client never logs them. */
+    /** Probes service readiness independently of any paired account or terminal. HTTP 200 alone is not trading readiness. */
+    suspend fun checkServiceReadiness(): ServiceReadiness = withContext(Dispatchers.IO) {
+        val base = validateBaseUrl(baseUrl()) ?: return@withContext ServiceReadiness(false, null, "CONFIGURATION_REQUIRED", "unknown", "unknown")
+        val req = Request.Builder().url(base + "/health/ready").header("Accept", "application/json")
+            .apply { addOptionalAccessHeaders(this) }.get().build()
+        try {
+            http.newCall(req).execute().use { response ->
+                val body = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrElse { JSONObject() }
+                val detail = body.optJSONObject("detail")
+                ServiceReadiness(
+                    httpReachable = true, httpStatus = response.code,
+                    serviceStatus = body.optString("status", if (response.isSuccessful) "unknown" else "not_ready"),
+                    database = body.optString("database", "unknown"),
+                    managedExecution = body.optString("managed_execution", "unknown"),
+                    errorCode = detail?.optString("code").orEmpty()
+                )
+            }
+        } catch (e: BridgeGatewayException) {
+            ServiceReadiness(false, null, e.failure.name, "unknown", "unknown", e.failure.name)
+        } catch (_: Exception) { ServiceReadiness(false, null, "unreachable", "unknown", "unknown") }
+    }
+
+    /** Registers the credential identity; terminal-reported mode is resolved by the bridge after claim. */
     suspend fun registerManagedAccount(
         login: String,
         password: String,
@@ -78,10 +257,24 @@ class MT5RemoteBridgeClient(
         savePasswordLocally: Boolean = false,
         costModel: String = "OBSERVED_ROUND_TURN",
         commissionPerLot: Double = 0.0,
-        costEvidence: String = ""
+        costEvidence: String = "",
+        ownerBootstrapCode: String = ""
     ): Snapshot {
         check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; managed account registration was not attempted." }
         require(managedConfigured()) { "CONFIGURATION_REQUIRED" }
+        val managementIdentityAssertion = managementIdentityAssertionProvider?.invoke().orEmpty()
+        require(managementIdentityAssertion.length >= 100) {
+            "MANAGEMENT_SIGN_IN_REQUIRED: sign in to the DestinedFX management account before registering broker credentials."
+        }
+        val serviceConfiguration = checkServiceConfiguration()
+        require(
+            serviceConfiguration.httpReachable && serviceConfiguration.httpStatus == 200 &&
+                serviceConfiguration.serviceStatus == "configured" &&
+                serviceConfiguration.database == "ok" && serviceConfiguration.managedExecution == "configured"
+        ) { "SERVICE_CONFIGURATION_NOT_READY: the managed bridge database and execution configuration must be ready before broker credentials are submitted." }
+        require(isManagedTerminalIsolationStatusAccepted(serviceConfiguration.perUserTerminalIsolation)) {
+            "PER_USER_TERMINAL_ISOLATION_REQUIRED: this host has not attested an accepted per-user MT5 terminal-isolation path. Broker credentials were not submitted."
+        }
         require(accessType == "MASTER" || accessType == "INVESTOR")
         require(brokerBrand in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
         require(consent) { "Explicit consent is required before sending broker credentials." }
@@ -96,27 +289,88 @@ class MT5RemoteBridgeClient(
             "ZERO_COMMISSION_SPREAD_ONLY" -> require(commissionPerLot == 0.0 && evidence.length >= 8) { "Zero-commission mode requires a broker pricing reference; the EA will calculate spread and slippage costs live." }
         else -> require(commissionPerLot > 0.0 && evidence.length >= 8) { "Configured commission requires a positive account-currency amount per standard lot and a broker pricing reference." }
         }
+        val previousLogin = secrets.getManagedMT5AccountLogin(profile)
+        val previousServer = secrets.getManagedMT5AccountServer(profile)
+        val previousGeneration = secrets.getManagedMT5CredentialGeneration(profile)
         check(secrets.saveManagedMT5AccountProfile(profile, login.trim(), server, accessType, password, savePasswordLocally)) {
             "Managed MT5 profile could not be durably saved in encrypted storage; no credentials were submitted."
         }
-        if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) pair()
+        val nextGeneration = secrets.getManagedMT5CredentialGeneration(profile)
+        val modePath = when (brokerBrand) {
+            "FBS" -> ModePath.FBS_MT5
+            "EXNESS" -> ModePath.EXNESS_MT5
+            "HFM" -> ModePath.HFM_MT5
+            "DERIV" -> ModePath.DERIV_MT5
+            else -> throw IllegalStateException("Unsupported MT5 broker brand")
+        }
+        if (previousGeneration.isNotBlank() && previousGeneration != nextGeneration) {
+            if (accountMode == "DEMO" && previousLogin.isNotBlank() && previousServer.isNotBlank()) {
+                secrets.clearPathDemoAcceptance(
+                    ModeAccountIdentity(modePath, brokerBrand, previousLogin, previousServer, AccountMode.DEMO, previousGeneration)
+                )
+            }
+            modeArmingPolicy?.onCredentialChanged(modePath, brokerBrand, previousLogin.ifBlank { login.trim() })
+        }
+        if (previousLogin.isNotBlank() && previousLogin != login.trim()) {
+            modeArmingPolicy?.onAccountSwitch(modePath, brokerBrand, login.trim())
+        }
+        if (secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()) {
+            val existing = state()
+            if (!existing.raw.optBoolean("management_identity_bound", false)) {
+                revoke()
+            }
+        }
+        if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) {
+            pair(ownerBootstrapCode, managementIdentityAssertion)
+        }
         val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
-            .put("access_type", accessType).put("account_mode", accountMode).put("broker_brand", brokerBrand).put("consent", consent)
+            .put("access_type", accessType).put("broker_brand", brokerBrand).put("consent", consent)
+            .put("account_mode", accountMode)
+            .put("credential_generation", nextGeneration)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
-        request("POST", "/v1/app/managed-account", payload)
+        request("POST", "/v1/app/managed-account", payload,
+            managementIdentityAssertion = managementIdentityAssertion)
         return state()
     }
 
-    suspend fun pair(): Pairing {
+    suspend fun pair(ownerBootstrapCode: String = "", managementIdentityAssertion: String = ""): Pairing {
         check(secrets.isSecureStorageAvailable) { "Secure storage is unavailable; pairing request was not sent." }
-        val body = request("POST", "/v1/pairings", JSONObject())
+        require(managementIdentityAssertion.length >= 100) {
+            "MANAGEMENT_SIGN_IN_REQUIRED: a signed management identity assertion is required for MT5 pairing."
+        }
+        var bootstrap = ownerBootstrapCode.trim()
+        require(bootstrap.length <= 200 && bootstrap.none { it.code < 32 || it.code == 127 }) {
+            "Invalid owner bootstrap code."
+        }
+        // Public Codespaces mode requires a one-use owner code. Obtain it over HTTPS using
+        // the same short-lived signed management identity; do not ask users to copy codes
+        // from a Codespaces terminal or persist the code on the device.
+        if (bootstrap.isBlank()) {
+            val host = request("GET", "/health", includeAppAuthorization = false)
+            if (host.optBoolean("public_exposure", false)) {
+                val issued = request(
+                    "POST", "/v1/owner/bootstrap-code", JSONObject(),
+                    managementIdentityAssertion = managementIdentityAssertion,
+                    includeAppAuthorization = false
+                )
+                bootstrap = issued.optString("owner_bootstrap_code")
+                require(bootstrap.isNotBlank()) { "Bridge did not issue a one-time pairing bootstrap code." }
+            }
+        }
+        val body = request(
+            "POST", "/v1/pairings", JSONObject(),
+            ownerBootstrapCode = bootstrap.takeIf { it.isNotEmpty() },
+            managementIdentityAssertion = managementIdentityAssertion.takeIf { it.isNotBlank() }
+        )
         val code = body.optString("pairing_code"); val token = body.optString("app_token")
         require(code.isNotBlank() && token.isNotBlank()) { "Bridge returned an incomplete pairing response." }
+        val pairingId = body.optString("pairing_id")
+        require(pairingId.isNotBlank()) { "Bridge returned an incomplete pairing identity." }
         check(secrets.saveMT5BridgeAccountAppToken(profile, token)) { "Bridge app token could not be durably stored in encrypted preferences." }
-        return Pairing(code, body.optString("expires_at"))
+        return Pairing(pairingId, code, body.optString("expires_at"))
     }
 
-    suspend fun state(): Snapshot {
+    override suspend fun state(): Snapshot {
         val obj = request("GET", "/v1/app/state")
         val account = obj.optJSONObject("account")
         val managed = obj.optJSONObject("managed_execution")
@@ -129,7 +383,7 @@ class MT5RemoteBridgeClient(
         val actualServer = account?.optString("server").orEmpty()
         val actualMode = account?.optString("account_mode").orEmpty().uppercase()
         val verified = obj.optBoolean("account_identity_verified", false) && actualLogin.isNotBlank() &&
-            actualServer.isNotBlank() && actualMode in setOf("DEMO", "LIVE")
+            actualServer.isNotBlank() && actualMode in setOf("DEMO", "LIVE") && actualMode == accountMode
         fun array(key: String): List<JSONObject>? {
             val a = obj.optJSONArray(key) ?: return null
             val out = mutableListOf<JSONObject>()
@@ -140,22 +394,77 @@ class MT5RemoteBridgeClient(
             }
             return out
         }
+        val brokerQuotes = parseVerifiedBrokerQuotes(
+            obj.optJSONArray("broker_quotes"),
+            System.currentTimeMillis(),
+            obj.optLong("broker_quote_stale_ms", 15_000L).coerceIn(1L, 15_000L)
+        )
         val managedState = managed?.let { it.optString("status", it.optString("state", "")) }.orEmpty().uppercase()
+        val workerStatus = managed?.optString("worker_status", "UNKNOWN").orEmpty().uppercase()
         val access = managed?.optString("access_type", "").orEmpty().uppercase()
         val mode = managed?.optString("account_mode", "").orEmpty().uppercase()
+        val hostProfile = when (obj.optString("BRIDGE_HOST_PROFILE", obj.optString("host_profile")).uppercase()) {
+            "PERSISTENT" -> HostProfile.PERSISTENT
+            "EPHEMERAL" -> HostProfile.EPHEMERAL
+            else -> HostProfile.EPHEMERAL
+        }
         return Snapshot(
-            managedState, access, mode, true, online, freshness,
+            hostProfile, managedState, workerStatus, access, mode, online && terminalConnected && verified && actualMode == accountMode, online, freshness,
             when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
             actualMode, managed?.optBoolean("live_authorized", false) == true,
             obj.optBoolean("trade_allowed", false), terminalConnected, verified,
+            managed?.optBoolean("broker_identity_verified", obj.optBoolean("broker_identity_verified", false)) == true,
             account?.optString("currency").orEmpty(), account?.let { finite(it, "balance") }, account?.let { finite(it, "equity") },
             account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
             account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
-            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj
+            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes
         )
     }
+
+    /** Owner-only preflight; no stop is queued until GitHub confirms the Codespaces action. */
+    suspend fun prepareHostStop(): JSONObject {
+        val identity = managementIdentityAssertionProvider?.invoke()
+            ?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Sign in to the DestinedFX management account before stopping the host.")
+        return request(
+            "POST",
+            "/v1/app/host/shutdown-safe",
+            JSONObject(),
+            managementIdentityAssertion = identity
+        )
+    }
+
+    /** Revokes a GitHub App user token through the owner-configured Bridge secret proxy. */
+    suspend fun revokeCodespacesGitHubAuthorization(accessToken: String): JSONObject {
+        require(accessToken.startsWith("ghu_") && accessToken.length <= 4096) {
+            "A GitHub App user access token is required for revocation."
+        }
+        val identity = managementIdentityAssertionProvider?.invoke()
+            ?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Sign in to the DestinedFX management account before revoking GitHub access.")
+        return request(
+            "POST",
+            "/v1/app/github/revoke",
+            JSONObject().put("access_token", accessToken),
+            managementIdentityAssertion = identity
+        )
+    }
+
+    suspend fun cancelHostStop(): JSONObject {
+        val identity = managementIdentityAssertionProvider?.invoke()
+            ?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Sign in to the DestinedFX management account before cancelling host shutdown.")
+        return request(
+            "POST",
+            "/v1/app/host/cancel-stop",
+            JSONObject(),
+            managementIdentityAssertion = identity
+        )
+    }
+
+    suspend fun hostStatus(): JSONObject = request("GET", "/v1/app/host/status")
 
     data class TradePage(val cursor: Int, val watermark: Double, val trades: List<JSONObject>)
 
@@ -174,6 +483,11 @@ class MT5RemoteBridgeClient(
         if (action in TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
             return CommandResult(requestId, false, "REAUTHENTICATION_REQUIRED: authenticate again before this trading action", rejected = true)
         }
+        if (action == "EMERGENCY_STOP") {
+            val policy = modeArmingPolicy
+                ?: return CommandResult(requestId, false, "MODE_POLICY_NOT_CONFIGURED: cannot confirm local disarming", rejected = true)
+            policy.emergencyStop()
+        }
         if (action in TRADE_ACTIONS) {
             val fresh = try { state() } catch (e: Exception) {
                 return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
@@ -186,6 +500,35 @@ class MT5RemoteBridgeClient(
             }
             val reason = gateFailure(fresh, requireLiveAuthorization = action != "PAUSE")
             if (reason != null) return CommandResult(requestId, false, reason, rejected = true)
+            if (action == "START" || action == "RESUME") {
+                val policy = modeArmingPolicy
+                    ?: return CommandResult(requestId, false, "MODE_POLICY_NOT_CONFIGURED: trading start is blocked", rejected = true)
+                val identity = modeIdentity(fresh)
+                if (!identity.isValid() || identity.mode.name != accountMode || identity.broker != brokerBrand ||
+                    identity.accountId != secrets.getManagedMT5AccountLogin(profile) ||
+                    identity.server != secrets.getManagedMT5AccountServer(profile)) {
+                    return CommandResult(requestId, false, "MODE_ARMING_BLOCKED: selected MT5 mode/account identity does not match fresh terminal evidence", rejected = true)
+                }
+                val evidence = ModeReadOnlyVerification(
+                    identity = identity,
+                    checkedAtMs = System.currentTimeMillis(),
+                    authenticatedSession = fresh.connected && fresh.terminalConnected,
+                    freshAccountData = fresh.snapshotsValid,
+                    freshQuote = false,
+                    freshHeartbeat = fresh.heartbeatFresh,
+                    accountIdentityMatched = fresh.accountVerified && fresh.brokerIdentityVerified &&
+                        fresh.actualLogin == secrets.getManagedMT5AccountLogin(profile) &&
+                        fresh.actualServer == secrets.getManagedMT5AccountServer(profile) &&
+                        fresh.actualAccountMode == accountMode
+                )
+                val decision = if (accountMode == "DEMO") {
+                    policy.demoDecision(identity, evidence, secrets.getPathDemoAcceptance(identity),
+                        secrets.getManagedMT5CredentialGeneration(profile))
+                } else policy.liveDecision(identity, hostProfile = fresh.hostProfile)
+                if (!decision.allowed) {
+                    return CommandResult(requestId, false, "MODE_ARMING_BLOCKED: " + decision.reason, rejected = true)
+                }
+            }
         }
         if (action == "START") {
             if (config.optString("strategy") !in StrategyRegistry.managedStrategyIds) return CommandResult(requestId, false, "START requires a registered managed strategy.", rejected = true)
@@ -286,14 +629,215 @@ class MT5RemoteBridgeClient(
         }
     }
 
-    suspend fun authorizeLiveSession(): String {
+    private fun modeIdentity(snapshot: Snapshot): ModeAccountIdentity {
+        val path = when (brokerBrand) {
+            "FBS" -> ModePath.FBS_MT5
+            "EXNESS" -> ModePath.EXNESS_MT5
+            "HFM" -> ModePath.HFM_MT5
+            "DERIV" -> ModePath.DERIV_MT5
+            else -> throw IllegalStateException("Unsupported MT5 broker brand")
+        }
+        return ModeAccountIdentity(
+            path = path, broker = brokerBrand, accountId = snapshot.actualLogin, server = snapshot.actualServer,
+            mode = if (accountMode == "DEMO") AccountMode.DEMO else AccountMode.LIVE,
+            credentialGeneration = secrets.getManagedMT5CredentialGeneration(profile)
+        )
+    }
+
+    /** Returns the pairing identity reported by the Bridge for this exact broker/mode slot. */
+    suspend fun pairingId(): String {
+        val id = state().raw.optString("pairing_id")
+        require(id.isNotBlank()) { "Bridge did not return this profile's pairing identity." }
+        return id
+    }
+
+    /** Records validated, broker-specific DEMO PASS evidence at the Bridge for this exact DEMO pairing. */
+    suspend fun acceptDemo(evidenceDigest: String, evidenceDocument: String): DemoAcceptance {
+        require(accountMode == "DEMO") { "DEMO acceptance can only be recorded by the DEMO profile." }
+        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate before accepting this DEMO profile." }
+        require(evidenceDocument.isNotBlank() && evidenceDocument.toByteArray(Charsets.UTF_8).size in 1..65536) {
+            "The original DEMO PASS document is required and must be at most 64 KiB."
+        }
+        val documentDigest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(evidenceDocument.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        require(evidenceDigest.equals(documentDigest, ignoreCase = true)) {
+            "The DEMO PASS document changed after its original file digest was calculated."
+        }
+        val fresh = state()
+        require(fresh.hostProfile == HostProfile.PERSISTENT &&
+            fresh.managedState == "READY" && fresh.workerStatus == "READY" &&
+            fresh.accountVerified && fresh.brokerIdentityVerified && fresh.heartbeatFresh &&
+            fresh.actualAccountMode == "DEMO" && fresh.accessType == "MASTER"
+        ) { "DEMO_ACCEPTANCE_BLOCKED: a fresh identity-matched MASTER DEMO terminal is required." }
+        val managementIdentity = managementIdentityAssertionProvider?.invoke().orEmpty()
+        require(managementIdentity.length >= 100) {
+            "MANAGEMENT_SIGN_IN_REQUIRED: sign in again before accepting this DEMO profile."
+        }
+        val result = request("POST", "/v1/app/demo-acceptance", JSONObject()
+            .put("confirm_demo", true)
+            .put("evidence_document", evidenceDocument),
+            managementIdentityAssertion = managementIdentity)
+        val accepted = requireNotNull(demoAcceptance()) {
+            "Bridge DEMO acceptance could not be read back after it was recorded."
+        }
+        require(accepted.acceptanceId == result.optString("acceptance_id") &&
+            accepted.identity.accountId == fresh.actualLogin &&
+            accepted.identity.server == fresh.actualServer &&
+            accepted.identity.credentialGeneration == secrets.getManagedMT5CredentialGeneration(profile) &&
+            accepted.evidenceDigest.equals(evidenceDigest, ignoreCase = true)
+        ) { "Bridge DEMO acceptance did not match the exact current account, credential generation and PASS digest." }
+        return accepted
+    }
+
+    /** Reads and validates the current server-side acceptance for this exact DEMO pairing. */
+    suspend fun demoAcceptance(): DemoAcceptance? {
+        require(accountMode == "DEMO") { "DEMO acceptance can only be read from a DEMO profile." }
+        val result = request("GET", "/v1/app/demo-acceptance")
+        if (!result.optBoolean("accepted", false)) return null
+        val pairingId = result.optString("pairing_id")
+        val acceptanceId = result.optString("id")
+        val brand = result.optString("broker_brand").uppercase()
+        val login = result.optString("login")
+        val server = result.optString("server")
+        val mode = result.optString("account_mode").uppercase()
+        val generation = result.optString("credential_generation")
+        val digest = result.optString("pass_evidence_digest").lowercase()
+        val acceptedAt = parseServerTimeMillis(result.optString("accepted_at"))
+        val expiresAt = parseServerTimeMillis(result.optString("expires_at"))
+        val path = modePath(brand) ?: return null
+        val identity = ModeAccountIdentity(
+            path, brand, login, server, AccountMode.DEMO, generation
+        )
+        if (pairingId.isBlank() || acceptanceId.isBlank() || mode != "DEMO" ||
+            !identity.isValid() || acceptedAt <= 0L || expiresAt <= System.currentTimeMillis() ||
+            !digest.matches(Regex("[0-9a-f]{64}")) ||
+            brand != brokerBrand || generation != secrets.getManagedMT5CredentialGeneration(profile) ||
+            login != secrets.getManagedMT5AccountLogin(profile) ||
+            server != secrets.getManagedMT5AccountServer(profile)
+        ) return null
+        return DemoAcceptance(acceptanceId, pairingId, identity, acceptedAt, expiresAt, digest)
+    }
+
+    /**
+     * Links this LIVE pairing to a different DEMO pairing. The Bridge independently checks
+     * signed tenant ownership, broker, both account identities and DEMO worker/credential generations.
+     */
+    suspend fun associateDemoProfile(
+        demoPairingId: String,
+        acceptance: DemoAcceptance
+    ): com.example.data.broker.VerifiedDemoProfileAssociation {
+        require(accountMode == "LIVE") { "DEMO association must be initiated from the LIVE profile." }
+        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate before linking account profiles." }
+        require(demoPairingId.isNotBlank() && acceptance.pairingId == demoPairingId &&
+            acceptance.identity.mode == AccountMode.DEMO &&
+            acceptance.identity.broker.equals(brokerBrand, ignoreCase = true) &&
+            acceptance.expiresAtMs > System.currentTimeMillis()
+        ) { "DEMO_PROFILE_ASSOCIATION_INVALID: the DEMO acceptance does not match the selected broker profile." }
+        val fresh = state()
+        require(fresh.hostProfile == HostProfile.PERSISTENT &&
+            fresh.managedState == "READY" && fresh.workerStatus == "READY" &&
+            fresh.accountVerified && fresh.brokerIdentityVerified && fresh.heartbeatFresh &&
+            fresh.actualAccountMode == "LIVE" && fresh.accessType == "MASTER"
+        ) { "LIVE_PROFILE_NOT_READY: fresh identity-matched MASTER LIVE terminal evidence is required." }
+        val livePairingId = fresh.raw.optString("pairing_id")
+        require(livePairingId.isNotBlank() && livePairingId != demoPairingId) {
+            "DEMO and LIVE must be independently paired profiles."
+        }
+        val managementIdentity = managementIdentityAssertionProvider?.invoke().orEmpty()
+        require(managementIdentity.length >= 100) {
+            "MANAGEMENT_SIGN_IN_REQUIRED: sign in again before linking DEMO and LIVE profiles."
+        }
+        val result = request("POST", "/v1/app/live-profile-association", JSONObject()
+            .put("demo_pairing_id", demoPairingId)
+            .put("demo_acceptance_id", acceptance.acceptanceId)
+            .put("confirm_association", true),
+            managementIdentityAssertion = managementIdentity)
+        val associatedAt = parseServerTimeMillis(result.optString("associated_at"))
+        val expiresAt = parseServerTimeMillis(result.optString("expires_at"))
+        val proof = com.example.data.broker.VerifiedDemoProfileAssociation(
+            demoIdentity = acceptance.identity,
+            liveIdentity = modeIdentity(fresh),
+            demoPairingId = result.optString("demo_pairing_id"),
+            livePairingId = result.optString("live_pairing_id"),
+            associatedAtMs = associatedAt,
+            expiresAtMs = expiresAt,
+            evidenceDigest = result.optString("evidence_digest").lowercase()
+        )
+        val localAcceptance = com.example.data.broker.ModeDemoAcceptance(
+            acceptance.identity, acceptance.acceptedAtMs, acceptance.evidenceDigest
+        )
+        require(result.optBoolean("associated", false) &&
+            proof.demoPairingId == demoPairingId && proof.livePairingId == livePairingId &&
+            result.optString("demo_acceptance_id") == acceptance.acceptanceId &&
+            result.optString("broker_brand").equals(brokerBrand, ignoreCase = true) &&
+            result.optString("demo_login") == acceptance.identity.accountId &&
+            result.optString("demo_server") == acceptance.identity.server &&
+            result.optString("demo_credential_generation") == acceptance.identity.credentialGeneration &&
+            result.optString("live_login") == fresh.actualLogin &&
+            result.optString("live_server") == fresh.actualServer &&
+            result.optString("live_credential_generation") == secrets.getManagedMT5CredentialGeneration(profile) &&
+            proof.matches(localAcceptance, modeIdentity(fresh), System.currentTimeMillis())
+        ) { "Bridge rejected or returned an inconsistent DEMO-to-LIVE profile association." }
+        return proof
+    }
+
+    private fun modePath(brand: String): ModePath? = when (brand.uppercase()) {
+        "FBS" -> ModePath.FBS_MT5
+        "EXNESS" -> ModePath.EXNESS_MT5
+        "HFM" -> ModePath.HFM_MT5
+        "DERIV" -> ModePath.DERIV_MT5
+        else -> null
+    }
+
+    private fun parseServerTimeMillis(value: String): Long {
+        val match = Regex("""^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$""")
+            .matchEntire(value.trim()) ?: return 0L
+        val fraction = match.groupValues[2]
+        val millis = if (fraction.isBlank()) "" else "." + fraction.padEnd(3, '0').take(3)
+        val normalized = match.groupValues[1] + millis + match.groupValues[3]
+        val pattern = if (millis.isEmpty()) "yyyy-MM-dd'T'HH:mm:ssXXX" else "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"
+        return runCatching {
+            SimpleDateFormat(pattern, Locale.US).apply {
+                isLenient = false
+                timeZone = TimeZone.getTimeZone("UTC")
+            }.parse(normalized)?.time ?: 0L
+        }.getOrDefault(0L)
+    }
+
+    suspend fun liveChallenge(): LiveChallenge {
         require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
         require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
         val fresh = state()
+        require(fresh.hostProfile == HostProfile.PERSISTENT) { "MODE_ARMING_BLOCKED: EPHEMERAL_HOST_LIVE_BLOCKED" }
         val reason = gateFailure(fresh, requireLiveAuthorization = false)
         require(reason == null) { reason ?: "LIVE profile is not ready." }
-        val result = request("POST", "/v1/app/live-authorization", JSONObject().put("confirm_live_trading", true))
-        return result.optString("expires_at")
+        val result = request("POST", "/v1/app/live-challenge")
+        val pairingId = result.optString("pairing_id")
+        val challengeId = result.optString("challenge_id")
+        val phrase = result.optString("typed_confirmation")
+        val expiresAt = result.optString("expires_at")
+        require(pairingId.isNotBlank() && challengeId.isNotBlank() && phrase.isNotBlank() && expiresAt.isNotBlank()) {
+            "Bridge returned an incomplete LIVE challenge."
+        }
+        return LiveChallenge(pairingId, challengeId, phrase, expiresAt)
+    }
+
+    suspend fun authorizeLiveSession(
+        challengeId: String,
+        typedConfirmation: String,
+        stepUpAssertion: String
+    ): String {
+        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
+        require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
+        require(challengeId.isNotBlank() && typedConfirmation.isNotBlank() && stepUpAssertion.length >= 100) {
+            "LIVE authorization requires the server challenge, exact typed confirmation, and signed reauthentication."
+        }
+        val result = request("POST", "/v1/app/live-authorization", JSONObject()
+            .put("challenge_id", challengeId)
+            .put("typed_confirmation", typedConfirmation)
+            .put("step_up_assertion", stepUpAssertion))
+        return result.optString("expires_at").takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Bridge returned no LIVE lease expiry.")
     }
 
     suspend fun clearLiveAuthorization() {
@@ -311,10 +855,12 @@ class MT5RemoteBridgeClient(
         val expectedLogin = secrets.getManagedMT5AccountLogin(profile)
         val expectedServer = secrets.getManagedMT5AccountServer(profile)
         return when {
+            snapshot.hostProfile != HostProfile.PERSISTENT && accountMode == "LIVE" -> "EPHEMERAL_HOST_LIVE_BLOCKED"
             accountMode !in setOf("DEMO", "LIVE") -> "Selected account mode is not DEMO or LIVE."
             snapshot.profileMode != accountMode -> "Selected $brokerBrand $accountMode profile does not match the server-managed account mode."
             snapshot.accessType != "MASTER" -> "INVESTOR access is read-only and cannot execute trading commands."
             !snapshot.accountVerified -> "Broker-reported account identity is not verified by the bridge."
+            !snapshot.brokerIdentityVerified -> "BROKER IDENTITY UNCONFIRMED: terminal company/server do not match the selected broker."
             snapshot.actualAccountMode != accountMode -> "Connected terminal reports ${snapshot.actualAccountMode.ifBlank { "UNVERIFIED" }} mode, not $accountMode."
             expectedLogin.isBlank() || snapshot.actualLogin != expectedLogin -> "Connected terminal login does not exactly match the selected $brokerBrand $accountMode account."
             expectedServer.isBlank() || snapshot.actualServer != expectedServer -> "Connected terminal server does not exactly match the selected $brokerBrand $accountMode account."
@@ -328,10 +874,13 @@ class MT5RemoteBridgeClient(
         }
     }
 
-    private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun request(method: String, path: String, body: JSONObject? = null, ownerBootstrapCode: String? = null, managementIdentityAssertion: String? = null, includeAppAuthorization: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: throw IllegalStateException(if (!managedConfigured()) "CONFIGURATION_REQUIRED" else "Managed service URL is invalid; HTTPS is required.")
         val builder = Request.Builder().url(base.trimEnd('/') + path).header("Accept", "application/json")
-        secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
+        addOptionalAccessHeaders(builder)
+        addOwnerBootstrapHeader(builder, method, path, ownerBootstrapCode)
+        addManagementIdentityHeader(builder, method, path, managementIdentityAssertion)
+        if (includeAppAuthorization) secrets.getMT5BridgeAccountAppToken(profile).takeIf(String::isNotBlank)?.let { builder.header("Authorization", "Bearer $it") }
         when (method) { "GET" -> builder.get(); "DELETE" -> builder.delete(); else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(jsonType)) }
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty().take(256 * 1024)
@@ -340,7 +889,12 @@ class MT5RemoteBridgeClient(
                     val value = JSONObject(text).opt("detail")
                     if (value is JSONObject) value.optString("code", "") else value?.toString().orEmpty()
                 }.getOrDefault("")
-                val safe = detail.takeIf { it.matches(Regex("[A-Z0-9_]{1,64}")) } ?: "Bridge request failed (${response.code})."
+                val normalizedDetail = when (detail) {
+                    "Owner bootstrap code required" -> "OWNER_BOOTSTRAP_REQUIRED"
+                    "Management identity required", "MANAGEMENT_IDENTITY_REQUIRED", "MANAGEMENT_IDENTITY_NOT_CONFIGURED", "MANAGEMENT_IDENTITY_INVALID" -> "MANAGEMENT_SIGN_IN_REQUIRED"
+                    else -> detail
+                }
+                val safe = normalizedDetail.takeIf { it.matches(Regex("[A-Z0-9_]{1,64}")) } ?: "Bridge request failed (${response.code})."
                 throw BridgeHttpException(response.code, safe)
             }
             if (text.isBlank()) JSONObject() else try { JSONObject(text) } catch (_: Exception) { throw IllegalStateException("Bridge returned invalid JSON.") }
@@ -350,12 +904,56 @@ class MT5RemoteBridgeClient(
     private fun validateBaseUrl(raw: String): String? {
         return validServiceOrigin(raw)
     }
+    private fun addOptionalAccessHeaders(builder: Request.Builder) {
+        val clientId = secrets.getCloudflareAccessClientId()
+        val clientSecret = secrets.getCloudflareAccessClientSecret()
+        require(clientId.isBlank() == clientSecret.isBlank()) { "Cloudflare Access service-token ID and secret must be configured together." }
+        if (clientId.isNotBlank()) {
+            builder.header("CF-Access-Client-Id", clientId)
+            builder.header("CF-Access-Client-Secret", clientSecret)
+        }
+    }
     private fun finite(obj: JSONObject, key: String): Double? = obj.optDouble(key).takeIf { it.isFinite() }
     private fun finiteInt(obj: JSONObject, key: String): Int? = obj.optInt(key).takeIf { it > 0 }
     private fun safeMessage(e: Exception) = (e as? BridgeHttpException)?.safeDescription ?: "No confirmed response; reconcile the same request before any recovery."
     class BridgeHttpException(val status: Int, val safeDescription: String) : Exception(safeDescription)
 
     companion object {
+        internal fun addOwnerBootstrapHeader(
+            builder: Request.Builder,
+            method: String,
+            path: String,
+            ownerBootstrapCode: String?
+        ) {
+            if (ownerBootstrapCode != null) {
+                require(method == "POST" && path == "/v1/pairings") {
+                    "Owner bootstrap is permitted only for initial pairing."
+                }
+                builder.header("X-Owner-Bootstrap", ownerBootstrapCode)
+            }
+        }
+
+        internal fun addManagementIdentityHeader(
+            builder: Request.Builder,
+            method: String,
+            path: String,
+            assertion: String?
+        ) {
+            if (assertion == null) return
+            require(method == "POST" && path in setOf(
+                "/v1/pairings",
+                "/v1/owner/bootstrap-code",
+                "/v1/app/managed-account",
+                "/v1/app/demo-acceptance",
+                "/v1/app/live-profile-association"
+            )) { "Management identity assertions are permitted only for pairing and owner-controlled profile changes." }
+            require(assertion.length in 100..8192 &&
+                assertion.matches(Regex("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"))) {
+                "A valid signed management identity assertion is required."
+            }
+            builder.header("X-Management-Identity", assertion)
+        }
+
         internal val TRADE_ACTIONS = setOf("CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")
         private val MAX_UINT64 = BigInteger("18446744073709551615")
 

@@ -26,12 +26,17 @@ class DerivBrokerGatewayAdapter(
     override val connectionStatus: StateFlow<BrokerConnectionStatus> = _connectionStatus.asStateFlow()
 
     override val accountMetrics: StateFlow<AccountMetrics?> = derivGateway.accountMetrics
+    private val _accountSnapshot = MutableStateFlow<BrokerAccountSnapshot?>(null)
+    override val accountSnapshot: StateFlow<BrokerAccountSnapshot?> = _accountSnapshot.asStateFlow()
     override val openPositions: StateFlow<List<Position>> = derivGateway.openPositions
 
     init {
         CoroutineScope(Dispatchers.IO).launch {
-            derivGateway.connectionState.collect { s ->
-                _connectionStatus.value = when (s) {
+            merge(
+                derivGateway.connectionState.map { Unit },
+                derivGateway.accountMetricsUpdatedAtMs.map { Unit }
+            ).collect {
+                _connectionStatus.value = when (val s = derivGateway.connectionState.value) {
                     DerivConnectionState.READY -> BrokerConnectionStatus.CONNECTED
                     DerivConnectionState.CONNECTED -> BrokerConnectionStatus.AUTHENTICATING
                     DerivConnectionState.CONNECTING -> BrokerConnectionStatus.CONNECTING
@@ -42,6 +47,27 @@ class DerivBrokerGatewayAdapter(
                     DerivConnectionState.ERROR -> BrokerConnectionStatus.ERROR
                     DerivConnectionState.RECONNECTING -> BrokerConnectionStatus.RECONNECTING
                     DerivConnectionState.DISCONNECTED -> BrokerConnectionStatus.DISCONNECTED
+                }
+                val status = _connectionStatus.value
+                val metrics = derivGateway.accountMetrics.value
+                val retrievedAtMs = derivGateway.accountMetricsUpdatedAtMs.value
+                val age = System.currentTimeMillis() - retrievedAtMs
+                _accountSnapshot.value = if (status == BrokerConnectionStatus.CONNECTED && metrics != null) {
+                    BrokerAccountSnapshot(
+                        providerId = "DERIV",
+                        origin = DataOrigin.BROKER_API,
+                        status = status,
+                        retrievedAtMs = retrievedAtMs,
+                        environment = derivGateway.accountInfo.value?.mode,
+                        currency = metrics.currency,
+                        balance = metrics.balance,
+                        equity = metrics.equity,
+                        margin = metrics.margin,
+                        freeMargin = metrics.freeMargin,
+                        validity = if (retrievedAtMs > 0L && age in 0..15_000L) DataValidity.FRESH else DataValidity.STALE
+                    )
+                } else {
+                    BrokerAccountSnapshot.unavailable("DERIV", status)
                 }
             }
         }

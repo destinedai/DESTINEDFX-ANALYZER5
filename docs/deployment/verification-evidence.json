@@ -1,0 +1,119 @@
+{
+  "schema": "destinedfx.verification-evidence.v1",
+  "source_commit": "fc007f06f15fa8dfab17fe4ab78a48c64030491c",
+  "recorded_at_utc": "2026-11-10T13:53:37Z",
+  "ci": [
+    {
+      "workflow": "Build APK",
+      "run_id": "42828697504",
+      "workflow_url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42828697504",
+      "job_result": "QUEUED",
+      "verification_status": "NOT_VERIFIED",
+      "artifact_reference": null,
+      "outstanding_issue": "Workflow has not completed."
+    },
+    {
+      "workflow": "Verify MT5 installer pins",
+      "run_id": "42828697597",
+      "workflow_url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42828697597",
+      "job_result": "QUEUED",
+      "verification_status": "NOT_VERIFIED",
+      "artifact_reference": null,
+      "outstanding_issue": "Workflow has not completed."
+    }
+  ],
+  "checks": [
+    {
+      "check": "source_implementation",
+      "verification_status": "IMPLEMENTED",
+      "workflow_run_id": null,
+      "workflow_url": null,
+      "job_result": null,
+      "artifact_reference": null,
+      "outstanding_issue": "Implementation exists at the exact source commit; runtime deployment is separate."
+    },
+    {
+      "check": "ci_tested",
+      "verification_status": "NOT_VERIFIED",
+      "workflow_run_id": "42828697504",
+      "workflow_url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42828697504",
+      "job_result": "QUEUED",
+      "artifact_reference": null,
+      "outstanding_issue": "Await exact-head CI completion."
+    },
+    {
+      "check": "artifact_generated",
+      "verification_status": "NOT_VERIFIED",
+      "workflow_run_id": "42828697504",
+      "workflow_url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42828697504",
+      "job_result": "QUEUED",
+      "artifact_reference": null,
+      "outstanding_issue": "APK and worker artifacts require a completed exact-head run."
+    },
+    {
+      "check": "deployment_recorded",
+      "verification_status": "NOT_VERIFIED",
+      "workflow_run_id": null,
+      "workflow_url": null,
+      "job_result": null,
+      "artifact_reference": null,
+      "outstanding_issue": "Owner must create and run the Codespace and return a redacted self-check report."
+    },
+    {
+      "check": "runtime_verified",
+      "verification_status": "NOT_VERIFIED",
+      "workflow_run_id": null,
+      "workflow_url": null,
+      "job_result": null,
+      "artifact_reference": null,
+      "outstanding_issue": "No owner-returned broker login, terminal heartbeat, DEMO acceptance, fill, or LIVE evidence."
+    }
+  ],
+  "rollout_stages": [
+    {
+      "stage": 1,
+      "name": "stack applied and host agent healthy with no broker",
+      "decision": "NO-GO",
+      "verification_status": "NOT_VERIFIED",
+      "owner_evidence_required": "Redacted first-run-check output from the owner Codespace."
+    },
+    {
+      "stage": 2,
+      "name": "INVESTOR read-only telemetry with identity-matched heartbeat",
+      "decision": "NO-GO",
+      "verification_status": "NOT_VERIFIED",
+      "owner_evidence_required": "Redacted account identity, server, mode, worker READY, and fresh heartbeat report."
+    },
+    {
+      "stage": 3,
+      "name": "one owner-approved DEMO order and full lifecycle",
+      "decision": "NO-GO",
+      "verification_status": "NOT_VERIFIED",
+      "owner_evidence_required": "Owner-approved DEMO lifecycle report including reconciliation and emergency stop."
+    },
+    {
+      "stage": 4,
+      "name": "five to seven day DEMO soak",
+      "decision": "NO-GO",
+      "verification_status": "NOT_VERIFIED",
+      "owner_evidence_required": "Owner-run soak, restart, reconciliation, and recovery evidence."
+    },
+    {
+      "stage": 5,
+      "name": "LIVE for one broker with minimum lot, lease, and typed confirmation",
+      "decision": "NO-GO",
+      "verification_status": "NOT_VERIFIED",
+      "owner_evidence_required": "Persistent owner host, DEMO PASS, fresh LIVE verification, lease, typed confirmation, and owner approval."
+    }
+  ],
+  "paths": {
+    "Deriv Options": "NOT_VERIFIED",
+    "cTrader": "BLOCKED BY OWNER STEP",
+    "MT5 on Codespaces host: FBS": "NOT_VERIFIED",
+    "MT5 on Codespaces host: Exness": "NOT_VERIFIED",
+    "MT5 on Codespaces host: HFM": "NOT_VERIFIED",
+    "MT5 on Codespaces host: Deriv MT5": "NOT_VERIFIED"
+  },
+  "orders_placed_by_this_work": false,
+  "deployment_claim": false
+}

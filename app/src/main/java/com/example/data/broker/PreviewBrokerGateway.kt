@@ -15,6 +15,8 @@ class PreviewBrokerGateway : BrokerGateway {
         MutableStateFlow(BrokerConnectionStatus.DISCONNECTED)
     override val accountMetrics: StateFlow<AccountMetrics?> =
         MutableStateFlow(null)
+    override val accountSnapshot: StateFlow<BrokerAccountSnapshot?> =
+        MutableStateFlow(BrokerAccountSnapshot.unavailable("PREVIEW", BrokerConnectionStatus.DISCONNECTED, "PREVIEW_ONLY"))
     override val openPositions: StateFlow<List<Position>> =
         MutableStateFlow(emptyList())
 

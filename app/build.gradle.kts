@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
   id("com.chaquo.python")
+  id("com.google.protobuf") version "0.10.1"
 }
 
 val mt5ManagedServiceUrlFromGradle = providers.gradleProperty("mt5ManagedServiceUrl").orNull.orEmpty().trim()
@@ -26,6 +27,28 @@ val mt5ManagedServiceUrl = mt5ManagedServiceUrlFromGradle.takeIf { it.isNotBlank
 val mt5ManagedServiceUrlBuildValue = mt5ManagedServiceUrl.ifBlank { "__CONFIGURATION_REQUIRED__" }
   .replace("\\", "\\\\")
   .replace("\"", "\\\"")
+val managementApiOrigin = providers.gradleProperty("managementApiOrigin").orNull?.trim()
+  ?.takeIf { it.isNotBlank() }
+  ?: System.getenv("MANAGEMENT_API_ORIGIN")?.trim()?.takeIf { it.isNotBlank() }
+  ?: rootProject.file(".env").takeIf { it.isFile }?.readLines()
+    ?.firstOrNull { it.trim().startsWith("MANAGEMENT_API_ORIGIN=") }
+    ?.substringAfter("=")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'")
+    ?.takeIf { it.isNotBlank() }
+  ?: "__CONFIGURATION_REQUIRED__"
+val managementApiOriginBuildValue = managementApiOrigin.replace("\\", "\\\\").replace("\"", "\\\"")
+val codespacesGithubClientIdRaw = providers.gradleProperty("codespacesGithubClientId").orNull?.trim()
+  ?: System.getenv("CODESPACES_GITHUB_CLIENT_ID")?.trim()
+  ?: rootProject.file(".env").takeIf { it.isFile }?.readLines()
+    ?.firstOrNull { it.trim().startsWith("CODESPACES_GITHUB_CLIENT_ID=") }
+    ?.substringAfter("=")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'")
+    .orEmpty()
+val codespacesGithubClientId = codespacesGithubClientIdRaw
+  .takeUnless { it.isBlank() || it == "__CONFIGURATION_REQUIRED__" }
+  .orEmpty()
+require(codespacesGithubClientId.isBlank() || codespacesGithubClientId.matches(Regex("[A-Za-z0-9._-]{8,128}"))) {
+  "CODESPACES_GITHUB_CLIENT_ID must be the public Client ID of your GitHub OAuth App."
+}
+val codespacesGithubClientIdBuildValue = codespacesGithubClientId.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
   namespace = "com.example"
@@ -35,12 +58,14 @@ android {
     applicationId = "com.aistudio.destinedfx.qwvzxp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 10
-    versionName = "1.0.10"
+    versionCode = 13
+    versionName = "1.0.13"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
+    buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
+    buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
+    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
   signingConfigs {
@@ -51,17 +76,13 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
   }
 
   buildTypes {
     release {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
+      buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
+      buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -69,7 +90,8 @@ android {
     }
     debug {
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
-      signingConfig = signingConfigs.getByName("debugConfig")
+      buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
+      buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
     }
   }
 
@@ -114,19 +136,25 @@ android {
   }
 }
 
+chaquopy {
+  defaultConfig {
+    version = "3.12"
+    buildPython("/usr/bin/python3.12")
+    pip { install("tzdata==2025.2") }
+  }
+  sourceSets {
+    getByName("main") {
+      setSrcDirs(listOf("../bridge"))
+      include("quantitative.py")
+    }
+  }
+}
+
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
-}
-
-chaquopy {
-  defaultConfig {
-    version = "3.13"
-    pip { install("tzdata==2025.2") }
-  }
-  sourceSets { getByName("main") { srcDir("src/main/python") } }
 }
 
 // Dependencies
@@ -149,15 +177,20 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.security.crypto)
+  // SQLCipher encrypts all Room user/trade/execution records at rest; 4.17.0 supports Room 2 and Android API 23+.
+  implementation("net.zetetic:sqlcipher-android:4.17.0@aar")
+  implementation("androidx.sqlite:sqlite:2.6.2")
   implementation(libs.androidx.biometric)
   implementation(libs.coil.compose)
   implementation(libs.play.services.auth)
+  implementation("androidx.browser:browser:1.8.0")
   implementation(libs.converter.moshi)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation("com.google.protobuf:protobuf-kotlin-lite:4.28.3")
   implementation(libs.retrofit)
   // Bundled, offline on-device OCR for chart labels; no screenshots are sent to a service.
   implementation("com.google.mlkit:text-recognition:16.0.1")
@@ -168,6 +201,7 @@ dependencies {
   testImplementation("org.json:json:20231013")
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation("com.squareup.okhttp3:mockwebserver:4.10.0")
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.espresso.core)
@@ -177,4 +211,15 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+protobuf {
+  protoc { artifact = "com.google.protobuf:protoc:4.28.3" }
+  generateProtoTasks {
+    all().configureEach {
+      builtins {
+        create("java") { option("lite") }
+      }
+    }
+  }
 }

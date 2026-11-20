@@ -14,13 +14,33 @@ internal object DerivBotRecoveryPolicy {
         hasCredentials: Boolean,
         symbol: String,
         strategy: String,
-        timeframe: String
+        timeframe: String,
+        notificationsAllowed: Boolean = true
     ): Boolean = action == Intent.ACTION_BOOT_COMPLETED &&
         accountMode.equals("demo", ignoreCase = true) &&
-        enabled && hasCredentials &&
+        enabled && hasCredentials && notificationsAllowed &&
         DerivMultiplierRules.isSupportedUnderlying(symbol) &&
         strategy in StrategyRegistry.managedStrategyIds &&
         Timeframe.parse(timeframe) != null
+
+    fun canStartExplicitDemo(accountMode: String, currentAcceptance: Boolean, notificationsAllowed: Boolean): Boolean =
+        accountMode.equals("demo", ignoreCase = true) && currentAcceptance && notificationsAllowed
+
+    fun canRecoverAfterProcessDeath(
+        accountMode: String,
+        enabled: Boolean,
+        hasCredentials: Boolean,
+        currentAcceptance: Boolean,
+        symbol: String,
+        strategy: String,
+        timeframe: String,
+        notificationsAllowed: Boolean
+    ): Boolean = accountMode.equals("demo", ignoreCase = true) && enabled && hasCredentials && currentAcceptance &&
+        notificationsAllowed && DerivMultiplierRules.isSupportedUnderlying(symbol) &&
+        strategy in StrategyRegistry.managedStrategyIds && Timeframe.parse(timeframe) != null
+
+    fun isDemoAccount(accountMode: String, accountType: String): Boolean =
+        accountMode.equals("demo", ignoreCase = true) && accountType.equals("demo", ignoreCase = true)
 }
 
 internal object DerivBotServiceStatePolicy {

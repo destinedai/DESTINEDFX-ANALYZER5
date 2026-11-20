@@ -41,6 +41,39 @@ class DerivBotRecoveryPolicyTest {
         assertFalse(shouldRecover(Intent.ACTION_BOOT_COMPLETED, "demo", true, true, "R_100", strategy, "not-a-timeframe"))
     }
 
+    @Test
+    fun explicitServiceStartRequiresAcceptedDemoAndVisibleNotificationPermission() {
+        assertTrue(DerivBotRecoveryPolicy.canStartExplicitDemo("demo", true, true))
+        assertFalse(DerivBotRecoveryPolicy.canStartExplicitDemo("real", true, true))
+        assertFalse(DerivBotRecoveryPolicy.canStartExplicitDemo("demo", false, true))
+        assertFalse(DerivBotRecoveryPolicy.canStartExplicitDemo("demo", true, false))
+        assertFalse(DerivBotRecoveryPolicy.isDemoAccount("real", "real"))
+        assertFalse(DerivBotRecoveryPolicy.isDemoAccount("demo", "real"))
+        assertTrue(DerivBotRecoveryPolicy.isDemoAccount("demo", "demo"))
+    }
+
+    @Test
+    fun persistedRealConfigurationAndDeniedNotificationsNeverRecover() {
+        assertFalse(shouldRecover(Intent.ACTION_BOOT_COMPLETED, "real", true, true, "R_100", strategy, "M5"))
+        assertFalse(shouldRecover(Intent.ACTION_BOOT_COMPLETED, "demo", true, true, "R_100", strategy, "M5", notificationsAllowed = false))
+        assertFalse(shouldRecover(Intent.ACTION_BOOT_COMPLETED, "demo", false, true, "R_100", strategy, "M5"))
+    }
+
+    @Test
+    fun processDeathRecoveryRequiresAcceptedDemoAndCurrentOwnerVisibleNotifications() {
+        fun allowed(mode: String = "demo", enabled: Boolean = true, credentials: Boolean = true,
+                    accepted: Boolean = true, notifications: Boolean = true) =
+            DerivBotRecoveryPolicy.canRecoverAfterProcessDeath(
+                mode, enabled, credentials, accepted, "R_100", strategy, "M5", notifications
+            )
+        assertTrue(allowed())
+        assertFalse(allowed(mode = "real"))
+        assertFalse(allowed(accepted = false))
+        assertFalse(allowed(credentials = false))
+        assertFalse(allowed(enabled = false))
+        assertFalse(allowed(notifications = false))
+    }
+
     private fun shouldRecover(
         action: String,
         mode: String,
@@ -48,6 +81,7 @@ class DerivBotRecoveryPolicyTest {
         credentials: Boolean,
         symbol: String,
         strategy: String,
-        timeframe: String
-    ) = DerivBotRecoveryPolicy.shouldRecover(action, mode, enabled, credentials, symbol, strategy, timeframe)
+        timeframe: String,
+        notificationsAllowed: Boolean = true
+    ) = DerivBotRecoveryPolicy.shouldRecover(action, mode, enabled, credentials, symbol, strategy, timeframe, notificationsAllowed)
 }

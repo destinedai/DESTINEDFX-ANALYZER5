@@ -87,7 +87,6 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     var showExportDialog by remember { mutableStateOf(false) }
     val dynamicAnalysis by viewModel.currentDynamicAnalysis.collectAsStateWithLifecycle()
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
-    val quoteDiagnostics by viewModel.quoteDiagnostics.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val currentTicker = tickers[activeSymbol]
     val hasFreshQuote = currentTicker?.let { it.isLive && it.price.isFinite() && it.price > 0.0 } == true &&
@@ -97,17 +96,24 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     val candlesAvailable = marketDataStatus.startsWith("READY", ignoreCase = true)
     val feedStatusColor = when {
         hasFreshQuote -> ProfitGreen
-        marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> LossRed
+        (marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) ||
+            marketDataStatus.startsWith("NO VERIFIED LIVE DATA", ignoreCase = true) ||
+            marketDataStatus.startsWith("ANALYSIS BLOCKED", ignoreCase = true)) -> LossRed
         else -> WarningAmber
     }
     val feedStatusLabel = when {
         hasFreshQuote && candlesAvailable -> "Fresh live quote • OHLC history available"
-        hasFreshQuote && marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "Fresh live quote • OHLC unavailable"
+        hasFreshQuote && (marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) ||
+            marketDataStatus.startsWith("NO VERIFIED LIVE DATA", ignoreCase = true) ||
+            marketDataStatus.startsWith("ANALYSIS BLOCKED", ignoreCase = true)) -> "Fresh live quote • OHLC unavailable"
         hasFreshQuote -> "Fresh live quote • OHLC history pending"
-        candlesAvailable -> quoteDiagnostics[activeSymbol]?.let { "Candle history available • $it" }
+        candlesAvailable -> viewModel.quoteDiagnosticForUi(activeSymbol)?.let { "Candle history available • $it" }
             ?: "Candle history available • no fresh quote"
-        quoteDiagnostics[activeSymbol] != null -> quoteDiagnostics.getValue(activeSymbol)
-        marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) -> "No fresh quote • candle history unavailable"
+        viewModel.quoteDiagnosticForUi(activeSymbol) != null ->
+            viewModel.quoteDiagnosticForUi(activeSymbol).orEmpty()
+        (marketDataStatus.startsWith("UNAVAILABLE", ignoreCase = true) ||
+            marketDataStatus.startsWith("NO VERIFIED LIVE DATA", ignoreCase = true) ||
+            marketDataStatus.startsWith("ANALYSIS BLOCKED", ignoreCase = true)) -> "No fresh quote • candle history unavailable"
         else -> "Checking quote • candle history pending"
     }
 
@@ -221,7 +227,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                         }
                     }
 
-                    // Workspace context keeps the six tabs understandable without opening a menu.
+                    // Workspace context keeps the primary tabs understandable without opening More.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -235,7 +241,8 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                                 text = selectedScreen.title,
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = TextPrimary
+                                color = TextPrimary,
+                                modifier = Modifier.testTag("workspace_header_title")
                             )
                             Text(
                                 text = selectedScreen.purpose,
@@ -297,7 +304,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
                     .navigationBarsPadding()
                     .border(BorderStroke(1.dp, CardBorder.copy(alpha = 0.8f)))
             ) {
-                // Keep the six daily-use trading workspaces visible without opening More.
+                // Keep the five owner-priority workspaces visible without opening another menu.
                 val bottomSelectedScreen = selectedScreen.takeIf { it in DestinedFXScreen.primaryScreens }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
@@ -348,13 +355,14 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedScreen) {
                     DestinedFXScreen.Home -> HomeDashboardTab(viewModel)
-                    DestinedFXScreen.Analyzer -> SignalsAndChartTab(viewModel, onExportAnalysis = { showExportDialog = true })
+                    DestinedFXScreen.Analyzer -> SimplifiedAnalyzerTab(viewModel, onExportAnalysis = { showExportDialog = true })
                     DestinedFXScreen.ImageAnalyzer -> ChartImageAnalyzerTab(viewModel)
                     DestinedFXScreen.Strategies -> StrategiesTab(viewModel)
                     DestinedFXScreen.Calendar -> CalendarTab(viewModel)
-                    DestinedFXScreen.Bot -> BotWorkstationTab(viewModel)
+                    DestinedFXScreen.Bot -> SimplifiedBotWorkstation(viewModel)
                     DestinedFXScreen.Watchlist -> WatchlistTab(viewModel)
                     DestinedFXScreen.More -> MoreTab(viewModel)
+                    DestinedFXScreen.Simulator -> DisconnectedSimulatorTab()
                     DestinedFXScreen.Chat -> ChatWorkstationTab(viewModel)
                     DestinedFXScreen.Risk -> RiskManagementTab(viewModel)
                     DestinedFXScreen.Settings -> SettingsTab(viewModel)
@@ -741,7 +749,7 @@ fun SignalsAndChartTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> U
         }
         item {
             QuoteFreshnessIndicator(ticker, connecting = marketDataStatus.startsWith("WAIT"),
-                diagnostic = quoteDiagnostics[activeSymbol])
+                diagnostic = viewModel.quoteDiagnosticForUi(activeSymbol))
         }
         item {
             val result = analysis
@@ -931,8 +939,25 @@ private fun FullAnalysisReport(result: DynamicAnalysisInfo?) {
         InsightLine("Signal state", result.signalState.ifBlank { "UNKNOWN" })
         InsightLine("Direction", result.direction.ifBlank { "WAIT" })
         InsightLine("Confluence score (not a win probability)", result.confidencePct.takeIf { it > 0 }?.let { "$it/100" } ?: "Not scored")
-        InsightLine("Data source", result.dataSource.ifBlank { "UNKNOWN" })
+        InsightLine("Market data", result.dataSource.ifBlank { "Not verified" })
         InsightLine("Ruleset version", result.strategyVersion.ifBlank { "Not supplied" })
+        HorizontalDivider(color = CardBorder)
+        Text("PYTHON QUANTITATIVE CANDIDATE", fontSize = 9.sp, color = ElectricCyan, fontWeight = FontWeight.Black)
+        val python = result.pythonAnalysis
+        InsightLine("Python state", python?.state ?: "UNAVAILABLE")
+        InsightLine("Python direction", if (python?.state == "CANDIDATE") python.direction else "WAIT")
+        InsightLine("Python entry", python?.entry?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python stop-loss", python?.stopLoss?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python take-profit", python?.takeProfit?.let { formatPrice(it, result.symbol) } ?: "N/A")
+        InsightLine("Python R:R", python?.rewardToRisk?.let { "1:${String.format(Locale.US, "%.2f", it)}" } ?: "N/A")
+        InsightLine("Python candle", python?.candleTimestampMs?.takeIf { it > 0L }?.let { java.util.Date(it).toString() } ?: "N/A")
+        InsightLine("Python engine", python?.strategyId?.ifBlank { "Not initialized" } ?: "Not initialized")
+        InsightLine("Python ruleset", python?.strategyVersion?.ifBlank { "Not supplied" } ?: "Not supplied")
+        InsightLine("Parity", when { python == null -> "Not assessed"; python.conflict -> "CONFLICT"; else -> "Analysis only" })
+        Text(python?.reason?.ifBlank { "No Python candidate reason returned." } ?: "Python analysis not available.", fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp)
+        python?.evidence.orEmpty().take(6).forEach { evidence ->
+            Text("• $evidence", color = TextPrimary, fontSize = 10.sp, lineHeight = 15.sp)
+        }
         InsightLine("MTF state", result.mtfStatus.ifBlank { "WAIT" })
         InsightLine("MTF summary", result.mtfSummary.ifBlank { "No summary returned" })
         InsightLine("Risk gate", result.riskNote.ifBlank { "No risk note returned" })
@@ -1224,6 +1249,7 @@ private fun MoreTab(viewModel: DestinedFXViewModel) {
                 DestinedFXScreen.Bot -> "Configure a broker connection, risk gates and automated scanning."
                 DestinedFXScreen.Watchlist -> "Follow available market quotes and jump into analysis."
                 DestinedFXScreen.Risk -> "Review account sizing, stop-loss and exposure constraints."
+                DestinedFXScreen.Simulator -> "Run fictional, disconnected DEMO/LIVE-labelled scenarios without broker or network access."
                 DestinedFXScreen.Settings -> "Manage account, broker and notification preferences."
                 DestinedFXScreen.About -> "Learn how analysis works and review the full risk disclosure."
                 DestinedFXScreen.Contact -> "Contact the support address published on the website."
@@ -1291,7 +1317,7 @@ private fun PythonQuantitativeAnalysisPanel(result: com.example.domain.model.Pyt
         InsightLine("Strategy", result.strategyId)
         InsightLine("Ruleset version", result.strategyVersion)
         InsightLine("Python state / direction", "${result.state} / ${result.direction}")
-        InsightLine("Provider source", result.source.ifBlank { "UNKNOWN" })
+        InsightLine("Market data validation", if (result.source.isBlank()) "Not supplied" else "Verified provider snapshot")
         InsightLine("Closed-candle timestamp", if (result.candleTimestampMs > 0L)
             java.time.Instant.ofEpochMilli(result.candleTimestampMs).toString() else "Unavailable")
         InsightLine("Snapshot retrieved at", if (result.retrievedAtMs > 0L)

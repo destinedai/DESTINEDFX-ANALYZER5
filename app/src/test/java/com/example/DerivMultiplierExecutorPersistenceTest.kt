@@ -60,11 +60,11 @@ class DerivMultiplierExecutorPersistenceTest {
         ApplicationProvider.getApplicationContext(), AppDatabase::class.java, databaseName
     ).allowMainThreadQueries().build()
 
-    private fun newExecutor(db: AppDatabase, fake: FakeDerivGateway) = DerivMultiplierExecutor(
+    private fun newExecutor(db: AppDatabase, fake: FakeDerivGateway, dailyRiskAllowed: () -> Boolean = { true }) = DerivMultiplierExecutor(
         gateway = fake,
         dao = db.derivExecutionDao(),
         sensitiveActionAuthorized = { true },
-        dailyRiskEntryAllowed = { _, _ -> true }
+        dailyRiskEntryAllowed = { _, _ -> dailyRiskAllowed() }
     )
 
     private fun intent(signalId: String = "signal-persisted") = DerivMultiplierIntent(
@@ -131,6 +131,46 @@ class DerivMultiplierExecutorPersistenceTest {
         assertEquals(9001L, restored!!.contractId)
         assertEquals(7001L, restored.buyTransactionId)
         assertEquals(1.25, restored.purchasePrice!!, 0.0)
+    }
+
+    @Test
+    fun missingOrStaleBalanceNeverReachesTheMultiplierGateway() = runBlocking {
+        gateway.metrics.value = null
+        assertTrue(executor.submit(intent("missing-balance")).isFailure)
+        assertEquals(0, gateway.purchaseAttempts)
+
+        gateway.metrics.value = AccountMetrics(100.0, 100.0, 0.0, 100.0, 0.0, "USD")
+        gateway.metricsUpdated.value = System.currentTimeMillis() - 60_000L
+        assertTrue(executor.submit(intent("stale-balance")).isFailure)
+        assertEquals(0, gateway.purchaseAttempts)
+    }
+
+    @Test
+    fun missingOrStalePortfolioNeverReachesTheMultiplierGateway() = runBlocking {
+        gateway.portfolioSnapshot.value = null
+        gateway.refreshPortfolio = false
+        assertTrue(executor.submit(intent("missing-portfolio")).isFailure)
+        assertEquals(0, gateway.purchaseAttempts)
+
+        gateway.portfolioSnapshot.value = DerivPortfolioSnapshot(
+            true, "D123", "DEMO", System.currentTimeMillis() - 60_000L, emptyList(), currency = "USD"
+        )
+        assertTrue(executor.submit(intent("stale-portfolio")).isFailure)
+        assertEquals(0, gateway.purchaseAttempts)
+    }
+
+    @Test
+    fun dailyRiskDenialAndAmbiguousReconciliationNeverReachTheMultiplierGateway() = runBlocking {
+        executor = newExecutor(database, gateway, dailyRiskAllowed = { false })
+        assertTrue(executor.submit(intent("daily-risk-blocked")).isFailure)
+        assertEquals(0, gateway.purchaseAttempts)
+
+        executor = newExecutor(database, gateway)
+        database.derivExecutionDao().insertIfAbsent(
+            storedExecution("unresolved-before-new-entry", status = DerivExecutionStatus.EXECUTION_UNKNOWN, contractId = null, buyTransactionId = null)
+        )
+        assertTrue(executor.submit(intent("reconciliation-blocked")).isFailure)
+        assertEquals(0, gateway.purchaseAttempts)
     }
 
     @Test
@@ -212,13 +252,16 @@ class DerivMultiplierExecutorPersistenceTest {
             DerivAccountInfo("D123", "USD", 100.0, "", "demo", true, "demo")
         )
         override val accountInfo: StateFlow<DerivAccountInfo?> = _account
-        override val accountMetrics: StateFlow<AccountMetrics?> = MutableStateFlow(
+        val metrics = MutableStateFlow<AccountMetrics?>(
             AccountMetrics(100.0, 100.0, 0.0, 100.0, 0.0, "USD")
         )
-        override val accountMetricsUpdatedAtMs: StateFlow<Long> = MutableStateFlow(now)
+        override val accountMetrics: StateFlow<AccountMetrics?> = metrics
+        val metricsUpdated = MutableStateFlow(now)
+        override val accountMetricsUpdatedAtMs: StateFlow<Long> = metricsUpdated
         val active = MutableStateFlow<Map<Long, DerivContractInfo>>(emptyMap())
         override val activeContracts: StateFlow<Map<Long, DerivContractInfo>> = active
         var portfolioContracts: List<DerivContractInfo> = emptyList()
+        var refreshPortfolio = true
         override val portfolioSnapshot: MutableStateFlow<DerivPortfolioSnapshot?> = MutableStateFlow(
             DerivPortfolioSnapshot(true, "D123", "DEMO", now, emptyList(), currency = "USD")
         )
@@ -229,7 +272,7 @@ class DerivMultiplierExecutorPersistenceTest {
             private set
 
         override suspend fun fetchPortfolio(): List<Position> {
-            portfolioSnapshot.value = DerivPortfolioSnapshot(
+            if (refreshPortfolio) portfolioSnapshot.value = DerivPortfolioSnapshot(
                 true, "D123", "DEMO", System.currentTimeMillis(), portfolioContracts, currency = "USD"
             )
             return emptyList()

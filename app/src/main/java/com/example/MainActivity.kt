@@ -1,6 +1,7 @@
 package com.example
 
 import android.os.Bundle
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -59,6 +60,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        (application as MyApplication).let { app -> intent?.data?.let(app::acceptCTraderCallback) }
         enableEdgeToEdge()
         ProcessLifecycleOwner.get().lifecycle.addObserver(processLifecycleObserver)
 
@@ -166,6 +168,12 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.data?.let { (application as MyApplication).acceptCTraderCallback(it) }
     }
 
     override fun onDestroy() {

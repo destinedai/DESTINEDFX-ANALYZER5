@@ -1,0 +1,26 @@
+[Unit]
+Description=DestinedFX MetaTrader 5 terminal
+After=destinedfx-xvfb.service network-online.target
+Requires=destinedfx-xvfb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=destinedfx
+Group=destinedfx
+WorkingDirectory=/var/lib/destinedfx/terminal
+Environment=DISPLAY=:99
+EnvironmentFile=-/etc/destinedfx/mt5.env
+Environment=DESTINEDFX_TERMINAL_STARTUP_CONFIG=/var/lib/destinedfx/terminal/startup.ini
+ExecStart=/opt/destinedfx/scripts/linux-host/launch-mt5.sh
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+UMask=0077
+ReadWritePaths=/var/lib/destinedfx
+
+[Install]
+WantedBy=multi-user.target

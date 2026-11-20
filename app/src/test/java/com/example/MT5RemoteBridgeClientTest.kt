@@ -1,12 +1,14 @@
 package com.example
 
 import com.example.data.trade.MT5RemoteBridgeClient
+import com.example.data.trade.parseVerifiedBrokerQuotes
 import com.example.security.SecretsManager
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import java.time.Instant
 import org.json.JSONArray
 import org.json.JSONObject
+import okhttp3.Request
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -19,10 +21,41 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MT5RemoteBridgeClientTest {
+    @Test fun brokerQuoteParserAcceptsOnlyFreshFiniteTwoSidedUniqueTerminalPrices() {
+        val now = 1_800_000_000_000L
+        val rows = JSONArray()
+            .put(JSONObject().put("symbol", "EURUSD.a").put("bid", 1.08231).put("ask", 1.08245).put("timestamp_ms", now - 1200L))
+            .put(JSONObject().put("symbol", "GBPUSD").put("bid", 1.2700).put("ask", 1.2690).put("timestamp_ms", now))
+            .put(JSONObject().put("symbol", "USDJPY").put("bid", 150.0).put("ask", 150.02).put("timestamp_ms", now - 20_000L))
+            .put(JSONObject().put("symbol", "AUDUSD").put("bid", 0.6500).put("ask", 0.6502).put("timestamp_ms", now + 5_000L))
+            .put(JSONObject().put("symbol", "EURUSD.A").put("bid", 1.08230).put("ask", 1.08244).put("timestamp_ms", now))
+        val accepted = parseVerifiedBrokerQuotes(rows, now)
+        assertEquals(1, accepted?.size)
+        val quote = accepted!!.single()
+        assertEquals("EURUSD.a", quote.symbol)
+        assertEquals(1.08231, quote.bid, 0.0000001)
+        assertEquals(1.08245, quote.ask, 0.0000001)
+        assertEquals(1200L, quote.ageMs)
+        assertEquals(5, quote.digits)
+        assertEquals("MT5_TERMINAL", quote.source)
+        assertEquals(null, parseVerifiedBrokerQuotes(null, now))
+    }
+
+    @Test fun brokerQuoteParserAllowsOnlySmallClockSkewAndClampsDisplayedAge() {
+        val now = 1_800_000_000_000L
+        val rows = JSONArray()
+            .put(JSONObject().put("symbol", "EURUSD").put("bid", 1.1).put("ask", 1.1002).put("digits", 5).put("timestamp_ms", now + 1000L))
+            .put(JSONObject().put("symbol", "GBPUSD").put("bid", 1.2).put("ask", 1.2002).put("digits", 5).put("timestamp_ms", now + 5000L))
+        val accepted = parseVerifiedBrokerQuotes(rows, now)
+        assertEquals(1, accepted?.size)
+        assertEquals(0L, accepted!!.single().ageMs)
+        assertEquals("EURUSD", accepted.single().symbol)
+    }
+
     @Test fun unavailableEncryptedStorageBlocksManagedRegistrationBeforeNetwork() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
-        val client = MT5RemoteBridgeClient(secrets)
+        val client = MT5RemoteBridgeClient(secrets, "FBS_DEMO", accountMode = "DEMO", brokerBrand = "FBS")
         val failure = runCatching {
             client.registerManagedAccount(
                 login = "12345", password = "test-password", server = "Broker-Demo",
@@ -30,6 +63,33 @@ class MT5RemoteBridgeClientTest {
             )
         }.exceptionOrNull()
         assertTrue(failure?.message.orEmpty().contains("Secure storage is unavailable"))
+    }
+
+
+    @Test fun managementIdentityHeaderIsLimitedToSignedProfileLifecycleRequests() {
+        val validAssertion = "header.payload.signature_" + "x".repeat(120)
+        val builder = Request.Builder().url("https://bridge.example.com")
+        MT5RemoteBridgeClient.addManagementIdentityHeader(
+            builder, "POST", "/v1/pairings", validAssertion
+        )
+        assertEquals(validAssertion, builder.build().header("X-Management-Identity"))
+        val bootstrapBuilder = Request.Builder().url("https://bridge.example.com")
+        MT5RemoteBridgeClient.addManagementIdentityHeader(
+            bootstrapBuilder, "POST", "/v1/owner/bootstrap-code", validAssertion
+        )
+        assertEquals(validAssertion, bootstrapBuilder.build().header("X-Management-Identity"))
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.addManagementIdentityHeader(
+                Request.Builder().url("https://bridge.example.com"),
+                "GET", "/v1/app/state", validAssertion
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.addManagementIdentityHeader(
+                Request.Builder().url("https://bridge.example.com"),
+                "POST", "/v1/app/demo-acceptance", "not-a-signed-assertion"
+            )
+        }
     }
 
     @Test fun allFourRequestedBrokerBrandsAreValidForTheirMT5AccountRoute() {
@@ -69,6 +129,22 @@ class MT5RemoteBridgeClientTest {
         }
     }
 
+    @Test fun allEightExplicitBrokerModeSlotsRemainIndependentAndAreRequired() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }
+        listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
+            listOf("DEMO", "LIVE").forEach { mode ->
+                val slot = "${brand}_${mode}"
+                val client = MT5RemoteBridgeClient(secrets, slot, accountMode = mode, brokerBrand = brand)
+                assertEquals(slot, client.profile)
+                assertEquals(brand, client.brokerBrand)
+                assertEquals(mode, client.accountMode)
+                assertThrows(IllegalArgumentException::class.java) {
+                    MT5RemoteBridgeClient(secrets, slot, accountMode = if (mode == "DEMO") "LIVE" else "DEMO", brokerBrand = brand)
+                }
+            }
+        }
+    }
     @Test fun riskMustBeFiniteAndWithinTheExactSupportedInterval() {
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(0.25))
         assertTrue(MT5RemoteBridgeClient.isValidRiskPercent(1.0))
@@ -167,10 +243,31 @@ class MT5RemoteBridgeClientTest {
         assertTrue(MT5RemoteBridgeClient.effectConfirmed("CLOSE_POSITION_SELECTED", closed, listOf(positionId)))
     }
 
+    @Test fun ownerBootstrapHeaderIsRestrictedToInitialPairingRequest() {
+        val pairing = Request.Builder().url("https://bridge.realcop.com/v1/pairings")
+        MT5RemoteBridgeClient.addOwnerBootstrapHeader(
+            pairing, "POST", "/v1/pairings", "one-time-owner-code"
+        )
+        assertEquals("one-time-owner-code", pairing.build().header("X-Owner-Bootstrap"))
+
+        val normal = Request.Builder().url("https://bridge.realcop.com/v1/app/state")
+        MT5RemoteBridgeClient.addOwnerBootstrapHeader(
+            normal, "GET", "/v1/app/state", null
+        )
+        assertEquals(null, normal.build().header("X-Owner-Bootstrap"))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.addOwnerBootstrapHeader(
+                Request.Builder().url("https://bridge.realcop.com/v1/app/state"),
+                "GET", "/v1/app/state", "one-time-owner-code"
+            )
+        }
+    }
+
     private fun snapshot(orders: List<JSONObject>) = MT5RemoteBridgeClient.Snapshot(
         managedState = "READY", accessType = "MASTER", profileMode = "DEMO", connected = true, terminalOnline = true,
         heartbeatFresh = true, state = "READY", account = "123 @ Broker-Demo", actualLogin = "123", actualServer = "Broker-Demo",
-        actualAccountMode = "DEMO", liveAuthorized = false, tradeAllowed = true, terminalConnected = true, accountVerified = true,
+        actualAccountMode = "DEMO", liveAuthorized = false, tradeAllowed = true, terminalConnected = true, accountVerified = true, brokerIdentityVerified = true,
         currency = "USD", balance = null, equity = null, margin = null, freeMargin = null, marginLevel = null, leverage = null,
         positions = emptyList(), activeOrders = orders, closedDeals = emptyList(), snapshotsValid = true,
         lastSignal = null, newsVerdict = null, raw = JSONObject()

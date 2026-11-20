@@ -119,8 +119,7 @@ open class DestinedFXViewModel(
         // 1. Try tickers.value[symbol]?.price
         val ticker = tickers.value[symbol]
         if (ticker != null && ticker.price > 0.0) {
-            val src = ticker.source.ifBlank { "Real-time feed" }
-            return ResolvedPrice(ticker.price, src, ticker.lastUpdateMillis)
+            return ResolvedPrice(ticker.price, "Live market data", ticker.lastUpdateMillis)
         }
 
         // 2. Else try marketDataRepository.getLatestTick(symbol).price if > 0
@@ -133,8 +132,7 @@ open class DestinedFXViewModel(
         val candles = app.marketDataRepository?.getCandles(symbol, timeframe, 1) ?: emptyList()
         val latestCandle = candles.lastOrNull()
         if (latestCandle != null && latestCandle.close > 0.0) {
-            val src = app.marketDataRepository?.getDataSource(symbol, timeframe) ?: "Unknown"
-            return ResolvedPrice(latestCandle.close, src, latestCandle.timestamp)
+            return ResolvedPrice(latestCandle.close, "Market data", latestCandle.timestamp)
         }
 
         // 4. If still nothing: return null
@@ -194,6 +192,23 @@ open class DestinedFXViewModel(
     val tickers = MutableStateFlow<Map<String, MarketTicker>>(emptyMap())
     val quoteDiagnostics: StateFlow<Map<String, String>>
         get() = if (isPreview) MutableStateFlow(emptyMap()) else app.marketDataRepository.quoteDiagnostics
+
+    /** User-facing freshness text deliberately omits upstream vendor, venue and socket details. */
+    fun quoteDiagnosticForUi(symbol: String): String? {
+        if (isPreview) return null
+        val detail = app.marketDataRepository.quoteDiagnostics.value[symbol]
+            ?.trim()?.uppercase(java.util.Locale.ROOT).orEmpty()
+        if (detail.isBlank()) return null
+        return when {
+            "TICK RECEIVED" in detail || "QUOTE RECEIVED" in detail -> "Live quote received"
+            "SUBSCRIB" in detail || "CONNECTING" in detail -> "Connecting to live market data"
+            "STALE" in detail -> "Last quote is stale"
+            "ERROR" in detail || "FAILED" in detail || "REJECTED" in detail ->
+                "Live quote connection failed"
+            "DISCONNECTED" in detail -> "Live data connection disconnected"
+            else -> "No verified live quote currently available"
+        }
+    }
     val _feedItems = MutableStateFlow<List<MarketTicker>>(emptyList())
     val feedItems: StateFlow<List<MarketTicker>> = _feedItems
 
@@ -359,40 +374,56 @@ open class DestinedFXViewModel(
         if (isPreview) null else app.marketDataRepository.getCandleError(symbol, timeframe)
 
     fun getDataSourceForSymbol(symbol: String): String =
-        if (isPreview) "Chart preview only" else app.marketDataRepository.getDataSource(symbol, selectedTimeframe.value)
+        if (isPreview) "Chart preview" else marketDataSource(symbol, selectedTimeframe.value)
 
-    fun marketDataSource(symbol: String, timeframe: String): String =
-        if (isPreview) "Preview has no market candles" else app.marketDataRepository.getDataSource(
-            symbol, if (timeframe == "60") "H1" else timeframe
-        )
+    /** UI reveals data freshness, not an upstream vendor or hidden provider route. */
+    fun marketDataSource(symbol: String, timeframe: String): String {
+        if (isPreview) return "Chart preview"
+        val detail = app.marketDataRepository.getDataSource(symbol, if (timeframe == "60") "H1" else timeframe)
+        return if (detail.startsWith("UNAVAILABLE", ignoreCase = true)) "No verified live candles"
+        else "Live market data"
+    }
 
     fun candlesForChart(symbol: String, timeframe: String): List<Candle> =
         candlestickHistoryByTimeframe[symbol + "-" + (if (timeframe == "60") "H1" else timeframe)].orEmpty()
+
+    fun candleSnapshotRetrievedAtMs(symbol: String, timeframe: String): Long {
+        if (isPreview) return 0L
+        val normalized = if (timeframe == "60") "H1" else timeframe
+        return app.marketDataRepository.candleRetrievedAtMs[
+            com.example.data.market.candleSourceKey(symbol, normalized)
+        ] ?: 0L
+    }
 
     fun refreshMarketData(symbol: String = selectedTicker.value, timeframe: String = selectedTimeframe.value) {
         if (isPreview) return
         viewModelScope.launch {
             marketDataStatus.value = "REFRESHING • " + symbol + " • " + timeframe
             try {
-                withTimeoutOrNull(4_000L) { app.marketDataRepository.refreshSymbol(symbol) }
-                val candles = withTimeoutOrNull(32_000L) {
+                // Deriv active-symbol discovery can require a WebSocket handshake plus a response.
+                // Its provider budget is 30s; do not cancel it after the old 4s UI wrapper.
+                withTimeoutOrNull(36_000L) { app.marketDataRepository.refreshSymbol(symbol) }
+                // OHLC loading can include active-symbol discovery followed by candle history;
+                // the repository now permits both provider stages to finish (up to ~62s).
+                val candles = withTimeoutOrNull(65_000L) {
                     app.marketDataRepository.getCandles(symbol, timeframe, 150)
                 } ?: emptyList()
                 if (candles.isNotEmpty()) {
                     candlestickHistory[symbol] = candles
                     candlestickHistoryByTimeframe[symbol + "-" + timeframe] = candles
-                    marketDataStatus.value = "READY • " + candles.size + " candles • " +
-                        app.marketDataRepository.getDataSource(symbol, timeframe)
+                    marketDataStatus.value = "LIVE DATA • " + candles.size + " candles"
                 } else {
-                    val reason = app.marketDataRepository.getCandleError(symbol, timeframe)
-                        ?: "The public feed returned no OHLC candles for this symbol/timeframe."
-                    marketDataStatus.value = "UNAVAILABLE • " + reason
+                    val detail = app.marketDataRepository.getCandleError(symbol, timeframe)
+                    marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe +
+                        (detail?.takeIf { it.isNotBlank() }?.let { " • " + it.take(220) } ?: "")
                 }
                 runSignalScan(symbol, timeframe)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                marketDataStatus.value = "UNAVAILABLE • " + (e.message ?: e.javaClass.simpleName)
+                val detail = app.marketDataRepository.getCandleError(symbol, timeframe)
+                marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe +
+                    (detail?.takeIf { it.isNotBlank() }?.let { " • " + it.take(220) } ?: "")
                 Log.w("DestinedFXViewModel", "Manual market refresh failed: " + e.javaClass.simpleName)
             }
         }
@@ -404,11 +435,10 @@ open class DestinedFXViewModel(
     val brokerConnected = MutableStateFlow(if (isPreview) false else app.brokerManager.activeBroker.value.isConnected())
     val brokerQuote = MutableStateFlow<com.destinedfx.core.marketdata.MarketQuote?>(null)
 
-    val crashLogManager by lazy { com.destinedfx.core.security.CrashLogManager(application.filesDir) }
     val lastCrashText = MutableStateFlow<String?>(null)
 
     fun dismissLastCrash() {
-        if (!isPreview) crashLogManager.dismissCrash()
+        if (!isPreview) app.secretsManager.clearLastCrashLog()
         lastCrashText.value = null
     }
 
@@ -709,6 +739,119 @@ open class DestinedFXViewModel(
         return true
     }
 
+    // The application-management API is intentionally separate from broker/trading gateways.
+    private val managementClient by lazy {
+        com.example.data.management.ManagementApiClient(
+            com.example.BuildConfig.MANAGEMENT_API_ORIGIN,
+            com.example.data.management.SecretsManagerAccessTokenStore(app.secretsManager)
+        )
+    }
+    val managementMessage = MutableStateFlow("")
+    val managementBusy = MutableStateFlow(false)
+    val managementEmail = MutableStateFlow(
+        if (!isPreview && app.secretsManager.getValidManagementAccessToken() != null) "Saved session" else ""
+    )
+    val managementServiceState = MutableStateFlow("")
+
+    fun managementRegister(email: String, password: String) = managementAction {
+        val user = managementClient.register(email, password)
+        managementMessage.value = "Account registered for ${user.email}. Sign in to manage settings."
+    }
+
+    fun managementLogin(email: String, password: String) = managementAction {
+        val user = managementClient.login(email, password)
+        managementEmail.value = user.email
+        val remoteTheme = try {
+            managementClient.getPreferences().optJSONObject("theme")?.optString("mode")
+        } catch (e: com.example.data.management.ManagementException) {
+            if (e.failure == com.example.data.management.ManagementFailure.AUTH_EXPIRED) throw e
+            null
+        }
+        if (remoteTheme != null && remoteTheme in setOf("System", "Light", "Dark")) {
+            setThemeMode(remoteTheme)
+            managementMessage.value = "Signed in as ${user.email}; saved account appearance restored."
+        } else {
+            managementMessage.value = "Signed in as ${user.email}; local appearance was kept because no saved account theme was available."
+        }
+    }
+
+    fun managementLogout() = managementAction {
+        managementClient.logout()
+        managementEmail.value = ""
+        managementMessage.value = "Signed out."
+    }
+
+    fun refreshManagementStatus() = managementAction {
+        managementServiceState.value = "Checking service health…"
+        try {
+            val status = managementClient.status()
+            managementServiceState.value = "Service ${status.service}; health ${status.health}; readiness ${status.readiness}; database ${status.database}; API ${status.version}"
+            managementMessage.value = managementServiceState.value
+        } catch (e: com.example.data.management.ManagementException) {
+            managementServiceState.value = "Unavailable; latest health check did not pass."
+            throw e
+        }
+    }
+
+    fun syncThemePreference(mode: String) = managementAction {
+        managementClient.putPreference("theme", org.json.JSONObject().put("mode", mode))
+        managementMessage.value = "$mode appearance saved locally and synced to your account."
+    }
+
+    suspend fun issueLiveStepUpAssertion(
+        password: String,
+        pairingId: String,
+        challengeId: String,
+        typedConfirmation: String,
+        brokerBrand: String,
+        login: String,
+        server: String,
+        credentialGeneration: String
+    ): String = withContext(Dispatchers.IO) {
+        managementClient.liveStepUpAssertion(
+            password, pairingId, challengeId, typedConfirmation,
+            brokerBrand, login, server, credentialGeneration
+        )
+    }
+
+    suspend fun issueBridgeIdentityAssertion(): String = withContext(Dispatchers.IO) {
+        managementClient.bridgeIdentityAssertion()
+    }
+
+    private fun managementAction(action: suspend () -> Unit) {
+        if (isPreview || managementBusy.value) return
+        viewModelScope.launch {
+            managementBusy.value = true
+            try {
+                withContext(Dispatchers.IO) { action() }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: com.example.data.management.ManagementException) {
+                managementMessage.value = when (e.failure) {
+                    com.example.data.management.ManagementFailure.UNCONFIGURED -> "Management service is not configured; no request was sent."
+                    com.example.data.management.ManagementFailure.SECURE_STORAGE_UNAVAILABLE -> "Encrypted token storage is unavailable; sign-in was not retained."
+                    com.example.data.management.ManagementFailure.AUTH_EXPIRED -> {
+                        managementEmail.value = ""
+                        app.secretsManager.clearManagementAccessToken()
+                        "Session expired or signed out. Please sign in again."
+                    }
+                    com.example.data.management.ManagementFailure.INVALID_CREDENTIALS -> "Email or password was not accepted."
+                    com.example.data.management.ManagementFailure.OFFLINE -> "Management service is offline or unreachable. Your local settings remain available."
+                    com.example.data.management.ManagementFailure.RATE_LIMITED -> "Too many requests. Please wait before trying again."
+                    com.example.data.management.ManagementFailure.SERVICE_UNAVAILABLE -> "Management service is temporarily unavailable."
+                    com.example.data.management.ManagementFailure.CONFLICT -> "An account with this email already exists."
+                    com.example.data.management.ManagementFailure.INVALID_REQUEST -> "The request was rejected. Check the email and password."
+                    com.example.data.management.ManagementFailure.FORBIDDEN -> "This account is not permitted to perform that action."
+                    else -> "Management request failed (${e.failure.name.lowercase().replace('_', ' ')})."
+                }
+            } catch (_: Exception) {
+                managementMessage.value = "Management request failed. Local settings remain unchanged."
+            } finally {
+                managementBusy.value = false
+            }
+        }
+    }
+
     // Text To Speech Voice System
     private var tts: TextToSpeech? = null
     val ttsInitialized = MutableStateFlow(false)
@@ -774,9 +917,9 @@ open class DestinedFXViewModel(
     }
 
 
-    // Strategy & Configured Equity Persistence
+    // Strategy preferences are encrypted. Manual calculator scenarios are intentionally
+    // separate from accountCapital and are never restored as broker balance/equity.
     val selectedStrategyId = MutableStateFlow(if (isPreview) "smc-confluence-1.0.0" else app.secretsManager.getSelectedStrategy())
-    val configuredEquity = MutableStateFlow(if (isPreview) 0.0 else app.secretsManager.getConfiguredEquity())
 
     fun selectStrategy(id: String) {
         selectedStrategyId.value = id
@@ -785,13 +928,6 @@ open class DestinedFXViewModel(
             app.secretsManager.saveSelectedStrategy(id)
             runSignalScan(selectedTicker.value, selectedTimeframe.value)
         }
-    }
-
-    fun saveConfiguredEquity(v: Double) {
-        val clean = if (v.isFinite() && v > 0.0) v else 0.0
-        configuredEquity.value = clean
-        accountCapital.value = clean
-        if (!isPreview) app.secretsManager.saveConfiguredEquity(clean)
     }
 
     // Live Real-Time Trade Signal State for Signals Tab
@@ -843,7 +979,7 @@ open class DestinedFXViewModel(
                 throw e
             } catch (e: Exception) {
                 if (generation == signalScanGeneration) {
-                    marketDataStatus.value = "UNAVAILABLE • Analysis failed: " + (e.message ?: e.javaClass.simpleName)
+                    marketDataStatus.value = "ANALYSIS BLOCKED • " + symbol + " " + timeframe
                     currentDynamicAnalysis.value = null
                     currentTradeSignal.value = null
                 }
@@ -902,20 +1038,48 @@ open class DestinedFXViewModel(
             return@withContext PreExecutionCheck(false, 0.0, 0.0, "News Gate: ${newsVerdict.detail}. Automated execution blocked.")
         }
 
-        val eq = configuredEquity.value
-        val maxRiskDollar = eq * 0.01
         if (spec == null) {
             return@withContext PreExecutionCheck(false, 0.0, 0.0, "Broker specification for $symbol is unavailable.")
         }
 
-        val acc = com.destinedfx.core.risk.AccountState(balance = eq, equity = eq, freeMargin = eq, leverage = 100, currency = "USD")
+        // A manual calculator value is a hypothetical scenario, never account evidence.
+        // Execution checks require a fresh broker API snapshot with actual margin and leverage.
+        val activeGateway = app.brokerManager.activeBroker.value
+        val account = activeGateway.accountSnapshot.value?.takeIf {
+            it.isDisplayable(nowMs = now, maxAgeMs = 15_000L)
+        } ?: return@withContext PreExecutionCheck(
+            false, 0.0, 0.0,
+            "BROKER_ACCOUNT_SNAPSHOT_UNAVAILABLE: a fresh authenticated balance, equity, free margin, leverage and currency are required. Manual scenario equity cannot authorize execution."
+        )
+        val balance = account.balance
+        val equity = account.equity
+        val freeMargin = account.freeMargin
+        val leverage = account.leverage
+        val currency = account.currency
+        if (account.origin != com.example.data.broker.DataOrigin.BROKER_API ||
+            balance == null || equity == null || freeMargin == null || leverage == null || leverage <= 0 ||
+            currency.isNullOrBlank() ||
+            listOf(balance, equity, freeMargin).any { !it.isFinite() || it < 0.0 } ||
+            minOf(balance, equity) <= 0.0
+        ) {
+            return@withContext PreExecutionCheck(
+                false, 0.0, 0.0,
+                "BROKER_ACCOUNT_SNAPSHOT_INVALID: account values or leverage are incomplete; no manual or default values are substituted."
+            )
+        }
+        val riskBase = minOf(balance, equity)
+        val maxRiskDollar = riskBase * 0.01
+        val acc = com.destinedfx.core.risk.AccountState(
+            balance = balance, equity = equity, freeMargin = freeMargin,
+            leverage = leverage, currency = currency
+        )
         val sizing = com.destinedfx.core.risk.RiskEngine.positionSize(acc, 1.0, entryPrice, stopLoss, spec)
         when (sizing) {
             is SizingResult.Sized -> {
                 if (sizing.moneyRiskActual > maxRiskDollar + 1e-6) {
                     return@withContext PreExecutionCheck(
                         false, sizing.lots, sizing.moneyRiskActual,
-                        "Estimated loss ($${String.format(java.util.Locale.US, "%.2f", sizing.moneyRiskActual)}) exceeds 1% limit ($${String.format(java.util.Locale.US, "%.2f", maxRiskDollar)})."
+                        "Estimated loss (${currency} ${String.format(java.util.Locale.US, "%.2f", sizing.moneyRiskActual)}) exceeds 1% limit (${currency} ${String.format(java.util.Locale.US, "%.2f", maxRiskDollar)})."
                     )
                 }
                 return@withContext PreExecutionCheck(true, sizing.lots, sizing.moneyRiskActual, "Safety checks verified.")
@@ -1132,7 +1296,7 @@ open class DestinedFXViewModel(
 
             startDataCorrespondenceUpdates()
             try {
-                lastCrashText.value = crashLogManager.readLastCrash()
+                lastCrashText.value = app.secretsManager.getLastCrashLog()
             } catch (e: Throwable) {
                 Log.w("DestinedFXViewModel", "readLastCrash failed: ${e.message}")
             }
@@ -1151,11 +1315,12 @@ open class DestinedFXViewModel(
                     if (isConn) {
                         val sym = selectedTicker.value
                         brokerQuote.value = activeBroker.getBrokerQuote(sym).getOrNull()
-                        val bal = activeBroker.accountMetrics.value?.balance ?: 0.0
-                        accountCapital.value = if (bal > 0.0) bal else configuredEquity.value
+                        val snapshot = activeBroker.accountSnapshot.value
+                            ?.takeIf { it.isDisplayable(maxAgeMs = 15_000L) }
+                        accountCapital.value = snapshot?.equity ?: 0.0
                     } else {
                         brokerQuote.value = null
-                        accountCapital.value = configuredEquity.value
+                        accountCapital.value = 0.0
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
@@ -1198,8 +1363,7 @@ open class DestinedFXViewModel(
                         if (candles.isNotEmpty()) {
                             candlestickHistory[symbol] = candles
                             candlestickHistoryByTimeframe[symbol + "-" + tfKey] = candles
-                            marketDataStatus.value = "READY • " + candles.size + " candles • " +
-                                app.marketDataRepository.getDataSource(symbol, tfKey)
+                            marketDataStatus.value = "LIVE DATA • " + candles.size + " candles"
                         } else {
                             val reason = app.marketDataRepository.getCandleError(symbol, tfKey)
                                 ?: "Waiting for valid candles from the public feed."
@@ -1318,6 +1482,27 @@ open class DestinedFXViewModel(
 
     val botStatusSummary = app.autonomousBotEngine.status
     val botActive: StateFlow<Boolean> = _botActive.asStateFlow()
+
+    /**
+     * Finds the strongest currently qualified opportunity from the real provider universe.
+     * No fallback symbol or fabricated plan is used; an empty result means no setup passed
+     * the existing signal and RiskEngine gates.
+     */
+    suspend fun findBestBotOpportunity(): com.example.domain.model.TradeSignal? = withContext(Dispatchers.Default) {
+        val candidates = com.example.data.market.SymbolRegistry.getBackgroundSymbols()
+        candidates.mapNotNull { symbol ->
+            runCatching {
+                app.signalGenerationUseCase.generateSignal(
+                    symbol = symbol,
+                    timeframe = "H1",
+                    strategyId = selectedStrategyId.value
+                )
+            }.getOrNull()?.takeIf {
+                it.executable && it.direction != com.example.domain.model.SignalDirection.WAIT &&
+                    it.entryPrice > 0.0 && it.stopLoss > 0.0 && it.takeProfit > 0.0
+            }
+        }.maxWithOrNull(compareBy<com.example.domain.model.TradeSignal> { it.confidenceScore }.thenBy { it.symbol })
+    }
 
     fun setBotStatus(active: Boolean, onResult: ((Boolean, String?) -> Unit)? = null) {
         viewModelScope.launch {

@@ -5,8 +5,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
- * The six core workspaces stay directly accessible in the bottom navigation.
- * Home and secondary utilities remain reachable from the header's More workspaces menu.
+ * The five owner-priority workspaces stay directly accessible in bottom navigation.
+ * Remaining workspaces are reachable from More.
  */
 sealed class DestinedFXScreen(val title: String, val purpose: String, val icon: ImageVector, val tag: String) {
     object Home : DestinedFXScreen("Home", "Terminal overview and latest activity", Icons.Default.Home, "nav_tab_home")
@@ -22,15 +22,16 @@ sealed class DestinedFXScreen(val title: String, val purpose: String, val icon: 
     object Settings : DestinedFXScreen("Settings", "Configure preferences, connections, and security", Icons.Default.Settings, "nav_tab_settings")
     object About : DestinedFXScreen("About & Disclosure", "Understand data, safety, and product boundaries", Icons.Default.Info, "nav_tab_about")
     object Contact : DestinedFXScreen("Contact", "Get help and send product feedback", Icons.Default.Email, "nav_tab_contact")
+    object Simulator : DestinedFXScreen("Simulator", "Run disconnected visual-only execution scenarios", Icons.Default.Science, "nav_tab_simulator")
 
     companion object {
         val primaryScreens: List<DestinedFXScreen>
-            get() = listOf(Analyzer, Strategies, Calendar, Bot, Risk, Settings)
+            get() = listOf(Home, Analyzer, Bot, Watchlist, More)
 
         val moreScreens: List<DestinedFXScreen>
-            get() = listOf(Home, ImageAnalyzer, Watchlist, Chat, About, Contact)
+            get() = listOf(ImageAnalyzer, Strategies, Calendar, Risk, Simulator, Settings, Chat, About, Contact)
 
         val allScreens: List<DestinedFXScreen>
-            get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Settings, About, Contact)
+            get() = listOf(Home, Analyzer, Strategies, Calendar, More, Chat, ImageAnalyzer, Bot, Watchlist, Risk, Simulator, Settings, About, Contact)
     }
 }

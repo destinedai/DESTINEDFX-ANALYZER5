@@ -34,6 +34,54 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
+ * Convert an MT5 Bridge snapshot into account data only after exact account, server, mode,
+ * broker identity and a fresh terminal heartbeat have all been verified.
+ */
+internal fun verifiedManagedMt5AccountSnapshot(
+    profileKey: String,
+    expectedLogin: String,
+    expectedServer: String,
+    expectedMode: String,
+    snapshot: MT5RemoteBridgeClient.Snapshot,
+    nowMs: Long = System.currentTimeMillis()
+): com.example.data.broker.BrokerAccountSnapshot? {
+    val (brand, profileMode) = AccountSessionRegistry.brandAndMode(profileKey) ?: return null
+    val heartbeatAge = snapshot.raw.optLong("heartbeat_age_seconds", Long.MAX_VALUE)
+    val staleAfter = snapshot.raw.optLong("heartbeat_stale_seconds", 15L).coerceIn(1L, 15L)
+    val retrievedAt = if (heartbeatAge in 0L..staleAfter) nowMs - heartbeatAge * 1_000L else 0L
+    val exactIdentity = expectedLogin.isNotBlank() && expectedServer.isNotBlank() &&
+        expectedMode.equals(profileMode, ignoreCase = true) &&
+        snapshot.actualLogin == expectedLogin &&
+        snapshot.actualServer == expectedServer &&
+        snapshot.actualAccountMode == profileMode &&
+        snapshot.profileMode == profileMode
+    val terminalReady = snapshot.connected && snapshot.terminalOnline &&
+        snapshot.heartbeatFresh && snapshot.terminalConnected &&
+        snapshot.accountVerified && snapshot.brokerIdentityVerified &&
+        snapshot.managedState.equals("READY", ignoreCase = true)
+    val values = listOf(snapshot.balance, snapshot.equity, snapshot.margin, snapshot.freeMargin)
+    if (!exactIdentity || !terminalReady || retrievedAt <= 0L ||
+        values.any { value -> value == null || !value.isFinite() || value < 0.0 } ||
+        snapshot.currency.isBlank() || snapshot.leverage == null || snapshot.leverage <= 0
+    ) return null
+
+    return com.example.data.broker.BrokerAccountSnapshot(
+        providerId = brand,
+        origin = com.example.data.broker.DataOrigin.BROKER_API,
+        status = com.example.data.broker.BrokerConnectionStatus.CONNECTED,
+        retrievedAtMs = retrievedAt,
+        environment = profileMode,
+        currency = snapshot.currency,
+        balance = snapshot.balance,
+        equity = snapshot.equity,
+        margin = snapshot.margin,
+        freeMargin = snapshot.freeMargin,
+        validity = com.example.data.broker.DataValidity.FRESH,
+        leverage = snapshot.leverage
+    ).takeIf { it.isDisplayable(nowMs = nowMs, maxAgeMs = staleAfter * 1_000L) }
+}
+
+/**
  * App-side monitor only. The Windows MT5 terminal/EA remains responsible for autonomous
  * trading and broker-side safety enforcement. This service keeps account telemetry alive
  * when the Bot screen is not composed.
@@ -97,7 +145,6 @@ class MT5AccountSessionService : Service() {
     companion object {
         private const val CHANNEL_ID = "destinedfx_mt5_account_monitor"
         private const val NOTIFICATION_ID = 1702
-        private const val ALERT_PREFS = "mt5_daily_risk_alerts"
 
         fun start(context: Context) {
             val intent = Intent(context, MT5AccountSessionService::class.java)
@@ -137,7 +184,8 @@ class MT5AccountSessionService : Service() {
 
     private fun publishRiskAlerts(snapshots: Map<String, MT5RemoteBridgeClient.Snapshot>) {
         val manager = getSystemService(NotificationManager::class.java) ?: return
-        val prefs = getSharedPreferences(ALERT_PREFS, MODE_PRIVATE)
+        val secrets = (application as? MyApplication)?.secretsManager ?: return
+        if (!secrets.isSecureStorageAvailable) return
         val day = utcDayKey()
         snapshots.forEach { (profile, snapshot) ->
             val config = snapshot.raw.optJSONObject("configuration") ?: return@forEach
@@ -150,8 +198,10 @@ class MT5AccountSessionService : Service() {
                 status == "WARNING_80" || used >= 80.0 -> 80
                 else -> return@forEach
             }
-            val key = "${profile}_${day}_${threshold}"
-            if (prefs.getBoolean(key, false)) return@forEach
+            if (secrets.wasMt5DailyRiskAlertSent(profile, day, threshold)) return@forEach
+            // Commit the encrypted dedupe marker before delivery so a process restart cannot
+            // fan out duplicate risk alerts for the same account/day/threshold.
+            if (!secrets.markMt5DailyRiskAlertSent(profile, day, threshold)) return@forEach
             val title = when (threshold) {
                 100 -> "DestinedFX · Daily loss lock reached"
                 90 -> "DestinedFX · 90% daily loss warning"
@@ -166,7 +216,6 @@ class MT5AccountSessionService : Service() {
                 .setAutoCancel(true)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .build())
-            prefs.edit().putBoolean(key, true).apply()
         }
     }
 

@@ -28,11 +28,11 @@ $dataRootInput = Read-Host "Private terminal-data root [$defaultDataRoot]"
 if ([string]::IsNullOrWhiteSpace($dataRootInput)) { $dataRootInput = $defaultDataRoot }
 $dataRoot = [System.IO.Path]::GetFullPath($dataRootInput.Trim().Trim('"'))
 New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
-$secureToken = Read-Host "Paste generated Render WORKER_TOKEN (input is hidden)" -AsSecureString
+$secureToken = Read-Host "Paste the one-time per-worker credential provisioned for $workerId (input is hidden)" -AsSecureString
 $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
 try { $workerToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
 finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
-if ($workerToken.Length -lt 32 -or $workerToken.Length -gt 512) { throw "Worker token length invalid; copy WORKER_TOKEN from private Render environment settings." }
+if ($workerToken.Length -lt 32 -or $workerToken.Length -gt 512) { throw "Per-worker credential length invalid; provision it through the operator worker-identity endpoint." }
 $configPath = Join-Path $root "worker.toml"
 $toml = @"
 control_plane_url = $(TomlString $bridgeUrl)

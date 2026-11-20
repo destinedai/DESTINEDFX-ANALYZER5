@@ -4,14 +4,19 @@ import com.destinedfx.core.marketdata.Decision
 import com.destinedfx.core.marketdata.QuoteArbiter
 import com.destinedfx.core.marketdata.QuoteView
 import com.example.data.market.QuoteFreshness
+import com.example.data.market.DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS
+import com.example.data.market.DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS
+import com.example.data.market.DERIV_CANDLE_HISTORY_TIMEOUT_MS
 import com.example.data.market.classifyQuoteFreshness
 import com.example.data.market.candleSourceKey
 import com.example.data.market.canMergeQuoteIntoCandle
 import com.example.data.market.canonicalTickerAfterRefresh
-import com.example.data.market.scannerQuoteFromRow
 import com.example.data.market.processPollingItemsIndependently
 import com.example.data.market.resilientPollingLoop
 import com.example.data.market.sanitizeOhlcCandles
+import com.example.data.market.isCandleSnapshotFresh
+import com.example.data.market.isExplicitDerivPublicSource
+import com.example.data.market.buildDerivCanonicalSymbolMap
 import com.example.domain.model.Candle
 import com.example.domain.model.MarketTicker
 import kotlinx.coroutines.CompletableDeferred
@@ -28,6 +33,17 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class MarketDataSafetyTest {
     @Test
+    fun derivOuterTimeoutsAllowNestedConnectAndProviderResponseBudgetsToFinish() {
+        // Deriv active-symbol discovery waits up to 16s for the WebSocket plus 12s
+        // for its response. The repository must not cancel that request at 5s or 18s.
+        assertTrue(DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS > 16_000L + 12_000L)
+        assertTrue(DERIV_SYMBOL_RESOLUTION_TIMEOUT_MS > DERIV_ACTIVE_SYMBOLS_TIMEOUT_MS)
+
+        // Candle history waits up to 16s for the socket plus 10s for the history response.
+        assertTrue(DERIV_CANDLE_HISTORY_TIMEOUT_MS > 16_000L + 10_000L)
+    }
+
+    @Test
     fun candleSourceKeysDoNotAliasTimeframes() {
         assertEquals("EUR/USD-M15", candleSourceKey("EUR/USD", "m15"))
         assertEquals("EUR/USD-H1", candleSourceKey("EUR/USD", "H1"))
@@ -39,7 +55,7 @@ class MarketDataSafetyTest {
         val streamThatWasDemotedButHasStickyBoolean = MarketTicker(
             symbol = "EUR/USD", price = 1.1, changePercent = 0.0, high = 0.0, low = 0.0,
             spread = 0.0, bias = "NEUTRAL", confidence = 0, lastUpdateMillis = 95_000L,
-            isLive = true, source = "Deriv WebSocket", kind = "STALE"
+            isLive = true, source = "Deriv public WebSocket", kind = "STALE"
         )
         assertEquals(QuoteFreshness.STALE, classifyQuoteFreshness(streamThatWasDemotedButHasStickyBoolean, 100_000L))
         assertEquals(QuoteFreshness.STALE, classifyQuoteFreshness(
@@ -63,16 +79,16 @@ class MarketDataSafetyTest {
         val existing = MarketTicker(
             symbol = "EUR/USD", price = 1.1, changePercent = 0.0, high = 0.0, low = 0.0,
             spread = 0.0002, bias = "NEUTRAL", confidence = 0, lastUpdateMillis = 99_000L,
-            isLive = true, source = "Deriv WebSocket", kind = "STREAM",
+            isLive = true, source = "Deriv public WebSocket", kind = "STREAM",
             bid = 1.0999, ask = 1.1001, hasRealSpread = true
         )
-        val rejected = existing.copy(price = 1.2, source = "TradingView scanner snapshot", lastUpdateMillis = 100_000L)
+        val rejected = existing.copy(price = 1.2, source = "Unverified external chart snapshot", lastUpdateMillis = 100_000L)
         assertEquals(existing, canonicalTickerAfterRefresh(existing, rejected, accepted = false))
         assertEquals(rejected, canonicalTickerAfterRefresh(existing, rejected, accepted = true))
         val staleCanonical = existing.copy(lastUpdateMillis = 80_000L)
         assertEquals(staleCanonical, canonicalTickerAfterRefresh(staleCanonical, rejected, accepted = false))
         assertEquals(QuoteFreshness.STALE, classifyQuoteFreshness(staleCanonical, 100_000L))
-        assertEquals("Deriv WebSocket", canonicalTickerAfterRefresh(existing, rejected, accepted = false)?.source)
+        assertEquals("Deriv public WebSocket", canonicalTickerAfterRefresh(existing, rejected, accepted = false)?.source)
         assertEquals(99_000L, canonicalTickerAfterRefresh(existing, rejected, accepted = false)?.lastUpdateMillis)
     }
 
@@ -130,64 +146,22 @@ class MarketDataSafetyTest {
     }
 
     @Test
-    fun scannerSnapshotNeverInventsBidAskSpreadOrConfidence() {
-        val ticker = scannerQuoteFromRow(
-            symbol = "EUR/USD",
-            close = 1.1000,
-            changePercent = 0.25,
-            high = 1.1050,
-            low = 1.0950,
-            bid = Double.NaN,
-            ask = Double.NaN,
-            retrievedAtMs = 100_000L
-        )
-        assertTrue(ticker != null)
-        assertEquals(null, ticker!!.bid)
-        assertEquals(null, ticker.ask)
-        assertEquals(0.0, ticker.spread, 0.0)
-        assertFalse(ticker.hasRealSpread)
-        assertEquals("POLLED_LAST", ticker.kind)
-        assertEquals(0, ticker.confidence)
-        assertEquals(QuoteFreshness.LIVE, classifyQuoteFreshness(ticker, 105_000L))
-    }
-
-    @Test
-    fun scannerSnapshotPreservesOnlyValidActualBidAsk() {
-        val ticker = scannerQuoteFromRow(
-            symbol = "EUR/USD",
-            close = 1.1000,
-            changePercent = 0.25,
-            high = 1.1050,
-            low = 1.0950,
-            bid = 1.0999,
-            ask = 1.1001,
-            retrievedAtMs = 100_000L
-        )!!
-        assertEquals(1.0999, ticker.bid!!, 0.0)
-        assertEquals(1.1001, ticker.ask!!, 0.0)
-        assertEquals(0.0002, ticker.spread, 0.0000000001)
-        assertTrue(ticker.hasRealSpread)
-        assertEquals("POLLED_BIDASK", ticker.kind)
-        assertEquals(0, ticker.confidence)
-    }
-
-    @Test
-    fun scannerSnapshotRejectsInvalidCloseAndNeverInventsMissingRange() {
-        assertEquals(null, scannerQuoteFromRow("EUR/USD", Double.NaN, 0.0, 1.1, 1.0, 1.0, 1.1, 100_000L))
-        val ticker = scannerQuoteFromRow("EUR/USD", 1.1, Double.NaN, 0.0, 0.0, 0.0, 0.0, 100_000L)!!
-        assertEquals(0.0, ticker.high, 0.0)
-        assertEquals(0.0, ticker.low, 0.0)
-        assertEquals("NEUTRAL", ticker.bias)
-    }
-
-    @Test
     fun quoteUpdatesCannotBeMixedIntoAnotherVenueCandleHistory() {
-        assertTrue(canMergeQuoteIntoCandle("Binance Spot OHLC candles", "Binance Spot (USDT pairs)"))
-        assertTrue(canMergeQuoteIntoCandle("Deriv WebSocket", "Deriv WebSocket"))
+        assertTrue(canMergeQuoteIntoCandle("Deriv public OHLC", "Deriv public WebSocket"))
         assertTrue(canMergeQuoteIntoCandle("OANDA", "OANDA Pricing stream"))
-        assertFalse(canMergeQuoteIntoCandle("Deriv WebSocket", "TradingView scanner snapshot"))
-        assertFalse(canMergeQuoteIntoCandle("OANDA", "Binance Spot (USDT pairs)"))
+        assertFalse(canMergeQuoteIntoCandle("Deriv public OHLC", "Unverified external chart snapshot"))
+        assertFalse(canMergeQuoteIntoCandle("OANDA", "Deriv public WebSocket"))
         assertFalse(canMergeQuoteIntoCandle("", "OANDA"))
+    }
+
+    @Test
+    fun analyzerUsesPublicDerivMarketFeedAndVerifiesCryptoMappingsToo() {
+        assertTrue(isExplicitDerivPublicSource("DERIV_PUBLIC"))
+        assertTrue(isExplicitDerivPublicSource("deriv_public"))
+        assertFalse(isExplicitDerivPublicSource("TRADINGVIEW"))
+        assertFalse(isExplicitDerivPublicSource("BINANCE"))
+        assertFalse(isExplicitDerivPublicSource("DERIV_MT5_DEMO"))
+        assertEquals("BTC/USD", buildDerivCanonicalSymbolMap(listOf("BTC/USD"))["cryBTCUSD"])
     }
 
 
@@ -210,60 +184,79 @@ class MarketDataSafetyTest {
 
     @Test
     fun arbiterRejectsPolledQuoteWhenStreamIsFresh() {
-        val existing = quote("Deriv WebSocket", "STREAM", 99_000L)
-        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
+        val existing = quote("Deriv public WebSocket", "STREAM", 99_000L)
+        val incoming = quote("Unverified external polled quote", "POLLED_BIDASK", 100_000L)
         val result = QuoteArbiter.accept(
-            existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+            existing, incoming, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L
         )
         assertTrue(result is Decision.Reject)
     }
 
     @Test
     fun arbiterRejectsMalformedQuotesAndDoesNotSilentlyAcceptWrongSource() {
-        val existing = quote("Deriv WebSocket", "STREAM", 95_000L)
-        val invalid = quote("Deriv WebSocket", "STREAM", 100_000L, bid = -1.0, ask = 1.1)
-        assertTrue(QuoteArbiter.accept(existing, invalid, "Deriv WebSocket", 95_000L, 2_500L, 100_000L) is Decision.Reject)
+        val existing = quote("Deriv public WebSocket", "STREAM", 95_000L)
+        val invalid = quote("Deriv public WebSocket", "STREAM", 100_000L, bid = -1.0, ask = 1.1)
+        assertTrue(QuoteArbiter.accept(existing, invalid, "Deriv public WebSocket", 95_000L, 2_500L, 100_000L) is Decision.Reject)
 
-        val wrongSource = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
+        val wrongSource = quote("Unverified external chart snapshot (External venue)", "POLLED_BIDASK", 100_000L)
         assertTrue(QuoteArbiter.accept(
-            existing, wrongSource, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+            existing, wrongSource, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
     }
 
     @Test
     fun arbiterAllowsSourceSwitchOnlyAfterActiveSourceIsSilent() {
-        val existing = quote("Deriv WebSocket", "POLLED_BIDASK", 95_000L)
-        val incoming = quote("TradingView scanner snapshot (FOREXCOM)", "POLLED_BIDASK", 100_000L)
+        val existing = quote("Deriv public WebSocket", "POLLED_BIDASK", 95_000L)
+        val incoming = quote("Unverified external chart snapshot (External venue)", "POLLED_BIDASK", 100_000L)
         assertTrue(QuoteArbiter.accept(
-            existing, incoming, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+            existing, incoming, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
         assertTrue(QuoteArbiter.accept(
-            existing, incoming, "Deriv WebSocket", 90_000L, 2_500L, 100_000L
+            existing, incoming, "Deriv public WebSocket", 90_000L, 2_500L, 100_000L
         ) is Decision.SwitchSource)
     }
 
 
     @Test
     fun freshStreamingProviderCannotBeReplacedByAnotherStream() {
-        val active = quote("Deriv WebSocket", "STREAM", 99_000L)
+        val active = quote("Deriv public WebSocket", "STREAM", 99_000L)
         val competing = quote("OANDA Pricing stream", "STREAM", 100_000L)
         assertTrue(QuoteArbiter.accept(
-            active, competing, "Deriv WebSocket", 99_000L, 2_500L, 100_000L
+            active, competing, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L
         ) is Decision.Reject)
 
         val staleActive = active.copy(lastUpdateMillis = 90_000L)
         assertTrue(QuoteArbiter.accept(
-            staleActive, competing, "Deriv WebSocket", 90_000L, 2_500L, 100_000L
+            staleActive, competing, "Deriv public WebSocket", 90_000L, 2_500L, 100_000L
         ) is Decision.Accept)
     }
 
     @Test
     fun arbiterRejectsFutureAndNonFiniteQuotesBeforeCanonicalization() {
-        val existing = quote("Deriv WebSocket", "STREAM", 99_000L)
-        val future = quote("Deriv WebSocket", "STREAM", 100_001L)
+        val existing = quote("Deriv public WebSocket", "STREAM", 99_000L)
+        val future = quote("Deriv public WebSocket", "STREAM", 100_001L)
         val nanPrice = future.copy(price = Double.NaN, lastUpdateMillis = 100_000L)
-        assertTrue(QuoteArbiter.accept(existing, future, "Deriv WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
-        assertTrue(QuoteArbiter.accept(existing, nanPrice, "Deriv WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
+        assertTrue(QuoteArbiter.accept(existing, future, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
+        assertTrue(QuoteArbiter.accept(existing, nanPrice, "Deriv public WebSocket", 99_000L, 2_500L, 100_000L) is Decision.Reject)
+    }
+
+    @Test
+    fun candleSnapshotChecksRetrievalAgeAndLatestClosedBar() {
+        val now = 500_000_000L
+        assertTrue(isCandleSnapshotFresh(now - 1_000L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 30_000L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now + 1L, now - 60_000L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, 0L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now + 1L, now, "M1"))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now - 300_000L, now, "M1"))
+        assertTrue(isCandleSnapshotFresh(
+            now - 1_000L, now - 48L * 60L * 60L * 1000L, now, "H1",
+            allowWeekendGap = true
+        ))
+        assertFalse(isCandleSnapshotFresh(
+            now - 1_000L, now - 48L * 60L * 60L * 1000L, now, "H1"
+        ))
+        assertFalse(isCandleSnapshotFresh(now - 1_000L, now - 60_000L, now, "UNKNOWN"))
     }
 
 }

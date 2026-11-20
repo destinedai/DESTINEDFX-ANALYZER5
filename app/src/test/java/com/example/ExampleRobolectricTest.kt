@@ -88,6 +88,13 @@ class ExampleRobolectricTest {
   fun `appearance preference accepts supported modes and rejects arbitrary values`() {
     val context = ApplicationProvider.getApplicationContext<MyApplication>()
     val secrets = context.secretsManager
+    if (!secrets.isSecureStorageAvailable) {
+      // Unavailable Keystore storage must keep the system default and refuse persistence.
+      assertFalse(secrets.saveThemeMode("Light"))
+      assertEquals("System", secrets.getThemeMode())
+      assertFalse(secrets.saveThemeMode("neon"))
+      return
+    }
     assertTrue(secrets.saveThemeMode("Light"))
     assertEquals("Light", secrets.getThemeMode())
     assertFalse(secrets.saveThemeMode("neon"))
@@ -189,7 +196,15 @@ class ExampleRobolectricTest {
     context.secretsManager.saveBotSymbol("R_100")
     context.secretsManager.saveBotStrategy("ict-silver-bullet")
     context.secretsManager.saveBotTimeframe("M15")
-    assertTrue(context.secretsManager.saveBotRiskPercent(0.25))
+    if (context.secretsManager.isSecureStorageAvailable) {
+      assertTrue(context.secretsManager.saveBotRiskPercent(0.25))
+      assertEquals(0.25, context.secretsManager.getBotRiskPercent(), 0.0)
+    } else {
+      // Robolectric may not provide an Android Keystore. The app must fail closed
+      // rather than write the risk setting into plaintext preferences.
+      assertFalse(context.secretsManager.saveBotRiskPercent(0.25))
+      assertEquals(0.25, context.secretsManager.getBotRiskPercent(), 0.0)
+    }
     val vm = DestinedFXViewModel(context)
 
     assertEquals("EUR/USD", vm.selectedTicker.value)

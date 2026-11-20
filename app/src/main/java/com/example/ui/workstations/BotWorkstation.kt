@@ -72,12 +72,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             bridgeSecrets, bridgeProfileKey,
             { AppSecurityGuard.authorizeSensitiveAction() },
             accountMode = selectedAccountMode,
-            brokerBrand = selectedBrokerBrand
+            brokerBrand = selectedBrokerBrand,
+            managementIdentityAssertionProvider = { viewModel.issueBridgeIdentityAssertion() }
         )
     }
     val reportContext = LocalContext.current
     var bridgeMode by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isNotBlank()) }
     var bridgeCode by remember(bridgeProfileKey) { mutableStateOf("") }
+    var ownerBootstrapCodeInput by remember(bridgeProfileKey) { mutableStateOf("") }
     var bridgeMessage by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.getMT5BridgeAccountPendingCommandId(bridgeProfileKey).let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
     var bridgeSnapshot by remember(bridgeProfileKey) { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
     var managedBridgeUrlInput by remember {
@@ -226,12 +228,24 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                     lastProcessedSessionSnapshot = sessionSnapshotKey
                     runCatching {
-                        val syncPrefs = reportContext.getSharedPreferences("destinedfx_trade_sync", android.content.Context.MODE_PRIVATE)
-                        val syncKey = bridgeProfileKey.lowercase()
-                        val records = mutableListOf<JSONObject>(); var cursor = syncPrefs.getInt("${syncKey}_cursor", 0); var updatedAfter = syncPrefs.getString("${syncKey}_watermark", "0")?.toDoubleOrNull() ?: 0.0; var next: Int; var watermark = updatedAfter
-                        do { val page = bridgeClient.tradeHistory(cursor, updatedAfter); next = page.cursor; watermark = maxOf(watermark, page.watermark); records += page.trades; if (next <= cursor) break; cursor = next } while (true)
+                        val secureStore = viewModel.app.secretsManager
+                        val records = mutableListOf<JSONObject>()
+                        var cursor = secureStore.getTradeSyncCursor(bridgeProfileKey)
+                        val updatedAfter = secureStore.getTradeSyncWatermark(bridgeProfileKey)
+                        var next: Int
+                        var watermark = updatedAfter
+                        do {
+                            val page = bridgeClient.tradeHistory(cursor, updatedAfter)
+                            next = page.cursor
+                            watermark = maxOf(watermark, page.watermark)
+                            records += page.trades
+                            if (next <= cursor) break
+                            cursor = next
+                        } while (true)
                         val result = TradeReportManager.sync(reportContext, records)
-                        syncPrefs.edit().putInt("${syncKey}_cursor", cursor).putString("${syncKey}_watermark", watermark.toString()).apply()
+                        check(secureStore.saveTradeSyncProgress(bridgeProfileKey, cursor, watermark)) {
+                            "Encrypted trade synchronization checkpoint could not be saved."
+                        }
                         reportStatus = "Trade reports: ${result.generated} synchronized/generated, ${result.failed} failed"
                     }.onFailure { reportStatus = "Trade reports: sync unavailable; retrying (${it.javaClass.simpleName})" }
                     val cmd = fresh.raw.optJSONObject("last_command")
@@ -324,9 +338,27 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
                     Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && bridgeSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) bridgeSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    val observedHostProfile = bridgeSnapshot?.hostProfile?.name ?: "UNKNOWN"
+                    Text(
+                        "HOST PROFILE: $observedHostProfile · LIVE GATE: " +
+                            if (observedHostProfile == "PERSISTENT") "PERSISTENT HOST EVIDENCE PRESENT" else "BLOCKED — PERSISTENT HOST NOT VERIFIED",
+                        color = if (observedHostProfile == "PERSISTENT") ProfitGreen else WarningAmber,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                     OutlinedButton(onClick = { showBridgeDetails = !showBridgeDetails }, modifier = Modifier.fillMaxWidth().testTag("bridge_setup_details_toggle")) {
                         Text(if (showBridgeDetails) "HIDE CONNECTION DETAILS" else "CONNECTION SETUP & POSITION DETAILS", fontSize = 10.sp)
                     }
+                    CodespacesHostControls(
+                        secrets = bridgeSecrets,
+                        bridgeClient = bridgeClient,
+                        onBridgeOriginDiscovered = { origin ->
+                            // The child control saves the same encrypted origin used by bridgeClient.
+                            // Keep the Bot's editable field and visible snapshot in sync with that connection.
+                            managedBridgeUrlInput = origin
+                            bridgeSnapshot = null
+                        }
+                    )
                     if (showBridgeDetails) {
                     val news = bridgeSnapshot?.newsVerdict.takeIf { verifiedRemoteSnapshotForBot != null }
                     val newsStatus = news?.optString("status", "UNKNOWN")?.uppercase() ?: "UNKNOWN"
@@ -346,6 +378,21 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         supportingText = { Text("Enter the public service origin only. Never enter a token or password here.") }
                     )
+                    if (bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isBlank()) {
+                        OutlinedTextField(
+                            value = ownerBootstrapCodeInput,
+                            onValueChange = { ownerBootstrapCodeInput = it },
+                            modifier = Modifier.fillMaxWidth().testTag("managed_bridge_owner_bootstrap"),
+                            enabled = !bridgeBusy && !isConnectingBroker,
+                            label = { Text("Optional owner bootstrap code (manual recovery)") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            supportingText = {
+                                Text("Leave blank for automatic one-use issuance using your signed management identity. Manual recovery only; expires in 10 minutes and is not saved.")
+                            }
+                        )
+                    }
                     if (managedBridgeUrlInput.contains(".trycloudflare.com", ignoreCase = true)) {
                         Text(
                             "DEMO / DEVELOPMENT ONLY — Cloudflare Quick Tunnel URLs are temporary and are not a production endpoint.",
@@ -392,6 +439,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val supportedStrategy = selectedStrategyId in StrategyRegistry.managedStrategyIds
                     val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
                     if (selectedAccountMode == "LIVE") {
+                        if (observedHostProfile != "PERSISTENT") {
+                            Text(
+                                "LIVE IS BLOCKED: host profile is $observedHostProfile. A persistent, independently verified host is required; an ephemeral Codespaces host remains DEMO-only. This is an active safety gate, not a missing button.",
+                                color = LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold
+                            )
+                        }
                         Text("LIVE authorization: ${if (bridgeSnapshot?.liveAuthorized == true) "ACTIVE (server-verified, short-lived)" else "NOT AUTHORIZED"}", color = if (bridgeSnapshot?.liveAuthorized == true) WarningAmber else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         Button(enabled = !bridgeBusy && bridgeProfileReady && bridgeSnapshot?.liveAuthorized != true, onClick = { showLiveAuthorizationDialog = true }) {
                             Text("AUTHORIZE LIVE SESSION (15 MIN)")
@@ -403,10 +456,18 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             onDismissRequest = { showLiveAuthorizationDialog = false },
                             title = { Text("Authorize LIVE trading?") },
                             text = { Text("This confirms LIVE profile ${bridgeSecrets.getManagedMT5AccountLogin("${selectedBrokerBrand}_LIVE")} at ${bridgeSecrets.getManagedMT5AccountServer("${selectedBrokerBrand}_LIVE")} for up to 15 minutes. The connected MT5 terminal must independently report this exact account as LIVE with MASTER access and fresh readiness. This permits real-money entries after all risk checks; it does not liquidate positions or guarantee outcomes.") },
-                            confirmButton = { TextButton(onClick = { showLiveAuthorizationDialog = false; coroutineScope.launch { bridgeBusy = true; try { val expiry = bridgeClient.authorizeLiveSession(); bridgeSnapshot = bridgeClient.state(); bridgeMessage = "LIVE authorization confirmed until $expiry." } catch (e: Exception) { bridgeMessage = e.message ?: "LIVE authorization failed closed." }; bridgeBusy = false } }) { Text("AUTHORIZE LIVE") } },
+                            confirmButton = { TextButton(onClick = { showLiveAuthorizationDialog = false; bridgeMessage = "LIVE authorization requires the server challenge, exact typed phrase, and management reauthentication in the primary MT5 workspace." }) { Text("OPEN PRIMARY WORKSPACE") } },
                             dismissButton = { TextButton(onClick = { showLiveAuthorizationDialog = false }) { Text("CANCEL") } }
                         )
                     }
+                    Text(
+                        "NEW MT5 ENTRIES: START activates the selected managed EA strategy. The EA submits broker Buy/Sell only after its own fresh-quote, account-identity, heartbeat, news, cost and risk checks. This phone UI does not send an arbitrary manual market order.",
+                        color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "A queued/acknowledged command is not a fill. The Bot waits for EA acknowledgement and a fresh terminal snapshot; unresolved results stay UNKNOWN and are not blindly resent.",
+                        color = TextSecondary, fontSize = 10.sp
+                    )
                     Text("Managed EA strategy support is registry-validated; support does not imply profitability or real-broker testing.", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     BridgeTelemetry(
                         if (bridgeMode) bridgeSnapshot else null, selectedAccountMode,
@@ -424,6 +485,44 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val actionSnapshotVerified = verifiedActionSnapshot != null
                     val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshotVerified && !bridgeBusy && !bridgeCommandPending
                     Text("SNAPSHOT-BOUND MANAGEMENT · $selectedAccountMode", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_snapshot_management_header"))
+                    val currentBrokerSnapshot = bridgeSnapshot
+                    val terminalQuotes = currentBrokerSnapshot?.brokerQuotes.orEmpty()
+                    val brokerQuotesReady = currentBrokerSnapshot?.let {
+                        it.connected && it.heartbeatFresh && it.brokerIdentityVerified
+                    } == true && terminalQuotes.isNotEmpty()
+                    Text("SELECTED BROKER · MT5 TERMINAL PRICES", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_broker_quotes_header"))
+                    if (brokerQuotesReady) {
+                        terminalQuotes.forEach { quote ->
+                            val priceFormat = "%.${quote.digits}f"
+                            Row(
+                                modifier = Modifier.fillMaxWidth().testTag("mt5_broker_quote_${quote.symbol}"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(quote.symbol, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                    Text("BID ${String.format(java.util.Locale.US, priceFormat, quote.bid)}  ·  ASK ${String.format(java.util.Locale.US, priceFormat, quote.ask)}",
+                                        color = ProfitGreen, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                }
+                                Text("${quote.ageMs} ms · ${quote.source}", color = TextSecondary, fontSize = 8.sp)
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = when {
+                                currentBrokerSnapshot == null -> "Broker prices unavailable · waiting for a verified terminal snapshot."
+                                currentBrokerSnapshot?.brokerIdentityVerified != true -> "Broker prices withheld · account company/server identity is not verified."
+                                currentBrokerSnapshot?.heartbeatFresh != true -> "Broker prices withheld · MT5 terminal heartbeat is stale."
+                                terminalQuotes.isEmpty() -> "No fresh MT5 bid/ask ticks received for the configured broker symbols."
+                                else -> "Broker prices unavailable."
+                            },
+                            color = WarningAmber,
+                            fontSize = 9.sp,
+                            modifier = Modifier.testTag("mt5_broker_quotes_status")
+                        )
+                    }
+                    Text("These are quotes from this account's authenticated MT5 terminal. Analyzer/provider prices remain a separate feed and are not substituted for these broker prices.",
+                        color = TextSecondary, fontSize = 9.sp)
                     if (verifiedActionSnapshot != null) {
                         val verifiedOrders = verifiedActionSnapshot.activeOrders.orEmpty()
                         Text("PENDING ORDERS (${verifiedOrders.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_pending_orders_section"))
@@ -1169,10 +1268,18 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             InsightCard("ENGINE SAFEGUARDS & QUANT CONTROLS") {
                 InsightLine("Active Strategy", strat)
                 val verifiedDisplayBalance = verifiedRemoteSnapshotForBot?.balance?.takeIf { it.isFinite() && it >= 0.0 }
-                InsightLine(
-                    if (verifiedDisplayBalance != null) "Verified MT5 Balance" else "Configured Capital (not live balance)",
-                    if (verifiedDisplayBalance != null) "${verifiedRemoteSnapshotForBot?.currency?.takeIf { it.isNotBlank() } ?: "Currency"} ${java.lang.String.format(java.util.Locale.US, "%.2f", verifiedDisplayBalance)}" else java.lang.String.format(java.util.Locale.US, "%.2f", capital)
-                )
+                if (verifiedDisplayBalance != null) {
+                    InsightLine(
+                        "Verified MT5 Balance",
+                        "${verifiedRemoteSnapshotForBot?.currency?.takeIf { it.isNotBlank() } ?: "Currency"} ${java.lang.String.format(java.util.Locale.US, "%.2f", verifiedDisplayBalance)}"
+                    )
+                } else {
+                    InsightLine("MT5 Broker Balance", "UNAVAILABLE — fresh authenticated terminal snapshot required")
+                    InsightLine(
+                        "Configured sizing capital (not broker data)",
+                        java.lang.String.format(java.util.Locale.US, "%.2f", capital)
+                    )
+                }
                 InsightLine("NFP Safeguard", if (nfpArmed) "ARMED (High-Impact Guard Active)" else "DISARMED")
                 InsightLine("News / Halt Guard", if (isHalted) "HALTED (News Filter Lock)" else "No engine halt; broker/risk checks still apply")
                 InsightLine("Deterministic MTF Scan", if (isMultiScanning) "SCANNING (H1 / M15 / H4)" else consensusStatus)
@@ -1304,10 +1411,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             var showOpenDemoDialog by remember { mutableStateOf(false) }
             var showOpenRealDialog by remember { mutableStateOf(false) }
 
-            val storedBal = remember {
-                viewModel.app.secretsManager.getMT5AccountBalance().takeIf { it > 0.0 } ?: 0.0
-            }
-            var mt5BalanceInput by remember { mutableStateOf(String.format(java.util.Locale.US, "%.2f", storedBal)) }
             var selectedLeverage by remember { mutableStateOf(viewModel.app.secretsManager.getMT5Leverage().takeIf { it > 0 } ?: 0) }
             var expandedLeverage by remember { mutableStateOf(false) }
             val currentSessionStatus = viewModel.app.secretsManager.getMT5SessionStatus()
@@ -1902,7 +2005,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             bridgeMode = true
                                             val snapshot = bridgeClient.registerManagedAccount(
                                                 mt5LoginInput, secret, mt5ServerInput, mt5AccessType, managedCredentialConsent,
-                                                savePasswordChecked, selectedCostModel, selectedCommission, selectedCostEvidence
+                                                savePasswordChecked, selectedCostModel, selectedCommission, selectedCostEvidence,
+                                                ownerBootstrapCodeInput.trim()
                                             )
                                             bridgeMode = true
                                             runCatching { MT5AccountSessionService.start(reportContext) }
@@ -1917,6 +2021,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                 it.contains("encrypted storage")
                                         } ?: "Managed registration failed; check service availability and credentials."
                                     } finally {
+                                        ownerBootstrapCodeInput = ""
                                         mt5PasswordInput = ""
                                         mt5InvestorPasswordInput = ""
                                         managedCredentialConsent = false

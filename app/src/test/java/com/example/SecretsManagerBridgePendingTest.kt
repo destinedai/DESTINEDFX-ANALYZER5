@@ -2,6 +2,8 @@ package com.example
 
 import androidx.test.core.app.ApplicationProvider
 import com.example.security.SecretsManager
+import com.destinedfx.core.security.CrashLogManager
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -204,4 +206,120 @@ class SecretsManagerBridgePendingTest {
         assertEquals("", manager.getDerivApiToken())
         assertEquals("", manager.getDerivAppId())
     }
+
+    @Test fun backgroundBotAndReportStateMigratesFromLegacyPreferencesIntoEncryptedStorage() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        context.getSharedPreferences("deriv_bot_config", 0).edit()
+            .putString("symbol", "R_100")
+            .putString("strategy", "smc-confluence-1.0.0")
+            .putString("timeframe", "M15")
+            .putBoolean("enabled", true)
+            .putString("service_status_state", "STOPPED")
+            .putString("service_status_reason", "BOT NOT RUNNING — legacy fixture")
+            .commit()
+        context.getSharedPreferences("destinedfx_trade_sync", 0).edit()
+            .putInt("fbs_demo_cursor", 9)
+            .putString("fbs_demo_watermark", "1731600000.5")
+            .commit()
+        context.getSharedPreferences("destinedfx_trade_reports", 0).edit()
+            .putString("OPEN_TRADE_DEMO_fixture.pdf", "legacy-fingerprint")
+            .commit()
+        context.getSharedPreferences("mt5_daily_risk_alerts", 0).edit()
+            .putBoolean("FBS_DEMO_2026-11-19_80", true)
+            .commit()
+
+        val manager = SecretsManager(context)
+        if (!manager.isSecureStorageAvailable) return
+
+        assertEquals("R_100", manager.getDerivBotRecoverySymbol())
+        assertEquals("smc-confluence-1.0.0", manager.getDerivBotRecoveryStrategy())
+        assertEquals("M15", manager.getDerivBotRecoveryTimeframe())
+        assertTrue(manager.isDerivBotRecoveryEnabled())
+        assertEquals("STOPPED", manager.getDerivBotServiceState())
+        assertEquals("BOT NOT RUNNING — legacy fixture", manager.getDerivBotServiceReason())
+        assertEquals(9, manager.getTradeSyncCursor("FBS_DEMO"))
+        assertEquals(1731600000.5, manager.getTradeSyncWatermark("FBS_DEMO"), 0.0)
+        assertEquals("legacy-fingerprint", manager.getTradeReportFingerprint("OPEN_TRADE_DEMO_fixture.pdf"))
+        assertTrue(manager.wasMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
+
+        assertTrue(context.getSharedPreferences("deriv_bot_config", 0).all.isEmpty())
+        assertTrue(context.getSharedPreferences("destinedfx_trade_sync", 0).all.isEmpty())
+        assertTrue(context.getSharedPreferences("destinedfx_trade_reports", 0).all.isEmpty())
+        assertTrue(context.getSharedPreferences("mt5_daily_risk_alerts", 0).all.isEmpty())
+    }
+
+    @Test fun encryptedDerivBotStateAndTradeCheckpointsValidateInputs() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) {
+            assertFalse(manager.saveDerivBotRecoveryConfiguration("R_100", "smc-confluence-1.0.0", "M15"))
+            assertFalse(manager.setDerivBotRecoveryEnabled(true))
+            assertFalse(manager.saveTradeSyncProgress("FBS_DEMO", 3, 100.0))
+            assertFalse(manager.markMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
+            return
+        }
+        assertTrue(manager.saveDerivBotRecoveryConfiguration("R_100", "smc-confluence-1.0.0", "M15"))
+        assertTrue(manager.setDerivBotRecoveryEnabled(true))
+        assertFalse(manager.saveDerivBotRecoveryConfiguration("R_100", "bad\nstrategy", "M15"))
+        assertTrue(manager.saveTradeSyncProgress("FBS_DEMO", 3, 100.5))
+        assertEquals(3, manager.getTradeSyncCursor("FBS_DEMO"))
+        assertEquals(100.5, manager.getTradeSyncWatermark("FBS_DEMO"), 0.0)
+        assertFalse(manager.saveTradeSyncProgress("FBS_DEMO", -1, 100.5))
+        assertFalse(manager.saveTradeSyncProgress("FBS_DEMO", 3, Double.NaN))
+        assertTrue(manager.markMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
+        assertTrue(manager.wasMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-19", 80))
+        assertFalse(manager.wasMt5DailyRiskAlertSent("FBS_DEMO", "2026-11-20", 80))
+    }
+
+    @Test fun legacyCrashDiagnosticsMigrateToEncryptedStorageAndPlaintextFileIsDeleted() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val legacy = File(context.filesDir, CrashLogManager.CRASH_FILE_NAME)
+        legacy.writeText("CRASH: fixture.Exception\\nThread: main | TimeMs: 123\\nStack frames:\\n  at fixture.Frame")
+        val manager = SecretsManager(context)
+
+        assertFalse(legacy.exists())
+        if (manager.isSecureStorageAvailable) {
+            assertTrue(manager.getLastCrashLog()?.contains("CRASH: fixture.Exception") == true)
+            assertTrue(manager.clearLastCrashLog())
+            assertEquals(null, manager.getLastCrashLog())
+        } else {
+            assertEquals(null, manager.getLastCrashLog())
+        }
+    }
+
+    @Test fun crashLogManagerCannotWriteNewPlaintextDiagnosticFiles() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val legacy = File(context.filesDir, CrashLogManager.CRASH_FILE_NAME)
+        legacy.delete()
+        assertFalse(CrashLogManager(context.filesDir).writeCrash("CRASH: fixture.Exception"))
+        assertFalse(legacy.exists())
+    }
+
+    @Test fun liveLeaseRenewalReminderMarkersMigrateIntoEncryptedStorage() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val fingerprint = "a".repeat(64)
+        val expiresAt = 1_800_000_000_000L
+        val legacy = context.getSharedPreferences("mode_renewal_reminders", 0)
+        val legacyKey = "notified_${fingerprint}:${expiresAt}"
+        legacy.edit().putBoolean(legacyKey, true).commit()
+
+        val manager = SecretsManager(context)
+        if (manager.isSecureStorageAvailable) {
+            assertTrue(manager.wasLiveLeaseRenewalReminderSent(fingerprint, expiresAt))
+            assertTrue("Legacy notification markers clear only after encrypted migration", legacy.all.isEmpty())
+            assertFalse(manager.markLiveLeaseRenewalReminderSent("not-a-sha256-fingerprint", expiresAt))
+            assertFalse(manager.wasLiveLeaseRenewalReminderSent(fingerprint, expiresAt + 1L))
+            assertTrue(manager.markLiveLeaseRenewalReminderSent("b".repeat(64), expiresAt))
+            assertTrue(manager.wasLiveLeaseRenewalReminderSent("b".repeat(64), expiresAt))
+        } else {
+            assertTrue("Preserve the old reminder marker until encryption is available", legacy.getBoolean(legacyKey, false))
+            assertFalse(manager.markLiveLeaseRenewalReminderSent(fingerprint, expiresAt))
+        }
+    }
+
+    @Test fun manualMt5BalancePersistenceIsDisabledAndCannotBeReadAsBrokerEvidence() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        assertFalse(manager.saveMT5AccountBalance(12_345.67))
+        assertEquals(0.0, manager.getMT5AccountBalance(), 0.0)
+    }
+
 }

@@ -12,6 +12,8 @@ import com.example.domain.engine.impl.CoreMarketStructureAnalyzer
 import com.example.domain.engine.MTFAlignmentEngine
 import com.example.domain.usecase.impl.*
 import com.example.security.SecretsManager
+import com.example.data.broker.ModeArmingPolicy
+import com.example.data.broker.UniversalConnectorDispatcher
 import com.example.security.AppSecurityGuard
 import com.example.domain.risk.TradingSafetyLimits
 import com.squareup.moshi.Moshi
@@ -20,10 +22,10 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
 
 
 class MyApplication : Application() {
@@ -39,9 +41,18 @@ class MyApplication : Application() {
     val db: AppDatabase get() = _db ?: throw IllegalStateException("AppDatabase not initialized")
 
     val storageAvailable = MutableStateFlow(false)
+    val cTraderCallback = MutableStateFlow<android.net.Uri?>(null)
+    fun acceptCTraderCallback(uri: android.net.Uri) {
+        if (_cTraderOAuthClient?.isCallbackRedirectAllowed(uri) == true) cTraderCallback.value = uri
+    }
+    fun clearCTraderCallback() { cTraderCallback.value = null }
     
     private var _secretsManager: SecretsManager? = null
     val secretsManager: SecretsManager get() = _secretsManager ?: throw IllegalStateException("SecretsManager not initialized")
+    private var _modeArmingPolicy: ModeArmingPolicy? = null
+    val modeArmingPolicy: ModeArmingPolicy get() = _modeArmingPolicy ?: throw IllegalStateException("ModeArmingPolicy not initialized")
+    private var _universalConnectorDispatcher: UniversalConnectorDispatcher? = null
+    val universalConnectorDispatcher: UniversalConnectorDispatcher get() = _universalConnectorDispatcher ?: throw IllegalStateException("UniversalConnectorDispatcher not initialized")
 
     private var _marketDataRepository: MarketDataRepositoryImpl? = null
     val marketDataRepository: MarketDataRepositoryImpl get() = _marketDataRepository ?: throw IllegalStateException("MarketDataRepository not initialized")
@@ -91,6 +102,12 @@ class MyApplication : Application() {
     private var _mtfAlignmentEngine: MTFAlignmentEngine? = null
     val mtfAlignmentEngine: MTFAlignmentEngine get() = _mtfAlignmentEngine ?: throw IllegalStateException("MTFAlignmentEngine not initialized")
 
+    private var _cTraderOAuthClient: com.example.data.ctrader.CTraderOAuthClient? = null
+    val cTraderOAuthClient: com.example.data.ctrader.CTraderOAuthClient get() = _cTraderOAuthClient ?: throw IllegalStateException("CTraderOAuthClient not initialized")
+
+    private var _cTraderGateway: com.example.data.ctrader.CTraderReadOnlyGateway? = null
+    val cTraderGateway: com.example.data.ctrader.CTraderReadOnlyGateway get() = _cTraderGateway ?: throw IllegalStateException("CTraderReadOnlyGateway not initialized")
+
     private var _derivBrokerGateway: com.example.data.deriv.DerivBrokerGateway? = null
     val derivBrokerGateway: com.example.data.deriv.DerivBrokerGateway get() = _derivBrokerGateway ?: throw IllegalStateException("DerivBrokerGateway not initialized")
 
@@ -106,7 +123,9 @@ class MyApplication : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 val crashText = com.destinedfx.core.security.CrashRecorder.format(thread.name, throwable, System.currentTimeMillis())
-                com.destinedfx.core.security.CrashLogManager(filesDir).writeCrash(crashText)
+                // Crash details are redacted and retained only in Android Keystore-backed storage.
+                // If initialization has not established secure storage, do not write them in plaintext.
+                _secretsManager?.takeIf { it.isSecureStorageAvailable }?.saveLastCrashLog(crashText)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.e("MyApplication", "Crash write failed: ${e.javaClass.simpleName}")
@@ -120,13 +139,16 @@ class MyApplication : Application() {
 
     fun initializeDependencies() {
         try {
-            // Initialize
-            val dbInstance = AppDatabase.getDatabase(this@MyApplication)
-            _db = dbInstance
+            // Secure storage must be initialized before Room so the database passphrase can
+            // be loaded from Android Keystore-backed encrypted preferences.
             val secrets = SecretsManager(this@MyApplication)
             _secretsManager = secrets
             storageAvailable.value = secrets.isSecureStorageAvailable
-            _riskRepository = RiskRepositoryImpl(this@MyApplication)
+            val dbInstance = AppDatabase.getDatabase(this@MyApplication, secrets)
+            _db = dbInstance
+            _modeArmingPolicy = ModeArmingPolicy(auditSink = secrets::appendModeArmingAudit)
+            _universalConnectorDispatcher = UniversalConnectorDispatcher(emptyMap(), modeArmingPolicy)
+            _riskRepository = RiskRepositoryImpl(this@MyApplication, secrets)
             
             val derivMarketDataGateway = com.example.data.deriv.DerivMarketDataGateway()
             
@@ -155,7 +177,9 @@ class MyApplication : Application() {
                 pythonAnalyzer = ChaquopyPythonAnalyzer(this@MyApplication)
             )
             
-            _derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secrets)
+            _cTraderOAuthClient = com.example.data.ctrader.CTraderOAuthClient(secrets)
+            _cTraderGateway = com.example.data.ctrader.CTraderReadOnlyGateway(secrets, cTraderOAuthClient)
+            _derivBrokerGateway = com.example.data.deriv.DerivBrokerGateway(secrets, modeArmingPolicy = modeArmingPolicy)
             _derivGatewayAdapter = com.example.data.broker.DerivBrokerGatewayAdapter(derivBrokerGateway)
             _mt5GatewayAdapter = com.example.data.broker.MT5BrokerGatewayAdapter(mt5GatewayRepository)
             _brokerManager = com.example.data.broker.BrokerManager(derivGatewayAdapter, mt5GatewayAdapter)

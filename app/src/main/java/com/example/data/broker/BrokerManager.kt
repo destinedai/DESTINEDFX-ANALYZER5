@@ -8,7 +8,6 @@ class BrokerManager(
     val derivGateway: BrokerGateway,
     val mt5Gateway: BrokerGateway
 ) {
-    private val unavailableOanda: BrokerGateway = UnavailableBrokerGateway(BrokerType.OANDA, "OANDA")
     private val _selectedBrokerType = MutableStateFlow(BrokerType.MT5)
     val selectedBrokerType: StateFlow<BrokerType> = _selectedBrokerType.asStateFlow()
 
@@ -19,14 +18,12 @@ class BrokerManager(
         _selectedBrokerType.value = type
         _activeBroker.value = when (type) {
             BrokerType.DERIV -> derivGateway
-            BrokerType.MT5 -> mt5Gateway
-            BrokerType.OANDA -> unavailableOanda
+            BrokerType.MT5, BrokerType.FBS, BrokerType.EXNESS, BrokerType.HFM -> mt5Gateway
         }
     }
 
     fun getGateway(type: BrokerType): BrokerGateway = when (type) {
         BrokerType.DERIV -> derivGateway
-        BrokerType.MT5 -> mt5Gateway
-        BrokerType.OANDA -> unavailableOanda
+        BrokerType.MT5, BrokerType.FBS, BrokerType.EXNESS, BrokerType.HFM -> mt5Gateway
     }
 }

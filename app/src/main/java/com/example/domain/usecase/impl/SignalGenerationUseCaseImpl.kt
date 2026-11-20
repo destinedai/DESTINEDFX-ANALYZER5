@@ -18,6 +18,7 @@ import com.destinedfx.core.session.SessionEngine as CoreSession
 import com.example.domain.model.MarketTicker
 import com.example.data.market.canMergeQuoteIntoCandle
 import com.example.data.market.candleSourceKey
+import com.example.data.market.isCandleSnapshotFresh
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.domain.model.PythonAnalysisReport
@@ -119,8 +120,13 @@ class SignalGenerationUseCaseImpl(
             // a valid freshly-received quote is not falsely treated as future-dated.
             now = clock()
             val hc = if (ticker?.kind == "STREAM") HealthConfig() else HealthConfig.polled(pollIntervalMs)
-            val health = if (ticker == null) MarketDataHealth.STALE
-                else MarketDataHealthEvaluator.evaluate(quote, now, connected = true, cfg = hc)
+            val isTradingViewScannerSnapshot =
+                ticker?.source?.contains("TradingView scanner snapshot", ignoreCase = true) == true
+            val health = when {
+                ticker == null -> MarketDataHealth.STALE
+                isTradingViewScannerSnapshot -> MarketDataHealth.DELAYED
+                else -> MarketDataHealthEvaluator.evaluate(quote, now, connected = true, cfg = hc)
+            }
             // STALE is accepted for a historical research readout, but is never executable below.
             if (health !in setOf(MarketDataHealth.LIVE, MarketDataHealth.DELAYED, MarketDataHealth.STALE)) {
                 return unavailable(symbol, timeframe, "Market data " + health.name, health.name)
@@ -137,10 +143,21 @@ class SignalGenerationUseCaseImpl(
                 if (raw.isEmpty()) {
                     failedFetches[cacheKey] = clock()
                     return emptyList()
-                } else {
-                    failedFetches.remove(cacheKey)
                 }
-                
+                val snapshotRetrievedAtMs = market.candleRetrievedAtMs[cacheKey] ?: 0L
+                val latestClosedCandleAtMs = raw.lastOrNull { it.complete }?.timestamp ?: 0L
+                if (!isCandleSnapshotFresh(
+                        snapshotRetrievedAtMs = snapshotRetrievedAtMs,
+                        latestClosedCandleAtMs = latestClosedCandleAtMs,
+                        nowMs = clock(),
+                        timeframe = t.label,
+                        allowWeekendGap = cls != AssetClass.CRYPTO
+                    )) {
+                    failedFetches[cacheKey] = clock()
+                    return emptyList()
+                }
+                failedFetches.remove(cacheKey)
+
                 val kind = if (raw.sumOf { it.volume } <= 0.0) VolumeType.NONE else if (cls == AssetClass.CRYPTO) VolumeType.REAL else VolumeType.TICK
                 val coreCandles = raw.map { CoreCandle(it.timestamp, it.open, it.high, it.low, it.close, it.volume, kind, null, it.complete) }
                 return CandleSelector.closedOnly(coreCandles)
@@ -162,7 +179,10 @@ class SignalGenerationUseCaseImpl(
                 targets.map { t ->
                     async {
                         try {
-                            withTimeout(30_000) {
+                            withTimeout(65_000) {
+                                // getCandles may first complete Deriv active-symbol discovery (up to 32s)
+                                // and then the historical candle request (up to 30s). Do not cancel
+                                // that nested provider work at the old 30-second MTF boundary.
                                 t to load(t, if (t == Timeframe.W1) 80 else 150)
                             }
                         } catch (e: TimeoutCancellationException) {
@@ -198,14 +218,17 @@ class SignalGenerationUseCaseImpl(
             val newsVerdict = NewsFilter.evaluate(news.calendar(), AssetClassifier.newsCurrencies(symbol), now)
             val sess = CoreSession.state(now)
 
-            val blockers = report.blockers.toMutableList()
             var state = report.state
+            val blockers = report.blockers.toMutableList()
+            if (isTradingViewScannerSnapshot) {
+                blockers += "TRADINGVIEW SCANNER SNAPSHOT: app retrieval time is available, but provider event time is not; read-only analysis only."
+                state = SignalState.BLOCKED
+            }
             val primaryCandleSource = market.candleSources[candleSourceKey(symbol, tf.label)].orEmpty()
             if (ticker != null &&
                 (primaryCandleSource.isBlank() || !canMergeQuoteIntoCandle(primaryCandleSource, ticker.source))
             ) {
-                val candleLabel = primaryCandleSource.ifBlank { "unknown OHLC provider" }
-                blockers += "QUOTE/CANDLE SOURCE MISMATCH: quote source '${ticker.source}', OHLC source '$candleLabel'; use a matching provider before execution."
+                blockers += "QUOTE/CANDLE DATA MISMATCH: the live quote and OHLC history do not come from the same verified feed; execution is blocked."
                 state = SignalState.BLOCKED
             }
             val requiresCompleteMtf = strategyId == "smc-confluence-1.0.0" ||
@@ -358,7 +381,7 @@ class SignalGenerationUseCaseImpl(
                 executable = health == MarketDataHealth.LIVE && spread != null && blockers.isEmpty() && signalDirection != SignalDirection.WAIT && finalPlan != null,
                 blockReasons = blockers,
                 reasons = finalReport.reasons,
-                dataSource = quote?.source ?: "",
+                dataSource = quote?.let { "Live market data" } ?: "",
                 dataHealth = health.name,
                 mtfSummary = finalReport.mtf?.summary ?: "",
                 mtfState = finalReport.mtf?.state?.name ?: "DATA_UNAVAILABLE",
