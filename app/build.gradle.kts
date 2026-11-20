@@ -201,6 +201,7 @@ dependencies {
   testImplementation("org.json:json:20231013")
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation("com.squareup.okhttp3:mockwebserver:4.10.0")
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.espresso.core)
