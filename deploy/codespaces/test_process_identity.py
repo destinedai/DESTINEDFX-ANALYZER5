@@ -168,7 +168,8 @@ def test_verified_process_receives_only_sigterm_and_record_clears_after_exit(tmp
 
 def test_pidfd_revalidation_closes_pid_reuse_window_before_signal(tmp_path):
     path = record(tmp_path)
-    with patch.object(identity.os, "pidfd_open", return_value=88) as open_pidfd, \
+    fake_pidfd = os.open(os.devnull, os.O_RDONLY)
+    with patch.object(identity.os, "pidfd_open", return_value=fake_pidfd) as open_pidfd, \
          patch.object(identity.os, "close", wraps=os.close) as close_fd, \
          patch.object(identity.signal, "pidfd_send_signal") as send_signal, \
          patch.object(identity, "snapshot", side_effect=[process(), process(start_ticks=101)]):
@@ -179,13 +180,14 @@ def test_pidfd_revalidation_closes_pid_reuse_window_before_signal(tmp_path):
         else:
             raise AssertionError("a PID reused between lookup and pidfd revalidation must fail closed")
     open_pidfd.assert_called_once_with(4242, 0)
-    close_fd.assert_any_call(88)
+    close_fd.assert_any_call(fake_pidfd)
     send_signal.assert_not_called()
 
 
 def test_pidfd_success_signals_only_the_pinned_verified_process(tmp_path):
     path = record(tmp_path)
-    with patch.object(identity.os, "pidfd_open", return_value=89) as open_pidfd, \
+    fake_pidfd = os.open(os.devnull, os.O_RDONLY)
+    with patch.object(identity.os, "pidfd_open", return_value=fake_pidfd) as open_pidfd, \
          patch.object(identity.os, "close", wraps=os.close) as close_fd, \
          patch.object(identity.signal, "pidfd_send_signal") as send_signal, \
          patch.object(identity, "snapshot", side_effect=[process(), process(), None]):
@@ -194,8 +196,8 @@ def test_pidfd_success_signals_only_the_pinned_verified_process(tmp_path):
         )
     assert stopped is True
     open_pidfd.assert_called_once_with(4242, 0)
-    close_fd.assert_any_call(89)
-    send_signal.assert_called_once_with(89, signal.SIGTERM)
+    close_fd.assert_any_call(fake_pidfd)
+    send_signal.assert_called_once_with(fake_pidfd, signal.SIGTERM)
     assert not path.exists()
 
 
