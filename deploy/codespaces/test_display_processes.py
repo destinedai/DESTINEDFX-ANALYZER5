@@ -59,3 +59,47 @@ if __name__ == "__main__":
     test_only_wildcard_legacy_websockify_is_selected_for_replacement()
     test_websockify_must_be_python_runner_for_known_system_service()
     print("PASS: display process identity regressions")
+
+
+
+def _verified_x11vnc_snapshot(**changes):
+    row = {
+        "pid": 4321,
+        "uid": 1000,
+        "args": ["x11vnc", "-display", ":99", "-localhost", "-rfbport", "5900", "-passwdfile", "/state/vnc.pass"],
+        "exe": "/usr/bin/x11vnc",
+        "state": "S",
+        "start_ticks": 501,
+    }
+    row.update(changes)
+    return row
+
+
+def test_legacy_cleanup_pidfd_rechecks_full_identity_before_signalling():
+    from unittest.mock import patch
+    import signal
+
+    expected = _verified_x11vnc_snapshot()
+    with patch.object(display, "_snapshot", side_effect=[
+        expected,
+        _verified_x11vnc_snapshot(start_ticks=502),
+    ]), patch.object(display.os, "pidfd_open", return_value=77), \
+         patch.object(display.os, "close") as close_fd, \
+         patch.object(display.signal, "pidfd_send_signal") as send_signal:
+        assert display._terminate_verified(expected, 1000) is False
+    close_fd.assert_called_once_with(77)
+    send_signal.assert_not_called()
+
+
+def test_legacy_cleanup_signals_only_pinned_process_with_sigterm():
+    from unittest.mock import patch
+    import signal
+
+    expected = _verified_x11vnc_snapshot()
+    snapshots = [expected, expected, None]
+    with patch.object(display, "_snapshot", side_effect=lambda *_args: snapshots.pop(0)), \
+         patch.object(display.os, "pidfd_open", return_value=78), \
+         patch.object(display.os, "close"), \
+         patch.object(display.signal, "pidfd_send_signal") as send_signal:
+        assert display._terminate_verified(expected, 1000) is True
+    send_signal.assert_called_once_with(78, signal.SIGTERM)
