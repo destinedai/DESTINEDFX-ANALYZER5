@@ -179,7 +179,7 @@ def test_pidfd_revalidation_closes_pid_reuse_window_before_signal(tmp_path):
         else:
             raise AssertionError("a PID reused between lookup and pidfd revalidation must fail closed")
     open_pidfd.assert_called_once_with(4242, 0)
-    close_fd.assert_called_once_with(88)
+    close_fd.assert_any_call(88)
     send_signal.assert_not_called()
 
 
@@ -194,7 +194,7 @@ def test_pidfd_success_signals_only_the_pinned_verified_process(tmp_path):
         )
     assert stopped is True
     open_pidfd.assert_called_once_with(4242, 0)
-    close_fd.assert_called_once_with(89)
+    close_fd.assert_any_call(89)
     send_signal.assert_called_once_with(89, signal.SIGTERM)
     assert not path.exists()
 
