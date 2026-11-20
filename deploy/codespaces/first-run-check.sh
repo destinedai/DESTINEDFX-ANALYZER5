@@ -39,7 +39,7 @@ fi
 check_cmd xvfb 'command -v Xvfb >/dev/null && Xvfb -help >/dev/null 2>&1' 'Rebuild the Codespaces environment with Xvfb installed.'
 check_cmd host_agent 'curl -fsS --max-time 5 http://127.0.0.1:8787/health/ready >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/host-agent.log.'
 check_cmd bridge_loopback 'curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/bridge.log.'
-check_cmd runner_loop 'pgrep -f "linux-worker.py --loop" >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/linux-worker.log.'
+check_cmd runner_loop 'pgrep -f "linux-slot-worker.py --loop --interval 3" >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/linux-slot-worker.log.'
 
 diagnostic_output="$(DESTINEDFX_CODESPACES_STATE_DIR="$STATE" DESTINEDFX_RUNTIME_DIR="$RUNTIME" \
   python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" 2>&1 || true)"
