@@ -57,7 +57,7 @@ fun CodespacesHostControls(
     LaunchedEffect(device?.deviceCode) {
         val request = device ?: return@LaunchedEffect
         val expiresAt = System.currentTimeMillis() + request.expiresInSeconds * 1_000L
-        var intervalSeconds = request.intervalSeconds.coerceIn(1L, 30L)
+        var intervalSeconds = deviceFlowPollIntervalSeconds(request.intervalSeconds, request.expiresInSeconds)
         while (System.currentTimeMillis() < expiresAt) {
             kotlinx.coroutines.delay(intervalSeconds * 1_000L)
             if (device?.deviceCode != request.deviceCode) return@LaunchedEffect
@@ -70,7 +70,7 @@ fun CodespacesHostControls(
                     return@LaunchedEffect
                 }
                 message = result.message + " Approval is checked automatically."
-                if (result.slowDown) intervalSeconds = (intervalSeconds + 5L).coerceAtMost(30L)
+                if (result.slowDown) intervalSeconds = nextDeviceFlowPollIntervalSeconds(intervalSeconds, request.expiresInSeconds)
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
