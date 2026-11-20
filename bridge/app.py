@@ -1,6 +1,7 @@
 import asyncio, os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error, base64
 import re
 import logging
+import subprocess
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from functools import lru_cache
@@ -1679,7 +1680,10 @@ def worker_claim(x:WorkerClaim, authorization:str|None=Header(default=None)):
             "SELECT COUNT(*) FROM worker_jobs WHERE worker_id=? AND kind='PROVISION' AND status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until>=?",
             (x.worker_id,t)
         ).fetchone()[0]
-        at_capacity = x.pause_provisioning or x.active_terminals >= x.max_terminals or leased_provisions >= x.max_terminals
+        shutdown_prepared=_host_stop_prepared(c)
+        # Keep the worker draining queued revocations while a host shutdown is
+        # prepared, but never lease a new DEMO provisioning job.
+        at_capacity = shutdown_prepared or x.pause_provisioning or x.active_terminals >= x.max_terminals or leased_provisions >= x.max_terminals
         if at_capacity or draining:
             r=c.execute("SELECT * FROM worker_jobs WHERE kind='REVOKE' AND (status='QUEUED' OR (status IN ('LEASED','PROVISIONING','AUTHENTICATING') AND lease_until<?)) ORDER BY created LIMIT 1",(t,)).fetchone()
         else:
@@ -2182,6 +2186,33 @@ def _require_pairing_owner(p, assertion):
         identity.get('sub') != p['owner_subject'] or identity.get('tenant_id') != p['owner_tenant']):
         raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'Only the management user that owns this Bridge pairing may control the Codespace'})
 
+def run_stop_script_preflight():
+    """Require an explicit read-only acknowledgement from the real local stop.sh."""
+    root=Path(__file__).resolve().parents[1]
+    script=root/'deploy'/'codespaces'/'stop.sh'
+    if not script.is_file():
+        return False
+    env=os.environ.copy()
+    env['BRIDGE_DB_PATH']=str(DB_PATH)
+    env.setdefault('DESTINEDFX_CODESPACES_STATE_DIR',str(Path(HOST_CONTROL_DIR).parent))
+    try:
+        result=subprocess.run(
+            ['bash',str(script),'--preflight'],
+            cwd=str(root),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError,subprocess.SubprocessError):
+        return False
+    expected='PASS: STOP PREFLIGHT acknowledged by stop.sh; no services or trading processes were stopped.'
+    return result.returncode==0 and expected in result.stdout
+
+
 @app.post('/v1/app/github/revoke')
 def revoke_github_app_authorization(
     x:GitHubTokenRevoke,
@@ -2271,6 +2302,9 @@ def prepare_host_stop(authorization:str|None=Header(default=None),
             reasons=sorted(set(backup_safety['reasons']) | set(current_safety['reasons']))
             raise HTTPException(409,detail={'code':'HOST_STOP_STATE_CHANGED','reasons':reasons,
                 'message':'Broker state changed during backup verification; the host remains online and shutdown was cancelled'})
+        if not run_stop_script_preflight():
+            raise HTTPException(503,detail={'code':'HOST_STOP_PREFLIGHT_FAILED',
+                'message':'The local stop.sh preflight did not acknowledge safe isolated-slot cleanup; the Codespace must remain running'})
     except HTTPException:
         try: cancel_stop(HOST_CONTROL_DIR,DB_PATH,HOST_GENERATION)
         except sqlite3.Error: pass
@@ -2281,6 +2315,7 @@ def prepare_host_stop(authorization:str|None=Header(default=None),
         raise HTTPException(503,detail={'code':'HOST_BACKUP_FAILED',
             'message':'A verified database backup and safe-state recheck could not be completed; the host was not prepared for shutdown'})
     return {'status':'PREPARED','host_generation':HOST_GENERATION,'backup_verified':True,
+            'stop_script_ack':True,'stop_script_status':'PREFLIGHT_PASSED',
             'backup_name':backup.name,'broker_safety':current_safety,'backup_safety':backup_safety}
 
 
