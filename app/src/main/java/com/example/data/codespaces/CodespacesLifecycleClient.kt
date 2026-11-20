@@ -27,6 +27,15 @@ import java.util.concurrent.TimeUnit
  * The returned scope field is intentionally empty for GitHub App user tokens.
  */
 internal const val CODESPACES_OAUTH_SCOPES = "offline_access"
+internal const val DESTINEDFX_CODESPACES_BRANCH = "free/phone-only-v1"
+
+internal fun codespaceMatchesDestinedFxTarget(
+    repositoryFullName: String,
+    repositoryId: Long,
+    gitRef: String
+): Boolean = repositoryFullName.equals("destinedai/DESTINEDFX-ANALYZER5", ignoreCase = true) &&
+    repositoryId == 1409048108L &&
+    gitRef == "refs/heads/$DESTINEDFX_CODESPACES_BRANCH"
 
 internal fun deviceFlowPollIntervalSeconds(serverIntervalSeconds: Long, expiresInSeconds: Long): Long {
     val expiry = expiresInSeconds.coerceAtLeast(1L)
@@ -106,6 +115,8 @@ class CodespacesLifecycleClient(
         private const val TOKEN_URL = "https://github.com/login/oauth/access_token"
         private const val REPOSITORY = "destinedai/DESTINEDFX-ANALYZER5"
         private const val REPOSITORY_ID = 1409048108L
+        private const val CODESPACES_PAGE_SIZE = 100
+        private const val CODESPACES_MAX_PAGES = 50
         private const val API_VERSION = "2022-11-28"
     }
 
@@ -347,22 +358,44 @@ class CodespacesLifecycleClient(
     }
 
     private fun findOwnedCodespace(accessToken: String): JSONObject {
-        val request = apiRequest(accessToken, "GET", "/user/codespaces?per_page=100")
-        val json = executeJson(request)
-        val items = json.optJSONArray("codespaces")
-            ?: throw IOException("GitHub returned an invalid Codespaces list.")
-        val matches = (0 until items.length()).mapNotNull { index ->
-            items.optJSONObject(index)?.let { item ->
+        val matches = mutableListOf<JSONObject>()
+        var reachedEnd = false
+        for (page in 1..CODESPACES_MAX_PAGES) {
+            val request = apiRequest(
+                accessToken,
+                "GET",
+                "/user/codespaces?per_page=$CODESPACES_PAGE_SIZE&page=$page"
+            )
+            val json = executeJson(request)
+            val items = json.optJSONArray("codespaces")
+                ?: throw IOException("GitHub returned an invalid Codespaces list.")
+            for (index in 0 until items.length()) {
+                val item = items.optJSONObject(index) ?: continue
                 val repository = item.optJSONObject("repository")
                 val fullName = repository?.optString("full_name").orEmpty()
                 val repositoryId = repository?.optLong("id", -1L) ?: -1L
-                item.takeIf { fullName.equals(REPOSITORY, ignoreCase = true) && repositoryId == REPOSITORY_ID }
+                val gitRef = item.optJSONObject("git_status")?.optString("ref").orEmpty()
+                if (codespaceMatchesDestinedFxTarget(fullName, repositoryId, gitRef)) {
+                    matches += item
+                }
             }
+            if (items.length() < CODESPACES_PAGE_SIZE) {
+                reachedEnd = true
+                break
+            }
+        }
+        if (!reachedEnd) {
+            throw IOException(
+                "GitHub returned too many Codespace pages to verify the complete owner list safely."
+            )
         }
         if (matches.size != 1) {
             throw IllegalStateException(
-                if (matches.isEmpty()) "No Codespace was found for $REPOSITORY."
-                else "More than one Codespace belongs to $REPOSITORY. Remove the ambiguity before using phone controls."
+                if (matches.isEmpty()) {
+                    "No Codespace was found for $REPOSITORY on branch $DESTINEDFX_CODESPACES_BRANCH."
+                } else {
+                    "More than one Codespace belongs to $REPOSITORY on branch $DESTINEDFX_CODESPACES_BRANCH. Remove the ambiguity before using phone controls."
+                }
             )
         }
         return matches.single()
