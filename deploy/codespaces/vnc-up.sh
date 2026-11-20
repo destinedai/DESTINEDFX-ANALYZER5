@@ -120,8 +120,20 @@ if (( ${#XVFB_PIDS[@]} > 1 )); then
 elif (( ${#XVFB_PIDS[@]} == 1 )); then
   XVFB_PID="${XVFB_PIDS[0]}"
   python3 "$DISPLAY_HELPER" check-xvfb "$XVFB_PID" || fail 'pre-existing Xvfb cannot be safely adopted'
+  # Preserve ownership across repeated invocations. A process started by this
+  # service must not become "adopted" merely because it is still running.
+  prior_ownership="$(cat "$RUNTIME/xvfb.ownership" 2>/dev/null || true)"
+  prior_pid="$(cat "$RUNTIME/xvfb.pid" 2>/dev/null || true)"
+  if [[ "$prior_ownership" == started && "$prior_pid" == "$XVFB_PID" ]] &&
+     grep -Fqx "$XVFB_PID|Xvfb :99" "$RUNTIME/pids" 2>/dev/null; then
+    printf 'started\n' >"$RUNTIME/xvfb.ownership"
+  else
+    if [[ "$prior_ownership" == started && "$prior_pid" != "$XVFB_PID" ]]; then
+      fail 'previously owned Xvfb PID changed; refusing to silently reclassify display ownership'
+    fi
+    printf 'adopted\n' >"$RUNTIME/xvfb.ownership"
+  fi
   write_pid xvfb "$XVFB_PID"
-  printf 'adopted\n' >"$RUNTIME/xvfb.ownership"
   chmod 600 "$RUNTIME/xvfb.ownership"
 else
   if [[ -e /tmp/.X11-unix/X99 || -e /tmp/.X99-lock ]]; then
