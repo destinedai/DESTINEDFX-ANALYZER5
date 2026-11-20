@@ -96,6 +96,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -1432,9 +1433,28 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         modifier = Modifier.weight(1f)
                     ) { Text("REFRESH LIST", fontSize = 9.sp) }
                     OutlinedButton(
-                        onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/settings/connections/applications"))) },
+                        onClick = {
+                            scope.launch {
+                                hostLifecycleBusy = true
+                                try {
+                                    val hostBridge = bridge
+                                    check(hostBridge?.hasPairing() == true) {
+                                        "Remote revocation requires a paired owner Bridge account and configured Bridge-side GitHub App secret."
+                                    }
+                                    val token = githubCodespacesClient.validAccessToken()
+                                    val result = hostBridge!!.revokeCodespacesGitHubAuthorization(token)
+                                    check(result.optBoolean("revoked")) { "Bridge did not confirm that GitHub revoked this user token." }
+                                    githubCodespacesClient.disconnectLocally()
+                                    githubHostMessage = "GitHub confirmed token revocation. Device copies of the authorization were cleared."
+                                } catch (error: Exception) {
+                                    githubHostMessage = "Remote revocation was not confirmed: ${error.message?.take(130).orEmpty()}. Opening GitHub settings for manual revocation."
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/settings/connections/applications")))
+                                } finally { hostLifecycleBusy = false }
+                            }
+                        },
+                        enabled = !hostLifecycleBusy && githubSignedIn,
                         modifier = Modifier.weight(1f)
-                    ) { Text("REVOKE IN GITHUB", fontSize = 9.sp) }
+                    ) { Text("REVOKE GITHUB APP", fontSize = 9.sp) }
                 }
                 if (githubCodespaces.size > 1) {
                     Text("Select Codespace:", color = TextSecondary, fontSize = 9.sp)
