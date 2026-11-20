@@ -15,6 +15,14 @@ class CodespacesBridgeDiscoveryTest {
     }
 
     @Test
+    fun deviceFlowRespectsServerIntervalAndEverySlowDownExtension() {
+        assertEquals(75L, deviceFlowPollIntervalSeconds(75L, 900L))
+        assertEquals(35L, nextDeviceFlowPollIntervalSeconds(30L, 900L))
+        assertEquals(40L, nextDeviceFlowPollIntervalSeconds(38L, 40L))
+        assertEquals(1L, deviceFlowPollIntervalSeconds(0L, 900L))
+    }
+
+    @Test
     fun githubAppTokenResponseMustContainExpiringAccessAndRefreshTokens() {
         assertTrue(hasUsableExpiringGitHubAppToken("ghu_access", "ghr_refresh", 28_800L, 15_897_600L))
         assertFalse(hasUsableExpiringGitHubAppToken("", "ghr_refresh", 28_800L, 15_897_600L))
