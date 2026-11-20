@@ -2558,8 +2558,8 @@ def test_cross_management_identity_cannot_prepare_host_shutdown(monkeypatch, tmp
     monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
     monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
     monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
-    p, headers = managed_pair('owner-a', 'tenant-a')
-    headers['X-Management-Identity'] = management_identity_assertion('owner-b', 'tenant-a')
+    p, headers = managed_pair('owner-a', 'owner-a')
+    headers['X-Management-Identity'] = management_identity_assertion('owner-b', 'owner-b')
     response = client.post('/host/shutdown-safe', headers=headers)
     assert response.status_code == 403
     with app.tx() as c:
