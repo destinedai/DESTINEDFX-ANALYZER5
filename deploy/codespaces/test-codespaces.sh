@@ -52,13 +52,14 @@ grep -Fq 'MT5_TERMINAL_EXIT_CODE' "$ROOT/scripts/linux-host/launch-mt5.sh" || fa
 grep -Fq 'WINEDEBUG=-all' "$ROOT/scripts/linux-host/launch-mt5.sh" || fail 'terminal launch must clear Wine debug channels'
 grep -Fq 'MT5 terminal readiness remains unverified' "$ROOT/deploy/codespaces/gui.sh" || fail 'VNC readiness must not imply terminal readiness'
 grep -Fq 'mt5_terminal_ready NOT_VERIFIED' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'terminal readiness must remain unverified absent owner evidence'
-grep -Fq -- 'installer exited before the wizard appeared' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer liveness diagnostic missing'
-grep -Fq -- 'wait_alive' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI display readiness checks missing'
+grep -Fq -- 'installer identity record exists but no longer matches' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI launcher must refuse duplicate launch when process identity is stale'
+grep -Fq -- 'process_identity.py' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI launcher must use exact process identity records'
+if grep -Eq 'pgrep|pkill|killall|kill -KILL|wineserver -k' "$ROOT/deploy/codespaces/gui.sh"; then fail 'GUI launcher must not use name-only process control or global Wine shutdown'; fi
 if grep -Fq 'Xvfb :99 -screen 0 1280x800x24' "$ROOT/deploy/codespaces/start.sh"; then fail 'start.sh must delegate Xvfb ownership to vnc-up.sh'; fi
 grep -Fq 'DISPLAY_HELPER="$ROOT/deploy/codespaces/display_processes.py"' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'display process identity helper path missing'
 grep -Fq 'check-xvfb "$XVFB_PID"' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'existing Xvfb must be identity-verified before adoption'
 grep -Fq 'prior_ownership' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'repeated VNC startup must preserve verified Xvfb ownership'
-grep -Fq 'previously owned Xvfb lacks its managed process record' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'incomplete prior Xvfb ownership must fail closed'
+grep -Fq 'previously owned Xvfb lacks a matching complete process identity record' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'incomplete prior Xvfb ownership must fail closed'
 grep -Fq 'cleanup-legacy' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'legacy unauthenticated VNC services must be safely reconciled'
 grep -Fq -- '--listen 127.0.0.1' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC websocket must bind to loopback only'
 grep -Fq 'xvfb.ownership' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must distinguish owned and adopted Xvfb'
@@ -206,18 +207,26 @@ grep -Fq 'Wine version allowed check failed' <<< "$output" || fail 'GUI launcher
 pass 'Wine allowlist and Codespaces GUI preconditions fail closed before startup'
 DESTINEDFX_CODESPACES_STATE_DIR="$TMP/state" "$ROOT/deploy/codespaces/stop.sh" | grep -q '^PASS:' || fail 'stop without state failed'
 pass 'stop safely handles empty private state'
-grep -Fq -- 'installer-gui.pid' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must clean stale GUI installer process'
 grep -Fq -- 'x11vnc.pid' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must clean stale VNC process'
-mkdir -p "$TMP/wineserver-bin" "$TMP/gui-state/runtime"
-cat > "$TMP/wineserver-bin/wineserver" <<'MOCK_WINESERVER'
-#!/usr/bin/env bash
-printf '%s|%s\n' "$WINEPREFIX" "$*" >> "$WINESERVER_CALLS"
-MOCK_WINESERVER
-chmod +x "$TMP/wineserver-bin/wineserver"
-printf '99999999\n' > "$TMP/gui-state/runtime/installer-gui.pid"
-WINESERVER_CALLS="$TMP/wineserver.calls" PATH="$TMP/wineserver-bin:$PATH" \
-	DESTINEDFX_CODESPACES_STATE_DIR="$TMP/gui-state" DESTINEDFX_MT5_GUI_WINEPREFIX="$TMP/private-prefix" \
-	"$ROOT/deploy/codespaces/stop.sh" >/dev/null || fail 'stop failed for tracked GUI Wine state'
-grep -Fq "$TMP/private-prefix|-k" "$TMP/wineserver.calls" || fail 'stop must shut down Wine only in the tracked private GUI prefix'
-pass 'stop shuts down orphaned Wine processes in the tracked private GUI prefix'
+grep -Fq 'process_identity.py' "$ROOT/deploy/codespaces/start.sh" || fail 'startup must record complete service process identities'
+grep -Fq 'process_identity.py' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must validate full process identity records'
+grep -Fq 'process_identity.py' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'VNC lifecycle must use complete process identity records'
+grep -Fq 'start_ticks' "$ROOT/deploy/codespaces/process_identity.py" || fail 'process identity must include kernel start ticks'
+grep -Fq 'SIGTERM' "$ROOT/deploy/codespaces/process_identity.py" || fail 'process identity shutdown must use SIGTERM'
+if grep -Eq 'SIGKILL|kill -KILL|killall|pkill' "$ROOT/deploy/codespaces/process_identity.py" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/vnc-up.sh" "$ROOT/deploy/codespaces/gui.sh"; then fail 'managed process cleanup must never use forced or name-only termination'; fi
+if grep -Fq 'killpg' "$ROOT/deploy/codespaces/host_controller.py"; then fail 'host controller must not signal unverified process groups'; fi
+python3 "$ROOT/deploy/codespaces/test_process_identity.py" || fail 'full process identity regression tests failed'
+mkdir -p "$TMP/legacy-state/runtime"
+sleep 30 &
+LEGACY_PID="$!"
+printf '%s|sleep\n' "$LEGACY_PID" > "$TMP/legacy-state/runtime/pids"
+if DESTINEDFX_CODESPACES_STATE_DIR="$TMP/legacy-state" "$ROOT/deploy/codespaces/stop.sh" >"$TMP/legacy-stop.out" 2>&1; then
+  kill "$LEGACY_PID" 2>/dev/null || true
+  fail 'legacy PID-only shutdown record must fail closed'
+fi
+kill -0 "$LEGACY_PID" 2>/dev/null || fail 'legacy PID-only record caused an unrelated process to be terminated'
+grep -Fq 'legacy PID-only record found; no signal was sent' "$TMP/legacy-stop.out" || fail 'legacy process record refusal must be explicit'
+kill "$LEGACY_PID" 2>/dev/null || true
+wait "$LEGACY_PID" 2>/dev/null || true
+pass 'shutdown rejects legacy PID-only records without signalling unrelated processes'
 printf 'PASS: Codespaces K1 shell tests completed.\n'
