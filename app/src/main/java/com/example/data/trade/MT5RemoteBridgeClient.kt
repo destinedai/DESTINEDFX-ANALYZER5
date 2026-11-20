@@ -430,8 +430,24 @@ class MT5RemoteBridgeClient(
             ?: throw IllegalStateException("Sign in to the DestinedFX management account before stopping the host.")
         return request(
             "POST",
-            "/v1/app/host/prepare-stop",
+            "/v1/app/host/shutdown-safe",
             JSONObject(),
+            managementIdentityAssertion = identity
+        )
+    }
+
+    /** Revokes a GitHub App user token through the owner-configured Bridge secret proxy. */
+    suspend fun revokeCodespacesGitHubAuthorization(accessToken: String): JSONObject {
+        require(accessToken.startsWith("ghu_") && accessToken.length <= 4096) {
+            "A GitHub App user access token is required for revocation."
+        }
+        val identity = managementIdentityAssertionProvider?.invoke()
+            ?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Sign in to the DestinedFX management account before revoking GitHub access.")
+        return request(
+            "POST",
+            "/v1/app/github/revoke",
+            JSONObject().put("access_token", accessToken),
             managementIdentityAssertion = identity
         )
     }
