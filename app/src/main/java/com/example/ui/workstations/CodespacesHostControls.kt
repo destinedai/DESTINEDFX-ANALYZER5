@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -21,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
@@ -199,6 +201,7 @@ fun CodespacesHostControls(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 enabled = !busy && authorized,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16834A)),
                 onClick = {
                     scope.launch {
                         busy = true
@@ -227,9 +230,12 @@ fun CodespacesHostControls(
                         }
                     }
                 }
-            ) { Text("START HOST", fontSize = 10.sp) }
+            ) {
+                Text("START HOST", fontSize = 10.sp)
+            }
             OutlinedButton(
                 enabled = !busy && authorized && bridgeClient.managedConfigured(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFD32F2F)),
                 onClick = { showStopHostConfirmation = true }
             ) { Text("STOP HOST", fontSize = 10.sp) }
         }
