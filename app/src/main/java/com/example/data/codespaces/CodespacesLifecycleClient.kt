@@ -29,6 +29,10 @@ import java.util.concurrent.TimeUnit
 internal const val CODESPACES_OAUTH_SCOPES = "offline_access"
 internal const val DESTINEDFX_CODESPACES_BRANCH = "free/phone-only-v1"
 
+internal fun isCodespaceStoppedState(state: String): Boolean =
+    state.equals("Shutdown", ignoreCase = true) ||
+        state.equals("Stopped", ignoreCase = true)
+
 internal fun codespaceMatchesDestinedFxTarget(
     repositoryFullName: String,
     repositoryId: Long,
@@ -284,17 +288,39 @@ class CodespacesLifecycleClient(
         }
     }
 
-    suspend fun stopRepositoryCodespace(): LifecycleResult = withContext(Dispatchers.IO) {
+    suspend fun stopRepositoryCodespace(timeoutMs: Long = 300_000L): LifecycleResult = withContext(Dispatchers.IO) {
+        require(timeoutMs in 5_000L..600_000L) {
+            "Codespaces stop confirmation timeout is outside the allowed range."
+        }
         val accessToken = validAccessToken()
         val codespace = findOwnedCodespace(accessToken)
         val name = codespace.optString("name")
-        val state = codespace.optString("state")
+        val initialState = codespace.optString("state")
         require(name.isNotBlank()) { "GitHub returned a Codespace without a name." }
-        if (state.equals("Shutdown", ignoreCase = true)) {
-            return@withContext LifecycleResult(true, name, state, "The DestinedFX Codespace is already stopped.")
+        if (isCodespaceStoppedState(initialState)) {
+            return@withContext LifecycleResult(true, name, initialState, "The DestinedFX Codespace is already stopped.")
         }
         executeSuccess(apiRequest(accessToken, "POST", "/user/codespaces/" + Uri.encode(name) + "/stop"))
-        LifecycleResult(true, name, state, "GitHub accepted the Codespaces stop request.")
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var lastState = initialState
+        while (System.currentTimeMillis() < deadline) {
+            delay(4_000L)
+            val latest = findOwnedCodespace(accessToken)
+            lastState = latest.optString("state").ifBlank { "UNKNOWN" }
+            if (isCodespaceStoppedState(lastState)) {
+                return@withContext LifecycleResult(
+                    true, name, lastState,
+                    "GitHub confirmed the DestinedFX Codespace is shut down."
+                )
+            }
+            if (lastState.equals("Failed", ignoreCase = true) || lastState.equals("Deleted", ignoreCase = true)) {
+                throw IOException("GitHub Codespaces stop ended in state $lastState; verify the owner host before cancelling the Bridge safety gate.")
+            }
+        }
+        throw IOException(
+            "GitHub accepted STOP HOST but did not confirm Shutdown within the allowed interval (last state: $lastState). " +
+                "The Bridge safety gate must remain armed until the owner verifies host state."
+        )
     }
 
     suspend fun repositoryCodespaceState(): String = withContext(Dispatchers.IO) {
