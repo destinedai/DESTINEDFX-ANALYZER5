@@ -91,30 +91,57 @@ def matches_legacy_websockify(
     return True
 
 
-def _terminate_verified(pid: int, start_ticks: int, expected_uid: int) -> bool:
-    """Send TERM only to the same owned process; never escalate to SIGKILL."""
+def _terminate_verified(item: dict[str, Any], expected_uid: int) -> bool:
+    """Send TERM only through a pidfd pinned to the complete discovered identity."""
+    pid = int(item["pid"])
+
+    def matches(current: dict[str, Any] | None) -> bool:
+        if not current or current.get("state") in {"Z", "X"}:
+            return False
+        return all(
+            current.get(key) == item.get(key)
+            for key in ("pid", "start_ticks", "uid", "exe", "args")
+        ) and current["uid"] == expected_uid
+
     current = _snapshot(pid)
-    if not current or current["uid"] != expected_uid or current["start_ticks"] != start_ticks:
+    if current is None or current.get("state") in {"Z", "X"}:
         return True
-    if current["state"] == "Z":
-        return True
+    if not matches(current):
+        return False
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        return False
     try:
-        os.kill(pid, signal.SIGTERM)
+        pidfd = os.pidfd_open(pid, 0)
     except ProcessLookupError:
         return True
-    except PermissionError:
+    except OSError:
         return False
-
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
+    try:
+        # The second read occurs after pidfd_open. PID reuse between discovery
+        # and signalling is rejected before the descriptor receives SIGTERM.
         current = _snapshot(pid)
-        if not current or current["start_ticks"] != start_ticks:
+        if current is None or current.get("state") in {"Z", "X"}:
             return True
-        if current["uid"] != expected_uid or current["state"] == "Z":
+        if not matches(current):
+            return False
+        try:
+            signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+        except ProcessLookupError:
             return True
-        time.sleep(0.1)
-    return False
+        except OSError:
+            return False
 
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            current = _snapshot(pid)
+            if current is None or current.get("state") in {"Z", "X"}:
+                return True
+            if not matches(current):
+                return False
+            time.sleep(0.1)
+        return False
+    finally:
+        os.close(pidfd)
 
 def _find_legacy(kind: str, proc_root: Path, expected_uid: int) -> list[dict[str, Any]]:
     matcher = matches_legacy_x11vnc if kind == "x11vnc" else matches_legacy_websockify
@@ -138,7 +165,7 @@ def cleanup_legacy(proc_root: Path = Path("/proc"), expected_uid: int | None = N
         if not matches:
             continue
         item = matches[0]
-        if not _terminate_verified(item["pid"], item["start_ticks"], uid):
+        if not _terminate_verified(item, uid):
             raise RuntimeError(f"legacy {kind} process did not stop after SIGTERM")
         stopped.append(f"{kind}:{item['pid']}")
     return stopped
