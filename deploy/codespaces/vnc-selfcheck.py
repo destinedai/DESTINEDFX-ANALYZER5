@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Verify the local authenticated, loopback-only noVNC stack."""
+"""Verify VNC password-file configuration and loopback binding (not an RFB handshake)."""
 from __future__ import annotations
 
 import os
 import socket
+import importlib.util
 import time
 from pathlib import Path
 
@@ -14,10 +15,16 @@ STATE = Path(os.environ.get(
 RUNTIME = STATE / "runtime"
 PASSWORD = RUNTIME / "vnc.pass"
 UID = os.getuid()
+IDENTITY_MODULE_PATH = Path(__file__).with_name("process_identity.py")
+IDENTITY_SPEC = importlib.util.spec_from_file_location("destinedfx_process_identity", IDENTITY_MODULE_PATH)
+IDENTITY_MODULE = importlib.util.module_from_spec(IDENTITY_SPEC)
+if IDENTITY_SPEC is None or IDENTITY_SPEC.loader is None:
+    raise RuntimeError("process identity helper cannot be loaded")
+IDENTITY_SPEC.loader.exec_module(IDENTITY_MODULE)
 failures: list[str] = []
 
 
-def process(pid_file: str, expected: str) -> tuple[int, list[str]] | None:
+def process(pid_file: str, expected: str, *, require_record: bool = True) -> tuple[int, list[str]] | None:
     path = RUNTIME / pid_file
     try:
         pid = int(path.read_text(encoding="ascii").strip())
@@ -29,6 +36,10 @@ def process(pid_file: str, expected: str) -> tuple[int, list[str]] | None:
             if item
         ]
         if owner != UID or expected not in " ".join(args):
+            return None
+        if require_record and not IDENTITY_MODULE.verify_record(
+            RUNTIME / f"process-{pid}.identity.json"
+        ):
             return None
         return pid, args
     except (OSError, ValueError, StopIteration):
@@ -61,7 +72,7 @@ def loopback_listeners(port: int) -> set[str]:
 if not PASSWORD.is_file() or PASSWORD.stat().st_mode & 0o077:
     failures.append("password_file_permissions")
 
-xvfb = process("xvfb.pid", "Xvfb :99")
+xvfb = process("xvfb.pid", "Xvfb :99", require_record=False)
 if not xvfb:
     failures.append("xvfb_process_identity")
 else:
@@ -120,4 +131,4 @@ for port in (5900, 6080):
 if failures:
     print("FAIL: VNC self-check failed: " + ",".join(failures))
     raise SystemExit(1)
-print("PASS: authenticated VNC and noVNC are bound only to loopback; Xvfb identity is verified")
+print("PASS: x11vnc password-file authentication is configured and VNC/noVNC listeners are loopback-only; RFB authentication handshake was not tested")
