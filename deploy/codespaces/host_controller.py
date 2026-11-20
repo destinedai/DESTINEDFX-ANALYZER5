@@ -130,6 +130,33 @@ def _record_matches(record: dict[str, Any] | None, expected: str) -> bool:
     return _supervisor_identity_matches(identity, expected)
 
 
+def signal_supervisor_record(record: dict[str, Any] | None, expected: str) -> bool:
+    """Send SIGTERM only to the full identity pinned by a Linux pidfd.
+
+    The complete supervisor identity is revalidated after pidfd_open so PID reuse
+    between discovery and signalling cannot redirect shutdown to another process.
+    """
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        return False
+    if not _record_matches(record, expected):
+        return False
+    try:
+        pid = int(record["pid"])  # type: ignore[index]
+        pidfd = os.pidfd_open(pid, 0)
+    except (KeyError, TypeError, ValueError, ProcessLookupError, OSError):
+        return False
+    try:
+        if not _record_matches(record, expected):
+            return False
+        try:
+            signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            return False
+        return True
+    finally:
+        os.close(pidfd)
+
+
 def _supervisor_record(pid: int, identity: dict[str, Any]) -> dict[str, Any]:
     return {
         "pid": pid,
