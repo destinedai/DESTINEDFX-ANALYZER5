@@ -60,6 +60,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
+import com.example.data.codespaces.GitHubCodespacesClient
 import com.example.data.broker.BrokerType
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginMode
@@ -362,6 +364,18 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             mt5Client(mt5Profile, mt5Mode, selectedMt5Broker)
         } else null
     }
+    val githubCodespacesClient = remember(secrets) { GitHubCodespacesClient(secrets) }
+    var githubCodespacesClientId by remember {
+        mutableStateOf(secrets.getCodespacesGitHubClientId().ifBlank { BuildConfig.CODESPACES_GITHUB_CLIENT_ID })
+    }
+    var githubDeviceAuthorization by remember { mutableStateOf<GitHubCodespacesClient.DeviceAuthorization?>(null) }
+    var githubCodespaces by remember { mutableStateOf<List<GitHubCodespacesClient.Codespace>>(emptyList()) }
+    var selectedGithubCodespace by remember { mutableStateOf<GitHubCodespacesClient.Codespace?>(null) }
+    var githubHostMessage by remember { mutableStateOf("Connect the GitHub App to manage this Codespace.") }
+    var hostLifecycleBusy by remember { mutableStateOf(false) }
+    var showHostStopConfirmation by remember { mutableStateOf(false) }
+    var hostApiStatus by remember { mutableStateOf<JSONObject?>(null) }
+    var githubHostOperationState by remember { mutableStateOf("UNKNOWN") }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val reason = if (granted) "BOT NOT RUNNING — notifications are enabled. Tap Start again to begin the foreground service."
         else "BOT NOT RUNNING — notification permission was denied. Allow DestinedFX notifications in Android Settings, then tap Start again."
@@ -507,6 +521,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             mt5Snapshot = null
             while (true) {
                 mt5Snapshot = runCatching { bridge.state() }.getOrNull() ?: mt5Snapshot?.copy(managedState = "OFFLINE", workerStatus = "OFFLINE", connected = false, terminalOnline = false, heartbeatFresh = false, state = "OFFLINE", liveAuthorized = false)
+                // Host lifecycle metadata shares the existing five-second Bridge poller.
+                hostApiStatus = runCatching { bridge.hostStatus() }.getOrNull()
                 delay(5_000L)
             }
         } else {
