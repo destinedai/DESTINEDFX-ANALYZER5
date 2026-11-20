@@ -120,9 +120,16 @@ class GitHubCodespacesClientTest {
     @Test
     fun expiredRefreshTokenClearsAuthorizationAndRequiresSignIn() = runBlocking {
         val expiredAt = System.currentTimeMillis() - 1_000L
+        // The production storage API correctly refuses an already-expired refresh
+        // expiry. Seed a valid token pair first, then advance only the test clock
+        // metadata to exercise the expired-token branch.
         assertTrue(secrets.saveCodespacesGitHubTokens(
-            "ghu_expired_token", "ghr_expired_refresh", expiredAt, expiredAt
+            "ghu_expired_token", "ghr_expired_refresh", expiredAt,
+            System.currentTimeMillis() + 60_000L
         ))
+        assertTrue(prefs.edit()
+            .putLong("codespaces_github_refresh_expires_at", expiredAt)
+            .commit())
         val failure = runCatching { client(server()).validAccessToken() }.exceptionOrNull()
         assertTrue(failure?.message.orEmpty().contains("sign-in expired"))
         assertEquals("", secrets.getCodespacesGitHubAccessToken())
