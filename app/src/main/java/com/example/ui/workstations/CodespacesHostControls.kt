@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.example.data.codespaces.CodespacesLifecycleClient
+import com.example.data.codespaces.deviceFlowPollIntervalSeconds
+import com.example.data.codespaces.nextDeviceFlowPollIntervalSeconds
 import com.example.data.codespaces.codespacesBridgeConfigurationAllowsOriginSave
 import com.example.data.codespaces.codespacesBridgeIsolationNotice
 import com.example.data.trade.MT5RemoteBridgeClient
