@@ -238,7 +238,7 @@ class GitHubCodespacesClient(
         }
         val refreshed = withContext(Dispatchers.IO) {
             postForm(
-                ACCESS_TOKEN_URL,
+                endpoints.accessTokenUrl,
                 mapOf(
                     "client_id" to clientId(),
                     "grant_type" to "refresh_token",
