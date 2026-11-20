@@ -1384,8 +1384,18 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     }
                                     selectedGithubCodespace = target
                                     if (!target.state.equals("Available", true)) {
+                                        // Start the local billing estimate before the API call so boot time is counted.
+                                        githubCodespacesClient.recordCodespaceStarted(target)
                                         githubHostOperationState = "STARTING"
-                                        githubCodespacesClient.startCodespace(target)
+                                        try {
+                                            githubCodespacesClient.startCodespace(target)
+                                        } catch (startError: Exception) {
+                                            val current = runCatching { githubCodespacesClient.getCodespace(target.name) }.getOrNull()
+                                            if (current?.state.equals("Shutdown", true)) {
+                                                githubCodespacesClient.recordCodespaceStopped(current!!)
+                                            }
+                                            throw startError
+                                        }
                                         var current = target
                                         withTimeout(10 * 60 * 1000L) {
                                             while (!current.state.equals("Available", true)) {
@@ -1396,10 +1406,12 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                                 check(!current.state.equals("Failed", true)) { "GitHub reports that the Codespace failed to start." }
                                             }
                                         }
+                                    } else {
+                                        // An already-running Codespace can only be tracked from the first time this device observes it.
+                                        githubCodespacesClient.recordCodespaceStarted(target)
                                     }
                                     val active = githubCodespacesClient.getCodespace(target.name)
                                     selectedGithubCodespace = active
-                                    githubCodespacesClient.recordCodespaceStarted(active)
                                     githubHostOperationState = "ACTIVE"
                                     githubHostMessage = "GitHub reports Available. Bridge, host-agent and MT5 readiness remain separate checks."
                                 } catch (error: Exception) {
@@ -1426,6 +1438,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 hostLifecycleBusy = true
                                 try {
                                     val matches = githubCodespacesClient.listTargetCodespaces()
+                                    matches.filter { it.state.equals("Shutdown", true) }.forEach(githubCodespacesClient::recordCodespaceStopped)
                                     githubCodespaces = matches
                                     selectedGithubCodespace = if (matches.size == 1) matches.first() else null
                                     githubHostMessage = "Discovered ${matches.size} Codespace(s) matching the configured repository and branch."
@@ -1482,6 +1495,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     if (githubCodespacesClient.completeDeviceAuthorization(device)) {
                                         githubDeviceAuthorization = null
                                         val matches = githubCodespacesClient.listTargetCodespaces()
+                                        matches.filter { it.state.equals("Shutdown", true) }.forEach(githubCodespacesClient::recordCodespaceStopped)
                                         githubCodespaces = matches
                                         selectedGithubCodespace = matches.singleOrNull()
                                         githubHostMessage = "GitHub App authorized. Found ${matches.size} matching Codespace(s)."
