@@ -2648,6 +2648,9 @@ def test_shutdown_gate_prevents_new_worker_provision_leases_but_keeps_revocation
     managed_env(monkeypatch)
     monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
     monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': True, 'slot_isolation': {'enabled': True, 'ready': True},
+    })
     p, ah = managed_pair()
     registered = client.post('/v1/app/managed-account', headers=ah, json={
         'login':'123456', 'server':'Demo-Server', 'password':'demo-secret',
