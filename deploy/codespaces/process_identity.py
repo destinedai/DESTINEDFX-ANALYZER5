@@ -85,6 +85,42 @@ def capture_identity(
         sleep(0.1)
 
 
+def find_and_capture_identity(
+    *,
+    expected_uid: int,
+    expected_exe: str,
+    expected_args: list[str],
+    proc_root: Path = Path("/proc"),
+) -> dict[str, Any]:
+    """Find exactly one process whose complete argv tail/exe/UID match."""
+    if proc_root != Path("/proc"):
+        raise IdentityError("process discovery requires the live Linux /proc filesystem")
+    executable = os.path.realpath(expected_exe)
+    matches: list[dict[str, Any]] = []
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError as exc:
+        raise IdentityError("cannot enumerate Linux process table") from exc
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        current = snapshot(int(entry.name), proc_root)
+        if not current or current["state"] in {"Z", "X"}:
+            continue
+        args = current["args"]
+        if (
+            current["uid"] == expected_uid
+            and current["exe"] == executable
+            and len(args) == len(expected_args) + 1
+            and Path(args[0]).name.startswith(Path(executable).name)
+            and args[1:] == expected_args
+        ):
+            matches.append({key: current[key] for key in IDENTITY_FIELDS})
+    if len(matches) != 1:
+        raise IdentityError(f"expected exactly one matching process; found {len(matches)}")
+    return matches[0]
+
+
 def write_record(path: Path, identity: dict[str, Any]) -> None:
     if set(IDENTITY_FIELDS).difference(identity):
         raise IdentityError("process identity record is incomplete")
@@ -221,6 +257,11 @@ def main() -> int:
     stop = commands.add_parser("stop")
     stop.add_argument("--record", required=True, type=Path)
     stop.add_argument("--timeout", type=float, default=5.0)
+    find_capture = commands.add_parser("find-capture")
+    find_capture.add_argument("--record", required=True, type=Path)
+    find_capture.add_argument("--expected-uid", type=int, required=True)
+    find_capture.add_argument("--expected-exe", required=True)
+    find_capture.add_argument("--expected-args", nargs="+", required=True)
     args = parser.parse_args()
     try:
         if args.command == "capture":
@@ -231,6 +272,14 @@ def main() -> int:
             )
             write_record(args.record, identity)
             print("PASS: complete process identity recorded")
+        elif args.command == "find-capture":
+            identity = find_and_capture_identity(
+                expected_uid=args.expected_uid,
+                expected_exe=args.expected_exe,
+                expected_args=args.expected_args,
+            )
+            write_record(args.record, identity)
+            print(identity["pid"])
         elif args.command == "verify":
             if not verify_record(args.record):
                 raise IdentityError("recorded PID/start-time/UID/executable/argv does not match")
