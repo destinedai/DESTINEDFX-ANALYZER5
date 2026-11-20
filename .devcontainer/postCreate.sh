@@ -27,12 +27,15 @@ if "$ROOT/scripts/linux-host/install-mt5.sh" \
     --headless \
     --expected-sha256 "$MT5_LINUX_SCRIPT_SHA256" \
     --expected-setup-sha256 "$MT5_SETUP_SHA256"; then
-  umask 077
-  printf 'verified_at=%s\nmethod=authenticode\nsigner=MetaQuotes Ltd\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$HOME/.local/share/destinedfx-codespaces/installer-verified"
-  chmod 600 "$HOME/.local/share/destinedfx-codespaces/installer-verified"
-  pass 'Official MetaQuotes setup.exe completed headlessly after Authenticode verification.'
+  if "$ROOT/scripts/linux-host/finalize-mt5-install.sh" headless; then
+    pass 'Official MetaQuotes setup and shared terminal/MetaEditor/EA-compile finalization passed.'
+  else
+    fail 'Installer finalization failed; no verified installation marker was created.'
+    fail 'OWNER STEP: inspect the redacted finalizer output, then use deploy/codespaces/gui.sh only if owner assistance is needed.'
+    exit 1
+  fi
 else
-  fail 'Headless MetaQuotes setup failed or a checksum did not match.'
+  fail 'Headless MetaQuotes setup failed; exact installer exit code/stage is in the redacted post-create log.'
   fail 'OWNER STEP: run deploy/codespaces/gui.sh for the private installer wizard fallback.'
   exit 1
 fi
