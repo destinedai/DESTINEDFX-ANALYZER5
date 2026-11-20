@@ -74,3 +74,46 @@ def test_live_step_up_requires_reauthentication_and_returns_signed_assertion(cli
     assert len(response.json()["assertion"]) >= 100
     body["password"] = "wrong password"
     assert client.post("/api/v1/auth/live-step-up", json=body, headers=headers).status_code == 401
+
+
+
+def test_bridge_verification_key_endpoint_publishes_only_ed25519_public_key(monkeypatch, client):
+    from app import main
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = Ed25519PrivateKey.generate()
+    private_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    monkeypatch.setattr(
+        main.settings,
+        "step_up_private_key_pem",
+        type(main.settings.step_up_private_key_pem)(private_pem),
+    )
+    response = client.get("/api/v1/auth/bridge-verification-key")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["algorithm"] == "EdDSA"
+    assert payload["issuer"] == main.settings.step_up_issuer
+    assert payload["audience"] == main.settings.step_up_audience
+    assert "PRIVATE KEY" not in payload["public_key_pem"]
+    exported = serialization.load_pem_public_key(payload["public_key_pem"].encode())
+    assert exported.public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    ) == key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+
+
+def test_bridge_verification_key_endpoint_fails_closed_without_signing_key(monkeypatch, client):
+    from app import main
+    monkeypatch.setattr(
+        main.settings,
+        "step_up_private_key_pem",
+        type(main.settings.step_up_private_key_pem)(""),
+    )
+    response = client.get("/api/v1/auth/bridge-verification-key")
+    assert response.status_code == 503
