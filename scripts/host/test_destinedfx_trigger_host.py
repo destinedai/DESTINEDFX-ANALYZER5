@@ -49,8 +49,10 @@ def test_start_all_delegates_to_existing_supervisor_and_records_usage(monkeypatc
     assert called == ["usage"]
 
 
-def test_idle_shutdown_refuses_unknown_or_active_broker_state(monkeypatch):
-    monkeypatch.setattr(trigger.DB_PATH, "is_file", lambda: True)
+def test_idle_shutdown_refuses_unknown_or_active_broker_state(monkeypatch, tmp_path):
+    database = tmp_path / "bridge.sqlite3"
+    database.touch()
+    monkeypatch.setattr(trigger, "DB_PATH", database)
     monkeypatch.setattr(trigger, "inspect_shutdown_safety", lambda *args, **kwargs: {
         "safe": False, "reasons": ["EA_ACTIVE", "OPEN_POSITIONS"]
     })
@@ -62,8 +64,10 @@ def test_idle_shutdown_refuses_unknown_or_active_broker_state(monkeypatch):
     assert called == []
 
 
-def test_idle_shutdown_only_signals_verified_supervisor_after_backup_and_rechecks(monkeypatch):
-    monkeypatch.setattr(trigger.DB_PATH, "is_file", lambda: True)
+def test_idle_shutdown_only_signals_verified_supervisor_after_backup_and_rechecks(monkeypatch, tmp_path):
+    database = tmp_path / "bridge.sqlite3"
+    database.touch()
+    monkeypatch.setattr(trigger, "DB_PATH", database)
     monkeypatch.setattr(trigger, "inspect_shutdown_safety", lambda *args, **kwargs: {"safe": True, "reasons": []})
     monkeypatch.setattr(trigger, "backup_database", lambda *args, **kwargs: Path("/tmp/verified-test-backup.sqlite3"))
     record = {"pid": 555, "start_ticks": 12345}
