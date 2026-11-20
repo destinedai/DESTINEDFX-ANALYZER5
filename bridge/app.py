@@ -2187,6 +2187,7 @@ def app_host_status(authorization:str|None=Header(default=None)):
             'slot_isolation':isolation,**host_lifecycle_state(),**read_status(HOST_CONTROL_DIR)}
 
 
+@app.post('/v1/app/host/shutdown-safe')
 @app.post('/v1/app/host/prepare-stop')
 def prepare_host_stop(authorization:str|None=Header(default=None),
                       x_management_identity:str|None=Header(default=None)):
