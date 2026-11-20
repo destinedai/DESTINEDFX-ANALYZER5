@@ -236,7 +236,11 @@ def _active_manifests() -> list[dict[str, Any]]:
     result = []
     for path in MANIFEST_DIR.glob("*.json"):
         row = _read_manifest(path)
-        if row and row.get("status") in {
+        if row is None:
+            # A corrupt or broadly readable marker could hide a live terminal.
+            # Never let cleanup skip it and continue with host shutdown.
+            raise SlotWorkerError("SLOT_MANIFEST_UNREADABLE")
+        if row.get("status") in {
             "RESERVED", "LAUNCH_PENDING", "AUTHENTICATING", "READY", "OPERATOR_REVIEW"
         }:
             result.append(row)
@@ -722,12 +726,44 @@ def run_once() -> str:
             os.close(fd)
 
 
-def stop_all() -> int:
+def check_stop() -> int:
+    """Read-only preflight for the local stop.sh cleanup path."""
     _require_stop_config()
     database = Path(os.environ.get("BRIDGE_DB_PATH", str(STATE / "bridge.sqlite3")))
     safety = inspect_shutdown_safety(database)
     if not safety.get("safe"):
-        _log("host stop blocked by unresolved broker state")
+        _log("host stop preflight blocked by unresolved broker state")
+        return 2
+    try:
+        rows = _active_manifests()
+        reservations = [_reservation_from_manifest(row) for row in rows]
+    except (SlotWorkerError, TypeError, ValueError, KeyError):
+        _log("host stop preflight blocked by unreadable or incomplete slot manifest")
+        return 2
+    if reservations:
+        health_url = HOST_AGENT_URL.rstrip("/")
+        if not health_url.endswith("/health/ready"):
+            health_url += "/health/ready"
+        try:
+            request = urllib.request.Request(health_url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(request, timeout=3) as response:
+                report = json.loads(response.read(128000).decode("utf-8"))
+            isolation = report.get("slot_isolation") if isinstance(report, dict) else None
+            if not report.get("healthy") or not isinstance(isolation, dict) or not isolation.get("enabled") or not isolation.get("ready"):
+                raise ValueError("host agent not ready")
+        except Exception:
+            _log("host stop preflight blocked because root host-agent readiness is unverified")
+            return 2
+        for reservation in reservations:
+            if reservation.linux_uid <= 0 or not reservation.linux_user or not reservation.display:
+                _log("host stop preflight blocked by incomplete slot ownership evidence")
+                return 2
+    _log("host stop preflight passed; no processes were stopped")
+    return 0
+
+
+def stop_all() -> int:
+    if check_stop() != 0:
         return 2
     rows = _active_manifests()
     for row in rows:
@@ -745,14 +781,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--stop-all", action="store_true")
+    parser.add_argument("--check-stop", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--interval", type=float, default=float(POLL_SECONDS))
     args = parser.parse_args()
     global _MANAGER
     _MANAGER = LinuxSlotManager(SLOT_ROOT, SLOT_RUNTIME)
     try:
+        if args.check_stop:
+            return check_stop()
         if args.stop_all:
-            _require_stop_config()
             return stop_all()
         _require_config()
         if args.loop:
