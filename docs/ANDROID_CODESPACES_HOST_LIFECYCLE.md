@@ -47,10 +47,11 @@ The devcontainer postStartCommand invokes scripts/host/destinedfx_trigger_host.p
 ## STOP HOST sequence
 
 1. The app shows explicit confirmation explaining that it inspects EA heartbeat, broker/account state, positions, pending orders, unresolved commands and backup integrity.
-2. The app calls the owner-authenticated Bridge POST /v1/app/host/shutdown-safe (also available as POST /host/shutdown-safe). Bridge rejects unsafe or unknown broker state and creates/rechecks an integrity-verified SQLite backup. It never liquidates or modifies positions/orders.
-3. Only after Bridge returns status=PREPARED and backup_verified=true does the app send GitHub POST /user/codespaces/{name}/stop.
-4. The app polls Codespace state. If GitHub reports it still Available after a rejected stop, the app cancels the Bridge shutdown gate. If the result is ambiguous or GitHub reports Stopping/Shutdown, the app leaves the safety gate armed and asks the owner to verify state before another operation.
-5. No Android STOP HOST action invokes the Bot STOP command. No automatic close-all, pending-order cancellation or trade liquidation is performed.
+2. The app calls the owner-authenticated Bridge POST /v1/app/host/shutdown-safe (also available as POST /host/shutdown-safe). Bridge blocks new provisioning/commands, rejects unsafe or unknown broker state, and creates/rechecks an integrity-verified SQLite backup. It never liquidates or modifies positions/orders.
+3. Before approval, the Bridge invokes the existing `deploy/codespaces/stop.sh --preflight`. This read-only command verifies DB/broker safety, isolated-slot manifests and root host-agent readiness. It returns an explicit `PASS: STOP PREFLIGHT acknowledged by stop.sh` only when checks pass. It does not stop any terminal, worker, Bridge or host process.
+4. Only when Bridge returns `status=PREPARED`, `backup_verified=true`, `stop_script_ack=true` and `stop_script_status=PREFLIGHT_PASSED` does Android send GitHub POST /user/codespaces/{name}/stop. The full existing `stop.sh` cleanup still runs later through the Codespaces host supervisor as the Codespace shuts down, and it rechecks broker state before stopping isolated MT5 sessions.
+5. The app polls Codespace state. If GitHub reports it still Available after a rejected stop, the app cancels the Bridge shutdown gate. If the result is ambiguous or GitHub reports Stopping/Shutdown, the app leaves the safety gate armed and asks the owner to verify state before another operation.
+6. No Android STOP HOST action invokes the Bot STOP command. No automatic close-all, pending-order cancellation or trade liquidation is performed.
 
 The host controller also exposes a separate idle_shutdown CLI operation. It rechecks broker state and a database backup, verifies the recorded supervisor PID/start-time/UID/executable/arguments, and delegates local service shutdown to the existing deploy/codespaces/stop.sh.
 
