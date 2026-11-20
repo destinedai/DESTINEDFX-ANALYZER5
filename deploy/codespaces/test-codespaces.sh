@@ -65,6 +65,8 @@ grep -Fq 'xvfb.ownership' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown mu
 grep -Fq 'MetaEditor64.exe' "$ROOT/deploy/codespaces/start.sh" || fail 'MetaEditor filename case fallback missing'
 grep -Fq 'not_loopback_only' "$ROOT/deploy/codespaces/vnc-selfcheck.py" || fail 'VNC self-check must reject wildcard noVNC listeners'
 python3 "$ROOT/deploy/codespaces/test_display_processes.py" || fail 'display process identity tests failed'
+python3 "$ROOT/scripts/linux-host/test_check_slot_worker.py" || fail 'slot worker process identity tests failed'
+grep -Fq 'check_slot_worker.py' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'first-run check must use the tested slot worker process checker'
 grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
 grep -Fq -- '--heartbeat=30' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC websocket heartbeat missing'
 grep -Fq -- 'cacheBust=' "$ROOT/deploy/codespaces/gui.sh" || fail 'noVNC cache-busting URL missing'
