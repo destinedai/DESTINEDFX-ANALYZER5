@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Verify VNC password-file configuration and loopback binding (not an RFB handshake)."""
+"""Verify configured VNC authentication with a real local RFB handshake and loopback binding."""
 from __future__ import annotations
 
 import os
 import socket
 import importlib.util
 import time
+import stat
 from pathlib import Path
 
 STATE = Path(os.environ.get(
@@ -21,7 +22,36 @@ IDENTITY_MODULE = importlib.util.module_from_spec(IDENTITY_SPEC)
 if IDENTITY_SPEC is None or IDENTITY_SPEC.loader is None:
     raise RuntimeError("process identity helper cannot be loaded")
 IDENTITY_SPEC.loader.exec_module(IDENTITY_MODULE)
+RFB_MODULE_PATH = Path(__file__).with_name("vnc_rfb.py")
+RFB_SPEC = importlib.util.spec_from_file_location("destinedfx_vnc_rfb", RFB_MODULE_PATH)
+RFB_MODULE = importlib.util.module_from_spec(RFB_SPEC)
+if RFB_SPEC is None or RFB_SPEC.loader is None:
+    raise RuntimeError("RFB authentication helper cannot be loaded")
+RFB_SPEC.loader.exec_module(RFB_MODULE)
 failures: list[str] = []
+
+
+def read_configured_password() -> str | None:
+    try:
+        info = PASSWORD.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or PASSWORD.is_symlink()
+            or info.st_mode & 0o077
+            or info.st_uid != UID
+        ):
+            return None
+        lines = PASSWORD.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError):
+        return None
+    for line in lines:
+        if not line.strip() or line.startswith("#") or "__SKIP__" in line:
+            continue
+        value = line.split("__COMM__", 1)[0].rstrip()
+        if value == "__EMPTY__":
+            return ""
+        return value
+    return None
 
 
 def process(pid_file: str, expected: str, *, require_record: bool = True) -> tuple[int, list[str]] | None:
@@ -69,8 +99,14 @@ def loopback_listeners(port: int) -> set[str]:
     return found
 
 
-if not PASSWORD.is_file() or PASSWORD.stat().st_mode & 0o077:
-    failures.append("password_file_permissions")
+vnc_password = read_configured_password()
+if vnc_password is None:
+    failures.append("password_file_permissions_or_owner")
+else:
+    try:
+        RFB_MODULE.vnc_password_key(vnc_password)
+    except (ValueError, UnicodeError):
+        failures.append("password_file_format_or_length")
 
 xvfb = process("xvfb.pid", "Xvfb :99", require_record=False)
 if not xvfb:
@@ -98,6 +134,11 @@ else:
     required = ("-localhost", "-display", ":99", "-rfbport", "5900", "-passwdfile", str(PASSWORD))
     if not all(value in args for value in required):
         failures.append("x11vnc_authentication_or_bind")
+    elif vnc_password is not None:
+        try:
+            RFB_MODULE.authenticate_localhost(5900, vnc_password, timeout=3.0)
+        except (RFB_MODULE.RfbAuthenticationError, OSError, ValueError):
+            failures.append("rfb_vnc_authentication_handshake")
 
 novnc = process("novnc.pid", "websockify")
 if not novnc:
@@ -131,4 +172,4 @@ for port in (5900, 6080):
 if failures:
     print("FAIL: VNC self-check failed: " + ",".join(failures))
     raise SystemExit(1)
-print("PASS: x11vnc password-file authentication is configured and VNC/noVNC listeners are loopback-only; RFB authentication handshake was not tested")
+print("PASS: real RFB VNC password authentication handshake succeeded; VNC and noVNC listeners are loopback-only")
