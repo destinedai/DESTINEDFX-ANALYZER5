@@ -355,9 +355,11 @@ def _graceful_stop(
         _write_status("STOP_FAILED", reason="START_PROCESS_IDENTITY_CHANGED")
         return False
     try:
-        os.killpg(child.pid, signal.SIGTERM)
+        # Signal only the process whose PID/start-time/UID/executable/argv were
+        # checked above. stop.sh has already performed the child-service cleanup.
+        child.terminate()
     except ProcessLookupError:
-        pass
+        return True
     except OSError:
         _write_status("STOP_FAILED", reason="START_PROCESS_STOP_FAILED")
         return False
@@ -366,8 +368,6 @@ def _graceful_stop(
         child.wait(timeout=15)
         return True
     except subprocess.TimeoutExpired:
-        # The group ID is the unique PID/session created by this Popen call.
-        # Do not signal a different process or a PID read from a stale file.
         if child.poll() is not None:
             return True
         current_identity = _proc_identity(child.pid)
@@ -377,19 +377,10 @@ def _graceful_stop(
         ):
             _write_status("STOP_FAILED", reason="START_PROCESS_IDENTITY_CHANGED")
             return False
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError:
-            _write_status("STOP_FAILED", reason="OWNED_PROCESS_GROUP_UNRESPONSIVE")
-            return False
-        try:
-            child.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            _write_status("STOP_FAILED", reason="OWNED_PROCESS_GROUP_UNRESPONSIVE")
-            return False
-        return True
+        # Never SIGKILL a process group: its descendants are not individually
+        # attested here. Leave them untouched and require operator inspection.
+        _write_status("STOP_FAILED", reason="START_MANAGER_UNRESPONSIVE_AFTER_SIGTERM")
+        return False
 
 
 def supervise() -> int:
