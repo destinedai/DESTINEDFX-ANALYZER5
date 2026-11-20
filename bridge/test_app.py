@@ -2520,6 +2520,7 @@ def test_github_token_revocation_uses_server_side_app_secret_without_echo(monkey
         captured['url'] = request.full_url
         captured['method'] = request.get_method()
         captured['auth'] = request.get_header('Authorization')
+        captured['api_version'] = request.get_header('X-github-api-version')
         captured['body'] = request.data.decode()
         captured['timeout'] = timeout
         return Response()
@@ -2529,6 +2530,7 @@ def test_github_token_revocation_uses_server_side_app_secret_without_echo(monkey
     assert response.status_code == 200 and response.json() == {'revoked': True}
     assert captured['url'] == 'https://api.github.com/applications/Iv1.fixtureclient/token'
     assert captured['method'] == 'DELETE'
+    assert captured['api_version'] == '2026-03-10'
     assert captured['auth'].startswith('Basic ')
     assert token in captured['body']
     assert 'fixture-github-app-secret-not-for-mobile' not in response.text
