@@ -2228,6 +2228,7 @@ def revoke_github_app_authorization(
     return {'revoked':True}
 
 
+@app.get('/host-status')
 @app.get('/v1/app/host/status')
 def app_host_status(authorization:str|None=Header(default=None)):
     auth(authorization,'app')
@@ -2238,6 +2239,7 @@ def app_host_status(authorization:str|None=Header(default=None)):
             'slot_isolation':isolation,**host_lifecycle_state(),**read_status(HOST_CONTROL_DIR)}
 
 
+@app.post('/host/shutdown-safe')
 @app.post('/v1/app/host/shutdown-safe')
 @app.post('/v1/app/host/prepare-stop')
 def prepare_host_stop(authorization:str|None=Header(default=None),
