@@ -18,6 +18,8 @@ data class MT5ManagedAccountLogin(
 }
 
 interface MT5ManagedAccountGateway {
+    /** True only when this broker-qualified profile already has an encrypted app pairing token. */
+    fun hasPairing(): Boolean = false
     suspend fun registerManagedAccount(login: MT5ManagedAccountLogin): MT5RemoteBridgeClient.Snapshot
     /** Reads only unauthenticated host metadata; it must not require an app pairing token. */
     suspend fun hostProfile(): HostProfile

@@ -16,12 +16,11 @@ class LoginContractParityTest {
         val json = contract()
         assertTrue(json.getBoolean("fixture"))
         val stages = json.getJSONArray("statuses")
-        assertEquals(4, stages.length())
-        assertEquals("SENT", stages.getJSONObject(0).getString("stage"))
-        assertEquals("TERMINAL_LOGGING_IN", stages.getJSONObject(1).getString("stage"))
-        assertEquals("HEARTBEAT", stages.getJSONObject(2).getString("stage"))
-        assertEquals("VERIFIED", stages.getJSONObject(3).getString("stage"))
-        assertEquals(ConnectStage.VERIFIED, ConnectStage.valueOf(stages.getJSONObject(3).getString("stage")))
+        val expected = listOf("SENT", "HOST_QUEUED", "TERMINAL_LOGGING_IN", "HEARTBEAT", "VERIFIED")
+        assertEquals(expected.size, stages.length())
+        val actual = (0 until stages.length()).map { stages.getJSONObject(it).getString("stage") }
+        assertEquals(expected, actual)
+        actual.forEach { assertEquals(it, ConnectStage.valueOf(it).name) }
     }
 
     @Test fun everySharedFailureHasPlainSentence() {

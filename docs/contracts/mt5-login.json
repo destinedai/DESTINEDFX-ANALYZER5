@@ -15,6 +15,10 @@
       "failure_code": null
     },
     {
+      "stage": "HOST_QUEUED",
+      "failure_code": null
+    },
+    {
       "stage": "TERMINAL_LOGGING_IN",
       "failure_code": null
     },
@@ -51,7 +55,9 @@
     "FORM_INCOMPLETE",
     "LOGIN_FAILED_UNCLASSIFIED",
     "BRIDGE_NEEDS_BROWSER_APPROVAL",
-    "BRIDGE_URL_CHANGED"
+    "BRIDGE_URL_CHANGED",
+    "HOST_CAPACITY_TIMEOUT",
+    "PAIRING_TERMINAL_ALREADY_ACTIVE"
   ],
   "bridge_worker_failures": [
     "ACCOUNT_REVOKED",

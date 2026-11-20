@@ -198,7 +198,7 @@ class MT5RemoteBridgeClient(
     )
     fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
     fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
-    fun hasPairing(): Boolean = secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()
+    override fun hasPairing(): Boolean = secrets.getMT5BridgeAccountAppToken(profile).isNotBlank()
     /** Pre-login configuration check. Unlike /health/ready, this does not require a paired terminal heartbeat. */
     suspend fun checkServiceConfiguration(): ServiceReadiness = withContext(Dispatchers.IO) {
         val base = validateBaseUrl(baseUrl()) ?: return@withContext ServiceReadiness(false, null, "CONFIGURATION_REQUIRED", "unknown", "unknown")

@@ -192,6 +192,7 @@ class BrokerLoginModelTest {
             "ALGO_TRADING_DISABLED", "WEBREQUEST_NOT_ALLOWED", "LOGIN_FAILED_UNCLASSIFIED", "EPHEMERAL_HOST_LIVE_BLOCKED",
             "BRIDGE_NEEDS_BROWSER_APPROVAL", "BRIDGE_URL_CHANGED", "WAITING_FOR_SPOTWARE_APPROVAL",
             "PROVIDER_AUTH_FAILED", "ACCOUNT_IDENTITY_MISMATCH", "PROVIDER_DATA_STALE", "SECURE_STORAGE_UNAVAILABLE",
+            "HOST_CAPACITY_TIMEOUT", "PAIRING_TERMINAL_ALREADY_ACTIVE",
         ).forEach { code ->
             assertTrue(code, ConnectFailures.knownCodes.contains(code))
             assertTrue(code, ConnectFailures.sentence(code).let { it.isNotBlank() && !it.contains("\n") })
@@ -203,12 +204,25 @@ class BrokerLoginModelTest {
     @Test fun successReportsStagesInOrderAndTheTerminalsOwnMode() = runBlocking {
         val stages = mutableListOf<ConnectStage>()
         val backend = FakeBackend(listOf(
-            ConnectObservation(null), ConnectObservation(ConnectStage.TERMINAL_LOGGING_IN), ConnectObservation(ConnectStage.HEARTBEAT),
+            ConnectObservation(null), ConnectObservation(ConnectStage.HOST_QUEUED),
+            ConnectObservation(ConnectStage.TERMINAL_LOGGING_IN), ConnectObservation(ConnectStage.HEARTBEAT),
             ConnectObservation(ConnectStage.VERIFIED, accountMode = "DEMO"),
         ))
         val outcome = useCase(backend).connect(mt5, goodForm) { stages += it }
-        assertEquals(listOf(ConnectStage.SENT, ConnectStage.TERMINAL_LOGGING_IN, ConnectStage.HEARTBEAT, ConnectStage.VERIFIED), stages)
+        assertEquals(listOf(ConnectStage.SENT, ConnectStage.HOST_QUEUED, ConnectStage.TERMINAL_LOGGING_IN, ConnectStage.HEARTBEAT, ConnectStage.VERIFIED), stages)
         assertEquals(ConnectOutcome.Verified("DEMO", modeMismatch = false), outcome)
+    }
+
+    @Test fun queuedMt5LoginTimesOutWithCapacityMessageInsteadOfGenericLoginFailure() = runBlocking {
+        val backend = FakeBackend(listOf(ConnectObservation(ConnectStage.HOST_QUEUED)))
+        val outcome = useCase(backend, timeoutMs = 3, clockStep = 1).connect(mt5, goodForm)
+        assertEquals("HOST_CAPACITY_TIMEOUT", (outcome as ConnectOutcome.Failed).code)
+        assertTrue(outcome.sentence.contains("request is retained"))
+        assertEquals(1, backend.submitted)
+    }
+
+    @Test fun managedMt5DefaultWaitCoversHostProvisioningAndTerminalAuthentication() {
+        assertEquals(480_000L, ConnectUseCase.DEFAULT_TIMEOUT_MS)
     }
 
     @Test fun aDemoLookingServerThatTheTerminalReportsAsLiveIsFlaggedNotTrusted() = runBlocking {

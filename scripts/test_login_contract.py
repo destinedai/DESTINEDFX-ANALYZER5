@@ -12,13 +12,14 @@ from mt5_journal import classify_mt5_journal
 def test_shared_contract_contains_all_required_statuses_and_fixture_label():
     payload = json.loads(CONTRACT.read_text())
     assert payload["fixture"] is True
-    assert [item["stage"] for item in payload["statuses"]] == ["SENT", "TERMINAL_LOGGING_IN", "HEARTBEAT", "VERIFIED"]
+    assert [item["stage"] for item in payload["statuses"]] == ["SENT", "HOST_QUEUED", "TERMINAL_LOGGING_IN", "HEARTBEAT", "VERIFIED"]
     assert set(payload["failures"]) == {
         "WRONG_CREDENTIALS", "ACCOUNT_OR_SERVER_MISMATCH", "NO_CONNECTION", "SERVER_NOT_FOUND",
         "TERMINAL_OFFLINE", "EA_OFFLINE", "ALGO_TRADING_DISABLED", "WEBREQUEST_NOT_ALLOWED",
         "ACCOUNT_DISABLED", "OWNER_BOOTSTRAP_REQUIRED", "MANAGEMENT_SIGN_IN_REQUIRED", "MANAGEMENT_SERVICE_UNAVAILABLE", "EPHEMERAL_HOST_LIVE_BLOCKED", "WAITING_FOR_SPOTWARE_APPROVAL",
         "PROVIDER_AUTH_FAILED", "ACCOUNT_IDENTITY_MISMATCH", "PROVIDER_DATA_STALE",
-        "SECURE_STORAGE_UNAVAILABLE", "CONNECT_TIMEOUT", "FORM_INCOMPLETE",
+        "SECURE_STORAGE_UNAVAILABLE", "CONNECT_TIMEOUT", "HOST_CAPACITY_TIMEOUT",
+        "PAIRING_TERMINAL_ALREADY_ACTIVE", "FORM_INCOMPLETE",
         "LOGIN_FAILED_UNCLASSIFIED", "BRIDGE_NEEDS_BROWSER_APPROVAL", "BRIDGE_URL_CHANGED",
     }
 
