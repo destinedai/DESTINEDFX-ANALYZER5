@@ -260,15 +260,15 @@ def idle_shutdown() -> dict[str, Any]:
     supervisor_record = host_controller._read_json(host_controller.SUPERVISOR_PID)
     if not host_controller._record_matches(supervisor_record, str(Path(host_controller.__file__).resolve())):
         return {"status": "STOP_BLOCKED", "reasons": ["SUPERVISOR_IDENTITY_UNVERIFIED"]}
-    pid = int(supervisor_record["pid"])
-    identity = host_controller._proc_identity(pid)
-    if not identity or not host_controller._supervisor_identity_matches(
-        identity, str(Path(host_controller.__file__).resolve())
+    # The controller pins the complete saved supervisor identity with a pidfd,
+    # revalidates it after pidfd_open, and only then sends SIGTERM. Numeric-PID
+    # signalling is deliberately not used because it has a PID-reuse race.
+    if not host_controller.signal_supervisor_record(
+        supervisor_record, str(Path(host_controller.__file__).resolve())
     ):
-        return {"status": "STOP_BLOCKED", "reasons": ["SUPERVISOR_IDENTITY_CHANGED"]}
+        return {"status": "STOP_BLOCKED", "reasons": ["SUPERVISOR_PIDFD_SIGNAL_REFUSED"]}
     # SIGTERM is handled by the supervisor, which repeats the broker/backup checks
     # and then invokes the existing deploy/codespaces/stop.sh.
-    os.kill(pid, signal.SIGTERM)
     deadline = time.monotonic() + 45.0
     while time.monotonic() < deadline:
         if not host_controller._read_json(host_controller.SUPERVISOR_PID):
