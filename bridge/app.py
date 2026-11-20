@@ -20,9 +20,15 @@ from quantitative import STRATEGY_RULESETS, analyze_json
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
 HOST_CONTROL_DIR=os.getenv('DESTINEDFX_HOST_CONTROL_DIR',os.path.join(os.path.dirname(os.path.abspath(DB_PATH)),'runtime'))
-HOST_PROFILE=os.getenv('BRIDGE_HOST_PROFILE','PERSISTENT').strip().upper()
-if HOST_PROFILE not in ('PERSISTENT','EPHEMERAL'):
-    raise ValueError('BRIDGE_HOST_PROFILE must be PERSISTENT or EPHEMERAL')
+def configured_host_profile(value=None):
+    """Resolve an explicit host profile; an unspecified deployment is never trusted as persistent."""
+    configured=os.getenv('BRIDGE_HOST_PROFILE','EPHEMERAL') if value is None else value
+    profile=str(configured).strip().upper()
+    if profile not in ('PERSISTENT','EPHEMERAL'):
+        raise ValueError('BRIDGE_HOST_PROFILE must be PERSISTENT or EPHEMERAL')
+    return profile
+
+HOST_PROFILE=configured_host_profile()
 HOST_GENERATION=os.getenv('HOST_GENERATION','persistent-default').strip()
 if not HOST_GENERATION or len(HOST_GENERATION)>128:
     raise ValueError('HOST_GENERATION must be a bounded non-empty identifier')
@@ -1015,7 +1021,8 @@ def managed_config():
     try: return Fernet(key.encode()), ''
     except Exception: raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
 def durable_execution_enabled():
-    return os.getenv('EXECUTION_STORAGE_DURABLE','true').lower() == 'true'
+    """Require explicit operator confirmation that execution storage survives restarts."""
+    return os.getenv('EXECUTION_STORAGE_DURABLE','false').strip().lower() == 'true'
 
 def trusted_analysis_sources():
     return {value.strip() for value in os.getenv('ANALYSIS_TRUSTED_SOURCES','').split(',') if value.strip()}
@@ -1921,7 +1928,7 @@ def configuration_health():
 @app.get('/health/ready')
 def readiness():
     """Report infrastructure and isolated-slot capacity without claiming an account is logged in."""
-    if os.getenv('EXECUTION_STORAGE_DURABLE', 'true').lower() != 'true':
+    if not durable_execution_enabled():
         raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution readiness is disabled because this deployment uses ephemeral storage'})
     try:
         managed_config()
