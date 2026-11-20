@@ -62,6 +62,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.data.codespaces.GitHubCodespacesClient
+import com.example.data.codespaces.isSafeHostStopPreflight
 import com.example.data.broker.BrokerType
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginMode
@@ -1547,12 +1548,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     check(hostBridge?.hasPairing() == true) { "A paired owner Bridge account is required for safe shutdown checks." }
                                     githubHostOperationState = "STOPPING"
                                     val preflight = hostBridge!!.prepareHostStop()
-                                    check(
-                                        preflight.optString("status") == "PREPARED" &&
-                                            preflight.optBoolean("backup_verified") &&
-                                            preflight.optBoolean("stop_script_ack") &&
-                                            preflight.optString("stop_script_status") == "PREFLIGHT_PASSED"
-                                    ) {
+                                    check(isSafeHostStopPreflight(preflight)) {
                                         "Bridge did not confirm database backup and local stop.sh preflight: " +
                                             preflight.optString("message").take(140)
                                     }
@@ -2424,8 +2420,8 @@ private fun ConnectedBotDashboard(
             Text("Account: ${maskAccountId(accountId)}", color = TextSecondary, fontSize = 11.sp)
             if (broker.usesManagedMt5Terminal) {
                 Text("Server: ${mt5Snapshot?.actualServer ?: "unverified"} · Currency: ${mt5Snapshot?.currency ?: "unverified"}", color = TextSecondary, fontSize = 11.sp)
-                Text("Balance: ${mt5Snapshot?.balance?.toString() ?: "unavailable"} · Equity: ${mt5Snapshot?.equity?.toString() ?: "unavailable"}", color = TextSecondary, fontSize = 11.sp)
-                Text("Free margin: ${mt5Snapshot?.freeMargin?.toString() ?: "unavailable"} · Leverage: ${mt5Snapshot?.leverage?.toString() ?: "unavailable"}", color = TextSecondary, fontSize = 11.sp)
+                Text("Balance: ${freshHostBalance?.toString() ?: "STALE"} · Equity: ${if (freshHostBalance != null) mt5Snapshot?.equity?.toString() ?: "unavailable" else "STALE"}", color = if (freshHostBalance != null) TextSecondary else WarningAmber, fontSize = 11.sp)
+                Text("Free margin: ${if (freshHostBalance != null) mt5Snapshot?.freeMargin?.toString() ?: "unavailable" else "STALE"} · Leverage: ${mt5Snapshot?.leverage?.toString() ?: "unavailable"}", color = if (freshHostBalance != null) TextSecondary else WarningAmber, fontSize = 11.sp)
                 Text("Terminal: ${if (mt5Snapshot?.terminalConnected == true) "CONNECTED" else "OFFLINE"} · EA heartbeat: ${if (mt5Snapshot?.heartbeatFresh == true) "FRESH" else "STALE"} · Trade permission: ${if (mt5Snapshot?.tradeAllowed == true) "ALLOWED" else "BLOCKED"}", color = TextSecondary, fontSize = 10.sp)
             } else {
                 Text("Balance: ${derivAccount?.balance?.toString() ?: "unavailable"} · Currency: ${derivAccount?.currency ?: "unverified"}", color = TextSecondary, fontSize = 11.sp)
