@@ -37,6 +37,7 @@ else
   compile_rc=$?
 fi
 set -e
+[[ "$compile_rc" == 0 ]] || fail "MetaEditor returned nonzero exit $compile_rc."
 [[ -s "$tmp/DestinedFXTraderEA.ex5" ]] || fail "MetaEditor did not produce the EA binary (exit $compile_rc)."
 [[ -f "$tmp/metaeditor.log" ]] || fail 'MetaEditor compile log was not produced.'
 if ! grep -Eiq '0 errors|0 error(s)?' "$tmp/metaeditor.log"; then
