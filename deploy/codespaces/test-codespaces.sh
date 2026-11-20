@@ -64,7 +64,7 @@ grep -Fq 'MT5_TERMINAL_EXIT_CODE' "$ROOT/scripts/linux-host/launch-mt5.sh" || fa
 grep -Fq 'WINEDEBUG=-all' "$ROOT/scripts/linux-host/launch-mt5.sh" || fail 'terminal launch must clear Wine debug channels'
 grep -Fq 'MT5 terminal readiness remains unverified' "$ROOT/deploy/codespaces/gui.sh" || fail 'VNC readiness must not imply terminal readiness'
 grep -Fq 'mt5_terminal_ready NOT_VERIFIED' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'terminal readiness must remain unverified absent owner evidence'
-grep -Fq -- 'installer identity record exists but no longer matches' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI launcher must refuse duplicate launch when process identity is stale'
+grep -Fq -- 'retire --record "$INSTALLER_IDENTITY"' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI launcher may retire installer identity only after exact process exit is verified'
 grep -Fq -- 'process_identity.py' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI launcher must use exact process identity records'
 if grep -Eq 'pgrep|pkill|killall|kill -KILL|wineserver -k' "$ROOT/deploy/codespaces/gui.sh"; then fail 'GUI launcher must not use name-only process control or global Wine shutdown'; fi
 if grep -Fq 'Xvfb :99 -screen 0 1280x800x24' "$ROOT/deploy/codespaces/start.sh"; then fail 'start.sh must delegate Xvfb ownership to vnc-up.sh'; fi
