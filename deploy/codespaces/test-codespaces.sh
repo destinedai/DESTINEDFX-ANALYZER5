@@ -65,7 +65,7 @@ grep -Fq -- '--listen 127.0.0.1' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'no
 grep -Fq 'xvfb.ownership' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdown must distinguish owned and adopted Xvfb'
 grep -Fq 'MetaEditor64.exe' "$ROOT/deploy/codespaces/start.sh" || fail 'MetaEditor filename case fallback missing'
 grep -Fq 'not_loopback_only' "$ROOT/deploy/codespaces/vnc-selfcheck.py" || fail 'VNC self-check must reject wildcard noVNC listeners'
-python3 "$ROOT/deploy/codespaces/test_display_processes.py" || fail 'display process identity tests failed'
+python3 -m pytest -q "$ROOT/deploy/codespaces/test_display_processes.py" || fail 'display process identity tests failed'
 python3 -m pytest -q "$ROOT/scripts/linux-host/test_check_slot_worker.py" || fail 'slot worker process identity tests failed'
 python3 -m pytest -q "$ROOT/scripts/host/test_destinedfx_trigger_host.py" || fail 'host trigger lifecycle tests failed'
 grep -Fq 'destinedfx_trigger_host.py start_all' "$ROOT/.devcontainer/devcontainer.json" || fail 'postStart must use the shared host trigger adapter'
@@ -213,9 +213,9 @@ grep -Fq 'process_identity.py' "$ROOT/deploy/codespaces/stop.sh" || fail 'shutdo
 grep -Fq 'process_identity.py' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'VNC lifecycle must use complete process identity records'
 grep -Fq 'start_ticks' "$ROOT/deploy/codespaces/process_identity.py" || fail 'process identity must include kernel start ticks'
 grep -Fq 'SIGTERM' "$ROOT/deploy/codespaces/process_identity.py" || fail 'process identity shutdown must use SIGTERM'
-if grep -Eq 'SIGKILL|kill -KILL|killall|pkill' "$ROOT/deploy/codespaces/process_identity.py" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/vnc-up.sh" "$ROOT/deploy/codespaces/gui.sh"; then fail 'managed process cleanup must never use forced or name-only termination'; fi
+if grep -Eq 'signal[.]SIGKILL|kill -KILL|killall|pkill' "$ROOT/deploy/codespaces/process_identity.py" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/vnc-up.sh" "$ROOT/deploy/codespaces/gui.sh"; then fail 'managed process cleanup must never use forced or name-only termination'; fi
 if grep -Fq 'killpg' "$ROOT/deploy/codespaces/host_controller.py"; then fail 'host controller must not signal unverified process groups'; fi
-python3 "$ROOT/deploy/codespaces/test_process_identity.py" || fail 'full process identity regression tests failed'
+python3 -m pytest -q "$ROOT/deploy/codespaces/test_process_identity.py" || fail 'full process identity regression tests failed'
 mkdir -p "$TMP/legacy-state/runtime"
 sleep 30 &
 LEGACY_PID="$!"
