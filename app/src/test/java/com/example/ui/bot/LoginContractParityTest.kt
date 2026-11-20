@@ -20,7 +20,7 @@ class LoginContractParityTest {
         assertEquals(expected.size, stages.length())
         val actual = (0 until stages.length()).map { stages.getJSONObject(it).getString("stage") }
         assertEquals(expected, actual)
-        actual.forEach { assertEquals(it, it, ConnectStage.valueOf(it).name) }
+        actual.forEach { assertEquals(it, ConnectStage.valueOf(it).name) }
     }
 
     @Test fun everySharedFailureHasPlainSentence() {
