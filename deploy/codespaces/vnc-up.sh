@@ -22,7 +22,7 @@ track_started_pid() {
   python3 "$PROCESS_IDENTITY" capture --pid "$pid" --record "$record" \
     --expected-uid "$EUID" --expected-fragment "$expected" || fail "could not record exact identity for $expected"
   if [[ -f "$RUNTIME/pids" ]] && ! grep -Fqx "$pid|${record##*/}" "$RUNTIME/pids"; then
-    printf '%s|%s\\n' "$pid" "${record##*/}" >>"$RUNTIME/pids"
+    printf '%s|%s\n' "$pid" "${record##*/}" >>"$RUNTIME/pids"
     chmod 600 "$RUNTIME/pids"
   fi
 }
