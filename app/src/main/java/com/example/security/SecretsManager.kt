@@ -87,6 +87,8 @@ class SecretsManager internal constructor(
         private const val GITHUB_CODESPACES_ACCESS_TOKEN = "codespaces_github_access_token"
         private const val GITHUB_CODESPACES_REFRESH_TOKEN = "codespaces_github_refresh_token"
         private const val GITHUB_CODESPACES_ACCESS_EXPIRES_AT = "codespaces_github_access_expires_at"
+        private const val GITHUB_CODESPACES_REFRESH_EXPIRES_AT = "codespaces_github_refresh_expires_at"
+        private const val GITHUB_CODESPACES_USAGE_LEDGER = "codespaces_github_usage_ledger_v1"
         private val APP_DATABASE_KEY_LOCK = Any()
         private const val APP_DATABASE_PASSPHRASE = "app_database_passphrase_v1"
         private const val BOT_SYMBOL = "bot_symbol_encrypted"
@@ -1050,14 +1052,22 @@ class SecretsManager internal constructor(
     fun getCodespacesGitHubClientId(): String =
         if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_CLIENT_ID, "") ?: "" else ""
 
-    fun saveCodespacesGitHubTokens(accessToken: String, refreshToken: String, expiresAtMillis: Long): Boolean {
+    fun saveCodespacesGitHubTokens(
+        accessToken: String,
+        refreshToken: String,
+        expiresAtMillis: Long,
+        refreshExpiresAtMillis: Long = 0L
+    ): Boolean {
         if (!isSecureStorageAvailable || accessToken.isBlank() || refreshToken.isBlank() ||
-            accessToken.length > 4096 || refreshToken.length > 4096 || expiresAtMillis <= 0L) return false
-        return prefs.edit()
+            accessToken.length > 4096 || refreshToken.length > 4096 || expiresAtMillis <= 0L ||
+            (refreshExpiresAtMillis != 0L && refreshExpiresAtMillis <= System.currentTimeMillis())) return false
+        val edit = prefs.edit()
             .putString(GITHUB_CODESPACES_ACCESS_TOKEN, accessToken)
             .putString(GITHUB_CODESPACES_REFRESH_TOKEN, refreshToken)
             .putLong(GITHUB_CODESPACES_ACCESS_EXPIRES_AT, expiresAtMillis)
-            .commit()
+        if (refreshExpiresAtMillis > 0L) edit.putLong(GITHUB_CODESPACES_REFRESH_EXPIRES_AT, refreshExpiresAtMillis)
+        else edit.remove(GITHUB_CODESPACES_REFRESH_EXPIRES_AT)
+        return edit.commit()
     }
 
     fun getCodespacesGitHubAccessToken(): String =
@@ -1069,11 +1079,22 @@ class SecretsManager internal constructor(
     fun getCodespacesGitHubAccessExpiresAtMillis(): Long =
         if (isSecureStorageAvailable) prefs.getLong(GITHUB_CODESPACES_ACCESS_EXPIRES_AT, 0L) else 0L
 
+    fun getCodespacesGitHubRefreshExpiresAtMillis(): Long =
+        if (isSecureStorageAvailable) prefs.getLong(GITHUB_CODESPACES_REFRESH_EXPIRES_AT, 0L) else 0L
+
+    fun getCodespacesGitHubUsageLedgerJson(): String =
+        if (isSecureStorageAvailable) prefs.getString(GITHUB_CODESPACES_USAGE_LEDGER, "") ?: "" else ""
+
+    fun saveCodespacesGitHubUsageLedgerJson(value: String): Boolean =
+        isSecureStorageAvailable && value.length <= 256_000 &&
+            prefs.edit().putString(GITHUB_CODESPACES_USAGE_LEDGER, value).commit()
+
     fun clearCodespacesGitHubAuthorization(): Boolean =
         isSecureStorageAvailable && prefs.edit()
             .remove(GITHUB_CODESPACES_ACCESS_TOKEN)
             .remove(GITHUB_CODESPACES_REFRESH_TOKEN)
             .remove(GITHUB_CODESPACES_ACCESS_EXPIRES_AT)
+            .remove(GITHUB_CODESPACES_REFRESH_EXPIRES_AT)
             .commit()
 
     /** Configured profile namespaces that have a saved opaque app token; no token values are returned. */
