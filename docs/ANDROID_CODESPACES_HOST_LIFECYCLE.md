@@ -19,13 +19,13 @@ Create a GitHub App for DestinedFX in GitHub Developer settings.
 
 1. Enable Device Flow under the GitHub App's user authorization settings.
 2. Configure fine-grained repository permissions:
-   - Codespaces: read — list the authenticated user's Codespaces and read selected Codespace details.
+   - Codespaces metadata: read — list the authenticated user's Codespaces and read selected Codespace details.
    - Codespaces lifecycle admin: write — start and stop the authenticated user's Codespaces.
 3. Ensure the owner account can access the repository and Codespace.
 4. Put the public GitHub App Client ID in Android build configuration as CODESPACES_GITHUB_CLIENT_ID (or enter the public Client ID in the host-control panel). The Client ID is not a secret.
 5. For the optional server-side token revocation proxy, add CODESPACES_GITHUB_CLIENT_ID and CODESPACES_GITHUB_CLIENT_SECRET to the private GitHub Codespaces secret/environment configuration. Never put the App client secret in the APK, Android preferences, repository, Bridge logs, or chat.
 
-The Android client uses POST https://github.com/login/device/code and requests offline_access. The owner enters the one-time code at GitHub's device verification page. GitHub App user tokens expire after eight hours; the refresh token expires after six months and rotates on use. Both tokens are stored in the app's Android Keystore-backed encrypted preferences. A normal Actions GITHUB_TOKEN is not used to control a user's Codespace.
+The Android client uses the GitHub App OAuth Device Flow with Custom Tabs: it sends POST https://github.com/login/device/code and requests offline_access. It deliberately does not ship an App client secret or use AppAuth's redirect-based authorization-code flow; GitHub documents Device Flow as appropriate for desktop/headless clients, and its expiring user-token refresh flow does not require the client secret when the token was obtained through Device Flow. The owner enters the one-time code at GitHub's device verification page. GitHub App user tokens expire after eight hours; the refresh token expires after six months and rotates on use. Both tokens are stored in the app's Android Keystore-backed encrypted preferences. A normal Actions GITHUB_TOKEN is not used to control a user's Codespace.
 
 GitHub documentation:
 - [Enable Device Flow for a GitHub App](https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration#enabling-or-disabling-the-device-flow)
