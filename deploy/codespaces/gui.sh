@@ -3,33 +3,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STATE="${DESTINEDFX_CODESPACES_STATE_DIR:-$HOME/.local/share/destinedfx-codespaces}"
 RUNTIME="$STATE/runtime"
+PROCESS_IDENTITY="$ROOT/deploy/codespaces/process_identity.py"
+INSTALLER_IDENTITY="$RUNTIME/installer-gui.identity.json"
 mkdir -p "$STATE" "$RUNTIME"
 chmod 700 "$STATE" "$RUNTIME"
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-stop_recorded() {
-  local file="$1" pid
-  [[ -s "$file" ]] || return 0
-  pid="$(cat "$file" 2>/dev/null || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] || { rm -f "$file"; return 0; }
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-    kill -KILL "$pid" 2>/dev/null || true
-  fi
-  rm -f "$file"
-}
-wait_alive() {
-  local name="$1" file="$2"
-  for _ in {1..30}; do
-    [[ -s "$file" ]] && kill -0 "$(cat "$file")" 2>/dev/null && return 0
-    sleep 0.2
-  done
-  fail "$name did not remain running; inspect $RUNTIME/${name,,}.log"
-}
-restart_recorded() {
-  stop_recorded "$1"
-}
 [[ "$(uname -m)" == x86_64 ]] || fail 'The owner-assisted MT5 route requires x86_64.'
 [[ -n "${CODESPACE_NAME:-}" ]] || fail 'CODESPACE_NAME is unavailable; run this inside GitHub Codespaces.'
 [[ -x "$(command -v x11vnc || true)" && -x "$(command -v websockify || true)" ]] || fail 'x11vnc and websockify are missing; rebuild the devcontainer image.'
@@ -49,7 +28,10 @@ else
   printf 'WARN: GitHub CLI is unavailable; port 6080 visibility could not be verified.\n' >&2
 fi
 
-if ! pgrep -f 'install-mt5.sh --gui' >/dev/null 2>&1; then
+if [[ -s "$INSTALLER_IDENTITY" ]]; then
+  python3 "$PROCESS_IDENTITY" verify --record "$INSTALLER_IDENTITY" >/dev/null 2>&1 || fail 'an installer identity record exists but no longer matches; refusing duplicate launch and leaving all processes untouched'
+  printf 'PASS: installer process matches the saved PID/start-time/UID/executable/argv identity; reusing the existing owner wizard.\n'
+else
   # shellcheck disable=SC1091
   source "$ROOT/deploy/codespaces/installer-pins.env"
   (
@@ -57,13 +39,15 @@ if ! pgrep -f 'install-mt5.sh --gui' >/dev/null 2>&1; then
       --expected-sha256 "$MT5_LINUX_SCRIPT_SHA256" \
       --expected-setup-sha256 "$MT5_SETUP_SHA256"
   ) >>"$RUNTIME/installer-gui.log" 2>&1 &
-  echo $! > "$RUNTIME/installer-gui.pid"
-fi
-sleep 2
-if [[ -s "$RUNTIME/installer-gui.pid" ]] && ! kill -0 "$(cat "$RUNTIME/installer-gui.pid")" 2>/dev/null; then
-  printf 'FAIL: installer exited before the wizard appeared. Last log lines:\n' >&2
-  tail -n 20 "$RUNTIME/installer-gui.log" >&2 || true
-  exit 1
+  INSTALLER_PID="$!"
+  printf '%s\n' "$INSTALLER_PID" >"$RUNTIME/installer-gui.pid"
+  chmod 600 "$RUNTIME/installer-gui.pid"
+  python3 "$PROCESS_IDENTITY" capture --pid "$INSTALLER_PID" \
+    --record "$INSTALLER_IDENTITY" --expected-uid "$EUID" || fail 'could not record installer PID/start-time/UID/executable/argv; refusing unverified installer management'
+  sleep 2
+  if ! python3 "$PROCESS_IDENTITY" verify --record "$INSTALLER_IDENTITY" >/dev/null 2>&1; then
+    printf 'WARN: installer process identity changed after launch (for example, during exec); it was not signalled and must not be relaunched until manually inspected.\n' >&2
+  fi
 fi
 
 printf 'PASS: private installer GUI started.\n'
