@@ -39,7 +39,7 @@ fi
 check_cmd xvfb 'command -v Xvfb >/dev/null && Xvfb -help >/dev/null 2>&1' 'Rebuild the Codespaces environment with Xvfb installed.'
 check_cmd host_agent 'curl -fsS --max-time 5 http://127.0.0.1:8787/health/ready >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/host-agent.log.'
 check_cmd bridge_loopback 'curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null' 'Run bash deploy/codespaces/start.sh and inspect runtime/bridge.log.'
-check_cmd runner_loop 'python3 - "$ROOT/scripts/linux-host/linux-slot-worker.py" <<\x27PY\x27
+check_cmd runner_loop 'python3 -c "import os,sys; expected=os.path.realpath(sys.argv[1]); found=False; entries=os.scandir(\"/proc\"); [None for _ in ()];\nfor entry in entries:\n if entry.name.isdigit() and int(entry.name)!=os.getpid():\n  try:\n   args=[os.fsdecode(x) for x in open(\"/proc/\"+entry.name+\"/cmdline\",\"rb\").read().split(bytes([0])) if x]; found |= len(args)>=5 and os.path.realpath(args[1])==expected and args[2:5]==[\"--loop\",\"--interval\",\"3\"]\n  except OSError: pass\nsys.exit(0 if found else 1)" "$ROOT/scripts/linux-host/linux-slot-worker.py"' 'Run bash deploy/codespaces/start.sh and inspect runtime/linux-slot-worker.log.'
 import os, sys
 expected=os.path.realpath(sys.argv[1])
 for entry in os.scandir("/proc"):
