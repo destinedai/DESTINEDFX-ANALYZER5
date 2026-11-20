@@ -110,8 +110,9 @@ class MT5BridgeConnectBackend(private val client: MT5ManagedAccountGateway) : Co
         val stage = when {
             s.managedState == "READY" && s.accountVerified && s.brokerIdentityVerified && s.heartbeatFresh -> ConnectStage.VERIFIED
             modeMismatchEvidence -> ConnectStage.VERIFIED
-            s.terminalOnline -> ConnectStage.HEARTBEAT
+            s.workerStatus in setOf("QUEUED", "AWAITING_ATTESTATION", "LEASED") -> ConnectStage.HOST_QUEUED
             s.workerStatus in setOf("PROVISIONING", "AUTHENTICATING", "READY") -> ConnectStage.TERMINAL_LOGGING_IN
+            s.terminalOnline -> ConnectStage.HEARTBEAT
             else -> null
         }
         val verified = stage == ConnectStage.VERIFIED
