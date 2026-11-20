@@ -126,6 +126,39 @@ def test_verified_process_receives_only_sigterm_and_record_clears_after_exit(tmp
     assert not path.exists()
 
 
+def test_pidfd_revalidation_closes_pid_reuse_window_before_signal(tmp_path):
+    path = record(tmp_path)
+    with patch.object(identity.os, "pidfd_open", return_value=88) as open_pidfd, \
+         patch.object(identity.os, "close") as close_fd, \
+         patch.object(identity.signal, "pidfd_send_signal") as send_signal, \
+         patch.object(identity, "snapshot", side_effect=[process(), process(start_ticks=101)]):
+        try:
+            identity.stop_record(path)
+        except identity.IdentityError as exc:
+            assert "after pidfd open" in str(exc)
+        else:
+            raise AssertionError("a PID reused between lookup and pidfd revalidation must fail closed")
+    open_pidfd.assert_called_once_with(4242, 0)
+    close_fd.assert_called_once_with(88)
+    send_signal.assert_not_called()
+
+
+def test_pidfd_success_signals_only_the_pinned_verified_process(tmp_path):
+    path = record(tmp_path)
+    with patch.object(identity.os, "pidfd_open", return_value=89) as open_pidfd, \
+         patch.object(identity.os, "close") as close_fd, \
+         patch.object(identity.signal, "pidfd_send_signal") as send_signal, \
+         patch.object(identity, "snapshot", side_effect=[process(), process(), None]):
+        stopped = identity.stop_record(
+            path, timeout_seconds=1, sleep=lambda _seconds: None, clock=lambda: 0
+        )
+    assert stopped is True
+    open_pidfd.assert_called_once_with(4242, 0)
+    close_fd.assert_called_once_with(89)
+    send_signal.assert_called_once_with(89, signal.SIGTERM)
+    assert not path.exists()
+
+
 def test_unresponsive_verified_process_is_not_killed_or_escalated(tmp_path):
     path = record(tmp_path)
     sent = []
