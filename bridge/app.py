@@ -1,4 +1,4 @@
-import asyncio, os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error
+import asyncio, os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error, base64
 import re
 import logging
 from datetime import datetime, timezone, timedelta
