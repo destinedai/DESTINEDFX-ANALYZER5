@@ -159,11 +159,19 @@ PROCESS_IDENTITY="$ROOT/deploy/codespaces/process_identity.py"
 track_pid() {
   local pid="$1" expected="$2" expected_uid="${3:-$EUID}"
   local record="$RUNTIME/process-$pid.identity.json"
-  python3 "$PROCESS_IDENTITY" capture --pid "$pid" --record "$record" \
-    --expected-uid "$expected_uid" --expected-fragment "$expected" || {
+  if [[ "$expected_uid" == "0" ]]; then
+    sudo -n python3 "$PROCESS_IDENTITY" capture --pid "$pid" --record "$record" \
+      --expected-uid "$expected_uid" --expected-fragment "$expected" || {
+        fail "Could not capture complete root process identity for $expected."
+        return 1
+      }
+  else
+    python3 "$PROCESS_IDENTITY" capture --pid "$pid" --record "$record" \
+      --expected-uid "$expected_uid" --expected-fragment "$expected" || {
       fail "Could not capture complete process identity for $expected."
       return 1
     }
+  fi
   printf '%s|%s\n' "$pid" "${record##*/}" >>"$RUNTIME/pids"
   chmod 600 "$RUNTIME/pids"
 }
@@ -171,7 +179,7 @@ if [[ -f "$RUNTIME/pids" && -s "$RUNTIME/pids" ]]; then
   all_running=true
   while IFS='|' read -r pid identity_file; do
     [[ "$pid" =~ ^[0-9]+$ && "$identity_file" == "process-$pid.identity.json" ]] || { all_running=false; continue; }
-    python3 "$PROCESS_IDENTITY" verify --record "$RUNTIME/$identity_file" >/dev/null 2>&1 || all_running=false
+    sudo -n python3 "$PROCESS_IDENTITY" verify --record "$RUNTIME/$identity_file" >/dev/null 2>&1 || all_running=false
   done < "$RUNTIME/pids"
   if [[ "$all_running" == true ]]; then
     pass 'Existing managed Codespaces processes match their saved PID/start-time/UID/executable/argv identities.'
