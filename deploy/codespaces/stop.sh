@@ -34,7 +34,7 @@ stop_recorded() {
     printf 'WARN: no complete identity record for %s PID %s; leaving it untouched.\n' "$expected" "$pid" >&2
     return 1
   }
-  python3 "$PROCESS_IDENTITY" stop --record "$record" --timeout 5 || return 1
+  sudo -n python3 "$PROCESS_IDENTITY" stop --record "$record" --timeout 5 || return 1
   rm -f "$file"
   return 0
 }
@@ -117,7 +117,7 @@ while IFS='|' read -r pid identity_file; do
   fi
   record="$RUNTIME/$identity_file"
   [[ -s "$record" ]] || continue
-  if ! python3 "$PROCESS_IDENTITY" stop --record "$record" --timeout 5; then
+  if ! sudo -n python3 "$PROCESS_IDENTITY" stop --record "$record" --timeout 5; then
     STOP_FAILURES=$((STOP_FAILURES + 1))
     continue
   fi
