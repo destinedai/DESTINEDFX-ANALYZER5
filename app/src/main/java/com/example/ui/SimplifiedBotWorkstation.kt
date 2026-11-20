@@ -1547,8 +1547,14 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     check(hostBridge?.hasPairing() == true) { "A paired owner Bridge account is required for safe shutdown checks." }
                                     githubHostOperationState = "STOPPING"
                                     val preflight = hostBridge!!.prepareHostStop()
-                                    check(preflight.optString("status") == "PREPARED" && preflight.optBoolean("backup_verified")) {
-                                        "Bridge did not confirm safe shutdown preparation: " + preflight.optString("message").take(140)
+                                    check(
+                                        preflight.optString("status") == "PREPARED" &&
+                                            preflight.optBoolean("backup_verified") &&
+                                            preflight.optBoolean("stop_script_ack") &&
+                                            preflight.optString("stop_script_status") == "PREFLIGHT_PASSED"
+                                    ) {
+                                        "Bridge did not confirm database backup and local stop.sh preflight: " +
+                                            preflight.optString("message").take(140)
                                     }
                                     githubCodespacesClient.stopCodespace(target)
                                     stopRequestAccepted = true
