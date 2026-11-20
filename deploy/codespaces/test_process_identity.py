@@ -298,3 +298,30 @@ def test_privileged_writer_refuses_symlinked_runtime_directory(tmp_path):
             raise AssertionError("root must refuse a symlinked runtime directory")
     assert target.stat().st_mode & 0o777 == 0o700
     assert not (target / "root-agent.identity.json").exists()
+
+
+def test_retire_only_removes_record_after_exact_process_is_gone(tmp_path):
+    path = record(tmp_path)
+    with patch.object(identity, "snapshot", return_value=None):
+        assert identity.retire_record_if_gone(path) is True
+    assert not path.exists()
+
+
+def test_retire_keeps_live_or_pid_reused_process_record(tmp_path):
+    path = record(tmp_path)
+    with patch.object(identity, "snapshot", return_value=process()):
+        try:
+            identity.retire_record_if_gone(path)
+        except identity.IdentityError as exc:
+            assert "still running" in str(exc)
+        else:
+            raise AssertionError("live process identity record must not be retired")
+    assert path.exists()
+    with patch.object(identity, "snapshot", return_value=process(start_ticks=101)):
+        try:
+            identity.retire_record_if_gone(path)
+        except identity.IdentityError as exc:
+            assert "mismatched PID" in str(exc)
+        else:
+            raise AssertionError("PID-reused record must not be retired")
+    assert path.exists()
