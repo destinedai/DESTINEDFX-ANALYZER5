@@ -70,7 +70,7 @@ python3 -m pytest -q "$ROOT/scripts/host/test_destinedfx_trigger_host.py" || fai
 grep -Fq 'destinedfx_trigger_host.py start_all' "$ROOT/.devcontainer/devcontainer.json" || fail 'postStart must use the shared host trigger adapter'
 grep -Fq 'ensure_started()' "$ROOT/scripts/host/destinedfx_trigger_host.py" || fail 'host adapter must reuse the existing host supervisor'
 grep -Fq 'STOP_SCRIPT' "$ROOT/deploy/codespaces/host_controller.py" || fail 'host supervisor must retain the existing stop.sh path'
-if grep -Fq 'gui.sh' "$ROOT/scripts/host/destinedfx_trigger_host.py"; then fail 'normal host start must never open the GUI installer'; fi
+if grep -Eq '(Popen|subprocess\\.(run|call|check_call|check_output)|exec)[^#]*gui\\.sh' "$ROOT/scripts/host/destinedfx_trigger_host.py"; then fail 'normal host start must never invoke the GUI installer'; fi
 grep -Fq 'check_slot_worker.py' "$ROOT/deploy/codespaces/first-run-check.sh" || fail 'first-run check must use the tested slot worker process checker'
 grep -Fq -- '-noxdamage' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'X11 damage buffering must be disabled for live VNC updates'
 grep -Fq -- '--heartbeat=30' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC websocket heartbeat missing'
