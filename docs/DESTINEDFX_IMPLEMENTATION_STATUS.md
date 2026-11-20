@@ -2,7 +2,7 @@
 
 Updated: 2026-11-20
 
-## Nov 20 code review and lifecycle hardening (latest CI pending for head 7c7227e)
+## Nov 20 code review and lifecycle hardening (latest CI pending for head 28a0a09)
 
 - **Bridge Linux-host enrollment:** EPHEMERAL Codespaces with verified per-user slot isolation can enrol DEMO only. LIVE is rejected before managed-account credential storage or worker-job creation. Regression tests cover allowed DEMO enrollment, LIVE refusal, and unready isolation.
 - **Codespaces first-run worker check:** now inspects the exact isolated slot-worker process path/arguments under `/proc`, avoiding the legacy worker mismatch and self-matching `pgrep` issue.
@@ -12,7 +12,9 @@ Updated: 2026-11-20
 - **VNC authentication verification:** x11vnc uses a private `-passwdfile` first-line password file (not the distinct encrypted `-rfbauth` format). The self-check reads that exact first line using a no-follow descriptor, verifies owner/mode, performs a real local RFB VNC challenge/response against port 5900 and confirms loopback-only listeners. It does not claim a browser-to-noVNC websocket handshake or MT5 terminal startup.
 - **GitHub authorization revocation:** the Bridge proxy now calls the GitHub App grant-revocation endpoint, rather than the single-token endpoint, so a confirmed result represents revocation of the app authorization grant. Android also fails closed unless both current and backup broker-safety reports are explicitly safe with no reasons.
 - **Android account freshness:** Connected Account balance/equity/free-margin are withheld as STALE unless the account-bound EA heartbeat and at least one terminal quote are within 15 seconds.
-- **Latest CI:** the last fully green four-workflow run was on `dcbcd58` (Build APK, Codespaces deployment diagnostics, MetaQuotes installer verification, Wine guard). New installer-completion, safe-retry and VNC password-parser changes are on the current feature-branch history; the matching Actions runs are in progress/pending and must be green before release or phone testing.
+- **GitHub App Codespaces authorization:** Android now requests only `offline_access`; it does not incorrectly require an OAuth `codespace` scope from GitHub App user-token responses (those responses use the App's fine-grained permissions and have an empty scope field). Both access-token and refresh-token expiry are saved and enforced. Device Flow polling respects GitHub's returned interval and adds five seconds for each `slow_down` response.
+- **Codespace target binding:** lifecycle discovery now paginates the owner's list and accepts only the exact repository name, immutable repository ID and `refs/heads/free/phone-only-v1`. Ambiguous results and incomplete pagination fail closed; the discovered Codespace name remains API-sourced, never hard-coded.
+- **Latest CI:** on `63db444`, Codespaces diagnostics, Wine guard and MetaQuotes installer verification passed; Build APK failed at Kotlin compilation because the newly added polling helpers were not imported in `CodespacesHostControls.kt`. The imports were added in `03ef102`; exact-branch discovery/tests followed in `f0e4d07` and `28a0a09`. The four Actions workflows for `28a0a09` are running; do not report the APK as passed until JVM tests, APK signature/metadata/ABI checks and instrumentation complete.
 - **GUI installer retry safety:** the installer PID record can be retired only when the exact recorded process is absent or a zombie; a live process or reused PID keeps the record and is left untouched.
 - **Validation and owner boundary:** no physical-phone, live Codespaces, two-user host, browser-to-noVNC, or genuine broker DEMO acceptance is claimed.
 
