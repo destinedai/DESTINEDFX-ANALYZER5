@@ -124,13 +124,11 @@ elif (( ${#XVFB_PIDS[@]} == 1 )); then
   # service must not become "adopted" merely because it is still running.
   prior_ownership="$(cat "$RUNTIME/xvfb.ownership" 2>/dev/null || true)"
   prior_pid="$(cat "$RUNTIME/xvfb.pid" 2>/dev/null || true)"
-  if [[ "$prior_ownership" == started && "$prior_pid" == "$XVFB_PID" ]] &&
-     grep -Fqx "$XVFB_PID|Xvfb :99" "$RUNTIME/pids" 2>/dev/null; then
+  if [[ "$prior_ownership" == started ]]; then
+    [[ "$prior_pid" == "$XVFB_PID" ]] || fail 'previously owned Xvfb PID changed; refusing to silently reclassify display ownership'
+    grep -Fqx "$XVFB_PID|Xvfb :99" "$RUNTIME/pids" 2>/dev/null || fail 'previously owned Xvfb lacks its managed process record; refusing ownership reclassification'
     printf 'started\n' >"$RUNTIME/xvfb.ownership"
   else
-    if [[ "$prior_ownership" == started && "$prior_pid" != "$XVFB_PID" ]]; then
-      fail 'previously owned Xvfb PID changed; refusing to silently reclassify display ownership'
-    fi
     printf 'adopted\n' >"$RUNTIME/xvfb.ownership"
   fi
   write_pid xvfb "$XVFB_PID"
