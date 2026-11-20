@@ -120,8 +120,13 @@ def write_record(path: Path, identity: dict[str, Any]) -> None:
 def read_record(path: Path) -> dict[str, Any]:
     try:
         info = path.lstat()
-        if not path.is_file() or path.is_symlink() or info.st_mode & 0o077:
-            raise IdentityError("process identity record permissions or file type are unsafe")
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or info.st_mode & 0o077
+            or (os.geteuid() != 0 and info.st_uid != os.geteuid())
+        ):
+            raise IdentityError("process identity record permissions, owner or file type are unsafe")
         payload = json.loads(path.read_text(encoding="utf-8"))
     except IdentityError:
         raise
