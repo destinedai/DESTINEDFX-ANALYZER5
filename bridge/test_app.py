@@ -2571,6 +2571,7 @@ def test_cross_management_identity_cannot_prepare_host_shutdown(monkeypatch, tmp
 
 def test_host_shutdown_safe_alias_uses_the_same_owner_and_safety_gate(monkeypatch, tmp_path):
     managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'run_stop_script_preflight', lambda: True)
     monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
     monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
     monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
@@ -2584,6 +2585,8 @@ def test_host_shutdown_safe_alias_uses_the_same_owner_and_safety_gate(monkeypatc
     assert response.status_code == 200, response.text
     assert response.json()['status'] == 'PREPARED'
     assert response.json()['backup_verified'] is True
+    assert response.json()['stop_script_ack'] is True
+    assert response.json()['stop_script_status'] == 'PREFLIGHT_PASSED'
     blocked = client.post('/v1/app/commands', headers=headers, json=command_req('STOP'))
     assert blocked.status_code == 409
     assert blocked.json()['detail']['code'] == 'HOST_SHUTDOWN_PREPARED'
@@ -2591,6 +2594,7 @@ def test_host_shutdown_safe_alias_uses_the_same_owner_and_safety_gate(monkeypatc
 
 def test_manual_host_stop_is_owner_gated_and_blocks_commands_until_cancelled(monkeypatch, tmp_path):
     managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'run_stop_script_preflight', lambda: True)
     monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
     monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
     monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
@@ -2605,6 +2609,8 @@ def test_manual_host_stop_is_owner_gated_and_blocks_commands_until_cancelled(mon
     assert prepared.status_code == 200, prepared.text
     assert prepared.json()['status'] == 'PREPARED'
     assert prepared.json()['backup_verified'] is True
+    assert prepared.json()['stop_script_ack'] is True
+    assert prepared.json()['stop_script_status'] == 'PREFLIGHT_PASSED'
     blocked = client.post('/v1/app/commands', headers=headers, json=command_req('STOP'))
     assert blocked.status_code == 409
     assert blocked.json()['detail']['code'] == 'HOST_SHUTDOWN_PREPARED'
@@ -2616,6 +2622,50 @@ def test_manual_host_stop_is_owner_gated_and_blocks_commands_until_cancelled(mon
     assert status.json()['shutdown_prepared'] is False
     accepted = client.post('/v1/app/commands', headers=headers, json=command_req('STOP'))
     assert accepted.status_code == 202
+
+
+def test_host_stop_requires_local_stop_script_ack_and_clears_gate(monkeypatch, tmp_path):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
+    monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'run_stop_script_preflight', lambda: False)
+    p = pair()
+    headers = {
+        'Authorization': 'Bearer ' + p['app_token'],
+        'X-Management-Identity': p['_management_identity_assertion'],
+    }
+    response = client.post('/v1/app/host/prepare-stop', headers=headers)
+    assert response.status_code == 503
+    assert response.json()['detail']['code'] == 'HOST_STOP_PREFLIGHT_FAILED'
+    with app.tx() as c:
+        row = c.execute("SELECT value FROM host_control WHERE key='shutdown_prepared'").fetchone()
+    assert row is None
+
+
+def test_shutdown_gate_prevents_new_worker_provision_leases_but_keeps_revocation_path(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    p, ah = managed_pair()
+    registered = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123456', 'server':'Demo-Server', 'password':'demo-secret',
+        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS',
+        'consent':True,
+    })
+    assert registered.status_code == 202
+    with app.tx(True) as c:
+        c.execute("INSERT OR REPLACE INTO host_control(key,value,updated) VALUES('shutdown_prepared',?,?)",
+                  (app.HOST_GENERATION,time.time()))
+    response = client.post('/v1/worker/jobs/claim',
+        headers={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']},
+        json={'worker_id':'w1','active_terminals':0,'max_terminals':2})
+    assert response.status_code == 200
+    assert response.json() == {'job':None}
+    with app.tx() as c:
+        job = c.execute("SELECT status FROM worker_jobs WHERE pairing_id=?", (p['pairing_id'],)).fetchone()
+    assert job['status'] == 'QUEUED'
 
 
 def test_host_stop_rechecks_backup_and_clears_gate_when_state_changes(monkeypatch, tmp_path):
