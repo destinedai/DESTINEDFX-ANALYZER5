@@ -735,7 +735,8 @@ def check_stop() -> int:
         _log("host stop preflight blocked by unresolved broker state")
         return 2
     try:
-        rows = _active_manifests()
+        # Keep preflight read-only: do not create manifest directories or markers.
+        rows = _active_manifests() if MANIFEST_DIR.is_dir() else []
         reservations = [_reservation_from_manifest(row) for row in rows]
     except (SlotWorkerError, TypeError, ValueError, KeyError):
         _log("host stop preflight blocked by unreadable or incomplete slot manifest")
