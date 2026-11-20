@@ -50,6 +50,13 @@ The managed-account registration includes `broker_brand`. The bridge stores it a
 - DEMO and LIVE profiles are separate. LIVE trade authorization remains blocked until explicitly armed for the exact account.
 - No genuine broker order was submitted in this development change.
 
+
+## Broker login queue and retry behaviour
+
+The Android MT5 login flow now keeps polling for up to eight minutes so a terminal can be staged, the EA compiled, the isolated slot launched, and the first authenticated heartbeat received. A queued request is shown separately from terminal authentication. If the host remains at capacity until the wait expires, the app reports `HOST_CAPACITY_TIMEOUT`; it does not label the broker credentials invalid.
+
+Retrying the same broker, DEMO/LIVE profile, access type, account number and exact server resumes the already accepted job using the existing pairing token. The app does not post the password a second time. A different account cannot replace a queued or active terminal in that same broker-qualified pairing; it receives `PAIRING_TERMINAL_ALREADY_ACTIVE` and must wait for verified revocation/cleanup before switching accounts. The bridge exposes the requested account number and exact server only within the authenticated pairing's `managed_execution` state so Android can make this comparison. This does not increase physical host capacity: the existing Codespaces RAM gate may queue additional sessions until a slot is available.
+
 ## Required acceptance evidence
 
 For each real DEMO account, record the exact broker and connection method, actual account ID/mode/server, fresh quote and instrument specification, broker-confirmed order/deal/contract IDs, protective order state, cancellation/close result, history reconciliation, and reconnect/restart evidence. Ambiguous order outcomes must remain unresolved until broker state confirms them.
