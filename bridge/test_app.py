@@ -718,7 +718,7 @@ def test_selected_mt5_broker_brand_is_checked_against_terminal_company(monkeypat
     assert accepted.status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['managed_execution']['broker_brand']=='FBS'
-    assert state['managed_execution']['requested_login']=='123456'
+    assert state['managed_execution']['requested_login']=='556677'
     assert state['managed_execution']['requested_server']=='Demo-Server'
 
 def test_mt5_broker_company_aliases_are_verified_not_guessed():
