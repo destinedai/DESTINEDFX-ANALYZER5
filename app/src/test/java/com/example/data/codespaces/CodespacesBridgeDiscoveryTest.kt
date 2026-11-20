@@ -32,6 +32,45 @@ class CodespacesBridgeDiscoveryTest {
     }
 
     @Test
+    fun codespaceDiscoveryRequiresExactRepositoryIdAndFeatureBranch() {
+        assertTrue(
+            codespaceMatchesDestinedFxTarget(
+                "destinedai/DESTINEDFX-ANALYZER5",
+                1409048108L,
+                "refs/heads/free/phone-only-v1"
+            )
+        )
+        assertFalse(
+            codespaceMatchesDestinedFxTarget(
+                "destinedai/DESTINEDFX-ANALYZER5",
+                1409048108L,
+                "refs/heads/main"
+            )
+        )
+        assertFalse(
+            codespaceMatchesDestinedFxTarget(
+                "destinedai/DESTINEDFX-ANALYZER5",
+                1409048108L,
+                "free/phone-only-v1"
+            )
+        )
+        assertFalse(
+            codespaceMatchesDestinedFxTarget(
+                "attacker/fork",
+                1409048108L,
+                "refs/heads/free/phone-only-v1"
+            )
+        )
+        assertFalse(
+            codespaceMatchesDestinedFxTarget(
+                "destinedai/DESTINEDFX-ANALYZER5",
+                1L,
+                "refs/heads/free/phone-only-v1"
+            )
+        )
+    }
+
+    @Test
     fun buildsTheDocumentedHttpsOriginForPort8000() {
         assertEquals(
             "https://steady-lizard-abc123-8000.app.github.dev",
