@@ -2150,7 +2150,7 @@ def state(authorization:str|None=Header(default=None)):
                 items=c.execute('SELECT ticket,ack_status,message,operational_status,remaining_volume,target_volume FROM command_items WHERE command_id=? ORDER BY rowid',(cmd['id'],)).fetchall()
             last_command['results']=[{'ticket':i['ticket'],'status':'REJECTED' if i['ack_status']=='REJECTED' else ('APPLIED' if i['operational_status']=='CONFIRMED' else ('PARTIAL' if i['operational_status']=='PARTIAL' else ('UNKNOWN' if i['ack_status']=='UNKNOWN' else 'PENDING'))),'ack_status':i['ack_status'] or 'PENDING','operational_status':i['operational_status'],'target_volume':i['target_volume'],'remaining_volume':i['remaining_volume'],'message':('Target absence confirmed by subsequent terminal evidence' if i['operational_status']=='CONFIRMED' else ('Partial result reconciled against fresh terminal volume' if i['operational_status']=='PARTIAL' else i['message']))} for i in items]
     with tx() as c:
-        m=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc,credential_generation FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        m=c.execute('SELECT access_type,revoked,account_mode,broker_brand,login_enc,server_enc,credential_generation FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
         job=c.execute('SELECT status,error_code,error_message FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1',(p['id'],)).fetchone()
     managed=None
     identity_verified=False
