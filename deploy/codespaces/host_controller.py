@@ -156,6 +156,16 @@ def _find_supervisors(expected: str) -> list[dict[str, Any]]:
     return found
 
 
+def _start_manager_identity_matches(identity: dict[str, Any] | None, expected_script: str) -> bool:
+    return bool(
+        identity
+        and identity["state"] not in {"Z", "X"}
+        and identity["uid"] == os.geteuid()
+        and identity["exe"] == os.path.realpath("/usr/bin/bash")
+        and identity["args"] == ["bash", str(Path(expected_script).resolve())]
+    )
+
+
 def _write_status(status: str, **extra: Any) -> None:
     _atomic_json(
         STATUS_FILE,
@@ -293,6 +303,11 @@ def _graceful_stop(
     """Recheck live and backed-up broker state before stopping owned services."""
     if child.poll() is not None:
         return True
+    start_identity = _proc_identity(child.pid)
+    start_ticks = _proc_start_ticks(child.pid)
+    if not _start_manager_identity_matches(start_identity, str(START_SCRIPT)) or start_identity["start_ticks"] != start_ticks:
+        _write_status("STOP_BLOCKED", reason=reason, safety_reasons=["START_PROCESS_IDENTITY_MISMATCH"])
+        return False
     try:
         safety = inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15)
         if not safety["safe"]:
@@ -328,6 +343,10 @@ def _graceful_stop(
         _write_status("STOP_FAILED", reason="STOP_SCRIPT_FAILED")
         return False
 
+    current_identity = _proc_identity(child.pid)
+    if not _start_manager_identity_matches(current_identity, str(START_SCRIPT)) or current_identity["start_ticks"] != start_ticks:
+        _write_status("STOP_FAILED", reason="START_PROCESS_IDENTITY_CHANGED")
+        return False
     try:
         os.killpg(child.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -344,6 +363,10 @@ def _graceful_stop(
         # Do not signal a different process or a PID read from a stale file.
         if child.poll() is not None:
             return True
+        current_identity = _proc_identity(child.pid)
+        if not _start_manager_identity_matches(current_identity, str(START_SCRIPT)) or current_identity["start_ticks"] != start_ticks:
+            _write_status("STOP_FAILED", reason="START_PROCESS_IDENTITY_CHANGED")
+            return False
         try:
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
