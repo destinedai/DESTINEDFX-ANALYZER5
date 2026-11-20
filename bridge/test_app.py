@@ -2528,7 +2528,7 @@ def test_github_token_revocation_uses_server_side_app_secret_without_echo(monkey
     monkeypatch.setattr(app.urllib.request, 'urlopen', fake_urlopen)
     response = client.post('/v1/app/github/revoke', headers=headers, json={'access_token': token})
     assert response.status_code == 200 and response.json() == {'revoked': True}
-    assert captured['url'] == 'https://api.github.com/applications/Iv1.fixtureclient/token'
+    assert captured['url'] == 'https://api.github.com/applications/Iv1.fixtureclient/grant'
     assert captured['method'] == 'DELETE'
     assert captured['api_version'] == '2026-03-10'
     assert captured['auth'].startswith('Basic ')
