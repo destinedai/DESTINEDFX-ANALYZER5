@@ -11,6 +11,8 @@ from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 import jwt
 from jwt import PyJWKClient
 from host_lifecycle import backup_database, cancel_stop, inspect_shutdown_safety, read_status, touch_activity
@@ -107,6 +109,22 @@ NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
 MANAGEMENT_STEP_UP_PUBLIC_KEY=os.getenv('MANAGEMENT_STEP_UP_PUBLIC_KEY','').strip()
 MANAGEMENT_STEP_UP_ISSUER=os.getenv('MANAGEMENT_STEP_UP_ISSUER','destinedfx-management').strip()
 MANAGEMENT_STEP_UP_AUDIENCE=os.getenv('MANAGEMENT_STEP_UP_AUDIENCE','destinedfx-bridge').strip()
+
+def management_step_up_key_fingerprint():
+    """Return the configured Ed25519 public-key fingerprint, or empty when invalid/missing."""
+    if not MANAGEMENT_STEP_UP_PUBLIC_KEY:
+        return ''
+    try:
+        key=serialization.load_pem_public_key(MANAGEMENT_STEP_UP_PUBLIC_KEY.encode('utf-8'))
+        if not isinstance(key,Ed25519PublicKey):
+            return ''
+        der=key.public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return hashlib.sha256(der).hexdigest()
+    except Exception:
+        return ''
 LINUX_HOST_MODE=os.getenv('BRIDGE_HOST_MODE','').strip().lower()=='linux-host'
 HOST_AGENT_URL=os.getenv('HOST_AGENT_URL','http://127.0.0.1:8787/health/ready').strip()
 ANALYSIS_CLOCK_SKEW_MS=max(0,int(os.getenv('ANALYSIS_CLOCK_SKEW_SECONDS','120')))*1000
@@ -1920,6 +1938,9 @@ def configuration_health():
         'database': 'ok',
         'managed_execution': 'configured',
         'host_profile': HOST_PROFILE,
+        'management_step_up_key_fingerprint_sha256': management_step_up_key_fingerprint(),
+        'management_step_up_issuer': MANAGEMENT_STEP_UP_ISSUER if management_step_up_key_fingerprint() else '',
+        'management_step_up_audience': MANAGEMENT_STEP_UP_AUDIENCE if management_step_up_key_fingerprint() else '',
         'per_user_terminal_isolation': isolation_status,
         'isolated_slots': int(isolation.get('active_slots', 0)) if isolation_verified else 0,
         'max_isolated_slots': int(isolation.get('max_slots', 0)) if isolation_verified else 0,
