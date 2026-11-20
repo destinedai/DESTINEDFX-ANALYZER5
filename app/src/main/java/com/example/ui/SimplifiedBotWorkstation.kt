@@ -1344,7 +1344,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         val hostDisplayState = when (codespaceState.lowercase()) {
             "available" -> if (hostApiStatus?.optBoolean("shutdown_prepared") == true) "STOPPING"
                 else if (
-                    hostApiStatus?.optString("host_lifecycle_status") in setOf("ACTIVE", "WARNING") &&
+                    hostApiStatus?.optString("host_lifecycle_status").orEmpty() in setOf("ACTIVE", "WARNING") &&
                     hostApiStatus.optJSONObject("slot_isolation")?.optBoolean("ready") == true &&
                     mt5Snapshot?.heartbeatFresh == true && mt5Snapshot?.terminalOnline == true
                 ) "ACTIVE" else "DEGRADED"
