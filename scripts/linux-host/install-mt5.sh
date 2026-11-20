@@ -24,7 +24,6 @@ STATE_DIR="${DESTINEDFX_CODESPACES_STATE_DIR:-$HOME/.local/share/destinedfx-code
 PROVENANCE_FILE="${DESTINEDFX_MT5_INSTALLER_PROVENANCE_FILE:-$STATE_DIR/mt5-installer-provenance.env}"
 COMPLETION_FILE="$STATE_DIR/installer-completed.json"
 VERIFIED_MARKER="$STATE_DIR/installer-verified"
-TERMINAL_PATH="$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/terminal64.exe"
 METAEDITOR_PATH=""
 BASE_TERMINAL_SHA256=""
 BASE_METAEDITOR_SHA256=""
@@ -166,6 +165,9 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+# Derive Wine-prefix paths only after --wineprefix arguments have been applied.
+TERMINAL_PATH="$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/terminal64.exe"
 
 arch="$(uname -m)"
 mkdir -p "$RECORD_DIR"
