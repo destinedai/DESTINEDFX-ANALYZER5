@@ -140,7 +140,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "HostProfile.PERSISTENT" in arming
         and "EPHEMERAL_HOST_LIVE_BLOCKED" in arming
         and "hostProfile != HostProfile.PERSISTENT" in arming
-        and "LIVE IS BLOCKED" in bot_ui
+        and "LIVE trading needs a verified persistent host." in bot_ui
         and "PERSISTENT HOST NOT VERIFIED" in bot_ui
     )
     add_check(
