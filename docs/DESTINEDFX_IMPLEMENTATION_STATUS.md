@@ -36,6 +36,15 @@ Updated: 2026-11-20
 - **Feature parity record:** see [Android vs MT5 Android feature parity audit](android-mt5-parity-audit.md) for verified implementation status, gaps and next engineering steps.
 - **Unverified owner runtime:** installation and interaction on the owner's physical Android device, live Codespaces-to-phone pairing, real broker DEMO authentication, live quotes/orders, and isolated per-user noVNC sessions.
 
+## Android-controlled Codespaces lifecycle (researched, not implemented)
+
+- GitHub REST supports authenticated-user Codespaces list/start/stop endpoints. Start and stop require the GitHub App user token to have **Codespaces lifecycle admin: write**; Codespaces metadata read is needed to discover the user's Codespace and its actual name. A repository Actions `GITHUB_TOKEN` is not the Android user's lifecycle credential.
+- Proposed Android authorization: GitHub App user authorization with a short-lived user access token and refresh handling; store tokens only in Android Keystore-backed encrypted storage, support disconnect/revoke, never embed a PAT or app secret in the APK. Discover the Codespace from the API, verify repository/ref and expected devcontainer, then invoke start/stop using its returned name rather than a hard-coded name.
+- Boot integration should use `.devcontainer/devcontainer.json` `postStartCommand` and the existing `host_controller.py` to reuse `start.sh`; do not duplicate startup or use `gui.sh` as normal startup. Current postStart already calls `host_controller.py ensure-started`; further Android controls and status wiring are still outstanding.
+- Safe STOP HOST must remain distinct from STOP BOT: first block new Bridge commands, reconcile heartbeat/account/orders/positions and verify shutdown safety; never auto-liquidate. If the safety gate is unknown or unsafe, leave the Codespace running and report the reason. Only call the GitHub stop endpoint after local host-stop acknowledgement.
+- Usage budget for GitHub Free personal Codespaces is **120 core-hours/month**. A 2-core machine consumes 2 core-hours per wall-clock hour. Budget target must count the entire Codespace running time, including idle grace: 1.5 wall-hours/day for 30 days is 90 core-hours, leaving 30; any extra daily idle time reduces the buffer. A 20-minute idle grace every day adds 20 core-hours/month. The target is total wall-time, not trading-time-only.
+- No START HOST/STOP HOST Android UI, GitHub App authorization flow, token refresh, lifecycle API calls, per-day usage accounting, host-state polling integration, or phone-side safe-stop flow has been implemented in this follow-up.
+
 ## Hosting and deployment
 
 - **Implemented:** persistent Bridge Docker Compose templates, durable SQLite volume, Caddy/TLS owner stack, systemd host/worker units, backup/restore scripts, health/readiness endpoints, and Codespaces noVNC diagnostics.
