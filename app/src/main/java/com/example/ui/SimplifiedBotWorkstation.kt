@@ -1521,6 +1521,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     ) { Text("CLEAR DEVICE TOKEN", fontSize = 9.sp) }
                 }
                 githubDeviceAuthorization?.let { device ->
+                    Text("SECURITY: enter this code only on the GitHub domain shown below. Never share it with anyone or enter it on another website.", color = WarningAmber, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     Text("Device code: ${device.userCode} · enter at https://github.com/login/device", color = WarningAmber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
                 Text(githubHostMessage, color = TextSecondary, fontSize = 9.sp)
