@@ -176,4 +176,5 @@ wait_alive x11vnc "$RUNTIME/x11vnc.pid" "x11vnc"
 wait_alive novnc "$RUNTIME/novnc.pid" "websockify"
 wait_port 5900
 wait_port 6080
-printf 'PASS: VNC configured (Xvfb verified; x11vnc password-file authentication configured; listeners loopback-only). RFB authentication handshake and MT5 terminal startup are not verified.\n'
+python3 "$ROOT/deploy/codespaces/vnc-selfcheck.py" || fail 'VNC local RFB password authentication or loopback self-check failed'
+printf 'PASS: RFB VNC password authentication handshake verified; VNC/noVNC listeners are loopback-only. MT5 terminal startup remains a separate check.\n'
