@@ -442,14 +442,25 @@ class GitHubCodespacesClient(
             private fun overlap(start: Long, end: Long, lower: Long, upper: Long): Long =
                 (minOf(end, upper) - maxOf(start, lower)).coerceAtLeast(0L)
 
-            private fun utcDayStart(now: Long): Long =
-                java.time.Instant.ofEpochMilli(now).atZone(java.time.ZoneOffset.UTC).toLocalDate()
-                    .atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
+            private fun utcCalendar(now: Long): java.util.Calendar =
+                java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                    timeInMillis = now
+                }
 
-            private fun utcMonthStart(now: Long): Long {
-                val date = java.time.Instant.ofEpochMilli(now).atZone(java.time.ZoneOffset.UTC).toLocalDate()
-                return date.withDayOfMonth(1).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
-            }
+            private fun utcDayStart(now: Long): Long = utcCalendar(now).apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+            private fun utcMonthStart(now: Long): Long = utcCalendar(now).apply {
+                set(java.util.Calendar.DAY_OF_MONTH, 1)
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
         }
     }
 }
