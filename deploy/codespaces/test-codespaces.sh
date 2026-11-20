@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/vnc-up.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/launch-mt5.sh" "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" "$ROOT/scripts/linux-host/wine-guard.sh" "$ROOT/scripts/linux-host/wine-probe.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
+for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/vnc-up.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/launch-mt5.sh" "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" "$ROOT/scripts/linux-host/wine-guard.sh" "$ROOT/scripts/linux-host/wine-probe.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" "$ROOT/scripts/linux-host/finalize-mt5-install.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
 [[ -x "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" ]] || fail 'Wine MT5 compatibility gate missing or not executable'
 [[ -x "$ROOT/scripts/linux-host/wine-guard.sh" ]] || fail 'Wine version guard missing or not executable'
 [[ -x "$ROOT/scripts/linux-host/wine-probe.sh" ]] || fail 'Wine startup probe missing or not executable'
@@ -70,6 +70,11 @@ grep -Fq -- '--heartbeat=30' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC 
 grep -Fq -- 'cacheBust=' "$ROOT/deploy/codespaces/gui.sh" || fail 'noVNC cache-busting URL missing'
 bash "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" || fail 'invalid installer signature fixtures were accepted'
 grep -Fq -- 'installer-verified' "$ROOT/.devcontainer/postCreate.sh" || fail 'installer verification marker missing'
+grep -Fq 'finalize-mt5-install.sh headless' "$ROOT/.devcontainer/postCreate.sh" || fail 'headless installer must use the shared finalizer'
+grep -Fq 'finalize-mt5-install.sh gui' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer must require shared finalization after owner wizard'
+grep -Fq 'authenticode_signer=MetaQuotes Ltd' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must verify installer provenance signer'
+grep -Fq 'MetaEditor' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must verify MetaEditor and compile the EA'
+grep -Fq 'DestinedFXTraderEA.ex5' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must require the compiled EA output'
 bash "$ROOT/deploy/codespaces/first-run-check.sh" >/tmp/destinedfx-first-run-check.out 2>&1 || true
 grep -Fq -- 'SUMMARY:' /tmp/destinedfx-first-run-check.out || fail 'first-run-check summary missing'
 grep -Fq -- 'gh codespace ports visibility 6080:private' "$ROOT/deploy/codespaces/gui.sh" || fail 'private GUI forwarding missing'
