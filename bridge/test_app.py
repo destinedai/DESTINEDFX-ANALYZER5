@@ -2535,6 +2535,38 @@ def test_github_token_revocation_uses_server_side_app_secret_without_echo(monkey
     assert token not in response.text
 
 
+def test_root_host_status_alias_is_owner_app_authenticated_and_uses_live_host_report(monkeypatch, tmp_path):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
+    monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': True, 'slot_isolation': {'enabled': True, 'ready': True, 'active_slots': 0, 'max_slots': 1},
+    })
+    p, headers = managed_pair()
+    assert client.get('/host-status').status_code == 401
+    response = client.get('/host-status', headers={'Authorization': headers['Authorization']})
+    assert response.status_code == 200, response.text
+    assert response.json()['host_profile'] == 'EPHEMERAL'
+    assert response.json()['slot_isolation']['ready'] is True
+
+
+def test_cross_management_identity_cannot_prepare_host_shutdown(monkeypatch, tmp_path):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
+    monkeypatch.setattr(app, 'HOST_CONTROL_DIR', str(tmp_path / 'runtime'))
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    p, headers = managed_pair('owner-a', 'tenant-a')
+    headers['X-Management-Identity'] = management_identity_assertion('owner-b', 'tenant-a')
+    response = client.post('/host/shutdown-safe', headers=headers)
+    assert response.status_code == 403
+    with app.tx() as c:
+        row = c.execute("SELECT value FROM host_control WHERE key='shutdown_prepared'").fetchone()
+    assert row is None
+
+
 def test_host_shutdown_safe_alias_uses_the_same_owner_and_safety_gate(monkeypatch, tmp_path):
     managed_env(monkeypatch)
     monkeypatch.setattr(app, 'DB_PATH', str(tmp_path / 'bridge.sqlite3'))
