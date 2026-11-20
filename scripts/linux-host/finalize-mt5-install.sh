@@ -9,14 +9,21 @@ for candidate in "$PREFIX/drive_c/Program Files/MetaTrader 5/metaeditor64.exe" "
   [[ -f "$candidate" ]] && { EDITOR="$candidate"; break; }
 done
 PROVENANCE="$STATE/mt5-installer-provenance.env"
+COMPLETION="$STATE/installer-completed.json"
+COMPLETION_HELPER="$ROOT/scripts/linux-host/installer_completion.py"
 MARKER="$STATE/installer-verified"
 SOURCE="$ROOT/mt5-ea/DestinedFXTraderEA.mq5"
 fail(){ printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 [[ -f "$TERMINAL" ]] || fail 'terminal64.exe is missing; installer wizard may be incomplete.'
 [[ -n "$EDITOR" ]] || fail 'MetaEditor is missing; installer wizard may be incomplete.'
 [[ -s "$PROVENANCE" ]] || fail 'verified installer provenance is missing; do not create an acceptance marker.'
-grep -Fqx 'authenticode_status=verified' "$PROVENANCE" || fail 'installer Authenticode provenance is not verified.'
-grep -Fqx 'authenticode_signer=MetaQuotes Ltd' "$PROVENANCE" || fail 'installer provenance signer is not MetaQuotes Ltd.'
+[[ -s "$COMPLETION" ]] || fail 'successful MetaQuotes setup completion record is missing; pre-existing terminal files are not accepted.'
+[[ -f "$COMPLETION_HELPER" ]] || fail 'installer completion verifier is missing.'
+python3 "$COMPLETION_HELPER" verify \
+  --manifest "$COMPLETION" \
+  --provenance "$PROVENANCE" \
+  --terminal "$TERMINAL" \
+  --metaeditor "$EDITOR" || fail 'current terminal/MetaEditor binaries do not match the successful pinned-installer completion record.'
 [[ -f "$SOURCE" ]] || fail 'DestinedFX EA source is missing.'
 command -v wine >/dev/null || fail 'Wine is unavailable.'
 command -v winepath >/dev/null || fail 'winepath is unavailable.'
