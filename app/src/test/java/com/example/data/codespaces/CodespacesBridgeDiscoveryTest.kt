@@ -8,12 +8,19 @@ import org.junit.Test
 
 class CodespacesBridgeDiscoveryTest {
     @Test
-    fun githubDeviceFlowRequestsCodespacesPermissionAndRefreshTokens() {
-        assertEquals("codespace offline_access", CODESPACES_OAUTH_SCOPES)
-        assertTrue(hasCodespacesOAuthScope("codespace offline_access"))
-        assertTrue(hasCodespacesOAuthScope("read:user,codespace,offline_access"))
-        assertFalse(hasCodespacesOAuthScope("offline_access"))
-        assertFalse(hasCodespacesOAuthScope("notcodespace offline_access"))
+    fun githubAppDeviceFlowRequestsOnlyOfflineAccess() {
+        // GitHub App user tokens use fine-grained App permissions, not OAuth scopes.
+        // The token response "scope" field is always empty for a GitHub App.
+        assertEquals("offline_access", CODESPACES_OAUTH_SCOPES)
+    }
+
+    @Test
+    fun githubAppTokenResponseMustContainExpiringAccessAndRefreshTokens() {
+        assertTrue(hasUsableExpiringGitHubAppToken("ghu_access", "ghr_refresh", 28_800L, 15_897_600L))
+        assertFalse(hasUsableExpiringGitHubAppToken("", "ghr_refresh", 28_800L, 15_897_600L))
+        assertFalse(hasUsableExpiringGitHubAppToken("ghu_access", "", 28_800L, 15_897_600L))
+        assertFalse(hasUsableExpiringGitHubAppToken("ghu_access", "ghr_refresh", 0L, 15_897_600L))
+        assertFalse(hasUsableExpiringGitHubAppToken("ghu_access", "ghr_refresh", 28_800L, 0L))
     }
 
     @Test
