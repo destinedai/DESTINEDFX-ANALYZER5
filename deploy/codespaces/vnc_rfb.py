@@ -7,8 +7,11 @@ listener or accept any inbound client connections.
 """
 from __future__ import annotations
 
+import os
 import socket
+import stat
 import struct
+from pathlib import Path
 from typing import Sequence
 
 # FIPS 46-3 DES permutation tables. Positions are one-based from the MSB.
@@ -86,6 +89,42 @@ def vnc_password_key(password: str) -> bytes:
     if len(raw) < 8 or any(value < 0x21 or value > 0x7E for value in raw):
         raise ValueError("VNC password must contain at least eight printable ASCII characters")
     return bytes(_reverse_bits(value) for value in raw[:8])
+
+
+def read_password_file(path: Path, expected_uid: int) -> str:
+    """Read exactly x11vnc -passwdfile's first plaintext line without following symlinks."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError("VNC password file cannot be opened safely") from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != expected_uid
+            or info.st_mode & 0o077
+        ):
+            raise ValueError("VNC password file owner or permissions are unsafe")
+        raw = bytearray()
+        while len(raw) <= 4096:
+            part = os.read(fd, min(4097 - len(raw), 4096))
+            if not part:
+                break
+            raw.extend(part)
+            if b"\\n" in raw:
+                break
+        if len(raw) > 4096:
+            raise ValueError("VNC password file exceeds the size limit")
+    finally:
+        os.close(fd)
+    first_line = bytes(raw).split(b"\\n", 1)[0].removesuffix(b"\\r")
+    try:
+        password = first_line.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError("VNC password must be ASCII") from exc
+    vnc_password_key(password)
+    return password
 
 
 def vnc_response(challenge: bytes, password: str) -> bytes:
