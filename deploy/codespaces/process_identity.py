@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import signal
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -154,29 +155,57 @@ def write_record(path: Path, identity: dict[str, Any]) -> None:
 
 
 def read_record(path: Path) -> dict[str, Any]:
+    """Read one private record without following symlinks or trusting a mutable path.
+
+    The file owner must equal the UID recorded inside it. This lets root read a
+    user's process record while preventing a user-owned file from impersonating
+    a root-owned process record in the shared runtime directory.
+    """
+    fd = None
     try:
-        info = path.lstat()
-        if (
-            not path.is_file()
-            or path.is_symlink()
-            or info.st_mode & 0o077
-            or (os.geteuid() != 0 and info.st_uid != os.geteuid())
-        ):
-            raise IdentityError("process identity record permissions, owner or file type are unsafe")
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+            raise IdentityError("process identity record permissions or file type are unsafe")
+        chunks = bytearray()
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.extend(chunk)
+            if len(chunks) > 65536:
+                raise IdentityError("process identity record exceeds the size limit")
+        payload = json.loads(chunks.decode("utf-8"))
     except IdentityError:
         raise
-    except (OSError, ValueError) as exc:
-        raise IdentityError("process identity record is unavailable or malformed") from exc
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise IdentityError("process identity record is unavailable, unsafe or malformed") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
     if not isinstance(payload, dict) or payload.get("version") != VERSION:
         raise IdentityError("unsupported process identity record")
     identity = {key: payload.get(key) for key in IDENTITY_FIELDS}
-    if identity["pid"] is None or identity["start_ticks"] is None or identity["uid"] is None:
-        raise IdentityError("process identity record is incomplete")
-    if not isinstance(identity["exe"], str) or not isinstance(identity["args"], list):
+    if (
+        type(identity["pid"]) is not int or identity["pid"] <= 1
+        or type(identity["start_ticks"]) is not int or identity["start_ticks"] <= 0
+        or type(identity["uid"]) is not int or identity["uid"] < 0
+    ):
+        raise IdentityError("process identity record contains invalid numeric fields")
+    if (
+        info.st_uid != identity["uid"]
+        or (os.geteuid() != 0 and identity["uid"] != os.geteuid())
+    ):
+        raise IdentityError("process identity file owner does not match the recorded process UID")
+    if (
+        not isinstance(identity["exe"], str) or not identity["exe"].startswith("/")
+        or not isinstance(identity["args"], list) or not identity["args"]
+        or not all(isinstance(arg, str) for arg in identity["args"])
+    ):
         raise IdentityError("process identity record is malformed")
     return identity
-
 
 def verify_record(path: Path, proc_root: Path = Path("/proc")) -> bool:
     try:
