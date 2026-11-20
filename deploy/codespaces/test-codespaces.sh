@@ -96,7 +96,8 @@ grep -Fq -- '--heartbeat=30' "$ROOT/deploy/codespaces/vnc-up.sh" || fail 'noVNC 
 grep -Fq -- 'cacheBust=' "$ROOT/deploy/codespaces/gui.sh" || fail 'noVNC cache-busting URL missing'
 bash "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" || fail 'invalid installer signature fixtures were accepted'
 grep -Fq 'finalize-mt5-install.sh" headless' "$ROOT/.devcontainer/postCreate.sh" || fail 'headless install must invoke the shared finalizer before accepting the marker'
-grep -Fq 'finalize-mt5-install.sh gui' "$ROOT/deploy/codespaces/gui.sh" || fail 'GUI installer must require shared finalization after owner wizard'
+grep -Fq 'finalize-mt5-install.sh" gui' "$ROOT/scripts/linux-host/install-mt5.sh" || fail 'GUI install runner must invoke the shared finalizer after successful wizard exit'
+if grep -Fq 'finalize-mt5-install.sh gui' "$ROOT/deploy/codespaces/gui.sh"; then fail 'GUI launcher must not ask the owner to manually finalize a canceled/incomplete wizard'; fi
 grep -Fq 'authenticode_signer=MetaQuotes Ltd' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must verify installer provenance signer'
 grep -Fq 'MetaEditor' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must verify MetaEditor and compile the EA'
 grep -Fq 'DestinedFXTraderEA.ex5' "$ROOT/scripts/linux-host/finalize-mt5-install.sh" || fail 'finalizer must require the compiled EA output'
