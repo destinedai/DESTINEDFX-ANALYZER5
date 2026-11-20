@@ -1336,6 +1336,229 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)
         ) { Icon(Icons.Default.Stop, contentDescription = null); Text("EMERGENCY STOP · STOP NEW ENTRIES", fontWeight = FontWeight.Black) }
+        val codespacesUsage = githubCodespacesClient.usageEstimate()
+        val githubSignedIn = secrets.getCodespacesGitHubAccessToken().isNotBlank() &&
+            secrets.getCodespacesGitHubAccessExpiresAtMillis() > System.currentTimeMillis()
+        val codespaceState = selectedGithubCodespace?.state.orEmpty()
+        val hostDisplayState = when (codespaceState.lowercase()) {
+            "available" -> if (hostApiStatus?.optBoolean("shutdown_prepared") == true) "STOPPING" else if (hostApiStatus != null) "ACTIVE" else "DEGRADED"
+            "starting", "creating" -> "STARTING"
+            "stopping" -> "STOPPING"
+            "shutdown" -> "SLEEPING"
+            "failed" -> "ERROR"
+            else -> githubHostOperationState
+        }
+        val freshHostBalance = mt5Snapshot?.takeIf {
+            it.heartbeatFresh && it.snapshotsValid && it.brokerQuotes?.any { quote -> quote.ageMs in 0L..15_000L } == true && it.balance?.isFinite() == true
+        }?.balance
+        val latestHostHeartbeat = mt5Snapshot?.raw?.optString("last_heartbeat_at")?.takeIf { it.isNotBlank() && it != "null" } ?: "No authenticated EA heartbeat"
+        Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, CardBorder)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("CODESPACES HOST CONTROL", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                    Text(hostDisplayState, color = when (hostDisplayState) { "ACTIVE" -> ProfitGreen; "SLEEPING" -> TextSecondary; "ERROR" -> LossRed; else -> WarningAmber }, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                }
+                Text("Host controls are separate from Bot START / STOP. STOP HOST never closes trades.", color = WarningAmber, fontSize = 9.sp)
+                Text("GitHub: ${if (githubSignedIn) "AUTHORIZED" else "NOT CONNECTED"} · Codespace: ${selectedGithubCodespace?.name ?: "discover from GitHub"}", color = TextSecondary, fontSize = 10.sp)
+                Text("EA heartbeat: $latestHostHeartbeat", color = TextSecondary, fontSize = 9.sp)
+                if (freshHostBalance != null) Text("Balance: $freshHostBalance ${mt5Snapshot?.currency.orEmpty()} · fresh quote", color = ProfitGreen, fontSize = 10.sp)
+                else Text("Balance: STALE · no fresh account-bound quote within 15 seconds", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                hostLifecycleBusy = true
+                                try {
+                                    check(!githubCodespacesClient.usageEstimate().blockStart) { "START BLOCKED: daily 90-minute target reached or monthly buffer below 10 core-hours." }
+                                    check(githubSignedIn) { "Connect the GitHub App before starting the Codespace." }
+                                    val target = selectedGithubCodespace?.let { githubCodespacesClient.getCodespace(it.name) } ?: run {
+                                        val matches = githubCodespacesClient.listTargetCodespaces()
+                                        githubCodespaces = matches
+                                        matches.singleOrNull() ?: error("GitHub returned multiple or no matching Codespaces. Select one explicitly.")
+                                    }
+                                    selectedGithubCodespace = target
+                                    if (!target.state.equals("Available", true)) {
+                                        githubHostOperationState = "STARTING"
+                                        githubCodespacesClient.startCodespace(target)
+                                        var current = target
+                                        withTimeout(10 * 60 * 1000L) {
+                                            while (!current.state.equals("Available", true)) {
+                                                delay(5_000L)
+                                                current = githubCodespacesClient.getCodespace(target.name)
+                                                selectedGithubCodespace = current
+                                                githubCodespaces = githubCodespaces.filterNot { it.name == current.name } + current
+                                                check(!current.state.equals("Failed", true)) { "GitHub reports that the Codespace failed to start." }
+                                            }
+                                        }
+                                    }
+                                    val active = githubCodespacesClient.getCodespace(target.name)
+                                    selectedGithubCodespace = active
+                                    githubCodespacesClient.recordCodespaceStarted(active)
+                                    githubHostOperationState = "ACTIVE"
+                                    githubHostMessage = "GitHub reports Available. Bridge, host-agent and MT5 readiness remain separate checks."
+                                } catch (error: Exception) {
+                                    githubHostOperationState = "ERROR"
+                                    githubHostMessage = error.message?.take(220) ?: "Codespace start failed."
+                                } finally { hostLifecycleBusy = false }
+                            }
+                        },
+                        enabled = !hostLifecycleBusy && githubSignedIn && !codespacesUsage.blockStart,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen, contentColor = DarkBackground)
+                    ) { Text(if (hostLifecycleBusy) "WORKING…" else "START HOST", fontWeight = FontWeight.Black, fontSize = 11.sp) }
+                    Button(
+                        onClick = { showHostStopConfirmation = true },
+                        enabled = !hostLifecycleBusy && githubSignedIn && selectedGithubCodespace != null,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)
+                    ) { Text("STOP HOST", fontWeight = FontWeight.Black, fontSize = 11.sp) }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                hostLifecycleBusy = true
+                                try {
+                                    val matches = githubCodespacesClient.listTargetCodespaces()
+                                    githubCodespaces = matches
+                                    selectedGithubCodespace = if (matches.size == 1) matches.first() else null
+                                    githubHostMessage = "Discovered ${matches.size} Codespace(s) matching the configured repository and branch."
+                                } catch (error: Exception) {
+                                    githubHostMessage = error.message?.take(200) ?: "Codespace discovery failed."
+                                } finally { hostLifecycleBusy = false }
+                            }
+                        },
+                        enabled = !hostLifecycleBusy && githubSignedIn,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("REFRESH LIST", fontSize = 9.sp) }
+                    OutlinedButton(
+                        onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/settings/connections/applications"))) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("REVOKE IN GITHUB", fontSize = 9.sp) }
+                }
+                if (githubCodespaces.size > 1) {
+                    Text("Select Codespace:", color = TextSecondary, fontSize = 9.sp)
+                    githubCodespaces.forEach { item ->
+                        FilterChip(selected = selectedGithubCodespace?.name == item.name, onClick = { selectedGithubCodespace = item }, label = { Text("${item.name} · ${item.state}", fontSize = 9.sp) })
+                    }
+                }
+                OutlinedTextField(value = githubCodespacesClientId, onValueChange = { githubCodespacesClientId = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), label = { Text("GitHub App public Client ID") })
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                hostLifecycleBusy = true
+                                try {
+                                    check(secrets.saveCodespacesGitHubClientId(githubCodespacesClientId)) { "A valid public GitHub App Client ID must be saved securely." }
+                                    val device = githubCodespacesClient.beginDeviceAuthorization()
+                                    githubDeviceAuthorization = device
+                                    githubCodespacesClient.openVerificationPage(context, device)
+                                    githubHostMessage = "Enter the one-time code below on GitHub."
+                                    if (githubCodespacesClient.completeDeviceAuthorization(device)) {
+                                        githubDeviceAuthorization = null
+                                        val matches = githubCodespacesClient.listTargetCodespaces()
+                                        githubCodespaces = matches
+                                        selectedGithubCodespace = matches.singleOrNull()
+                                        githubHostMessage = "GitHub App authorized. Found ${matches.size} matching Codespace(s)."
+                                    }
+                                } catch (error: Exception) {
+                                    githubHostMessage = error.message?.take(220) ?: "GitHub authorization failed."
+                                } finally { hostLifecycleBusy = false }
+                            }
+                        },
+                        enabled = !hostLifecycleBusy && !githubSignedIn,
+                        modifier = Modifier.weight(1f)
+                    ) { Text(if (hostLifecycleBusy) "CONNECTING…" else "CONNECT GITHUB APP", fontSize = 9.sp) }
+                    OutlinedButton(
+                        onClick = {
+                            githubCodespacesClient.disconnectLocally()
+                            githubCodespaces = emptyList()
+                            selectedGithubCodespace = null
+                            githubHostMessage = "Device tokens cleared. To revoke remotely, remove the DestinedFX GitHub App authorization in GitHub Settings."
+                        },
+                        enabled = !hostLifecycleBusy && githubSignedIn,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("CLEAR DEVICE TOKEN", fontSize = 9.sp) }
+                }
+                githubDeviceAuthorization?.let { device ->
+                    Text("Device code: ${device.userCode} · enter at https://github.com/login/device", color = WarningAmber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Text(githubHostMessage, color = TextSecondary, fontSize = 9.sp)
+                Text("Usage estimate · today ${codespacesUsage.usedTodayMinutes}/90 min · month ${"%.2f".format(codespacesUsage.usedMonthCoreHours)}/120 core-hours · remaining ${"%.2f".format(codespacesUsage.remainingMonthCoreHours)} core-hours", color = if (codespacesUsage.blockStart) LossRed else TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                if (codespacesUsage.remainingMonthCoreHours < 10.0) Text("LOW BUDGET: new host starts are blocked below 10 estimated monthly core-hours.", color = LossRed, fontSize = 9.sp)
+            }
+        }
+        if (showHostStopConfirmation) {
+            AlertDialog(
+                onDismissRequest = { if (!hostLifecycleBusy) showHostStopConfirmation = false },
+                title = { Text("STOP HOST SAFELY?") },
+                text = { Text("DestinedFX first checks fresh EA heartbeat, account state, positions, pending orders, unresolved commands and verified database backup. If any check is unsafe or unknown, the Codespace remains running. No trade is automatically closed.") },
+                confirmButton = {
+                    TextButton(
+                        enabled = !hostLifecycleBusy,
+                        onClick = {
+                            showHostStopConfirmation = false
+                            scope.launch {
+                                hostLifecycleBusy = true
+                                val target = selectedGithubCodespace
+                                val hostBridge = bridge
+                                var stopRequestAccepted = false
+                                try {
+                                    check(githubSignedIn) { "GitHub App authorization is required." }
+                                    check(target != null) { "Discover and select the owner's Codespace first." }
+                                    check(hostBridge?.hasPairing() == true) { "A paired owner Bridge account is required for safe shutdown checks." }
+                                    githubHostOperationState = "STOPPING"
+                                    val preflight = hostBridge!!.prepareHostStop()
+                                    check(preflight.optString("status") == "PREPARED" && preflight.optBoolean("backup_verified")) {
+                                        "Bridge did not confirm safe shutdown preparation: " + preflight.optString("message").take(140)
+                                    }
+                                    githubCodespacesClient.stopCodespace(target)
+                                    stopRequestAccepted = true
+                                    var current = target
+                                    val stopped = withTimeoutOrNull(90_000L) {
+                                        while (!current.state.equals("Shutdown", true)) {
+                                            delay(5_000L)
+                                            current = githubCodespacesClient.getCodespace(target.name)
+                                            selectedGithubCodespace = current
+                                            githubCodespaces = githubCodespaces.filterNot { it.name == current.name } + current
+                                        }
+                                        true
+                                    } ?: false
+                                    if (stopped) {
+                                        githubCodespacesClient.recordCodespaceStopped(current)
+                                        selectedGithubCodespace = current
+                                        githubHostOperationState = "SLEEPING"
+                                        githubHostMessage = "GitHub reports Shutdown. No trades were liquidated."
+                                    } else {
+                                        githubHostOperationState = "STOPPING"
+                                        githubHostMessage = "Stop is processing. The safety gate remains armed; refresh before another action."
+                                    }
+                                } catch (error: Exception) {
+                                    val latest = target?.let { runCatching { githubCodespacesClient.getCodespace(it.name) }.getOrNull() }
+                                    val currentState = latest?.state.orEmpty()
+                                    if (currentState.equals("Shutdown", true) || currentState.equals("Stopping", true)) {
+                                        selectedGithubCodespace = latest
+                                        githubHostOperationState = if (currentState.equals("Shutdown", true)) "SLEEPING" else "STOPPING"
+                                        githubHostMessage = "GitHub reports $currentState. Safe-shutdown remains prepared; verify state before retrying."
+                                    } else if (currentState.equals("Available", true)) {
+                                        runCatching { hostBridge?.cancelHostStop() }
+                                        githubHostOperationState = "ACTIVE"
+                                        githubHostMessage = "Stop did not complete; Bridge shutdown gate cancelled. " + (error.message?.take(120) ?: "")
+                                    } else {
+                                        githubHostOperationState = "DEGRADED"
+                                        githubHostMessage = "Stop outcome uncertain. Safety gate remains armed; verify GitHub state before retrying."
+                                    }
+                                    if (!stopRequestAccepted && currentState.equals("Available", true)) {
+                                        githubHostMessage = "GitHub did not stop the Codespace. Bridge safety gate was released."
+                                    }
+                                } finally { hostLifecycleBusy = false }
+                            }
+                        }
+                    ) { Text("CHECK SAFETY AND STOP HOST", color = LossRed, fontWeight = FontWeight.Bold) }
+                },
+                dismissButton = { TextButton(onClick = { showHostStopConfirmation = false }, enabled = !hostLifecycleBusy) { Text("CANCEL") } }
+            )
+        }
         Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CardBorder)) {
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("BOT STATE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Black)
