@@ -75,6 +75,7 @@ def test_idle_shutdown_only_signals_verified_supervisor_after_backup_and_recheck
     record = {"pid": 555, "start_ticks": 12345}
     read_calls = iter([record, None])
     monkeypatch.setattr(trigger.host_controller, "_read_json", lambda path: next(read_calls))
+    monkeypatch.setattr(trigger.host_controller, "_record_matches", lambda *args: True)
     signals = []
     monkeypatch.setattr(
         trigger.host_controller,
