@@ -22,6 +22,12 @@ WINEPREFIX_VALUE="${WINEPREFIX:-$HOME/.mt5}"
 INSTALL_PATH='C:\Program Files\MetaTrader 5'
 STATE_DIR="${DESTINEDFX_CODESPACES_STATE_DIR:-$HOME/.local/share/destinedfx-codespaces}"
 PROVENANCE_FILE="${DESTINEDFX_MT5_INSTALLER_PROVENANCE_FILE:-$STATE_DIR/mt5-installer-provenance.env}"
+COMPLETION_FILE="$STATE_DIR/installer-completed.json"
+VERIFIED_MARKER="$STATE_DIR/installer-verified"
+TERMINAL_PATH="$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+METAEDITOR_PATH=""
+BASE_TERMINAL_SHA256=""
+BASE_METAEDITOR_SHA256=""
 PREFIX_INFO_FILE="${DESTINEDFX_MT5_PREFIX_INFO_FILE:-$STATE_DIR/mt5-prefix.env}"
 
 url_host() {
@@ -49,6 +55,65 @@ record_installer_provenance() {
     printf 'authenticode_status=verified\nauthenticode_signer=MetaQuotes Ltd\n'
   } > "$temporary"
   record_private_metadata "$PROVENANCE_FILE" "$temporary"
+}
+
+find_metaeditor() {
+  local candidate
+  METAEDITOR_PATH=""
+  for candidate in \
+    "$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/metaeditor64.exe" \
+    "$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/MetaEditor64.exe" \
+    "$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/MetaEditor.exe"; do
+    if [[ -f "$candidate" && ! -L "$candidate" ]]; then
+      METAEDITOR_PATH="$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+file_sha256() {
+  [[ -f "$1" && ! -L "$1" ]] || return 1
+  sha256sum "$1" | awk '{print $1}'
+}
+
+capture_installer_baseline() {
+  BASE_TERMINAL_SHA256=""
+  BASE_METAEDITOR_SHA256=""
+  if [[ -f "$TERMINAL_PATH" && ! -L "$TERMINAL_PATH" ]]; then
+    BASE_TERMINAL_SHA256="$(file_sha256 "$TERMINAL_PATH")"
+  fi
+  if find_metaeditor; then
+    BASE_METAEDITOR_SHA256="$(file_sha256 "$METAEDITOR_PATH")"
+  fi
+}
+
+record_successful_installer_completion() {
+  local mode="$1" current_terminal current_editor
+  [[ -f "$TERMINAL_PATH" && ! -L "$TERMINAL_PATH" ]] || {
+    echo "BLOCKED: successful installer exit did not produce the standard terminal binary." >&2
+    return 1
+  }
+  find_metaeditor || {
+    echo "BLOCKED: successful installer exit did not produce MetaEditor." >&2
+    return 1
+  }
+  current_terminal="$(file_sha256 "$TERMINAL_PATH")"
+  current_editor="$(file_sha256 "$METAEDITOR_PATH")"
+  if [[ -n "$BASE_TERMINAL_SHA256" && "$BASE_TERMINAL_SHA256" == "$current_terminal" ]]; then
+    echo "BLOCKED: terminal binary is unchanged from before this installer run; completion cannot be proven." >&2
+    return 1
+  fi
+  if [[ -n "$BASE_METAEDITOR_SHA256" && "$BASE_METAEDITOR_SHA256" == "$current_editor" ]]; then
+    echo "BLOCKED: MetaEditor binary is unchanged from before this installer run; completion cannot be proven." >&2
+    return 1
+  fi
+  python3 "$SCRIPT_DIR/installer_completion.py" record \
+    --manifest "$COMPLETION_FILE" \
+    --provenance "$PROVENANCE_FILE" \
+    --terminal "$TERMINAL_PATH" \
+    --metaeditor "$METAEDITOR_PATH" \
+    --mode "$mode" --exit-code 0
 }
 
 record_prefix_configuration() {
@@ -172,6 +237,11 @@ if [[ -n "$EXPECTED_SETUP_SHA256" && "${EXPECTED_SETUP_SHA256,,}" != "${setup_sh
 fi
 
 verify_mt5_authenticode "$setup"
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+# Invalidate every prior acceptance before a new installer attempt. A failed or
+# canceled wizard must never inherit an earlier success marker.
+rm -f "$VERIFIED_MARKER" "$COMPLETION_FILE"
 record_installer_provenance
 
 if [[ ! -x "$(command -v wine || true)" || ! -x "$(command -v xvfb-run || true)" ]]; then
@@ -202,6 +272,8 @@ clean_wine_env=(env
   WINEDEBUG=-all WINEDLLOVERRIDES=''
   WINEPREFIX="$WINEPREFIX")
 
+capture_installer_baseline
+
 if [[ "$GUI" == "1" ]]; then
   [[ -n "${DISPLAY:-}" ]] || { echo "BLOCKED: GUI mode needs DISPLAY. Run deploy/codespaces/gui.sh." >&2; exit 28; }
   echo "INFO: initializing Wine prefix at $WINEPREFIX_VALUE before opening the installer."
@@ -209,7 +281,17 @@ if [[ "$GUI" == "1" ]]; then
   "${clean_wine_env[@]}" winecfg -v win10
   record_prefix_configuration
   echo "OWNER STEP: complete the MetaTrader setup wizard in the private Codespaces noVNC window."
-  exec "${clean_wine_env[@]}" wine "$setup"
+  echo "INFO: installer completion is recorded only if the wizard exits successfully and the terminal/MetaEditor binaries are created or updated."
+  if "${clean_wine_env[@]}" wine "$setup"; then
+    installer_exit_code=0
+  else
+    installer_exit_code=$?
+    echo "FAIL: MetaTrader GUI installer exited with status $installer_exit_code; no completion marker was written." >&2
+    exit "$installer_exit_code"
+  fi
+  record_successful_installer_completion gui
+  "$SCRIPT_DIR/finalize-mt5-install.sh" gui
+  exit 0
 fi
 
 # MetaQuotes documents this exact switch pair for setup.exe. Xvfb supplies the display
@@ -219,13 +301,19 @@ xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
 xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
   "${clean_wine_env[@]}" winecfg -v win10
 record_prefix_configuration
-xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
-  "${clean_wine_env[@]}" wine "$setup" /auto /path:"$INSTALL_PATH"
-terminal="$WINEPREFIX_VALUE/drive_c/Program Files/MetaTrader 5/terminal64.exe"
-if [[ ! -f "$terminal" ]]; then
-  echo "BLOCKED: /auto completed without terminal64.exe at the standard path." >&2
-  echo "OWNER STEP: run deploy/codespaces/gui.sh and complete the private setup wizard once." >&2
-  exit 29
+if xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -nolisten tcp' \
+  "${clean_wine_env[@]}" wine "$setup" /auto /path:"$INSTALL_PATH"; then
+  installer_exit_code=0
+else
+  installer_exit_code=$?
+  echo "FAIL: MetaQuotes headless setup exited with status $installer_exit_code; no completion marker was written." >&2
+  exit "$installer_exit_code"
 fi
-chmod 700 "$terminal"
-echo "PASS: headless MetaTrader setup completed at $terminal"
+[[ -f "$TERMINAL_PATH" ]] || {
+  echo "BLOCKED: /auto completed without terminal64.exe at the standard path." >&2
+  echo "OWNER STEP: run deploy/codespaces/gui.sh only after reviewing the failed headless installation." >&2
+  exit 29
+}
+record_successful_installer_completion headless
+chmod 700 "$TERMINAL_PATH"
+echo "PASS: headless MetaTrader setup completed and exact terminal/MetaEditor completion was recorded."
