@@ -16,6 +16,13 @@ Updated: 2026-11-20
 - **GUI installer retry safety:** the installer PID record can be retired only when the exact recorded process is absent or a zombie; a live process or reused PID keeps the record and is left untouched.
 - **Validation and owner boundary:** no physical-phone, live Codespaces, two-user host, browser-to-noVNC, or genuine broker DEMO acceptance is claimed.
 
+## Android Bot UI — MT5 Android parity review (source review, not phone acceptance)
+
+- **Present in source:** authenticated MT5 bid/ask quotes with age/source; account balance, equity, free margin, used margin and margin level; open positions and pending orders; selected-position close, selected-order cancel, EA-pending-order cancel and guarded close-all; recent closed deals/trade reports; M15/M30/H1/H4/D1/W1 strategy timeframe selection; broker/account setup; news sentry and alerts.
+- **Not yet at MT5 Android parity:** no dedicated native MT5-style Charts workspace in the Bot tab; no per-chart indicator add/edit/remove controls; no Market Depth/DOM view; the timeframe selector is only a subset of MT5 timeframes; no modify-position SL/TP/volume or modify-pending-order price/SL/TP flow; closed-deal history is a recent summary, not a full MT5 History screen; no MT5 terminal Messages/inbox surface.
+- **Safety boundary:** current managed MT5 phone controls intentionally send EA start/stop and snapshot-bound close/cancel actions, not arbitrary manual MT5 market orders. The separate local/other-broker instant-order card must not be represented as the managed MT5 terminal's one-click deal panel.
+- **Acceptance:** JVM/emulator evidence is not a substitute for comparing the installed APK on a physical Android phone with MT5 Android. Chart rendering, scrolling, touch targets, reconnect behavior, quote freshness, account snapshots and real DEMO order lifecycle still require owner-side phone/broker acceptance.
+
 ## Bridge and account security
 
 - **Implemented:** per-pairing encrypted credentials, broker/login/server checks, DEMO/LIVE mode checks, fail-closed commands, fresh EA heartbeat requirements, signed worker attestation, nonce replay protection, expiry, host-generation binding, single-use job linkage, process/EA finalization, and READY gating.
@@ -44,7 +51,7 @@ Updated: 2026-11-20
 
 ## Android-controlled Codespaces lifecycle (implemented in source; CI and owner acceptance pending)
 
-- **Android GitHub App authorization:** the Bot workspace now includes GitHub App Device Flow using Custom Tabs and the public App Client ID. It requests `offline_access`; expiring user access tokens and rotating refresh tokens are stored in the existing Android Keystore-backed encrypted preferences. The App client secret and PAT are not embedded in the APK. The UI allows local token clearing and a server-side revoke attempt.
+- **Android GitHub App authorization:** the Bot host controls use GitHub App Device Flow with the public App Client ID and request only `offline_access`. GitHub App user tokens use fine-grained App permissions, not OAuth scopes; the token response's `scope` is empty. The client now accepts that documented response, requires both expiring access and refresh tokens, stores both expiry timestamps securely, and clears authorization when the six-month refresh-token lifetime is reached. It does not embed an App client secret or PAT in the APK.
 - **Permissions:** Codespaces metadata: read is required to list/read Codespaces. Codespaces lifecycle admin: write is required for start/stop. The owner must enable GitHub App Device Flow. See [GitHub App device flow](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app) and [GitHub App REST permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps).
 - **Discovery and lifecycle:** the Android client paginates `GET /user/codespaces`, selects only the exact repository and branch, fetches and revalidates the API-returned Codespace before every start/stop, and never hard-codes a Codespace name. START HOST and STOP HOST are separate from Bot START/STOP/PAUSE actions.
 - **Boot path:** `.devcontainer/devcontainer.json` now uses `postStartCommand` to call `scripts/host/destinedfx_trigger_host.py start_all`. The adapter reuses the existing `deploy/codespaces/host_controller.py`, `start.sh`, and `stop.sh` paths; it does not launch `gui.sh` and does not implement a second MT5 startup path. Its process checks record/verify PID, start ticks, UID, executable and argv.
