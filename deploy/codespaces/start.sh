@@ -155,32 +155,33 @@ printf '%s\n' "$HOST_AGENT_TOKEN" | sudo -n tee "$HOST_AGENT_TOKEN_FILE" >/dev/n
 sudo -n chown root:root "$HOST_AGENT_TOKEN_FILE"
 sudo -n chmod 0600 "$HOST_AGENT_TOKEN_FILE"
 
-track_pid() { printf '%s|%s\n' "$1" "$2" >>"$RUNTIME/pids"; }
+PROCESS_IDENTITY="$ROOT/deploy/codespaces/process_identity.py"
+track_pid() {
+  local pid="$1" expected="$2" expected_uid="${3:-$EUID}"
+  local record="$RUNTIME/process-$pid.identity.json"
+  python3 "$PROCESS_IDENTITY" capture --pid "$pid" --record "$record" \
+    --expected-uid "$expected_uid" --expected-fragment "$expected" || {
+      fail "Could not capture complete process identity for $expected."
+      return 1
+    }
+  printf '%s|%s\\n' "$pid" "${record##*/}" >>"$RUNTIME/pids"
+  chmod 600 "$RUNTIME/pids"
+}
 if [[ -f "$RUNTIME/pids" && -s "$RUNTIME/pids" ]]; then
   all_running=true
-  while IFS='|' read -r pid expected; do
-    [[ "$pid" =~ ^[0-9]+$ && -n "$expected" ]] || { all_running=false; continue; }
-    cmdline=""
-    [[ -r "/proc/$pid/cmdline" ]] && cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
-    [[ "$cmdline" == *"$expected"* ]] || all_running=false
+  while IFS='|' read -r pid identity_file; do
+    [[ "$pid" =~ ^[0-9]+$ && "$identity_file" == "process-$pid.identity.json" ]] || { all_running=false; continue; }
+    python3 "$PROCESS_IDENTITY" verify --record "$RUNTIME/$identity_file" >/dev/null 2>&1 || all_running=false
   done < "$RUNTIME/pids"
-  for spec in "x11vnc.pid|x11vnc" "novnc.pid|websockify"; do
-    pidfile="${spec%%|*}"
-    expected="${spec#*|}"
-    pid=""
-    [[ -s "$RUNTIME/$pidfile" ]] && pid="$(cat "$RUNTIME/$pidfile" 2>/dev/null || true)"
-    cmdline=""
-    if [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]]; then
-      cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
-    fi
-    [[ "$cmdline" == *"$expected"* ]] || all_running=false
-  done
   if [[ "$all_running" == true ]]; then
-    pass 'Existing managed Codespaces processes are identity-verified and already running.'
+    pass 'Existing managed Codespaces processes match their saved PID/start-time/UID/executable/argv identities.'
     python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
     exit 0
   fi
-  "$ROOT/deploy/codespaces/stop.sh" >/dev/null 2>&1 || true
+  "$ROOT/deploy/codespaces/stop.sh" || {
+    fail 'Existing Codespaces process identities could not be safely stopped; refusing to replace their records.'
+    exit 1
+  }
 fi
 : > "$RUNTIME/pids"
 chmod 600 "$RUNTIME/pids"
@@ -195,7 +196,7 @@ sudo -n env PATH="$PATH" HOST_AGENT_TOKEN_FILE="$HOST_AGENT_TOKEN_FILE" \
   DESTINEDFX_SLOT_RUNTIME="$DESTINEDFX_SLOT_RUNTIME" DESTINEDFX_HOST_OWNER_UID="$DESTINEDFX_HOST_OWNER_UID" \
   DESTINEDFX_SLOT_MAX_TERMINALS="$DESTINEDFX_SLOT_MAX_TERMINALS" WINE_BIN="$WINE_BIN" \
   python3 "$ROOT/scripts/linux-host/host-agent.py" --host 127.0.0.1 --port 8787 >>"$RUNTIME/host-agent.log" 2>&1 &
-track_pid "$!" "host-agent.py"
+track_pid "$!" "host-agent.py" 0
 for _ in $(seq 1 20); do
   if curl -fs --max-time 2 http://127.0.0.1:8787/health/ready >/dev/null 2>&1; then break; fi
   sleep 1
