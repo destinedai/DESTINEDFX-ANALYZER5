@@ -1,7 +1,6 @@
 package com.example.data.codespaces
 
 import android.content.Context
-import androidx.test.core.app.ApplicationProvider
 import com.example.security.SecretsManager
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
@@ -14,6 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.junit.runner.RunWith
 import java.util.UUID
 
@@ -26,7 +26,7 @@ class GitHubCodespacesClientTest {
 
     @Before
     fun setUp() {
-        context = ApplicationProvider.getApplicationContext()
+        context = RuntimeEnvironment.getApplication()
         prefs = context.getSharedPreferences("github-codespaces-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
         secrets = SecretsManager(context) { prefs }
         assertTrue(secrets.isSecureStorageAvailable)
@@ -90,8 +90,9 @@ class GitHubCodespacesClientTest {
         assertTrue(deviceRequestBody.contains("scope=offline_access"))
         val tokenRequest = mock.takeRequest()
         assertEquals("/login/oauth/access_token", tokenRequest.path)
-        assertTrue(tokenRequest.body.readUtf8().contains("device_code=device-fixture"))
-        assertTrue(tokenRequest.body.readUtf8().contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"))
+        val tokenRequestBody = tokenRequest.body.readUtf8()
+        assertTrue(tokenRequestBody.contains("device_code=device-fixture"))
+        assertTrue(tokenRequestBody.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"))
     }
 
     @Test
