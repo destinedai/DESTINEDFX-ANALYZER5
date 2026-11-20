@@ -293,6 +293,26 @@ def stop_record(
         sleep(0.1)
     raise IdentityError("verified process did not stop after SIGTERM; refusing SIGKILL escalation")
 
+def retire_record_if_gone(
+    path: Path,
+    *,
+    proc_root: Path = Path("/proc"),
+) -> bool:
+    """Remove a record only after its exact process is proven absent/zombie.
+
+    A live matching process and a reused/mismatched PID are both retained.
+    This operation never sends a signal.
+    """
+    record = read_record(path)
+    pid = int(record["pid"])
+    current = snapshot(pid, proc_root)
+    if current is None or current.get("state") in {"Z", "X"}:
+        path.unlink(missing_ok=True)
+        return True
+    if not same_identity(record, current):
+        raise IdentityError("PID no longer matches its recorded identity; stale record retained")
+    raise IdentityError("recorded process is still running; record retained")
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -307,6 +327,8 @@ def main() -> int:
     stop = commands.add_parser("stop")
     stop.add_argument("--record", required=True, type=Path)
     stop.add_argument("--timeout", type=float, default=5.0)
+    retire = commands.add_parser("retire")
+    retire.add_argument("--record", required=True, type=Path)
     find_capture = commands.add_parser("find-capture")
     find_capture.add_argument("--record", required=True, type=Path)
     find_capture.add_argument("--expected-uid", type=int, required=True)
@@ -334,6 +356,9 @@ def main() -> int:
             if not verify_record(args.record):
                 raise IdentityError("recorded PID/start-time/UID/executable/argv does not match")
             print("PASS: complete process identity verified")
+        elif args.command == "retire":
+            retire_record_if_gone(args.record)
+            print("PASS: exited process identity record retired without signalling")
         else:
             stop_record(args.record, timeout_seconds=args.timeout)
             print("PASS: verified process stopped or was already absent")
