@@ -60,57 +60,7 @@ if [[ -d "$STATE/isolated-slots" ]]; then
   fi
 fi
 
-# The host agent runs as root. Stop only the process whose effective UID,
-# exact script path, arguments and start-time match this Codespaces instance.
-if [[ -f "$ROOT/scripts/linux-host/host-agent.py" ]]; then
-  python3 - "$ROOT/scripts/linux-host/host-agent.py" <<'PY'
-import os, signal, sys, time
-from pathlib import Path
-script=os.path.realpath(sys.argv[1])
-proc=Path("/proc")
-def identity(pid):
-    base=proc/str(pid)
-    try:
-        status=(base/"status").read_text(encoding="ascii")
-        uid_line=next(line for line in status.splitlines() if line.startswith("Uid:"))
-        effective_uid=int(uid_line.split()[2])
-        raw=(base/"stat").read_text(encoding="ascii")
-        tail=raw[raw.rfind(")")+2:].split()
-        ticks=int(tail[19])
-        args=[x.decode("utf-8","replace") for x in (base/"cmdline").read_bytes().split(b"\0") if x]
-        exe=os.path.realpath(base/"exe")
-        state=tail[0]
-        return effective_uid,ticks,exe,args,state
-    except (OSError,ValueError,IndexError,StopIteration):
-        return None
-for entry in proc.glob("[0-9]*"):
-    try: pid=int(entry.name)
-    except ValueError: continue
-    row=identity(pid)
-    if not row: continue
-    uid,ticks,exe,args,state=row
-    if (uid!=0 or exe!=os.path.realpath("/usr/bin/python3") or
-        len(args)<2 or os.path.realpath(args[1])!=script or
-        args[2:] != ["--host","127.0.0.1","--port","8787"]):
-        continue
-    try: os.kill(pid,signal.SIGTERM)
-    except ProcessLookupError: continue
-    deadline=time.monotonic()+5
-    while time.monotonic()<deadline:
-        current=identity(pid)
-        if not current or current[1]!=ticks or current[4] in {"Z","X"}:
-            break
-        if current[0]!=0 or current[2]!=exe or current[3]!=args:
-            raise SystemExit("FAIL: root host-agent identity changed after SIGTERM; no further signal sent")
-        time.sleep(.1)
-    current=identity(pid)
-    if current and current[1]==ticks and current[4] not in {"Z","X"}:
-        if current[0]!=0 or current[2]!=exe or current[3]!=args:
-            raise SystemExit("FAIL: root host-agent identity changed; process left untouched")
-        raise SystemExit("FAIL: root host agent did not stop after SIGTERM; refusing SIGKILL escalation")
-PY
-fi
-
+# Root host-agent is included in the same full-identity ledger as all services.
 # Stop the private VNC helpers only through complete process identity records.
 for spec in "x11vnc.pid|x11vnc" "novnc.pid|websockify"; do
   IFS='|' read -r pidfile expected <<< "$spec"
