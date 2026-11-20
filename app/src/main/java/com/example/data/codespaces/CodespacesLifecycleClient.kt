@@ -21,18 +21,20 @@ import java.util.concurrent.TimeUnit
  * components. GitHub's forwarding domain is supplied by the Codespace environment; the
  * mobile client uses the documented default and verifies it against the Bridge's host check.
  */
-/** OAuth scope needed for the Codespaces API plus rotating native-device refresh tokens. */
-internal const val CODESPACES_OAUTH_SCOPES = "codespace offline_access"
+/**
+ * GitHub App user tokens use fine-grained App permissions, not OAuth scopes.
+ * offline_access asks GitHub to issue the expiring access/refresh token pair.
+ * The returned scope field is intentionally empty for GitHub App user tokens.
+ */
+internal const val CODESPACES_OAUTH_SCOPES = "offline_access"
 
-internal fun hasCodespacesOAuthScope(rawScopes: String): Boolean =
-    rawScopes.split(Regex("[,\\s]+")).any { it == "codespace" }
-
-/** Reject a token response unless GitHub confirms that the OAuth app received Codespaces access. */
-private fun requireCodespacesOAuthScope(json: JSONObject) {
-    check(hasCodespacesOAuthScope(json.optString("scope"))) {
-        "GitHub did not grant the required codespace OAuth scope. Re-authorize the OAuth App and approve Codespaces access."
-    }
-}
+internal fun hasUsableExpiringGitHubAppToken(
+    accessToken: String,
+    refreshToken: String,
+    accessExpiresInSeconds: Long,
+    refreshExpiresInSeconds: Long
+): Boolean = accessToken.isNotBlank() && refreshToken.isNotBlank() &&
+    accessExpiresInSeconds > 0L && refreshExpiresInSeconds > 0L
 
 internal fun codespacesBridgeOrigin(
     codespaceName: String,
@@ -286,10 +288,16 @@ class CodespacesLifecycleClient(
         val accessToken = secrets.getCodespacesGitHubAccessToken()
         val refreshToken = secrets.getCodespacesGitHubRefreshToken()
         val expiresAt = secrets.getCodespacesGitHubAccessExpiresAtMillis()
+        val now = System.currentTimeMillis()
+        val refreshExpiresAt = secrets.getCodespacesGitHubRefreshExpiresAtMillis()
         if (accessToken.isBlank() || refreshToken.isBlank()) {
             throw IllegalStateException("Authorize GitHub before controlling the Codespaces host.")
         }
-        if (expiresAt > System.currentTimeMillis() + 60_000L) return accessToken
+        if (refreshExpiresAt > 0L && refreshExpiresAt <= now + 60_000L) {
+            secrets.clearCodespacesGitHubAuthorization()
+            throw IllegalStateException("GitHub authorization expired. Authorize this device again.")
+        }
+        if (expiresAt > now + 60_000L) return accessToken
 
         val body = FormBody.Builder()
             .add("client_id", clientId())
@@ -310,15 +318,19 @@ class CodespacesLifecycleClient(
     }
 
     private fun saveTokenResponse(json: JSONObject) {
-        requireCodespacesOAuthScope(json)
+        // GitHub App user-token responses return an empty "scope"; the App's
+        // configured fine-grained permissions, not OAuth scopes, authorize API calls.
         val access = json.optString("access_token")
         val refresh = json.optString("refresh_token")
         val expires = json.optLong("expires_in", 0L)
-        require(access.isNotBlank() && refresh.isNotBlank() && expires > 0L) {
-            "GitHub did not return an expiring access token and refresh token. Ensure offline_access is enabled for this OAuth App."
+        val refreshExpires = json.optLong("refresh_token_expires_in", 0L)
+        require(hasUsableExpiringGitHubAppToken(access, refresh, expires, refreshExpires)) {
+            "GitHub did not return an expiring App user token and refresh token. Enable expiring user tokens or request offline_access."
         }
-        val expiry = System.currentTimeMillis() + expires.coerceAtMost(31_536_000L) * 1000L
-        check(secrets.saveCodespacesGitHubTokens(access, refresh, expiry)) {
+        val now = System.currentTimeMillis()
+        val expiry = now + expires.coerceAtMost(31_536_000L) * 1000L
+        val refreshExpiry = now + refreshExpires.coerceAtMost(31_536_000L) * 1000L
+        check(secrets.saveCodespacesGitHubTokens(access, refresh, expiry, refreshExpiry)) {
             "GitHub authorization could not be saved in Android Keystore-backed storage."
         }
     }
