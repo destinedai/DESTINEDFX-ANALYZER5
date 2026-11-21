@@ -333,7 +333,9 @@ def test_journal_failure_contracts_fail_closed_before_ack_or_submission():
     atomic = source[source.index("bool AtomicWrite("):source.index("bool SaveToken(")]
     place = source[source.index("bool Place("):source.index("\nvoid SetWait")]
     commands = source[source.index("void ProcessCommands()"):source.index("void ReconcileOrder(")]
-    scan = source[source.index("void Scan()"):source.index("void Ack(")]
+    scan_start = source.index("void Scan()")
+    scan_end = source.index("bool Ack(", scan_start)
+    scan = source[scan_start:scan_end]
     assert "uint written=encoded==0?0:FileWriteArray(h,bytes,0,encoded)" in atomic
     assert "FILE_WRITE|FILE_BIN" in atomic and "CP_UTF8" in atomic
     assert "FileFlush(h)" in atomic and "FileSize(h)" in atomic
@@ -379,7 +381,9 @@ def test_restart_recovery_precedes_start_resume_and_scanning():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     startup = source[source.index("bool StartupBrokerSnapshotReady()") : source.index("void OnTimer()") ]
     commands = source[source.index("void ProcessCommands()") : source.index("void ReconcileOrder()") ]
-    scan = source[source.index("void Scan()") : source.index("void Ack(")]
+    scan_start = source.index("void Scan()")
+    scan_end = source.index("bool Ack(", scan_start)
+    scan = source[scan_start:scan_end]
     assert "g_journalsLoaded" in startup
     assert "TERMINAL_CONNECTED" in startup and "HistorySelect(" in startup
     assert "PositionGetTicket(i)" in startup and "PositionSelectByTicket(ticket)" in startup
