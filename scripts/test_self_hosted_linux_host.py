@@ -22,6 +22,9 @@ def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
     assert "destinedfx-linux-slot-worker.service" in installer
     assert "accept_two_user_runtime.py" in installer
     assert "backup.sh" in installer and "restore-test.sh" in installer
+    assert "backup-management-postgres.sh" in installer
+    assert "destinedfx-management-postgres-backup.timer" in installer
+    assert "systemctl enable --now destinedfx-management-postgres-backup.timer" in installer
 
 
 def test_public_ingress_is_only_caddy_and_backend_services_are_loopback():
@@ -106,3 +109,17 @@ def test_slot_worker_sandbox_allows_atomic_system_account_updates_only_in_host_w
     assert "ReadWritePaths=/var/lib/destinedfx/host-runtime /home/destinedfx-slots /etc" in worker
     assert "ReadWritePaths=/etc" not in bridge
     assert "ReadWritePaths=/etc" not in management
+
+def test_local_postgres_backup_is_atomic_scheduled_and_retained():
+    script = (LINUX_HOST / "backup-management-postgres.sh").read_text()
+    service = (LINUX_HOST / "systemd" / "destinedfx-management-postgres-backup.service").read_text()
+    timer = (LINUX_HOST / "systemd" / "destinedfx-management-postgres-backup.timer").read_text()
+    assert '[[ "${EUID}" -eq 0 ]]' in script
+    assert "pg_dump --no-password --format=custom" in script
+    assert "sha256sum" in script and "mv --" in script
+    assert "RETENTION_DAYS=14" in script
+    assert "ProtectSystem=strict" in service
+    assert "ReadWritePaths=/var/backups/destinedfx-management /run/docker.sock" in service
+    assert "OnCalendar=*-*-* 02:25:00 UTC" in timer
+    assert "Persistent=true" in timer
+    assert "RandomizedDelaySec=15min" in timer
