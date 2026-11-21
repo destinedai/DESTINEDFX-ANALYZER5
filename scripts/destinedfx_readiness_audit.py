@@ -307,6 +307,8 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         and 'positionStopTightenConfig' in bridge_client
         and 'mt5_position_stop_tighten_card' in bot_ui
         and 'ExecutePhonePositionStopTighten' in ea
+        and 'g_sigCommandId=commandId' in ea
+        and 'RetryPhonePositionStopAck()' in ea
     )
     add_check(
         checks,
