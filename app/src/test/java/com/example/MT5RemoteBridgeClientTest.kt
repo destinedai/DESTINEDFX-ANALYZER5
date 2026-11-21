@@ -415,3 +415,54 @@ class MT5RemoteBridgeClientTest {
         assertEquals("https://bridge.realcop.com:443", MT5RemoteBridgeClient.validServiceOrigin(" HTTPS://Bridge.RealCop.com:443/ "))
     }
 }
+
+
+    @Test fun phonePositionStopEditAllowsOnlyMonotonicTighteningAndKeepsTpOutOfPayload() {
+        val base = phoneMarketOrderSnapshot()
+        val position = JSONObject()
+            .put("ticket", "920001")
+            .put("position_id", "920001")
+            .put("symbol", "EURUSD")
+            .put("direction", "BUY")
+            .put("stop_loss", 1.09000)
+            .put("take_profit", 1.13000)
+        val snapshot = base.copy(
+            raw = JSONObject()
+                .put("configuration", JSONObject().put("symbols", JSONArray().put("EURUSD")))
+                .put("risk_controls", base.raw.optJSONObject("risk_controls"))
+                .put("open_positions", JSONArray().put(position))
+        )
+        val config = MT5RemoteBridgeClient.positionStopTightenConfig(snapshot, "920001", 1.09500)
+        assertEquals("TIGHTEN_POSITION_SL", "TIGHTEN_POSITION_SL")
+        assertEquals("920001", config.getString("ticket"))
+        assertEquals(1.09000, config.getDouble("expected_stop_loss"), 0.0000001)
+        assertEquals(1.09500, config.getDouble("new_stop_loss"), 0.0000001)
+        assertFalse(config.has("take_profit"))
+        val payload = MT5RemoteBridgeClient.commandPayload(
+            "2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18", "TIGHTEN_POSITION_SL", config
+        )
+        assertEquals("TIGHTEN_POSITION_SL", payload.getString("action"))
+    }
+
+    @Test fun phonePositionStopEditRejectsLooseningWrongSideAndUnknownTicket() {
+        val base = phoneMarketOrderSnapshot()
+        val position = JSONObject()
+            .put("ticket", "920001")
+            .put("position_id", "920001")
+            .put("symbol", "EURUSD")
+            .put("direction", "BUY")
+            .put("stop_loss", 1.09000)
+            .put("take_profit", 1.13000)
+        val snapshot = base.copy(
+            raw = JSONObject()
+                .put("configuration", JSONObject().put("symbols", JSONArray().put("EURUSD")))
+                .put("risk_controls", base.raw.optJSONObject("risk_controls"))
+                .put("open_positions", JSONArray().put(position))
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.positionStopTightenConfig(snapshot, "920001", 1.08500)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            MT5RemoteBridgeClient.positionStopTightenConfig(snapshot, "920099", 1.09500)
+        }
+    }
