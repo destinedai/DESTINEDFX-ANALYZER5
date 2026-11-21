@@ -162,7 +162,7 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
     state = "BLOCKED" if blocked else "INFRASTRUCTURE_READY_ACCOUNT_ACCEPTANCE_PENDING" if pending else "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY"
     return {"schema_version":1,"overall_status":state,"checks":checks,
             "non_actions":["No LIVE switch changed","No credentials read","No broker evidence fabricated","No order or trading command submitted"],
-            "still_required":["Same-user, same-broker, separately paired DEMO and LIVE profiles","Genuine 5-7 day DEMO PASS with order lifecycle, reconciliation, restart and risk evidence","Fresh LIVE MT5 identity, MASTER trade permission and authenticated EA heartbeat","Fresh risk telemetry within limits and clear news verdict","Password reauthentication and exact typed LIVE confirmation","Account-bound 15-minute LIVE authorization"]}
+            "still_required":["Same-user, same-broker, separately paired DEMO and LIVE profiles","Genuine 5-7 day DEMO PASS with order lifecycle, reconciliation, restart and risk evidence","Independently verified per-user Windows process/SID/ACL isolation; separate /portable directories under one Windows user do not qualify","Two simultaneously active isolated MT5 terminals for the DEMO and LIVE profiles","Fresh LIVE MT5 identity, MASTER trade permission and authenticated EA heartbeat","Fresh risk telemetry within limits and clear news verdict","Password reauthentication and exact typed LIVE confirmation","Account-bound 15-minute LIVE authorization"]}
 
 
 
