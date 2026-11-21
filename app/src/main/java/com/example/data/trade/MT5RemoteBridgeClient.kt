@@ -615,8 +615,9 @@ class MT5RemoteBridgeClient(
                 val cap = snapshot.raw.optJSONObject("risk_controls")?.optDouble("risk_percent", Double.NaN) ?: Double.NaN
                 if (!cap.isFinite() || risk > cap + 1e-9) return "Requested risk exceeds the current EA-configured per-trade risk cap."
                 val controls = snapshot.raw.optJSONObject("risk_controls")
-                if (controls?.optBoolean("authorized", false) != true || controls.optBoolean("daily_loss_clear", false).not() ||
-                    controls.optBoolean("risk_caps_clear", false).not()) return "Fresh EA daily-risk telemetry is not clear."
+                    ?: return "Fresh EA daily-risk telemetry is unavailable."
+                if (!controls.optBoolean("authorized", false) || !controls.optBoolean("daily_loss_clear", false) ||
+                    !controls.optBoolean("risk_caps_clear", false)) return "Fresh EA daily-risk telemetry is not clear."
                 val maxPositions = controls.optInt("max_concurrent_positions", 0)
                 if (snapshot.positions.orEmpty().size >= maxPositions) return "The configured maximum concurrent-position limit is reached."
                 val news = snapshot.newsVerdict
