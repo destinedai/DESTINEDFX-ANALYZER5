@@ -10,18 +10,27 @@ import java.net.URI
 import java.util.concurrent.TimeUnit
 
 /** Management-only client; intentionally independent of broker, trading, and bridge gateways. */
+private fun managementHttpClient(): OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(8, TimeUnit.SECONDS)
+    .readTimeout(12, TimeUnit.SECONDS)
+    .writeTimeout(8, TimeUnit.SECONDS)
+    .callTimeout(20, TimeUnit.SECONDS)
+    .retryOnConnectionFailure(false)
+    .build()
+
 class ManagementApiClient(
-    origin: String,
+    private val originProvider: () -> String,
     private val tokens: AccessTokenStore,
-    private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
-        .writeTimeout(8, TimeUnit.SECONDS)
-        .callTimeout(20, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(false)
-        .build()
+    private val http: OkHttpClient = managementHttpClient()
 ) {
-    private val baseUrl: String? = validatedOrigin(origin)
+    constructor(
+        origin: String,
+        tokens: AccessTokenStore,
+        http: OkHttpClient = managementHttpClient()
+    ) : this({ origin }, tokens, http)
+
+    private fun currentBaseUrl(): String =
+        validatedOrigin(originProvider()) ?: throw ManagementException(ManagementFailure.UNCONFIGURED)
 
     fun register(email: String, password: String): ManagementUser {
         requireSecureStorage()
@@ -30,7 +39,8 @@ class ManagementApiClient(
 
     fun login(email: String, password: String): ManagementUser {
         requireSecureStorage()
-        val json = execute("POST", "/api/v1/auth/login", credentials(email, password), auth = false)
+        val origin = currentBaseUrl()
+        val json = executeAt(origin, "POST", "/api/v1/auth/login", credentials(email, password), auth = false)
         val token = json.optString("access_token")
         val expires = json.optString("expires_at")
         val expiryMs = runCatching { java.time.Instant.parse(expires).toEpochMilli() }
@@ -40,7 +50,7 @@ class ManagementApiClient(
         }
         val user = json.optJSONObject("user")?.let(::userFrom)
             ?: throw ManagementException(ManagementFailure.INVALID_RESPONSE)
-        if (!tokens.save(token, expires)) throw ManagementException(ManagementFailure.SECURE_STORAGE_UNAVAILABLE)
+        if (!tokens.saveForOrigin(token, expires, origin)) throw ManagementException(ManagementFailure.SECURE_STORAGE_UNAVAILABLE)
         return user
     }
 
@@ -116,12 +126,14 @@ class ManagementApiClient(
 
     private fun credentials(email: String, password: String) = JSONObject().put("email", email.trim()).put("password", password)
 
-    private fun execute(method: String, path: String, body: JSONObject? = null, auth: Boolean = false, allowEmpty: Boolean = false): JSONObject {
-        val base = baseUrl ?: throw ManagementException(ManagementFailure.UNCONFIGURED)
+    private fun execute(method: String, path: String, body: JSONObject? = null, auth: Boolean = false, allowEmpty: Boolean = false): JSONObject =
+        executeAt(currentBaseUrl(), method, path, body, auth, allowEmpty)
+
+    private fun executeAt(base: String, method: String, path: String, body: JSONObject? = null, auth: Boolean = false, allowEmpty: Boolean = false): JSONObject {
         val requestBuilder = Request.Builder().url(base + path).header("Accept", "application/json")
         if (body != null) requestBuilder.header("Content-Type", "application/json; charset=utf-8")
         if (auth) {
-            val token = tokens.validToken() ?: throw ManagementException(ManagementFailure.AUTH_EXPIRED)
+            val token = tokens.validTokenForOrigin(base) ?: throw ManagementException(ManagementFailure.AUTH_EXPIRED)
             requestBuilder.header("Authorization", "Bearer $token")
         }
         val requestBody = body?.toString()?.toRequestBody(JSON)
@@ -170,6 +182,56 @@ class ManagementApiClient(
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
+        private const val EXPECTED_STEP_UP_ISSUER = "destinedfx-management"
+        private const val EXPECTED_STEP_UP_AUDIENCE = "destinedfx-bridge"
+
+        /**
+         * Prove the selected origin is the real management API before saving it.
+         * This reads only public readiness/key metadata and never sends a bearer or password.
+         */
+        fun verifyOrigin(raw: String, http: OkHttpClient = managementHttpClient()): String {
+            val origin = validatedOrigin(raw) ?: throw ManagementException(ManagementFailure.UNCONFIGURED)
+            val ready = probeGet(http, "$origin/ready")
+            if (ready.optString("status") != "ready") {
+                throw ManagementException(ManagementFailure.SERVICE_UNAVAILABLE)
+            }
+            val key = probeGet(http, "$origin/api/v1/auth/bridge-verification-key")
+            val pem = key.optString("public_key_pem").trim()
+            val issuer = key.optString("issuer")
+            val audience = key.optString("audience")
+            if (key.optString("algorithm") != "EdDSA" ||
+                !pem.startsWith("-----BEGIN PUBLIC KEY-----") ||
+                !pem.endsWith("-----END PUBLIC KEY-----") ||
+                pem.length !in 80..4096 ||
+                issuer != EXPECTED_STEP_UP_ISSUER ||
+                audience != EXPECTED_STEP_UP_AUDIENCE
+            ) {
+                throw ManagementException(ManagementFailure.INVALID_RESPONSE)
+            }
+            return origin
+        }
+
+        private fun probeGet(http: OkHttpClient, url: String): JSONObject {
+            val request = Request.Builder().url(url).get()
+                .header("Accept", "application/json").build()
+            try {
+                http.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw ManagementException(
+                            if (response.code in 500..599) ManagementFailure.SERVICE_UNAVAILABLE
+                            else ManagementFailure.INVALID_RESPONSE
+                        )
+                    }
+                    val text = response.body?.string().orEmpty()
+                    return try { JSONObject(text) }
+                    catch (_: Exception) { throw ManagementException(ManagementFailure.INVALID_RESPONSE) }
+                }
+            } catch (e: ManagementException) {
+                throw e
+            } catch (_: IOException) {
+                throw ManagementException(ManagementFailure.OFFLINE)
+            }
+        }
         /** Accept only a bare, real HTTPS origin. Placeholder hosts are rejected in every build type. */
         fun validatedOrigin(raw: String): String? {
             val value = raw.trim()
@@ -187,18 +249,23 @@ interface AccessTokenStore {
     val isAvailable: Boolean
     fun save(token: String, expiresAt: String): Boolean
     fun validToken(nowMs: Long = System.currentTimeMillis()): String?
+    fun saveForOrigin(token: String, expiresAt: String, origin: String): Boolean = save(token, expiresAt)
+    fun validTokenForOrigin(origin: String, nowMs: Long = System.currentTimeMillis()): String? = validToken(nowMs)
     fun clear(): Boolean
 }
 
 class SecretsManagerAccessTokenStore(private val secrets: com.example.security.SecretsManager) : AccessTokenStore {
     override val isAvailable: Boolean get() = secrets.isSecureStorageAvailable
-    override fun save(token: String, expiresAt: String): Boolean {
+    override fun save(token: String, expiresAt: String): Boolean = saveForOrigin(token, expiresAt, "")
+    override fun saveForOrigin(token: String, expiresAt: String, origin: String): Boolean {
         val expiry = runCatching { java.time.Instant.parse(expiresAt).toEpochMilli() }
             .recoverCatching { java.time.OffsetDateTime.parse(expiresAt).toInstant().toEpochMilli() }
             .getOrNull() ?: return false
-        return secrets.saveManagementAccessToken(token, expiry)
+        return secrets.saveManagementAccessToken(token, expiry, origin)
     }
     override fun validToken(nowMs: Long): String? = secrets.getValidManagementAccessToken(nowMs)
+    override fun validTokenForOrigin(origin: String, nowMs: Long): String? =
+        secrets.getValidManagementAccessToken(nowMs, origin)
     override fun clear(): Boolean = secrets.clearManagementAccessToken()
 }
 
