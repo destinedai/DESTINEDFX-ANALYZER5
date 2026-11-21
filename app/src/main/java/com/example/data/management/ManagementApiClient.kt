@@ -32,14 +32,21 @@ class ManagementApiClient(
     private fun currentBaseUrl(): String =
         validatedOrigin(originProvider()) ?: throw ManagementException(ManagementFailure.UNCONFIGURED)
 
+    private fun verifiedBaseUrl(): String {
+        val origin = currentBaseUrl()
+        verifyOrigin(origin, http)
+        return origin
+    }
+
     fun register(email: String, password: String): ManagementUser {
         requireSecureStorage()
-        return userRequest("POST", "/api/v1/auth/register", credentials(email, password), auth = false)
+        val origin = verifiedBaseUrl()
+        return userFrom(executeAt(origin, "POST", "/api/v1/auth/register", credentials(email, password), auth = false))
     }
 
     fun login(email: String, password: String): ManagementUser {
         requireSecureStorage()
-        val origin = currentBaseUrl()
+        val origin = verifiedBaseUrl()
         val json = executeAt(origin, "POST", "/api/v1/auth/login", credentials(email, password), auth = false)
         val token = json.optString("access_token")
         val expires = json.optString("expires_at")
@@ -61,9 +68,11 @@ class ManagementApiClient(
 
     fun currentUser(): ManagementUser = userFrom(execute("GET", "/api/v1/auth/me", auth = true))
 
-    fun bridgeIdentityAssertion(): String =
-        execute("POST", "/api/v1/auth/bridge-identity", auth = true).optString("assertion")
+    fun bridgeIdentityAssertion(): String {
+        val origin = verifiedBaseUrl()
+        return executeAt(origin, "POST", "/api/v1/auth/bridge-identity", auth = true).optString("assertion")
             .takeIf { it.length >= 100 } ?: throw ManagementException(ManagementFailure.INVALID_RESPONSE)
+    }
 
     fun liveStepUpAssertion(
         password: String,
@@ -86,7 +95,7 @@ class ManagementApiClient(
             .put("server", server)
             .put("account_mode", "LIVE")
             .put("credential_generation", credentialGeneration)
-        return execute("POST", "/api/v1/auth/live-step-up", body, auth = true)
+        return executeAt(verifiedBaseUrl(), "POST", "/api/v1/auth/live-step-up", body, auth = true)
             .optString("assertion").takeIf { it.length >= 100 }
             ?: throw ManagementException(ManagementFailure.INVALID_RESPONSE)
     }
