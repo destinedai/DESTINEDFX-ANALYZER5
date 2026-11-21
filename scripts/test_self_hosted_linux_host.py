@@ -49,6 +49,7 @@ def test_host_bootstrap_provisions_encrypted_credentials_without_printing_them()
     assert "API_USER=destinedfx-api" in bootstrap
     assert "destinedfx-postgres-password.cred" in bootstrap
     assert "destinedfx-postgres-app-password.cred" in bootstrap
+    assert "install -d -o 999 -g 999 -m 0700 /var/lib/destinedfx-management/postgres" in bootstrap
     assert "destinedfx-management-step-up-private-key-pem.cred" in bootstrap
     assert 'systemd-creds encrypt --name=step-up-private-key-pem' in bootstrap
     assert 'systemd-creds decrypt --name=step-up-private-key-pem' in bootstrap
