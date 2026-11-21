@@ -25,6 +25,8 @@ def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
     assert "backup-management-postgres.sh" in installer
     assert "destinedfx-management-postgres-backup.timer" in installer
     assert "systemctl enable --now destinedfx-management-postgres-backup.timer" in installer
+    assert "destinedfx-bridge-backup.timer" in installer
+    assert "systemctl enable --now destinedfx-bridge-backup.timer" in installer
 
 
 def test_public_ingress_is_only_caddy_and_backend_services_are_loopback():
@@ -100,6 +102,21 @@ def test_management_api_owner_setup_token_is_host_encrypted_and_interactive_only
     assert "show-owner-setup-token.sh" in installer
     assert "systemd-creds decrypt --name=owner-setup-token" in reveal
     assert "[[ -t 1" in reveal and "/dev/tty" in reveal
+
+
+def test_bridge_sqlite_backup_is_scheduled_private_and_retained():
+    backup = (LINUX_HOST / "backup.sh").read_text()
+    service = (LINUX_HOST / "systemd" / "destinedfx-bridge-backup.service").read_text()
+    timer = (LINUX_HOST / "systemd" / "destinedfx-bridge-backup.timer").read_text()
+    installer = (LINUX_HOST / "install-self-hosted.sh").read_text()
+    assert "DESTINEDFX_BACKUP_RETENTION_DAYS" in backup
+    assert "sqlite3.connect" in backup
+    assert "User=destinedfx" in service
+    assert "ReadWritePaths=/var/lib/destinedfx/backups" in service
+    assert "OnCalendar=*-*-* 02:45:00 UTC" in timer
+    assert "Persistent=true" in timer
+    assert "systemctl enable --now destinedfx-bridge-backup.timer" in installer
+
 
 def test_two_user_acceptance_defaults_to_persistent_host_state():
     acceptance = (LINUX_HOST / "accept_two_user_runtime.py").read_text()

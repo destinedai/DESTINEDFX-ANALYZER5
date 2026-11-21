@@ -4,6 +4,11 @@ umask 077
 
 DB_PATH="${1:-${BRIDGE_DB_PATH:-/var/lib/destinedfx/bridge.sqlite3}}"
 BACKUP_DIR="${2:-${DESTINEDFX_BACKUP_DIR:-/var/lib/destinedfx/backups}}"
+RETENTION_DAYS="${DESTINEDFX_BACKUP_RETENTION_DAYS:-14}"
+if [[ ! "$RETENTION_DAYS" =~ ^[0-9]+$ || "$RETENTION_DAYS" -lt 1 || "$RETENTION_DAYS" -gt 365 ]]; then
+  echo "BLOCKED: backup retention must be an integer from 1 to 365 days." >&2
+  exit 2
+fi
 if [[ ! -f "$DB_PATH" || -L "$DB_PATH" ]]; then
   echo "BLOCKED: bridge database is missing or is not a regular file: $DB_PATH" >&2
   exit 2
@@ -42,4 +47,7 @@ chmod 600 "$side_tmp"
 mv -- "$tmp" "$dest"
 mv -- "$side_tmp" "$dest.sha256"
 trap - EXIT
+find "$BACKUP_DIR" -maxdepth 1 -type f \
+  \( -name 'destinedfx-*.sqlite3' -o -name 'destinedfx-*.sqlite3.sha256' \) \
+  -mtime "+$RETENTION_DAYS" -delete
 printf 'BACKUP_OK %s\n' "$dest"
