@@ -142,7 +142,14 @@ class ManagementApiClient(
         val requestBuilder = Request.Builder().url(base + path).header("Accept", "application/json")
         if (body != null) requestBuilder.header("Content-Type", "application/json; charset=utf-8")
         if (auth) {
-            val token = tokens.validTokenForOrigin(base) ?: throw ManagementException(ManagementFailure.AUTH_EXPIRED)
+            val token = tokens.validTokenForOrigin(base)
+            if (token == null) {
+                // A still-valid token from another origin must never be forwarded.
+                // Probe the newly selected origin using public metadata only, then
+                // require a fresh login for that origin.
+                if (tokens.validToken() != null) verifyOrigin(base, http)
+                throw ManagementException(ManagementFailure.AUTH_EXPIRED)
+            }
             requestBuilder.header("Authorization", "Bearer $token")
         }
         val requestBody = body?.toString()?.toRequestBody(JSON)
