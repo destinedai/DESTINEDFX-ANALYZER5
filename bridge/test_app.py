@@ -3040,3 +3040,44 @@ def test_phone_position_stop_command_only_allows_a_tighter_sell_stop_and_exact_t
     })
     assert missing.status_code==409
     assert missing.json()['detail']['code']=='POSITION_STOP_TICKET_CHANGED'
+
+
+def test_phone_market_order_is_idempotent_and_blocks_second_unresolved_request(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    config = _publish_market_order_quote(terminal_headers, actual)
+    request_id=str(uuid.uuid4())
+    body={'request_id':request_id,'action':'PLACE_MARKET_ORDER','config':config}
+    first=client.post('/v1/app/commands',headers=headers,json=body)
+    assert first.status_code==202, first.text
+    replay=client.post('/v1/app/commands',headers=headers,json=body)
+    assert replay.status_code==202 and replay.json()['id']==first.json()['id']
+    second=client.post('/v1/app/commands',headers=headers,json={
+        **body,'request_id':str(uuid.uuid4()),
+    })
+    assert second.status_code==409
+    assert second.json()['detail']['code']=='MARKET_ORDER_ALREADY_PENDING'
+
+
+def test_phone_position_stop_edit_is_idempotent_and_blocks_conflicting_pending_edit(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    quote = _publish_market_order_quote(terminal_headers, actual)
+    _store_test_open_position(pairing, ticket='920003', direction='BUY', stop_loss=1.09000)
+    config = {
+        'account_login':actual['login'],'account_server':actual['server'],'account_mode':'DEMO',
+        'ticket':'920003','position_id':'920003','symbol':'EURUSD','direction':'BUY',
+        'expected_stop_loss':1.09000,'new_stop_loss':1.09500,
+        'expected_bid':quote['expected_bid'],'expected_ask':quote['expected_ask'],
+        'quote_timestamp_ms':quote['quote_timestamp_ms'],
+    }
+    request_id=str(uuid.uuid4())
+    body={'request_id':request_id,'action':'TIGHTEN_POSITION_SL','config':config}
+    first=client.post('/v1/app/commands',headers=headers,json=body)
+    assert first.status_code==202, first.text
+    replay=client.post('/v1/app/commands',headers=headers,json=body)
+    assert replay.status_code==202 and replay.json()['id']==first.json()['id']
+    second=client.post('/v1/app/commands',headers=headers,json={
+        **body,'request_id':str(uuid.uuid4()),
+        'config':{**config,'new_stop_loss':1.09600},
+    })
+    assert second.status_code==409
+    assert second.json()['detail']['code']=='POSITION_STOP_ALREADY_PENDING'
