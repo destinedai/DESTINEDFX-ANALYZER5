@@ -47,7 +47,7 @@ The paths below are implemented in the app and covered by local fixture/state te
 
 An optional owner-operated Python flow is available in `scripts/live_activation_preflight.py`. It uses the same existing Bridge challenge and Management password-step-up endpoints as the Android flow; it does not create a bypass.
 
-After installing the repository's Python dependencies in a trusted owner-controlled environment, set `DESTINEDFX_APP_BEARER_TOKEN` in the process environment from the exact user's encrypted LIVE profile pairing token. Do not put that token in the command line, source, shell history, issue reports, or chat.
+After installing the repository's Python dependencies in a trusted owner-controlled environment, provide the exact user's LIVE profile app-pairing bearer token either through the hidden prompt or through the environment variable `DESTINEDFX_APP_BEARER_TOKEN` from an approved local secret store. Never put that token in the command line, source, shell history, issue reports, or chat. The tool does not extract secrets from Android's encrypted app storage; when the bearer cannot be supplied safely, use the in-app LIVE authorization flow instead.
 
 Run:
 
