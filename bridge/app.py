@@ -1464,6 +1464,7 @@ def verified_terminal_pairing_exists():
 UINT64_MAX=18446744073709551615
 DESTRUCTIVE_ACTIONS={'CANCEL_PENDING_SELECTED','CANCEL_EA_PENDING','CLOSE_POSITION_SELECTED','CLOSE_ALL'}
 OPENING_ACTIONS={'PLACE_MARKET_ORDER'}
+POSITION_MANAGEMENT_ACTIONS={'TIGHTEN_POSITION_SL'}
 
 def canonical_ticket(value):
     if not isinstance(value,str) or not value or len(value)>20 or not value.isascii() or not value.isdecimal() or value.startswith('0'):
@@ -3106,6 +3107,111 @@ def issue_market_order_command(x,p):
         'account_login':account['login'],'account_server':account['server'],'account_mode':managed['account_mode'],
         'symbol':symbol,'side':side,'risk_percent':float(risk_percent),
         'stop_loss':float(stop_loss),'take_profit':float(take_profit),
+        'expected_bid':quote['bid'],'expected_ask':quote['ask'],
+        'quote_timestamp_ms':quote['timestamp_ms'],'expires_at_epoch':int(expiry),
+    }
+    serialized=json.dumps(queued_config,separators=(',',':'),allow_nan=False)
+    with tx(True) as c:
+        _require_host_accepting_commands(c)
+        concurrent=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
+        if concurrent:
+            if concurrent['action']!=x.action or concurrent['request_config']!=raw_config:
+                raise HTTPException(409,'request_id was already used for a different command payload')
+            return {'id':concurrent['id'],'request_id':concurrent['request_id'],'action':concurrent['action'],
+                    'config':json.loads(concurrent['config']),'status':'acknowledged' if concurrent['ack'] else 'queued'}
+        c.execute('''INSERT INTO commands(pairing_id,request_id,action,config,expires_at,request_config,host_generation)
+                     VALUES(?,?,?,?,?,?,?)''',
+                  (p['id'],x.request_id,x.action,serialized,expiry,raw_config,HOST_GENERATION))
+        command_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    return {'id':command_id,'request_id':x.request_id,'action':x.action,'config':queued_config,'status':'queued'}
+
+
+
+def issue_position_stop_command(x,p):
+    """Queue a stop-loss-only change that strictly reduces or preserves account risk."""
+    try:
+        raw_config=json.dumps(x.config,sort_keys=True,separators=(',',':'),allow_nan=False)
+    except (TypeError,ValueError):
+        raise HTTPException(422,'Invalid position stop config')
+    with tx() as c:
+        prior=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
+    if prior:
+        if prior['action']!=x.action or prior['request_config']!=raw_config:
+            raise HTTPException(409,'request_id was already used for a different command payload')
+        return {'id':prior['id'],'request_id':prior['request_id'],'action':prior['action'],
+                'config':json.loads(prior['config']),'status':'acknowledged' if prior['ack'] else 'queued'}
+
+    require_durable_execution()
+    if HOST_PROFILE!='PERSISTENT':
+        raise HTTPException(409,detail={'code':'PERSISTENT_HOST_REQUIRED','message':'Position protection edits require the persistent owner host'})
+    managed,beat=destructive_context(p)
+    cfg=x.config
+    account=beat.get('account') or {}
+    if any((cfg.get('account_login')!=account.get('login'),
+            cfg.get('account_server')!=account.get('server'),
+            cfg.get('account_mode')!=managed['account_mode'])):
+        raise HTTPException(409,detail={'code':'POSITION_STOP_ACCOUNT_MISMATCH','message':'Protection request does not match the current MT5 account'})
+    ticket=cfg.get('ticket')
+    if not isinstance(ticket,str) or snapshot_ticket(ticket)!=ticket:
+        raise HTTPException(422,'A canonical positive MT5 position ticket is required')
+    def finite_number(value, allow_zero=False):
+        return (isinstance(value,(int,float)) and not isinstance(value,bool)
+                and math.isfinite(float(value)) and (float(value)>=0 if allow_zero else float(value)>0))
+    expected_stop=cfg.get('expected_stop_loss')
+    new_stop=cfg.get('new_stop_loss')
+    quote_timestamp=cfg.get('quote_timestamp_ms')
+    expected_bid=cfg.get('expected_bid')
+    expected_ask=cfg.get('expected_ask')
+    if (not finite_number(expected_stop,True) or not finite_number(new_stop) or
+        not finite_number(expected_bid) or not finite_number(expected_ask) or
+        isinstance(quote_timestamp,bool) or not isinstance(quote_timestamp,int) or quote_timestamp<=0):
+        raise HTTPException(422,'Stop price and current broker quote must be finite and positive')
+    positions=beat.get('open_positions')
+    if not isinstance(positions,list):
+        raise HTTPException(409,'A complete broker position snapshot is required before editing protection')
+    matches=[item for item in positions if isinstance(item,dict) and snapshot_ticket(item.get('ticket'))==ticket]
+    if len(matches)!=1:
+        raise HTTPException(409,detail={'code':'POSITION_STOP_TICKET_CHANGED','message':'The exact open position ticket is no longer present'})
+    position=matches[0]
+    symbol=position.get('symbol')
+    direction=str(position.get('direction','')).upper()
+    current_stop=position.get('stop_loss')
+    if (not isinstance(symbol,str) or not symbol or direction not in ('BUY','SELL') or
+        not finite_number(current_stop,True)):
+        raise HTTPException(409,'The selected MT5 position snapshot is incomplete')
+    quotes=fresh_terminal_broker_quotes(beat)
+    quote_matches=[q for q in quotes if q['symbol']==symbol and q['timestamp_ms']==quote_timestamp]
+    if len(quote_matches)!=1:
+        raise HTTPException(409,detail={'code':'POSITION_STOP_QUOTE_CHANGED','message':'The selected position quote has changed or is stale; refresh before editing SL'})
+    quote=quote_matches[0]
+    tolerance=0.5*(10.0**(-quote['digits']))
+    if (abs(float(expected_stop)-float(current_stop))>tolerance or
+        abs(float(expected_bid)-quote['bid'])>tolerance or
+        abs(float(expected_ask)-quote['ask'])>tolerance or quote['age_ms']>BROKER_QUOTE_MAX_AGE_MS):
+        raise HTTPException(409,detail={'code':'POSITION_STOP_SNAPSHOT_CHANGED','message':'Position SL or broker quote changed; refresh before retrying'})
+    if direction=='BUY':
+        tighter=float(expected_stop)<=0 or float(new_stop)>float(expected_stop)+tolerance
+        price_valid=float(new_stop)<quote['bid']
+    else:
+        tighter=float(expected_stop)<=0 or float(new_stop)<float(expected_stop)-tolerance
+        price_valid=float(new_stop)>quote['ask']
+    if not tighter or not price_valid:
+        raise HTTPException(422,detail={'code':'POSITION_STOP_MUST_TIGHTEN','message':'The new stop must strictly reduce or establish protection and stay on the broker-valid side of price; widening/removing a stop is blocked'})
+    position_id=snapshot_ticket(position.get('position_id'))
+    if not position_id:
+        raise HTTPException(409,'The selected position identity is unavailable')
+    with tx() as c:
+        unresolved=c.execute('''SELECT 1 FROM command_items i JOIN commands cmd ON cmd.id=i.command_id
+            WHERE cmd.pairing_id=? AND i.target_id=? AND i.operational_status IN ('PENDING','PARTIAL')
+            AND (cmd.ack IS NOT NULL OR cmd.expires_at>?) LIMIT 1''',(p['id'],position_id,time.time())).fetchone()
+    if unresolved:
+        raise HTTPException(409,'A close or other unresolved operation is already queued for this position')
+    now_epoch=time.time()
+    expiry=now_epoch+20
+    queued_config={
+        'account_login':account['login'],'account_server':account['server'],'account_mode':managed['account_mode'],
+        'ticket':ticket,'position_id':position_id,'symbol':symbol,'direction':direction,
+        'expected_stop_loss':float(current_stop),'new_stop_loss':float(new_stop),
         'expected_bid':quote['bid'],'expected_ask':quote['ask'],
         'quote_timestamp_ms':quote['timestamp_ms'],'expires_at_epoch':int(expiry),
     }
