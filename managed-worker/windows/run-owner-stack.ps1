@@ -141,7 +141,7 @@ function Wait-BridgeConfiguration {
         Start-Sleep -Seconds 2
         try {
             $ready=Invoke-RestMethod -Uri 'http://127.0.0.1:8000/health/config' -TimeoutSec 5
-            if($ready.database -eq 'ok' -and $ready.managed_execution -eq 'configured'){return}
+            if($ready.database -eq 'ok' -and $ready.managed_execution -eq 'configured' -and $ready.news_provider_configured -eq $true){return}
         } catch {}
     }
     throw 'Bridge did not reach durable local readiness.'
