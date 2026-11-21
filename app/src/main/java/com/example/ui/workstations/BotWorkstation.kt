@@ -203,6 +203,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var manualOrderTakeProfit by remember(bridgeProfileKey) { mutableStateOf("") }
     var manualOrderRiskPercent by remember(bridgeProfileKey) { mutableStateOf("0.25") }
     var showManualOrderConfirm by remember(bridgeProfileKey) { mutableStateOf(false) }
+    var positionStopTicket by remember(bridgeProfileKey) { mutableStateOf("") }
+    var positionStopDraft by remember(bridgeProfileKey) { mutableStateOf("") }
+    var showPositionStopConfirm by remember(bridgeProfileKey) { mutableStateOf(false) }
     val terminalSymbol = viewModel.app.secretsManager.getBrokerSymbolOverrides()[activeSymbol]
         ?.trim()?.takeIf { it.isNotEmpty() } ?: activeSymbol.replace("/", "").replace(" ", "")
     val coroutineScope = rememberCoroutineScope()
@@ -648,6 +651,108 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }
                             }
                         }
+
+                        val stopEditPositions = currentBrokerSnapshot?.raw?.optJSONArray("open_positions")
+                        Card(
+                            modifier = Modifier.fillMaxWidth().testTag("mt5_position_stop_tighten_card"),
+                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                            border = BorderStroke(1.dp, WarningAmber.copy(alpha = 0.35f))
+                        ) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                Text("PROTECT AN OPEN POSITION", color = WarningAmber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("TIGHTEN SL ONLY · A stop can only move closer to market. Existing TP is preserved; widening/removing protection is blocked.", color = TextSecondary, fontSize = 9.sp)
+                                val stopEditCount = stopEditPositions?.length() ?: 0
+                                for (positionIndex in 0 until stopEditCount) {
+                                    val item = stopEditPositions?.optJSONObject(positionIndex) ?: continue
+                                    val itemTicket = item.optString("ticket")
+                                    val itemSymbol = item.optString("symbol")
+                                    val itemSide = item.optString("direction").uppercase()
+                                    val itemStop = item.optDouble("stop_loss", 0.0)
+                                    val itemTp = item.optDouble("take_profit", 0.0)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text("$itemSide $itemSymbol · ticket $itemTicket", color = TextPrimary, fontSize = 10.sp)
+                                            Text("Current SL $itemStop · TP $itemTp", color = TextSecondary, fontSize = 9.sp)
+                                        }
+                                        OutlinedButton(
+                                            enabled = !bridgeBusy && !bridgeCommandPending,
+                                            onClick = {
+                                                positionStopTicket = itemTicket
+                                                positionStopDraft = ""
+                                            },
+                                            modifier = Modifier.testTag("mt5_select_position_for_stop_$itemTicket")
+                                        ) { Text(if (positionStopTicket == itemTicket) "SELECTED" else "SELECT", fontSize = 9.sp) }
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = positionStopTicket,
+                                    onValueChange = { positionStopTicket = it },
+                                    modifier = Modifier.fillMaxWidth().testTag("mt5_position_stop_ticket"),
+                                    label = { Text("Selected MT5 position ticket") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                                OutlinedTextField(
+                                    value = positionStopDraft,
+                                    onValueChange = { positionStopDraft = it },
+                                    modifier = Modifier.fillMaxWidth().testTag("mt5_position_new_stop"),
+                                    label = { Text("New tighter stop-loss price") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                )
+                                Button(
+                                    enabled = actionsReady && positionStopTicket.isNotBlank() &&
+                                        positionStopDraft.toDoubleOrNull()?.let { it.isFinite() && it > 0.0 } == true &&
+                                        !bridgeCommandPending,
+                                    modifier = Modifier.fillMaxWidth().testTag("mt5_position_stop_review"),
+                                    onClick = { showPositionStopConfirm = true }
+                                ) { Text("REVIEW TIGHTER STOP", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                            }
+                        }
+                        if (showPositionStopConfirm) AlertDialog(
+                            onDismissRequest = { if (!bridgeBusy) showPositionStopConfirm = false },
+                            title = { Text("Confirm stop-loss tightening?") },
+                            text = {
+                                Text(
+                                    "This request can only move the selected position's SL closer to market or establish a missing SL. It cannot widen/remove a stop or change TP. The Windows EA will re-check the exact ticket, current SL, broker quote and stop/freeze levels before applying it."
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(enabled = !bridgeBusy && !bridgeCommandPending, onClick = {
+                                    showPositionStopConfirm = false
+                                    if (bridgeBusy || bridgeCommandPending) return@TextButton
+                                    bridgeBusy = true
+                                    coroutineScope.launch {
+                                        try {
+                                            val fresh = bridgeClient.state()
+                                            bridgeSnapshot = fresh
+                                            val stop = positionStopDraft.toDoubleOrNull()
+                                                ?: error("New stop-loss price is invalid.")
+                                            val config = MT5RemoteBridgeClient.positionStopTightenConfig(
+                                                fresh, positionStopTicket, stop
+                                            )
+                                            sendBridgeTradeCommand(
+                                                bridgeClient, "TIGHTEN_POSITION_SL", config, emptyList(),
+                                                bridgeSecrets, bridgeProfileKey,
+                                                { bridgeBusy = it }, { bridgeCommandPending = it },
+                                                { bridgePendingId = it }, { bridgePendingAction = it },
+                                                { bridgePendingServerId = it }, { bridgeTradePendingTickets = it },
+                                                { bridgeMessage = it }
+                                            )
+                                        } catch (e: Exception) {
+                                            bridgeMessage = e.message ?: "Position stop edit was blocked; existing SL/TP were not changed."
+                                            bridgeBusy = false
+                                        }
+                                    }
+                                }) { Text("TIGHTEN SL") }
+                            },
+                            dismissButton = { TextButton(onClick = { showPositionStopConfirm = false }) { Text("CANCEL") } }
+                        )
+
                         if (showManualOrderConfirm) AlertDialog(
                             onDismissRequest = { if (!bridgeBusy) showManualOrderConfirm = false },
                             title = { Text("Confirm ${manualOrderSide} market order?") },
