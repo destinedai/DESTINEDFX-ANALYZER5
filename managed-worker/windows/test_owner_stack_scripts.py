@@ -79,3 +79,14 @@ def test_step_up_key_exporter_derives_matching_public_key_without_copying_privat
     )
     assert b"PRIVATE KEY" not in exported
     assert "private key was not copied" in result.stdout.lower()
+
+
+def test_windows_supervisor_configures_a_real_news_calendar_by_default():
+    # New entries must remain blocked when the feed is unavailable; the Windows
+    # owner host nevertheless needs an actual provider configured by default.
+    assert "if ([string]::IsNullOrWhiteSpace($env:NEWS_PROVIDER_URL))" in SUPERVISOR
+    assert "$env:NEWS_PROVIDER_URL='https://showmytrades.com/api/public/calendar/v1'" in SUPERVISOR
+    assert SUPERVISOR.index("$env:NEWS_PROVIDER_URL='https://showmytrades.com/api/public/calendar/v1'") < SUPERVISOR.index("Start-ManagedChild 'bridge'")
+    cleanup = SUPERVISOR.split("finally {", 1)[-1]
+    assert "'NEWS_PROVIDER_URL'" in cleanup
+    assert "'NEWS_PROVIDER_TOKEN'" in cleanup
