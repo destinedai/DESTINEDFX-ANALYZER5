@@ -1,0 +1,34 @@
+[Unit]
+Description=DestinedFX one-time provisioning of the isolated Linux worker credential
+After=destinedfx-bridge.service
+Requires=destinedfx-bridge.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/destinedfx/bridge
+EnvironmentFile=-/etc/destinedfx/host.env
+EnvironmentFile=-/etc/destinedfx/bridge.env
+Environment=BRIDGE_HOST_PROFILE=PERSISTENT
+Environment=BRIDGE_HOST_MODE=linux-host
+Environment=BRIDGE_DB_PATH=/var/lib/destinedfx/bridge.sqlite3
+Environment=WORKER_BOOTSTRAP_TOKEN_FILE=%d/worker-bootstrap-token
+Environment=CREDENTIALS_FERNET_KEY_FILE=%d/credentials-fernet-key
+Environment=PYTHONPATH=/opt/destinedfx/bridge:/opt/destinedfx/managed-worker
+LoadCredentialEncrypted=worker-bootstrap-token:/etc/credstore.encrypted/destinedfx-worker-bootstrap-token.cred
+LoadCredentialEncrypted=credentials-fernet-key:/etc/credstore.encrypted/destinedfx-credentials-fernet-key.cred
+ExecStart=/bin/bash /opt/destinedfx/scripts/linux-host/provision-worker-token.sh
+RemainAfterExit=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+ReadWritePaths=/etc/credstore.encrypted /run /var/lib/destinedfx
+
+[Install]
+WantedBy=multi-user.target
