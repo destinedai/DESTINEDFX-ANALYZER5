@@ -68,7 +68,7 @@ def ensure_worker(worker_id: str, token_file: Path) -> None:
         except app.HTTPException:
             pass
 
-    bootstrap = os.environ.get("WORKER_BOOTSTRAP_TOKEN", "").strip()
+    bootstrap = app.secret_value("WORKER_BOOTSTRAP_TOKEN")
     if len(bootstrap) < 32:
         raise RuntimeError("WORKER_BOOTSTRAP_TOKEN_UNAVAILABLE")
     authorization = "Bearer " + bootstrap
