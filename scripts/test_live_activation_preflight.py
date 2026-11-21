@@ -67,14 +67,26 @@ def test_preflight_blocks_windows_host_without_multi_user_os_isolation(monkeypat
     assert result["overall_status"] == "BLOCKED"
 
 
-def test_preflight_blocks_linux_host_mode_even_if_persistent_and_attested(monkeypatch):
+def test_preflight_accepts_persistent_root_attested_linux_host(monkeypatch):
     data=fixture_responses()
     data["https://bridge.owner.ts.net/health/config"][1]["linux_host_mode"]=True
     monkeypatch.setattr(preflight,"get_json",lambda url:data[url])
     result=preflight.run("https://management.owner.ts.net","https://bridge.owner.ts.net")
     row=next(x for x in result["checks"] if x["name"]=="persistent_live_host_type")
+    assert row["status"] == "PASS"
+    assert row["code"] == "PERSISTENT_ISOLATED_LINUX_HOST"
+    assert result["overall_status"] == "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY"
+
+
+def test_preflight_blocks_ephemeral_linux_host_even_with_root_attestation(monkeypatch):
+    data=fixture_responses()
+    data["https://bridge.owner.ts.net/health/config"][1]["linux_host_mode"]=True
+    data["https://bridge.owner.ts.net/health/config"][1]["host_profile"]="EPHEMERAL"
+    monkeypatch.setattr(preflight,"get_json",lambda url:data[url])
+    result=preflight.run("https://management.owner.ts.net","https://bridge.owner.ts.net")
+    row=next(x for x in result["checks"] if x["name"]=="persistent_live_host_type")
     assert row["status"] == "BLOCKED"
-    assert row["code"] == "LINUX_HOST_MODE_DEMO_ONLY"
+    assert row["code"] == "EPHEMERAL_HOST_OR_UNVERIFIED_LINUX_ISOLATION"
 
 
 def test_missing_terminal_readiness_is_pending_not_a_false_pass(monkeypatch):
