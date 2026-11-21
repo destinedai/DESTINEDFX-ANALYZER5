@@ -478,7 +478,7 @@ class MT5RemoteBridgeClient(
 
     /** Creates one profile-scoped idempotency key; UNKNOWN is retained for reconciliation, never retried here. */
     suspend fun command(requestId: String, action: String, config: JSONObject = JSONObject()): CommandResult {
-        require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + TRADE_ACTIONS + OPENING_ACTIONS)
+        require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + COMMAND_TRADE_ACTIONS)
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
         if (action in COMMAND_TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
             return CommandResult(requestId, false, "REAUTHENTICATION_REQUIRED: authenticate again before this trading action", rejected = true)
@@ -577,7 +577,7 @@ class MT5RemoteBridgeClient(
     }
 
     private fun tradeActionFailure(snapshot: Snapshot, action: String, config: JSONObject): String? {
-        val profileFailure = gateFailure(snapshot, requireLiveAuthorization = action in OPENING_ACTIONS && accountMode == "LIVE")
+        val profileFailure = gateFailure(snapshot, requireLiveAuthorization = action in (OPENING_ACTIONS + POSITION_MANAGEMENT_ACTIONS) && accountMode == "LIVE")
         if (profileFailure != null) return profileFailure
         if (!snapshot.snapshotsValid || snapshot.positions == null || snapshot.activeOrders == null) return "Fresh, complete position and pending-order snapshots are required."
         val login = config.optString("account_login")
@@ -597,6 +597,32 @@ class MT5RemoteBridgeClient(
             return out.takeIf { it.isNotEmpty() && it.distinct().size == it.size }
         }
         return when (action) {
+            "TIGHTEN_POSITION_SL" -> {
+                if (snapshot.hostProfile != HostProfile.PERSISTENT) return "A persistent owner host is required for a position protection edit."
+                val ticket = config.optString("ticket")
+                val newStop = config.optDouble("new_stop_loss", Double.NaN)
+                val expectedStop = config.optDouble("expected_stop_loss", Double.NaN)
+                val position = snapshot.positions.orEmpty().singleOrNull { exactIdentifier(it, "ticket") == ticket }
+                    ?: return "The exact MT5 position ticket is no longer present."
+                val symbol = position.optString("symbol")
+                val direction = position.optString("direction").uppercase()
+                val currentStop = position.optDouble("stop_loss", Double.NaN)
+                val quote = snapshot.brokerQuotes?.singleOrNull { it.symbol == symbol }
+                    ?: return "A fresh quote for the selected position symbol is unavailable."
+                val tolerance = kotlin.math.pow(10.0, -quote.digits.toDouble()) * 0.51
+                if (!newStop.isFinite() || newStop <= 0.0 || !expectedStop.isFinite() ||
+                    !currentStop.isFinite() || kotlin.math.abs(currentStop - expectedStop) > tolerance) {
+                    return "The selected position SL changed or the new SL is invalid; refresh the position."
+                }
+                if (quote.ageMs !in 0..15_000L || quote.timestampMs <= 0L) return "A fresh broker quote is required before editing a stop."
+                val tighter = when (direction) {
+                    "BUY" -> (expectedStop <= 0.0 || newStop > expectedStop + tolerance) && newStop < quote.bid
+                    "SELL" -> (expectedStop <= 0.0 || newStop < expectedStop - tolerance) && newStop > quote.ask
+                    else -> false
+                }
+                if (!tighter) return "Only a strictly tighter stop-loss is allowed; widening/removing stops is blocked."
+                null
+            }
             "PLACE_MARKET_ORDER" -> {
                 if (snapshot.hostProfile != HostProfile.PERSISTENT) return "A persistent owner host is required for a new MT5 market order."
                 val symbol = config.optString("symbol")
@@ -986,6 +1012,8 @@ class MT5RemoteBridgeClient(
         internal val TRADE_ACTIONS = setOf("CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")
         internal val OPENING_ACTIONS = setOf("PLACE_MARKET_ORDER")
         internal val COMMAND_TRADE_ACTIONS = TRADE_ACTIONS + OPENING_ACTIONS
+        internal val POSITION_MANAGEMENT_ACTIONS = setOf("TIGHTEN_POSITION_SL")
+        internal val COMMAND_TRADE_ACTIONS = TRADE_ACTIONS + OPENING_ACTIONS + POSITION_MANAGEMENT_ACTIONS
         private val MAX_UINT64 = BigInteger("18446744073709551615")
 
         /** Parses a non-empty unique list of canonical ticket strings; malformed/float IDs are rejected. */
@@ -1017,6 +1045,53 @@ class MT5RemoteBridgeClient(
         }
 
         internal fun serverCommandId(obj: JSONObject): String? = exactIdentifier(obj, "id")
+
+        internal fun positionStopTightenConfig(
+            snapshot: Snapshot,
+            ticket: String,
+            newStopLoss: Double
+        ): JSONObject {
+            require(snapshot.snapshotsValid && snapshot.heartbeatFresh && snapshot.terminalConnected &&
+                snapshot.accountVerified && snapshot.brokerIdentityVerified && snapshot.tradeAllowed &&
+                snapshot.managedState == "READY" && snapshot.accessType == "MASTER") {
+                "A fresh verified MASTER MT5 snapshot is required before editing position protection."
+            }
+            require(snapshot.hostProfile == HostProfile.PERSISTENT) {
+                "A persistent Windows owner host is required before editing position protection."
+            }
+            require(ticket.matches(Regex("[1-9][0-9]{0,19}")) && newStopLoss.isFinite() && newStopLoss > 0.0) {
+                "A canonical position ticket and finite positive stop price are required."
+            }
+            val position = snapshot.positions?.singleOrNull { exactIdentifier(it, "ticket") == ticket }
+                ?: throw IllegalStateException("The exact MT5 position ticket is no longer present.")
+            val symbol = position.optString("symbol")
+            val direction = position.optString("direction").uppercase()
+            val currentStop = position.optDouble("stop_loss", Double.NaN)
+            require(currentStop.isFinite() && currentStop >= 0.0 && symbol.isNotBlank() && direction in setOf("BUY", "SELL"))
+            val quote = snapshot.brokerQuotes?.singleOrNull { it.symbol == symbol }
+                ?: throw IllegalStateException("A verified quote for the selected position symbol is unavailable.")
+            require(quote.ageMs in 0..15_000L && quote.timestampMs > 0L)
+            val tolerance = kotlin.math.pow(10.0, -quote.digits.toDouble()) * 0.51
+            val tighter = when (direction) {
+                "BUY" -> (currentStop <= 0.0 || newStopLoss > currentStop + tolerance) && newStopLoss < quote.bid
+                "SELL" -> (currentStop <= 0.0 || newStopLoss < currentStop - tolerance) && newStopLoss > quote.ask
+                else -> false
+            }
+            require(tighter) { "Only a strictly tighter stop-loss is allowed; widening/removing stops is blocked." }
+            return JSONObject()
+                .put("account_login", snapshot.actualLogin)
+                .put("account_server", snapshot.actualServer)
+                .put("account_mode", snapshot.actualAccountMode)
+                .put("ticket", ticket)
+                .put("position_id", exactIdentifier(position, "position_id"))
+                .put("symbol", symbol)
+                .put("direction", direction)
+                .put("expected_stop_loss", currentStop)
+                .put("new_stop_loss", newStopLoss)
+                .put("expected_bid", quote.bid)
+                .put("expected_ask", quote.ask)
+                .put("quote_timestamp_ms", quote.timestampMs)
+        }
 
         internal fun marketOrderConfig(
             snapshot: Snapshot,
@@ -1231,6 +1306,19 @@ class MT5RemoteBridgeClient(
         internal fun commandPayload(requestId: String, action: String, config: JSONObject = JSONObject()): JSONObject {
             require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
             require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + COMMAND_TRADE_ACTIONS)
+            if (action in POSITION_MANAGEMENT_ACTIONS) {
+                require(config.optString("account_login").isNotBlank() && config.optString("account_server").isNotBlank() && config.optString("account_mode") in setOf("DEMO", "LIVE"))
+                require(config.optString("ticket").matches(Regex("[1-9][0-9]{0,19}")))
+                require(config.optString("position_id").matches(Regex("[1-9][0-9]{0,19}")))
+                require(config.optString("symbol").matches(Regex("[A-Za-z0-9._-]{1,64}")) && config.optString("direction") in setOf("BUY", "SELL"))
+                val oldStop = config.optDouble("expected_stop_loss", Double.NaN)
+                val newStop = config.optDouble("new_stop_loss", Double.NaN)
+                val bid = config.optDouble("expected_bid", Double.NaN)
+                val ask = config.optDouble("expected_ask", Double.NaN)
+                require(oldStop.isFinite() && oldStop >= 0.0 && newStop.isFinite() && newStop > 0.0)
+                require(bid.isFinite() && ask.isFinite() && bid > 0.0 && ask >= bid && config.optLong("quote_timestamp_ms", 0L) > 0L)
+                require(config.optJSONArray("tickets") == null && !config.has("take_profit"))
+            }
             if (action in OPENING_ACTIONS) {
                 require(config.optString("account_login").isNotBlank() && config.optString("account_server").isNotBlank() && config.optString("account_mode") in setOf("DEMO", "LIVE"))
                 require(config.optString("symbol").matches(Regex("[A-Za-z0-9._-]{1,32}")) && config.optString("side") in setOf("BUY", "SELL"))
