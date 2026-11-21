@@ -299,6 +299,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         executionState in marketOrderStates
                                     }
                                     if (fresh.heartbeatFresh && signalMatches && confirmed) {
+                                        val completedAction = bridgePendingAction
                                         val order = signal?.optString("order").orEmpty()
                                         val deal = signal?.optString("deal").orEmpty()
                                         val executed = signal?.optString("executed_volume").orEmpty()
@@ -306,7 +307,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         bridgeCommandPending = false
                                         bridgePendingId = ""; bridgePendingAction = ""; bridgePendingServerId = ""
                                         bridgeTradePendingTickets = emptyList()
-                                        bridgeMessage = if (bridgePendingAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS) {
+                                        bridgeMessage = if (completedAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS) {
                                             "MT5 confirmed tighter SL for position $positionTicket at $signalStop; existing TP was preserved."
                                         } else {
                                             "MT5 broker response reconciled for $executionState · order ${order.ifBlank { "—" }} · deal ${deal.ifBlank { "—" }} · executed volume ${executed.ifBlank { "0" }}. ORDER_SUBMITTED is not a confirmed fill."
