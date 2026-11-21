@@ -66,6 +66,16 @@ internal fun parseVerifiedBrokerQuotes(
     return accepted
 }
 
+/** Exact MT5 terminal quote spread; null means its sides are invalid or incomplete. */
+internal fun verifiedBrokerSpread(quote: VerifiedBrokerQuote): Double? =
+    (quote.ask - quote.bid).takeIf {
+        quote.bid.isFinite() && quote.ask.isFinite() && quote.bid > 0.0 && it.isFinite() && it >= 0.0
+    }
+
+/** Stable symbol ordering for the phone's broker quote board; does not reorder source snapshots. */
+internal fun sortedVerifiedBrokerQuotes(quotes: List<VerifiedBrokerQuote>): List<VerifiedBrokerQuote> =
+    quotes.sortedWith(compareBy({ it.symbol.lowercase(Locale.ROOT) }, { it.symbol }))
+
 /**
  * Missing or unknown isolation metadata must never be interpreted as a usable terminal host.
  * WORKER_ATTESTATION_REQUIRED is a known non-Linux worker path; BLOCKED and unknown values fail closed.
