@@ -89,7 +89,7 @@ assert "ReadWritePaths=/var/backups/destinedfx-management /run/docker.sock" in u
 assert "backup-management-postgres.sh" in units["pg_backup"]
 assert "User=caddy" in units["caddy"] and "CAP_NET_BIND_SERVICE" in units["caddy"]
 timer = (base / "destinedfx-management-postgres-backup.timer").read_text()
-if not timer.startswith("[Unit]\\n") or "[Timer]\\n" not in timer or "OnCalendar=*-*-* 02:25:00 UTC" not in timer:
+if not timer.startswith("[Unit]\n") or "[Timer]\n" not in timer or "OnCalendar=*-*-* 02:25:00 UTC" not in timer:
     raise SystemExit("invalid PostgreSQL backup timer: must have the daily persistent schedule")
 print("SELF_HOSTED_SOURCE_CHECK_OK")
 PY
