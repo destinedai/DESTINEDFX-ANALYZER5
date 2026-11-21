@@ -3308,3 +3308,21 @@ def test_position_stop_unknown_ack_can_only_upgrade_to_final_broker_result(monke
         'outcome':'REJECTED','state':'READY','message':'Contradictory final result must be rejected',
     })
     assert downgrade.status_code == 409
+
+
+def test_host_agent_token_can_be_loaded_from_a_private_systemd_credential(monkeypatch, tmp_path):
+    token_file = tmp_path / "host-agent-token"
+    token_file.write_text("systemd-host-agent-fixture-token-" * 2, encoding="utf-8")
+    token_file.chmod(0o400)
+    monkeypatch.delenv("HOST_AGENT_TOKEN", raising=False)
+    monkeypatch.setenv("HOST_AGENT_TOKEN_FILE", str(token_file))
+    assert app.host_agent_shared_token() == "systemd-host-agent-fixture-token-" * 2
+
+
+def test_host_agent_token_credential_rejects_group_or_other_readable_file(monkeypatch, tmp_path):
+    token_file = tmp_path / "host-agent-token"
+    token_file.write_text("systemd-host-agent-fixture-token-" * 2, encoding="utf-8")
+    token_file.chmod(0o444)
+    monkeypatch.delenv("HOST_AGENT_TOKEN", raising=False)
+    monkeypatch.setenv("HOST_AGENT_TOKEN_FILE", str(token_file))
+    assert app.host_agent_shared_token() == ""
