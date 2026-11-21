@@ -29,8 +29,7 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 OWNER_UID="$(id -u "$SERVICE_USER")"
 OWNER_GID="$(id -g "$SERVICE_USER")"
-API_USER=destinedfx-api
-if [[ -n "$DESTINEDFX_API_USER" ]]; then API_USER="$DESTINEDFX_API_USER"; fi
+API_USER="${DESTINEDFX_API_USER:-destinedfx-api}"
 if ! id "$API_USER" >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /var/lib/destinedfx-api --create-home --shell /usr/sbin/nologin "$API_USER"
 fi
@@ -133,4 +132,4 @@ echo "Created non-secret configuration: $CONFIG_DIR/host.env and $CONFIG_DIR/bri
 echo "Created/retained encrypted Bridge, worker, PostgreSQL and management-signing credentials under $CRED_DIR; plaintext values were not printed."
 echo "The management API Ed25519 public key was derived locally; its private key remains host-bound and encrypted."
 echo "Next: install genuine MT5/MetaEditor with --wineprefix /var/lib/destinedfx/terminal-template-prefix, then review the template paths in host.env."
-echo "Then edit bridge.env with your HTTPS domain, set the Ed25519 public key in management-step-up-public.pem, configure the news provider, and run rebuild.sh self-hosted."
+echo "Then configure both HTTPS hostnames, Caddy contact and initial admin email in bridge.env; the management public key is generated automatically."
