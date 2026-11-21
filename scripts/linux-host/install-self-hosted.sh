@@ -204,7 +204,7 @@ done
 for rel in worker.py mt5_journal.py; do
   install -o root -g root -m 0644 "$SOURCE_ROOT/managed-worker/$rel" "$DEST_ROOT/managed-worker/$rel"
 done
-for rel in host-agent.py linux-slot-worker.py linux_isolation.py host_lifecycle.py; do
+for rel in host-agent.py linux-slot-worker.py linux_isolation.py host_lifecycle.py provision-worker-token.sh; do
   install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
 done
 install -o root -g root -m 0644 "$SOURCE_ROOT/bridge/requirements-production.txt" "$DEST_ROOT/bridge/requirements-production.txt"
@@ -231,10 +231,10 @@ for unit in destinedfx-host-agent.service destinedfx-bridge.service destinedfx-p
   systemctl start "$unit"
 done
 for attempt in $(seq 1 30); do
-  if curl --fail --silent --max-time 3 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then break; fi
+  if curl --fail --silent --max-time 3 -H 'X-Forwarded-Proto: https' -H "Host: $BRIDGE_HOST" http://127.0.0.1:8000/health/live >/dev/null 2>&1; then break; fi
   sleep 2
 done
-curl --fail --silent --max-time 5 http://127.0.0.1:8000/health/live >/dev/null || block "Bridge liveness failed; inspect journalctl -u destinedfx-bridge.service."
+curl --fail --silent --max-time 5 -H 'X-Forwarded-Proto: https' -H "Host: $BRIDGE_HOST" http://127.0.0.1:8000/health/live >/dev/null || block "Bridge liveness failed; inspect journalctl -u destinedfx-bridge.service."
 for attempt in $(seq 1 45); do
   if curl --fail --silent --max-time 5 "$BRIDGE_BASE_URL/health/live" >/dev/null 2>&1; then break; fi
   sleep 2
