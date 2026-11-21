@@ -53,6 +53,7 @@ class ReadinessAuditTests(unittest.TestCase):
         self.assertEqual("PASS", report["status"], report["failed_checks"])
         names = {item["name"] for item in report["checks"]}
         self.assertIn("MT5 EA order and management path", names)
+        self.assertIn("phone MT5 market orders route through the Windows EA", names)
         self.assertIn("fail-closed persistent-host Live policy", names)
         self.assertIn("Analyzer provider diagnostics", names)
         self.assertIn("automatic Codespaces Bridge discovery", names)
