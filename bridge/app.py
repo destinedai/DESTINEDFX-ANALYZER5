@@ -1,5 +1,6 @@
 import asyncio, os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error, base64
 import re
+import stat
 import logging
 import subprocess
 from datetime import datetime, timezone, timedelta
@@ -292,11 +293,31 @@ def require_live_host_isolation(minimum_active_slots=2):
     return {}
 
 
+def host_agent_shared_token():
+    """Read the root-agent secret from a systemd credential, with env fallback for test/dev hosts."""
+    secret=os.getenv('HOST_AGENT_TOKEN','').strip()
+    if secret:
+        return secret
+    credential_path=os.getenv('HOST_AGENT_TOKEN_FILE','').strip()
+    if not credential_path:
+        return ''
+    try:
+        path=Path(credential_path)
+        info=path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1
+                or stat.S_IMODE(info.st_mode)&0o077
+                or info.st_uid not in (0,os.geteuid())):
+            return ''
+        return path.read_text(encoding='utf-8').strip()
+    except (OSError,UnicodeError):
+        return ''
+
+
 def host_agent_slot_request(path, payload):
     """Request root-only validation of a reserved or running per-user MT5 slot."""
     if not LINUX_HOST_MODE or not path.startswith('/internal/slot/'):
         raise HTTPException(503,detail={'code':'SLOT_ATTESTATION_UNAVAILABLE','message':'Isolated slot verification is unavailable'})
-    secret=os.getenv('HOST_AGENT_TOKEN','').strip()
+    secret=host_agent_shared_token()
     parsed=urlparse(HOST_AGENT_URL)
     health_path=parsed.path.rstrip('/')
     if health_path.endswith('/health/ready'):
