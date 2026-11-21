@@ -739,10 +739,14 @@ open class DestinedFXViewModel(
         return true
     }
 
-    // The management API origin can be provisioned at build time or safely selected at runtime.
-    // Management sessions are encrypted and origin-bound by SecretsManagerAccessTokenStore.
+    // Production APKs use the management API origin compiled from the self-hosted host manifest.
+    // Development builds retain the verified runtime override for local engineering only.
     private fun effectiveManagementApiOrigin(): String =
-        app.secretsManager.getManagementApiOrigin().ifBlank { com.example.BuildConfig.MANAGEMENT_API_ORIGIN }
+        com.example.data.management.ManagementApiClient.resolveConfiguredOrigin(
+            app.secretsManager.getManagementApiOrigin(),
+            com.example.BuildConfig.MANAGEMENT_API_ORIGIN,
+            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
+        )
 
     val managementApiOrigin = MutableStateFlow(
         com.example.data.management.ManagementApiClient.validatedOrigin(effectiveManagementApiOrigin()).orEmpty()
@@ -762,6 +766,9 @@ open class DestinedFXViewModel(
 
     /** Verify readiness and EdDSA public-key publication before persisting a runtime API origin. */
     fun verifyAndSaveManagementApiOrigin(rawOrigin: String) = managementAction {
+        check(!com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) {
+            "This APK is bound to its verified DestinedFX host. Change endpoints only through the host deployment and rebuild."
+        }
         if (!app.secretsManager.isSecureStorageAvailable) {
             throw com.example.data.management.ManagementException(
                 com.example.data.management.ManagementFailure.SECURE_STORAGE_UNAVAILABLE

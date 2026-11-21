@@ -23,6 +23,33 @@ class ManagementApiClientTest {
             .forEach { assertNull("must reject $it", ManagementApiClient.validatedOrigin(it)) }
     }
 
+    @Test fun lockedBuildAlwaysUsesEmbeddedManagementOriginAndIgnoresRuntimeOverrides() {
+        assertEquals(
+            "https://api.destinedfx.example",
+            ManagementApiClient.resolveConfiguredOrigin(
+                "https://attacker-controlled.example",
+                "https://api.destinedfx.example",
+                locked = true
+            )
+        )
+        assertEquals(
+            "",
+            ManagementApiClient.resolveConfiguredOrigin(
+                "https://old-host.example",
+                "__CONFIGURATION_REQUIRED__",
+                locked = true
+            )
+        )
+        assertEquals(
+            "https://developer-bridge.example",
+            ManagementApiClient.resolveConfiguredOrigin(
+                "https://developer-bridge.example",
+                "https://build-default.example",
+                locked = false
+            )
+        )
+    }
+
     @Test fun runtimeOriginIsAcceptedOnlyWhenBackendAndEdDsaKeyAreReady() {
         val requests = mutableListOf<String>()
         val pem = "-----BEGIN PUBLIC KEY-----\\n" + "A".repeat(48) + "\\n-----END PUBLIC KEY-----"
