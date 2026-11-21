@@ -391,13 +391,13 @@ fun MetaTraderBrokerFlow(
                 )
                 if (spec.connector == LoginConnector.MT5_TERMINAL) {
                     Text(
-                        "Unverified connection hint only. The terminal determines the account mode after login.",
+                        "Mode selection is a hint. MT5 confirms DEMO or LIVE after login.",
                         color = WarningAmber,
                         fontSize = 12.sp,
                         modifier = Modifier.testTag("mt5_mode_hint_notice"),
                     )
                     Text(
-                        "MT5 uses the broker account Login number, Password and exact Server. A Client ID is not part of standard MT5 sign-in.",
+                        "Enter the MT5 login number, password and exact server.",
                         color = TextSecondary,
                         fontSize = 11.sp,
                         modifier = Modifier.testTag("mt5_login_fields_help"),
@@ -425,7 +425,7 @@ fun MetaTraderBrokerFlow(
                         Text("Investor access cannot trade", color = WarningAmber, fontSize = 14.sp)
                     }
                     if (form.mode == LoginMode.LIVE && hostProfile != HostProfile.PERSISTENT) {
-                        Text("LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.", color = WarningAmber, fontSize = 14.sp)
+                        Text("LIVE trade login needs a persistent host. Investor access is read-only.", color = WarningAmber, fontSize = 14.sp)
                     }
                     LoginInput("Login", form.login, { form = form.copy(login = it.filter(Char::isDigit)) }, KeyboardType.Number)
                     LoginInput("Password", form.password, { form = form.copy(password = it) }, KeyboardType.Password, true, ImeAction.Next)
@@ -442,7 +442,7 @@ fun MetaTraderBrokerFlow(
                         keyboardActions = loginKeyboardActions(),
                     )
                     Text(
-                        "This test sends your broker login through the authenticated HTTPS Bridge to your owner-authorized host. The MT5 terminal performs the actual broker login; the EA then verifies the exact account identity and fresh heartbeat. No trade is submitted by this test.",
+                        "Secure broker login check only. No trade is placed.",
                         color = TextSecondary,
                         fontSize = 10.sp,
                         modifier = Modifier.testTag("mt5_login_verification_path")
@@ -613,9 +613,8 @@ fun MetaTraderBrokerFlow(
         title = { Text("Account safety") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Connected status requires fresh, identity-matched broker evidence.")
-                Text("Login never arms trading. Existing risk, news, lease, and Emergency Stop gates remain in force.")
-                Text("A fixture or test result is not proof of a broker login.")
+                Text("Connected means fresh broker identity and terminal heartbeat.")
+                Text("Login does not start trading. Risk checks and Emergency Stop remain active.")
             }
         },
         confirmButton = { TextButton(onClick = { showInfoSheet = false }) { Text("CLOSE") } },
@@ -658,7 +657,7 @@ fun MetaTraderBrokerFlow(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("ModeArmingPolicy: $policyMessage", color = WarningAmber)
-                Text("DEMO acceptance requires fresh identity-matched read-only evidence. MT5 also requires a validated DEMO PASS. LIVE arming requires PERSISTENT host evidence, DEMO acceptance, fresh verification, risk clearance and explicit re-authentication.")
+                Text("DEMO needs a verified PASS. LIVE needs a persistent host, fresh account checks, risk clearance and owner confirmation.")
                 OutlinedTextField(
                     value = liveTypedConfirmation,
                     onValueChange = { liveTypedConfirmation = it },
