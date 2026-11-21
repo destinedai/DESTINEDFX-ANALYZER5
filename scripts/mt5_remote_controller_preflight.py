@@ -102,7 +102,7 @@ def source_checks(root: Path) -> list[dict[str, str]]:
                 "NewsClear(symbol)",
                 "OrderCalcProfit",
                 "OrderCalcMargin",
-                '"signal_key"',
+                "signal_key",
             )),
             "The Windows MT5 EA checks the current account, quote, news, risk, margin and broker result; volume is sized on-terminal.",
         ),
