@@ -184,9 +184,11 @@ if not isinstance(key, Ed25519PublicKey):
     raise SystemExit("BLOCKED: management public key must be Ed25519.")
 print("SELF_HOSTED_DOMAIN_AND_MANAGEMENT_KEY_OK")
 PY
-for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password management-step-up-private-key-pem; do
+for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password; do
   systemd-creds decrypt --name="$name" "$CREDENTIAL_DIR/destinedfx-$name.cred" /dev/null >/dev/null || block "encrypted credential invalid: $name"
 done
+systemd-creds decrypt --name=step-up-private-key-pem "$CREDENTIAL_DIR/destinedfx-management-step-up-private-key-pem.cred" /dev/null >/dev/null || block "encrypted management signing credential is invalid."
+[[ -x /usr/bin/docker ]] || block "Docker CLI must be installed at /usr/bin/docker."
 
 TEMPLATE="$DESTINEDFX_MT5_TERMINAL_TEMPLATE"
 [[ -n "$TEMPLATE" && -f "$MT5_TERMINAL_EXE" && ! -L "$MT5_TERMINAL_EXE" ]] || block "genuine terminal64.exe is missing from host.env template."
