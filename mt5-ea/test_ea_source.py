@@ -398,6 +398,25 @@ def test_restart_recovery_precedes_start_resume_and_scanning():
     assert timer.index("StartupBrokerSnapshotReady()") < timer.index("ProcessCommands()")
 
 
+def test_unresolved_mt5_trade_states_block_new_orders_and_preserve_stop_confirmation():
+    source = (Path(__file__).parent / "DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
+    helper = source.split("bool PhoneTradeOutcomeUnresolved()", 1)[1].split("\n}", 1)[0]
+    for state in (
+        "SUBMISSION_INTENT", "SUBMISSION_UNKNOWN", "UNKNOWN_REQUIRES_RECONCILIATION",
+        "ORDER_SUBMITTED", "PARTIALLY_FILLED", "FILLED", "FILLED_POSITION_NOT_FOUND",
+        "POSITION_RECONCILED_SLTP_UNVERIFIED", "POSITION_SL_MODIFY_INTENT",
+    ):
+        assert f'g_sigExecutionState=="{state}"' in helper
+    manual = source.split("bool ExecutePhoneMarketOrder(", 1)[1].split("bool ExecutePhonePositionStopTighten(", 1)[0]
+    stop = source.split("bool ExecutePhonePositionStopTighten(", 1)[1].split("void ReconcilePhonePositionStopState(", 1)[0]
+    scan = source.split("void Scan()", 1)[1].split("bool Ack(", 1)[0]
+    assert "PhoneTradeOutcomeUnresolved()" in manual
+    assert "PhoneTradeOutcomeUnresolved()" in stop
+    assert "PhoneTradeOutcomeUnresolved()" in scan
+    assert 'g_sigExecutionState=="POSITION_SL_TIGHTENED"||g_sigExecutionState=="POSITION_SL_NOT_APPLIED"' in scan
+    assert "TimeGMT()-g_sigSubmittedAt<30" in scan
+
+
 def test_phone_market_order_uses_durable_ea_risk_engine_and_never_trusts_phone_volume():
     source = (Path(__file__).parent / "DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
     assert 'action=="PLACE_MARKET_ORDER"' in source
