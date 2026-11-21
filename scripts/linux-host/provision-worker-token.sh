@@ -50,7 +50,11 @@ export BRIDGE_DB_PATH="${BRIDGE_DB_PATH:-/var/lib/destinedfx/bridge.sqlite3}"
   exit 5
 }
 chmod 0600 "$TOKEN_FILE"
-systemd-creds encrypt --name=worker-token "$TOKEN_FILE" "$CREDENTIAL_DIR/destinedfx-worker-token.cred"
-chown root:root "$CREDENTIAL_DIR/destinedfx-worker-token.cred"
-chmod 0600 "$CREDENTIAL_DIR/destinedfx-worker-token.cred"
+CREDENTIAL_TMP="$CREDENTIAL_DIR/.destinedfx-worker-token.cred.$.tmp"
+cleanup_credential() { rm -f "$CREDENTIAL_TMP"; }
+trap 'cleanup; cleanup_credential' EXIT INT TERM
+systemd-creds encrypt --name=worker-token "$TOKEN_FILE" "$CREDENTIAL_TMP"
+chown root:root "$CREDENTIAL_TMP"
+chmod 0600 "$CREDENTIAL_TMP"
+mv -f -- "$CREDENTIAL_TMP" "$CREDENTIAL_DIR/destinedfx-worker-token.cred"
 echo "DESTINEDFX_WORKER_CREDENTIAL_READY worker_id=$DESTINEDFX_WORKER_ID"
