@@ -162,3 +162,9 @@ Never add broker credentials, management assertions, pairing tokens, GitHub toke
 ## License
 
 No license has been selected. All rights and licensing choices remain with the repository owner.
+
+## Phone-to-MT5 remote controller
+
+DestinedFX's Android workstation controls a separately provisioned Windows MT5 terminal. It now supports broker-quote-bound manual market BUY/SELL through the Bridge and Windows EA, as well as the existing managed start/stop and position/order management actions. It is not yet full MT5 Android feature parity: pending-order placement, full TP/SL editing (only tighten-only SL protection is available), broker-native chart/timeframe/indicator controls, Market Depth and the MT5 mailbox/news stream remain unimplemented or unverified. See [the MT5 remote-controller capability matrix](docs/mt5-phone-remote-controller-matrix.md).
+
+Run the read-only Python source preflight with `python scripts/mt5_remote_controller_preflight.py`. After deploying services, add `--management-url` and `--bridge-url` to check management readiness, public-key/Bridge fingerprint parity, persistent-host/news configuration, terminal readiness and per-user isolation. It uses GET only and never reads broker credentials or submits trades.

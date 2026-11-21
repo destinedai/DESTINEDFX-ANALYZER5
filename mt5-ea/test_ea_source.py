@@ -333,7 +333,9 @@ def test_journal_failure_contracts_fail_closed_before_ack_or_submission():
     atomic = source[source.index("bool AtomicWrite("):source.index("bool SaveToken(")]
     place = source[source.index("bool Place("):source.index("\nvoid SetWait")]
     commands = source[source.index("void ProcessCommands()"):source.index("void ReconcileOrder(")]
-    scan = source[source.index("void Scan()"):source.index("void Ack(")]
+    scan_start = source.index("void Scan()")
+    scan_end = source.index("bool Ack(", scan_start)
+    scan = source[scan_start:scan_end]
     assert "uint written=encoded==0?0:FileWriteArray(h,bytes,0,encoded)" in atomic
     assert "FILE_WRITE|FILE_BIN" in atomic and "CP_UTF8" in atomic
     assert "FileFlush(h)" in atomic and "FileSize(h)" in atomic
@@ -379,7 +381,9 @@ def test_restart_recovery_precedes_start_resume_and_scanning():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     startup = source[source.index("bool StartupBrokerSnapshotReady()") : source.index("void OnTimer()") ]
     commands = source[source.index("void ProcessCommands()") : source.index("void ReconcileOrder()") ]
-    scan = source[source.index("void Scan()") : source.index("void Ack(")]
+    scan_start = source.index("void Scan()")
+    scan_end = source.index("bool Ack(", scan_start)
+    scan = source[scan_start:scan_end]
     assert "g_journalsLoaded" in startup
     assert "TERMINAL_CONNECTED" in startup and "HistorySelect(" in startup
     assert "PositionGetTicket(i)" in startup and "PositionSelectByTicket(ticket)" in startup
@@ -392,3 +396,48 @@ def test_restart_recovery_precedes_start_resume_and_scanning():
     assert "if(!g_startupRecoveryReady)" in scan
     timer = source[source.index("void OnTimer()") : source.index("void OnTick()")]
     assert timer.index("StartupBrokerSnapshotReady()") < timer.index("ProcessCommands()")
+
+
+def test_phone_market_order_uses_durable_ea_risk_engine_and_never_trusts_phone_volume():
+    source = (Path(__file__).parent / "DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
+    assert 'action=="PLACE_MARKET_ORDER"' in source
+    assert "ExecutePhoneMarketOrder(orderConfig,orderRequest,outcome,msg)" in source
+    assert "bool ExecutePhoneMarketOrder(" in source
+    assert 'Place(symbol,PERIOD_M5,side=="BUY"' in source
+    assert '"MANUAL-"+requestId' in source
+    assert "g_liveAuthorizedUntil<=0" in source
+    assert "QuoteFresh(symbol,q)" in source
+    assert "NewsClear(symbol)" in source
+    assert "RiskDayOK()" in source
+    assert "OrderCalcProfit" in source
+    assert "OrderCalcMargin" in source
+    assert "g_sigRequestedVolume=vol" in source
+    assert "signal_key" in source
+    manual = source.split("bool ExecutePhoneMarketOrder(", 1)[1].split("\nvoid SetWait", 1)[0]
+    assert "JNum(cfg,\"volume\"" not in manual
+
+
+def test_requested_phone_take_profit_must_meet_existing_cost_adjusted_net_two_r():
+    source = (Path(__file__).parent / "DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
+    assert "bool preserveRequestedTarget=false" in source
+    assert "if(preserveRequestedTarget)" in source
+    assert "suppliedDistance+tick*0.5<requiredTargetDistance" in source
+    assert "Requested take-profit does not meet the cost-adjusted net 1:2 risk/reward requirement" in source
+
+
+def test_phone_position_stop_edit_only_tightens_sl_and_preserves_tp():
+    source = (Path(__file__).parent / "DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
+    assert 'action=="TIGHTEN_POSITION_SL"' in source
+    assert "bool ExecutePhonePositionStopTighten(" in source
+    assert "PositionSelectByTicket(ticket)" in source
+    assert "trade.PositionModify(ticket,newStop,currentTake)" in source
+    assert "SYMBOL_TRADE_STOPS_LEVEL" in source
+    assert "SYMBOL_TRADE_FREEZE_LEVEL" in source
+    assert 'g_lastSignal="TIGHTEN-"+requestId' in source
+    assert 'g_sigExecutionState="POSITION_SL_TIGHTENED"' in source
+    assert 'g_sigCommandId=commandId' in source
+    assert 'g_sigCommandId=ArraySize(p)>=18?p[17]:""' in source
+    assert "RetryPhonePositionStopAck()" in source
+    assert "bool Ack(string id,string outcome,string msg,string resultJson" in source
+    assert 'Ack(g_sigCommandId,finalOutcome,g_sigRationale)' in source
+    assert 'g_sigOrder=commandId' not in source
