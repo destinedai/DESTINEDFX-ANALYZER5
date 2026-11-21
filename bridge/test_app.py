@@ -430,10 +430,74 @@ def test_ephemeral_linux_host_rejects_live_before_storage_or_job(monkeypatch):
         'consent':True,
     })
     assert response.status_code == 409
-    assert response.json()['detail']['code'] == 'LINUX_HOST_DEMO_ONLY'
+    assert response.json()['detail']['code'] == 'EPHEMERAL_HOST_LIVE_BLOCKED'
     with app.tx() as c:
         assert c.execute('SELECT COUNT(*) FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
         assert c.execute('SELECT COUNT(*) FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+
+
+def test_persistent_linux_host_allows_live_enrollment_with_two_slot_capacity(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'PERSISTENT')
+    monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: False)
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': True, 'slot_isolation': {
+            'enabled': True, 'ready': True, 'active_slots': 1, 'max_slots': 2,
+        },
+    })
+    monkeypatch.setattr(app, 'durable_execution_enabled', lambda: True)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123457', 'server':'FBS-Live', 'password':'live-secret',
+        'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS',
+        'consent':True,
+    })
+    assert response.status_code == 202, response.text
+    with app.tx() as c:
+        account = c.execute('SELECT account_mode FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
+        job = c.execute('SELECT status,requested_account_mode FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
+    assert account['account_mode'] == 'LIVE'
+    assert job['requested_account_mode'] == 'LIVE'
+    assert job['status'] == 'AWAITING_ATTESTATION'
+
+
+def test_persistent_linux_live_enrollment_rejects_insufficient_slot_capacity(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'PERSISTENT')
+    monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: False)
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': True, 'slot_isolation': {
+            'enabled': True, 'ready': True, 'active_slots': 1, 'max_slots': 1,
+        },
+    })
+    monkeypatch.setattr(app, 'durable_execution_enabled', lambda: True)
+    p, ah = managed_pair()
+    response = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123458', 'server':'FBS-Live', 'password':'live-secret',
+        'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS',
+        'consent':True,
+    })
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'LIVE_REQUIRES_TWO_ISOLATED_TERMINALS'
+    with app.tx() as c:
+        assert c.execute('SELECT COUNT(*) FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+        assert c.execute('SELECT COUNT(*) FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+
+
+def test_persistent_linux_live_challenge_requires_two_active_slots(monkeypatch):
+    pairing, headers, _worker, _job, _terminal, _actual = live_ready(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'PERSISTENT')
+    monkeypatch.setattr(app, 'linux_host_report', lambda: {
+        'healthy': True, 'slot_isolation': {
+            'enabled': True, 'ready': True, 'active_slots': 1, 'max_slots': 2,
+        },
+    })
+    response = client.post('/v1/app/live-challenge', headers=headers)
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'LIVE_ISOLATION_CAPACITY_NOT_READY'
 
 
 def test_ephemeral_linux_host_rejects_unready_isolation_before_storage(monkeypatch):
