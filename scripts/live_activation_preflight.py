@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Read-only DestinedFX LIVE infrastructure preflight.
+"""DestinedFX LIVE infrastructure preflight and explicit lease-arming tool.
 
-Checks management API health and Ed25519 public-key publication, then compares
-that key's SHA-256 SPKI fingerprint with the running Bridge's health/config.
-It also checks persistent/durable Bridge configuration and terminal readiness.
-It NEVER changes LIVE state, reads account credentials, fabricates DEMO evidence,
-or submits a trading command/order. The optional PEM output is PUBLIC only.
+The default preflight is HTTPS GET-only and never changes LIVE state. The optional
+--arm-live path uses the existing one-time Bridge challenge, Management password
+step-up, exact typed confirmation, and 15-minute authorization endpoint. It does
+not submit or retry orders. Broker credentials are never requested; only the
+user's existing app-pairing bearer and Management password reauthentication are
+used for this account-specific authorization. The optional PEM output is PUBLIC.
 """
 from __future__ import annotations
-import argparse, hashlib, json, os, re, stat, tempfile, urllib.error, urllib.parse, urllib.request
+import argparse, getpass, hashlib, hmac, json, os, re, stat, tempfile, urllib.error, urllib.parse, urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -122,17 +124,35 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
         news_ready = config.get("news_provider_configured") is True
         checks.append({"name":"news_calendar_provider","status":"PASS" if news_ready else "BLOCKED","code":"NEWS_PROVIDER_CONFIGURED" if news_ready else "NEWS_PROVIDER_NOT_CONFIGURED","provider_kind":config.get("news_provider_kind","unconfigured")})
         linux_mode = config.get("linux_host_mode") is True
-        checks.append({"name":"persistent_live_host_type","status":"BLOCKED" if linux_mode else "PASS","code":"LINUX_HOST_MODE_DEMO_ONLY" if linux_mode else "WINDOWS_OR_MANAGED_HOST"})
         isolation_status = config.get("multi_user_terminal_isolation")
         isolation_ready = isolation_status == "VERIFIED"
+        persistent_live_host = persistent and (not linux_mode or isolation_ready)
+        checks.append({
+            "name":"persistent_live_host_type",
+            "status":"PASS" if persistent_live_host else "BLOCKED",
+            "code":"PERSISTENT_ISOLATED_LINUX_HOST" if linux_mode and persistent_live_host else "PERSISTENT_WINDOWS_OR_MANAGED_HOST" if persistent_live_host else "EPHEMERAL_HOST_OR_UNVERIFIED_LINUX_ISOLATION",
+        })
         checks.append({"name":"multi_user_terminal_isolation","status":"PASS" if isolation_ready else "BLOCKED","code":"PER_USER_ISOLATION_VERIFIED" if isolation_ready else "MULTI_USER_OS_ISOLATION_NOT_VERIFIED"})
+        active_slots = config.get("isolated_slots")
+        max_slots = config.get("max_isolated_slots")
+        dual_capacity = (
+            isinstance(active_slots, int) and not isinstance(active_slots, bool) and active_slots >= 2
+            and isinstance(max_slots, int) and not isinstance(max_slots, bool) and max_slots >= 2
+        )
+        checks.append({
+            "name":"live_demo_and_live_terminal_capacity",
+            "status":"PASS" if isolation_ready and dual_capacity else "BLOCKED",
+            "code":"TWO_ISOLATED_TERMINALS_READY" if isolation_ready and dual_capacity else "LIVE_REQUIRES_TWO_VERIFIED_ISOLATED_TERMINALS",
+            "active_slots":active_slots if isinstance(active_slots, int) and not isinstance(active_slots, bool) else 0,
+            "max_slots":max_slots if isinstance(max_slots, int) and not isinstance(max_slots, bool) else 0,
+        })
         bridge_fp = config.get("management_step_up_key_fingerprint_sha256")
         trust = bool(remote_fp and bridge_fp == remote_fp)
         checks.append({"name":"management_bridge_trust","status":"PASS" if trust else "BLOCKED","code":"PUBLIC_KEY_FINGERPRINT_MATCH" if trust else "BRIDGE_KEY_MISSING_OR_MISMATCHED","bridge_fingerprint_sha256":bridge_fp if isinstance(bridge_fp, str) else ""})
         issuer_match = bool(issuer and audience and config.get("management_step_up_issuer") == issuer and config.get("management_step_up_audience") == audience)
         checks.append({"name":"management_bridge_issuer_audience","status":"PASS" if issuer_match else "BLOCKED","code":"ISSUER_AUDIENCE_MATCH" if issuer_match else "ISSUER_AUDIENCE_MISMATCH"})
     except PreflightError as e:
-        for name in ("bridge_config", "persistent_host", "durable_storage", "news_calendar_provider", "persistent_live_host_type", "multi_user_terminal_isolation", "management_bridge_trust", "management_bridge_issuer_audience"):
+        for name in ("bridge_config", "persistent_host", "durable_storage", "news_calendar_provider", "persistent_live_host_type", "multi_user_terminal_isolation", "live_demo_and_live_terminal_capacity", "management_bridge_trust", "management_bridge_issuer_audience"):
             checks.append({"name":name,"status":"BLOCKED","code":str(e) if name == "bridge_config" else "BRIDGE_CONFIG_UNAVAILABLE"})
     try:
         code, data = get_json(bridge + "/health/ready")
@@ -147,21 +167,221 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
     state = "BLOCKED" if blocked else "INFRASTRUCTURE_READY_ACCOUNT_ACCEPTANCE_PENDING" if pending else "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY"
     return {"schema_version":1,"overall_status":state,"checks":checks,
             "non_actions":["No LIVE switch changed","No credentials read","No broker evidence fabricated","No order or trading command submitted"],
-            "still_required":["Same-user, same-broker, separately paired DEMO and LIVE profiles","Genuine 5-7 day DEMO PASS with order lifecycle, reconciliation, restart and risk evidence","Fresh LIVE MT5 identity, MASTER trade permission and authenticated EA heartbeat","Fresh risk telemetry within limits and clear news verdict","Password reauthentication and exact typed LIVE confirmation","Account-bound 15-minute LIVE authorization"]}
+            "still_required":["Same-user, same-broker, separately paired DEMO and LIVE profiles","Genuine 5-7 day DEMO PASS with order lifecycle, reconciliation, restart and risk evidence","Independently verified per-user Windows process/SID/ACL isolation; separate /portable directories under one Windows user do not qualify","Two simultaneously active isolated MT5 terminals for the DEMO and LIVE profiles","Fresh LIVE MT5 identity, MASTER trade permission and authenticated EA heartbeat","Fresh risk telemetry within limits and clear news verdict","Password reauthentication and exact typed LIVE confirmation","Account-bound 15-minute LIVE authorization"]}
+
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so authenticated requests never forward bearer tokens."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def authenticated_json(url: str, method: str, payload: dict[str, Any] | None = None,
+                       bearer: str | None = None, timeout: float = 8.0) -> tuple[int, dict[str, Any]]:
+    """Bounded HTTPS JSON client used only by the explicit LIVE lease flow."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise PreflightError("AUTH_ENDPOINT_MUST_BE_HTTPS")
+        if bearer is not None and (not bearer.strip() or any(ch in bearer for ch in "\r\n")):
+            raise PreflightError("AUTH_TOKEN_INVALID")
+        headers = {"Accept":"application/json","User-Agent":"DestinedFX-LIVE-Arm/1.0"}
+        if bearer is not None:
+            headers["Authorization"] = "Bearer " + bearer
+        data = None
+        if payload is not None:
+            data = json.dumps(payload,separators=(",",":"),allow_nan=False).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(url,data=data,headers=headers,method=method)
+        opener = urllib.request.build_opener(NoRedirectHandler())
+        try:
+            response = opener.open(request,timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            status = int(exc.code)
+            raw = exc.read(MAX_BYTES+1)
+        except (OSError,TimeoutError,urllib.error.URLError):
+            raise PreflightError("AUTH_ENDPOINT_UNREACHABLE") from None
+        else:
+            with response:
+                status = int(response.status)
+                raw = response.read(MAX_BYTES+1)
+    except PreflightError:
+        raise
+    except (ValueError,TypeError,UnicodeError):
+        raise PreflightError("AUTH_REQUEST_INVALID") from None
+    if status in (301,302,303,307,308):
+        raise PreflightError("AUTH_REDIRECT_REFUSED")
+    if len(raw)>MAX_BYTES:
+        raise PreflightError("AUTH_RESPONSE_TOO_LARGE")
+    try:
+        value = json.loads(raw.decode("utf-8")) if raw else {}
+    except (UnicodeError,json.JSONDecodeError):
+        raise PreflightError("AUTH_RESPONSE_NOT_JSON") from None
+    if not isinstance(value,dict):
+        raise PreflightError("AUTH_RESPONSE_SCHEMA_INVALID")
+    if status<200 or status>=300:
+        raise PreflightError(error_code(value))
+    return status,value
+
+
+def arm_live(management_url: str, bridge_url: str, *,
+             credential_provider: Callable[[], tuple[str, str, str]],
+             confirm_typed_phrase: Callable[[str], bool]) -> dict[str, Any]:
+    """Create only the existing 15-minute LIVE lease after all server-side gates pass.
+
+    No trade/order endpoint is called. Tokens, passwords and signed assertions are
+    kept in memory and are not returned or printed.
+    """
+    report = run(management_url,bridge_url)
+    if report.get("overall_status") != "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY":
+        raise PreflightError("LIVE_INFRASTRUCTURE_PREFLIGHT_BLOCKED")
+    try:
+        app_token, management_email, management_password = credential_provider()
+    except Exception:
+        raise PreflightError("LIVE_AUTH_INPUT_UNAVAILABLE") from None
+    if not app_token or not management_email or not management_password:
+        raise PreflightError("LIVE_AUTH_INPUT_MISSING")
+    management = base_url(management_url,"MANAGEMENT")
+    bridge = base_url(bridge_url,"BRIDGE")
+    management_session = ""
+    authorized_result: dict[str,Any] | None = None
+    logout_confirmed = False
+    try:
+        _,login_data = authenticated_json(
+            management+"/api/v1/auth/login","POST",
+            {"email":management_email,"password":management_password},
+        )
+        management_session = str(login_data.get("access_token") or "")
+        if len(management_session)<20:
+            raise PreflightError("MANAGEMENT_LOGIN_RESPONSE_INVALID")
+
+        _,challenge = authenticated_json(
+            bridge+"/v1/app/live-challenge","POST",{},bearer=app_token,
+        )
+        pairing_id = str(challenge.get("pairing_id") or "")
+        challenge_id = str(challenge.get("challenge_id") or "")
+        phrase = str(challenge.get("typed_confirmation") or "")
+        broker = str(challenge.get("broker_brand") or "").strip().upper()
+        login = str(challenge.get("login") or "")
+        server = str(challenge.get("server") or "")
+        mode = str(challenge.get("account_mode") or "").strip().upper()
+        generation = str(challenge.get("credential_generation") or "")
+        expected_phrase = f"ARM LIVE {broker} {login}"
+        if (not pairing_id or not challenge_id or broker not in BROKERS
+                or not re.fullmatch(r"[0-9]{1,20}",login) or not server.strip()
+                or mode!="LIVE" or not generation or phrase!=expected_phrase):
+            raise PreflightError("LIVE_CHALLENGE_IDENTITY_INVALID")
+        try:
+            confirmed = confirm_typed_phrase(expected_phrase) is True
+        except Exception:
+            confirmed = False
+        if not confirmed:
+            raise PreflightError("LIVE_TYPED_CONFIRMATION_MISMATCH")
+
+        _,step_up = authenticated_json(
+            management+"/api/v1/auth/live-step-up","POST",
+            {
+                "password":management_password,
+                "pairing_id":pairing_id,
+                "challenge_id":challenge_id,
+                "typed_confirmation":expected_phrase,
+                "broker_brand":broker,
+                "login":login,
+                "server":server,
+                "account_mode":mode,
+                "credential_generation":generation,
+            },
+            bearer=management_session,
+        )
+        assertion = str(step_up.get("assertion") or "")
+        if len(assertion)<100:
+            raise PreflightError("LIVE_STEP_UP_ASSERTION_INVALID")
+
+        _,authorization = authenticated_json(
+            bridge+"/v1/app/live-authorization","POST",
+            {
+                "challenge_id":challenge_id,
+                "typed_confirmation":expected_phrase,
+                "step_up_assertion":assertion,
+            },
+            bearer=app_token,
+        )
+        if authorization.get("authorized") is not True or authorization.get("duration_seconds")!=900:
+            raise PreflightError("LIVE_AUTHORIZATION_NOT_CONFIRMED")
+        expires = str(authorization.get("expires_at") or "")
+        try:
+            expiry = datetime.fromisoformat(expires.replace("Z","+00:00"))
+        except ValueError:
+            raise PreflightError("LIVE_AUTHORIZATION_EXPIRY_INVALID") from None
+        if expiry.tzinfo is None or expiry<=datetime.now(timezone.utc):
+            raise PreflightError("LIVE_AUTHORIZATION_EXPIRY_INVALID")
+        authorized_result = {
+            "authorized":True,"expires_at":expires,"duration_seconds":900,
+            "broker_brand":broker,"login":login,
+        }
+    finally:
+        if management_session:
+            try:
+                authenticated_json(management+"/api/v1/auth/logout","POST",{},bearer=management_session)
+                logout_confirmed = True
+            except PreflightError:
+                logout_confirmed = False
+
+    if authorized_result is None:
+        raise PreflightError("LIVE_AUTHORIZATION_NOT_CONFIRMED")
+    authorized_result["management_session_logout_confirmed"] = logout_confirmed
+    return authorized_result
+
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--management-url", required=True, help="Management API HTTPS origin")
-    p.add_argument("--bridge-url", required=True, help="Persistent Windows Bridge private HTTPS origin")
-    p.add_argument("--public-key-file", type=Path, help="Optional local public PEM to compare with the backend")
-    p.add_argument("--write-public-key", type=Path, help="Optional output path for backend PUBLIC PEM")
-    p.add_argument("--overwrite-public-key", action="store_true")
-    p.add_argument("--broker", action="append", choices=BROKERS, help="Repeat for selected brands; default is all four")
-    a = p.parse_args(argv)
-    try: report = run(a.management_url, a.bridge_url, key_file=a.public_key_file, write_key=a.write_public_key, overwrite=a.overwrite_public_key, brokers=tuple(a.broker or BROKERS))
-    except PreflightError as e:
-        print(json.dumps({"overall_status":"BLOCKED","fatal_code":str(e)}, indent=2)); return 2
-    print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if report["overall_status"] == "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY" else 2
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--management-url",required=True,help="Management API HTTPS origin")
+    parser.add_argument("--bridge-url",required=True,help="Persistent Windows Bridge private HTTPS origin")
+    parser.add_argument("--public-key-file",type=Path,help="Optional local public PEM to compare with the backend")
+    parser.add_argument("--write-public-key",type=Path,help="Optional output path for backend PUBLIC PEM")
+    parser.add_argument("--overwrite-public-key",action="store_true")
+    parser.add_argument("--broker",action="append",choices=BROKERS,help="Repeat for selected brands; default is all four")
+    parser.add_argument("--arm-live",action="store_true",
+        help="After a fully green infrastructure preflight, perform password reauthentication and exact typed LIVE confirmation. Never submits an order.")
+    args = parser.parse_args(argv)
+    try:
+        report = run(args.management_url,args.bridge_url,key_file=args.public_key_file,
+                     write_key=args.write_public_key,overwrite=args.overwrite_public_key,
+                     brokers=tuple(args.broker or BROKERS))
+    except PreflightError as exc:
+        print(json.dumps({"overall_status":"BLOCKED","fatal_code":str(exc)},indent=2))
+        return 2
+    print(json.dumps(report,indent=2,sort_keys=True))
+    if report["overall_status"]!="INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY":
+        return 2
+    if not args.arm_live:
+        return 0
 
-if __name__ == "__main__": raise SystemExit(main())
+    print("This action creates only the existing 15-minute account-bound LIVE authorization lease. It does not place an order.")
+    def credentials() -> tuple[str, str, str]:
+        app_token = os.environ.get("DESTINEDFX_APP_BEARER_TOKEN","").strip()
+        if not app_token:
+            app_token = getpass.getpass("LIVE profile app-pairing bearer token (hidden): ").strip()
+        email = input("DestinedFX management account email: ").strip()
+        password = getpass.getpass("DestinedFX management password (hidden): ")
+        return app_token,email,password
+    def confirm(phrase: str) -> bool:
+        print("Type this exact account-specific phrase:")
+        print(phrase)
+        return hmac.compare_digest(input("> ").strip(),phrase)
+    try:
+        result = arm_live(args.management_url,args.bridge_url,credential_provider=credentials,
+                          confirm_typed_phrase=confirm)
+    except PreflightError as exc:
+        print(json.dumps({"live_authorization":"BLOCKED","code":str(exc)},indent=2))
+        return 2
+    print(json.dumps({"live_authorization":result},indent=2,sort_keys=True))
+    if not result["management_session_logout_confirmed"]:
+        print("WARNING: The LIVE lease was confirmed but Management session logout was not confirmed. Treat the session as potentially active until expiry.")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

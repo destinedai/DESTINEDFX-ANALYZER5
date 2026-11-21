@@ -310,10 +310,13 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         ),
     )
 
-    # Runtime source must still enforce the Linux DEMO-only provisioning gate.
+    # The worker may provision LIVE only when explicitly bound to a persistent
+    # Linux Bridge. Ephemeral Codespaces remains blocked.
     worker_source = (ROOT / "scripts" / "linux-host" / "linux-slot-worker.py").read_text(encoding="utf-8")
-    if 'account.get("account_mode") != "DEMO"' not in worker_source:
-        raise AcceptanceError("LINUX_DEMO_ONLY_GUARD_NOT_FOUND")
+    if ('BRIDGE_HOST_PROFILE' not in worker_source or
+            'BRIDGE_HOST_MODE' not in worker_source or
+            'EPHEMERAL_HOST_LIVE_BLOCKED' not in worker_source):
+        raise AcceptanceError("PERSISTENT_LINUX_LIVE_HOST_GUARD_NOT_FOUND")
 
     checked: list[tuple[int, str, Path]] = []
     for manifest_path, row in active:

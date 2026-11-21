@@ -43,6 +43,31 @@ The paths below are implemented in the app and covered by local fixture/state te
 - Accept the exact DEMO account only after fresh evidence. Verify one complete lifecycle separately: entry, SL/TP, close, history/reconciliation, restart, and emergency STOP.
 - Record a redacted evidence report containing commit SHA, APK/EA/kit checksums, broker brand, account mode, server, timestamps, heartbeat age, and result. Never include passwords, tokens, or private URLs.
 
+## Python LIVE authorization tool
+
+An optional owner-operated Python flow is available in `scripts/live_activation_preflight.py`. It uses the same existing Bridge challenge and Management password-step-up endpoints as the Android flow; it does not create a bypass.
+
+After installing the repository's Python dependencies in a trusted owner-controlled environment, provide the exact user's LIVE profile app-pairing bearer token either through the hidden prompt or through the environment variable `DESTINEDFX_APP_BEARER_TOKEN` from an approved local secret store. Never put that token in the command line, source, shell history, issue reports, or chat. The tool does not extract secrets from Android's encrypted app storage; when the bearer cannot be supplied safely, use the in-app LIVE authorization flow instead.
+
+Run:
+
+```sh
+python scripts/live_activation_preflight.py \
+  --management-url https://<management-api-origin> \
+  --bridge-url https://<private-windows-bridge-origin> \
+  --arm-live
+```
+
+The script refuses to request credentials unless Management readiness, the Ed25519 public-key match, a persistent durable host, configured news provider, verified per-user terminal isolation, two simultaneously active isolated DEMO/LIVE terminal slots, and fresh authenticated MT5 readiness all pass.
+
+A persistent Linux host may use the root-attested per-pairing slot runtime: each pairing is launched under its own non-login Unix identity, private Wine prefix, terminal tree, Xauthority cookie and display. The Bridge and slot worker allow LIVE only when `BRIDGE_HOST_PROFILE=PERSISTENT`, `BRIDGE_HOST_MODE=linux-host`, the root agent reports verified isolation, and the linked DEMO and LIVE terminals are both active. Codespaces remains explicitly `EPHEMERAL` and is DEMO-only. Do not change its host profile or bypass its expiry gate.
+
+The current Windows owner-worker still creates separate `/portable` directories but launches all accounts under the same Windows identity; this does not prove OS-level isolation. Windows LIVE remains blocked until process SIDs/tokens and account-specific ACLs are independently verified. The script then asks for Management account email, hidden password reauthentication, and the exact account-specific `ARM LIVE <BROKER> <LOGIN>` phrase.
+
+On success it reports only the 15-minute account-bound lease expiry and a Management-session logout result. Tokens, passwords and signed assertions remain in memory; authenticated redirects are refused. The script does not submit, retry, close, cancel, or modify any broker order. An unsuccessful Management logout is reported as a warning because the already-issued lease can remain active until its 15-minute expiry.
+
+Do not mark LIVE production-ready merely because this command succeeds: the broker account's own acceptance, risk/news freshness, actual order lifecycle, and operational recovery still need owner verification.
+
 ## LIVE gate
 
 - LIVE is not enabled by login. It requires the existing `ModeArmingPolicy`, fresh exact identity evidence, risk/news/session checks, typed confirmation, an active process-local lease, and a persistent owner host.

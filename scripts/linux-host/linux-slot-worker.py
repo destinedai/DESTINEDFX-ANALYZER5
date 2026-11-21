@@ -513,9 +513,17 @@ def _remove_startup_credentials(reservation: SlotReservation) -> None:
 def _prepare_and_launch(job: dict, reservation: SlotReservation) -> dict[str, int]:
     validated = worker.validate_job(job)
     account = validated["account"]
-    if account.get("account_mode") != "DEMO":
-        # Isolation supports per-user sessions, but new Linux provisioning remains DEMO-only.
-        raise SlotWorkerError("LINUX_LIVE_PROVISIONING_DISABLED")
+    account_mode = account.get("account_mode")
+    if account_mode not in ("DEMO", "LIVE"):
+        raise SlotWorkerError("UNSUPPORTED_ACCOUNT_MODE")
+    # Codespaces stays ephemeral and DEMO-only. LIVE may run through this
+    # worker only when an operator has explicitly provisioned a persistent
+    # Linux Bridge with the root-attested per-pairing slot runtime.
+    if account_mode == "LIVE" and (
+        os.environ.get("BRIDGE_HOST_PROFILE", "EPHEMERAL").strip().upper() != "PERSISTENT"
+        or os.environ.get("BRIDGE_HOST_MODE", "").strip().lower() != "linux-host"
+    ):
+        raise SlotWorkerError("EPHEMERAL_HOST_LIVE_BLOCKED")
     _copy_clean_terminal(reservation)
     _MANAGER.run_as_slot(reservation, ["wineboot", "-u"], timeout=180)
     _copy_ea_and_compile(reservation)
