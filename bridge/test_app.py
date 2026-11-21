@@ -3157,3 +3157,38 @@ def test_phone_position_stop_rejects_changed_position_direction_and_position_id(
     })
     assert mismatched.status_code == 409
     assert mismatched.json()['detail']['code'] == 'POSITION_STOP_IDENTITY_CHANGED'
+
+
+def test_position_stop_unknown_ack_can_only_upgrade_to_final_broker_result(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    quote = _publish_market_order_quote(terminal_headers, actual)
+    _store_test_open_position(pairing, ticket='920006', direction='BUY', stop_loss=1.09000)
+    config = {
+        'account_login':actual['login'],'account_server':actual['server'],'account_mode':'DEMO',
+        'ticket':'920006','position_id':'920006','symbol':'EURUSD','direction':'BUY',
+        'expected_stop_loss':1.09000,'new_stop_loss':1.09500,
+        'expected_bid':quote['expected_bid'],'expected_ask':quote['expected_ask'],
+        'quote_timestamp_ms':quote['quote_timestamp_ms'],
+    }
+    queued = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':config,
+    })
+    assert queued.status_code == 202, queued.text
+    command_id = queued.json()['id']
+
+    unknown = client.post(f'/v1/terminal/commands/{command_id}/ack', headers=terminal_headers, json={
+        'outcome':'UNKNOWN','state':'READY','message':'Broker result awaiting reconciliation',
+    })
+    assert unknown.status_code == 200, unknown.text
+    applied = client.post(f'/v1/terminal/commands/{command_id}/ack', headers=terminal_headers, json={
+        'outcome':'APPLIED','state':'READY','message':'Same position ticket reconciled with requested tighter SL',
+    })
+    assert applied.status_code == 200, applied.text
+    with app.tx() as c:
+        row = c.execute('SELECT ack FROM commands WHERE id=?',(command_id,)).fetchone()
+    assert json.loads(row['ack'])['outcome'] == 'APPLIED'
+
+    downgrade = client.post(f'/v1/terminal/commands/{command_id}/ack', headers=terminal_headers, json={
+        'outcome':'REJECTED','state':'READY','message':'Contradictory final result must be rejected',
+    })
+    assert downgrade.status_code == 409
