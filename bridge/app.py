@@ -23,6 +23,32 @@ from quantitative import STRATEGY_RULESETS, analyze_json
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
 HOST_CONTROL_DIR=os.getenv('DESTINEDFX_HOST_CONTROL_DIR',os.path.join(os.path.dirname(os.path.abspath(DB_PATH)),'runtime'))
+
+
+def secret_value(name):
+    """Resolve a secret from the process environment or a protected systemd credential file."""
+    value=os.getenv(name,'').strip()
+    if value:
+        return value
+    credential=os.getenv(name+'_FILE','').strip()
+    if not credential:
+        return ''
+    fd=None
+    try:
+        fd=os.open(credential,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_CLOEXEC',0))
+        info=os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1
+                or stat.S_IMODE(info.st_mode)&0o077
+                or info.st_uid not in (0,os.geteuid())):
+            return ''
+        with os.fdopen(fd,'r',encoding='utf-8') as stream:
+            fd=None
+            return stream.read(8193).strip()
+    except (OSError,UnicodeError):
+        return ''
+    finally:
+        if fd is not None:
+            os.close(fd)
 def configured_host_profile(value=None):
     """Resolve an explicit host profile; an unspecified deployment is never trusted as persistent."""
     configured=os.getenv('BRIDGE_HOST_PROFILE','EPHEMERAL') if value is None else value
@@ -106,7 +132,7 @@ NEWS_AFTER=int(os.getenv('NEWS_BLACKOUT_AFTER_SECONDS','1800'))
 NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
 NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
-NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
+NEWS_PROVIDER_TOKEN=secret_value('NEWS_PROVIDER_TOKEN')
 
 def news_provider_configuration():
     """Expose a safe readiness flag without revealing provider URL or bearer token."""
@@ -1144,8 +1170,8 @@ def validate_origin(raw, allow_loopback=False):
     return f'{parsed.scheme}://{serialized_host}' + (f':{port}' if port else '')
 
 def managed_config():
-    key=os.getenv('CREDENTIALS_FERNET_KEY','')
-    bootstrap=os.getenv('WORKER_BOOTSTRAP_TOKEN','') or os.getenv('WORKER_TOKEN','')
+    key=secret_value('CREDENTIALS_FERNET_KEY')
+    bootstrap=secret_value('WORKER_BOOTSTRAP_TOKEN') or secret_value('WORKER_TOKEN')
     bridge_url=os.getenv('BRIDGE_BASE_URL','').strip() or os.getenv('RENDER_EXTERNAL_URL','').strip()
     if not key or len(bootstrap)<32 or len(bootstrap)>512 or not validate_origin(bridge_url, allow_loopback=ALLOW_LOOPBACK):
         raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
@@ -1188,7 +1214,7 @@ def fetch_provider_snapshot(symbol, timeframe):
         raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_CONFIGURED','message':'No usable trusted analysis provider is configured'})
     query=urlencode({'symbol':symbol,'timeframe':timeframe})
     headers={'Accept':'application/json'}
-    provider_token=os.getenv('ANALYSIS_PROVIDER_TOKEN','').strip()
+    provider_token=secret_value('ANALYSIS_PROVIDER_TOKEN')
     if provider_token: headers['Authorization']='Bearer '+provider_token
     try:
         request=urllib.request.Request(safe_url+('?' if '?' not in safe_url else '&')+query,headers=headers)
@@ -1278,7 +1304,7 @@ def require_worker_identity(context, worker_id):
         raise HTTPException(403, detail={'code':'WORKER_IDENTITY_MISMATCH','message':'Worker credential is not authorized for this worker'})
 
 def operator_auth(header):
-    bootstrap=os.getenv('WORKER_BOOTSTRAP_TOKEN','').strip()
+    bootstrap=secret_value('WORKER_BOOTSTRAP_TOKEN')
     if not bootstrap or not header or not header.startswith('Bearer ') or not hmac.compare_digest(header[7:].strip(),bootstrap):
         raise HTTPException(401,'Unauthorized')
 def fresh_heartbeat(p):
