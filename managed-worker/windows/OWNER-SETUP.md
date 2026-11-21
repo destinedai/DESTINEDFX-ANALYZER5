@@ -14,7 +14,7 @@ This kit runs the Bridge and MT5 worker on an owner-operated Windows computer. T
 
 ## Accounts and terminals
 
-The installer currently provisions one account/terminal at a time and sets `max_terminals=1`. Never enter a guessed path, guessed server name, or credentials for another account in the current pairing. Use separate account identity, login, server, mode, pairing, and credential state. `worker.example.toml` includes a commented broker-terminal schema example; its sample paths are not verified installations, and this artifact does not claim that a second account has been provisioned or that a terminal is ready. Keep concurrency at one unless terminal isolation and available host resources have been explicitly verified.
+The installer sets `max_terminals` to the measured safe simultaneous terminal capacity (1–4). **LIVE needs at least two simultaneously READY terminal slots** because the Bridge verifies the separately paired DEMO and LIVE profiles together during authorization; a capacity of one is DEMO-only. Measure available RAM, CPU, storage and network headroom with two real MT5 terminals before selecting 2. For concurrent users, size for the intended total terminal count and verify isolation before onboarding them; a capacity number alone is not evidence of multi-user OS isolation. Never enter a guessed path, guessed server name, or credentials for another account in the current pairing. Use separate account identity, login, server, mode, pairing, and credential state. `worker.example.toml` includes a commented broker-terminal schema example; its sample paths are not verified installations, and this artifact does not claim that a second account has been provisioned or that a terminal is ready.
 
 ## Recovery and backups
 
