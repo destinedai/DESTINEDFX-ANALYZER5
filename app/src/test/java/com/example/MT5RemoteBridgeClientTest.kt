@@ -414,8 +414,6 @@ class MT5RemoteBridgeClientTest {
         ).forEach { assertEquals(null, MT5RemoteBridgeClient.validServiceOrigin(it)) }
         assertEquals("https://bridge.realcop.com:443", MT5RemoteBridgeClient.validServiceOrigin(" HTTPS://Bridge.RealCop.com:443/ "))
     }
-}
-
 
     @Test fun phonePositionStopEditAllowsOnlyMonotonicTighteningAndKeepsTpOutOfPayload() {
         val base = phoneMarketOrderSnapshot()
@@ -480,3 +478,4 @@ class MT5RemoteBridgeClientTest {
             MT5RemoteBridgeClient.positionStopTightenConfig(snapshot, "920099", 1.09500)
         }
     }
+}
