@@ -45,7 +45,7 @@ def _read_systemd_credential(env_name: str, *, max_bytes: int = 16384) -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", validate_default=True)
     database_url: SecretStr = SecretStr("")
     session_ttl_seconds: int = 60 * 60 * 24 * 30
     pool_size: int = 5
