@@ -24,13 +24,16 @@ block() { printf 'BLOCKED: %s\n' "$*" >&2; exit 1; }
 
 for rel in \
   bridge/app.py bridge/host_lifecycle.py bridge/quantitative.py bridge/owner_ctl.py bridge/requirements-production.txt \
+  backend/app/config.py backend/app/main.py backend/app/db.py backend/app/models.py backend/app/schemas.py \
+  backend/alembic/env.py backend/alembic.ini backend/requirements.txt \
   managed-worker/worker.py managed-worker/mt5_journal.py mt5-ea/DestinedFXTraderEA.mq5 \
   scripts/linux-host/host-agent.py scripts/linux-host/linux-slot-worker.py scripts/linux-host/linux_isolation.py \
   scripts/linux-host/host_lifecycle.py scripts/linux-host/provision-worker-token.sh \
   scripts/linux-host/Caddyfile \
   scripts/linux-host/systemd/destinedfx-host-agent.service scripts/linux-host/systemd/destinedfx-bridge.service \
   scripts/linux-host/systemd/destinedfx-linux-slot-worker.service \
-  scripts/linux-host/systemd/destinedfx-provision-linux-worker.service scripts/linux-host/systemd/destinedfx-caddy.service; do
+  scripts/linux-host/systemd/destinedfx-provision-linux-worker.service scripts/linux-host/systemd/destinedfx-caddy.service \
+  scripts/linux-host/systemd/destinedfx-postgres.service scripts/linux-host/systemd/destinedfx-management-api.service; do
   [[ -f "$SOURCE_ROOT/$rel" && ! -L "$SOURCE_ROOT/$rel" ]] || block "required source file missing or symlinked: $rel"
 done
 
@@ -44,6 +47,8 @@ import sys
 root = pathlib.Path(sys.argv[1])
 for item in [
     "bridge/app.py", "bridge/host_lifecycle.py", "bridge/quantitative.py", "bridge/owner_ctl.py",
+    "backend/app/config.py", "backend/app/main.py", "backend/app/db.py", "backend/app/models.py",
+    "backend/app/schemas.py", "backend/alembic/env.py",
     "managed-worker/worker.py", "managed-worker/mt5_journal.py",
     "scripts/linux-host/host-agent.py", "scripts/linux-host/linux-slot-worker.py",
     "scripts/linux-host/linux_isolation.py", "scripts/linux-host/host_lifecycle.py",
@@ -56,6 +61,8 @@ units = {
     "bridge": (base / "destinedfx-bridge.service").read_text(),
     "worker": (base / "destinedfx-linux-slot-worker.service").read_text(),
     "provision": (base / "destinedfx-provision-linux-worker.service").read_text(),
+    "postgres": (base / "destinedfx-postgres.service").read_text(),
+    "management": (base / "destinedfx-management-api.service").read_text(),
     "caddy": (base / "destinedfx-caddy.service").read_text(),
 }
 for name, text in units.items():
@@ -72,6 +79,10 @@ assert "LoadCredentialEncrypted=worker-token:" in units["worker"]
 assert "destinedfx-provision-linux-worker.service" in units["worker"]
 assert "LoadCredentialEncrypted=worker-bootstrap-token:" in units["provision"]
 assert "LoadCredentialEncrypted=credentials-fernet-key:" in units["provision"]
+assert "127.0.0.1:5433:5432" in units["postgres"]
+assert "LoadCredentialEncrypted=postgres-password:" in units["postgres"]
+assert "User=destinedfx-api" in units["management"]
+assert "LoadCredentialEncrypted=step-up-private-key-pem:" in units["management"]
 assert "User=caddy" in units["caddy"] and "CAP_NET_BIND_SERVICE" in units["caddy"]
 print("SELF_HOSTED_SOURCE_CHECK_OK")
 PY
@@ -80,6 +91,8 @@ PY
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-bridge.service" \
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-linux-slot-worker.service" \
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-provision-linux-worker.service" \
+      "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-postgres.service" \
+      "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-management-api.service" \
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-caddy.service"
   fi
   say SELF_HOSTED_INSTALL_CHECK_OK
@@ -88,7 +101,7 @@ fi
 
 [[ "$MODE" == "install" ]] || block "usage: install-self-hosted.sh [install|--check]"
 [[ "$EUID" -eq 0 ]] || block "run install-self-hosted.sh as root."
-for cmd in systemctl systemd-creds systemd-analyze install curl visudo findmnt sudo useradd userdel Xvfb xauth wine caddy sqlite3; do
+for cmd in systemctl systemd-creds systemd-analyze install curl visudo findmnt sudo useradd userdel Xvfb xauth wine caddy sqlite3 docker; do
   command -v "$cmd" >/dev/null || block "required command '$cmd' is missing; install Ubuntu runtime packages first."
 done
 VERSION="$(systemctl --version | awk 'NR==1 {print $2}')"
@@ -108,7 +121,7 @@ private_root_file() {
 }
 private_root_file "$HOST_ENV"
 private_root_file "$BRIDGE_ENV"
-for name in credentials-fernet-key worker-bootstrap-token host-agent-token; do
+for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password management-step-up-private-key-pem; do
   private_root_file "$CREDENTIAL_DIR/destinedfx-$name.cred"
 done
 set -a
@@ -119,6 +132,11 @@ set +a
 id "$SERVICE_USER" >/dev/null 2>&1 || block "service account '$SERVICE_USER' is missing; run bootstrap-self-hosted-host.sh."
 OWNER_UID="$(id -u "$SERVICE_USER")"
 OWNER_GID="$(id -g "$SERVICE_USER")"
+API_USER=destinedfx-api
+id "$API_USER" >/dev/null 2>&1 || block "management service account '$API_USER' is missing; run bootstrap-self-hosted-host.sh."
+API_UID="$(id -u "$API_USER")"
+API_GID="$(id -g "$API_USER")"
+[[ "$API_UID" -gt 0 && "$API_GID" -gt 0 ]] || block "Management API service account must not be root."
 [[ "$OWNER_UID" -gt 0 && "$OWNER_GID" -gt 0 ]] || block "Bridge service account must not be root."
 [[ "$DESTINEDFX_HOST_OWNER_UID" == "$OWNER_UID" && "$DESTINEDFX_HOST_OWNER_GID" == "$OWNER_GID" ]] || block "host.env owner UID/GID does not match the Bridge service user."
 [[ "$BRIDGE_HOST_PROFILE" == "PERSISTENT" && "$BRIDGE_HOST_MODE" == "linux-host" && "$EXECUTION_STORAGE_DURABLE" == "true" ]] || block "host.env must select persistent Linux execution."
@@ -128,13 +146,13 @@ OWNER_GID="$(id -g "$SERVICE_USER")"
 MAX_SLOTS="$DESTINEDFX_SLOT_MAX_TERMINALS"
 [[ "$MAX_SLOTS" -ge 2 && "$MAX_SLOTS" -le 8 ]] || block "configure 2..8 isolated slots."
 
-"$PYTHON" - "$BRIDGE_BASE_URL" "$BRIDGE_HOST" "$EXPECTED_FORWARDED_HOST" "$MANAGEMENT_STEP_UP_PUBLIC_KEY_FILE" <<'PY'
+"$PYTHON" - "$BRIDGE_BASE_URL" "$BRIDGE_HOST" "$EXPECTED_FORWARDED_HOST" "$APP_DOMAIN" "$CADDY_EMAIL" "$ADMIN_EMAILS" "$MANAGEMENT_STEP_UP_PUBLIC_KEY_FILE" <<'PY'
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-origin, proxy_host, allowed_host, key_file = sys.argv[1:]
+origin, proxy_host, allowed_host, api_host, caddy_email, admin_email, key_file = sys.argv[1:]
 u = urlsplit(origin)
 host = (u.hostname or "").lower().rstrip(".")
 try:
@@ -147,6 +165,14 @@ if host.endswith(".example.com") or host in {"example.com", "localhost"}:
     raise SystemExit("BLOCKED: replace the sample domain with a hostname controlled by the operator.")
 if host != proxy_host.lower().rstrip(".") or host != allowed_host.lower().rstrip("."):
     raise SystemExit("BLOCKED: BRIDGE_HOST and EXPECTED_FORWARDED_HOST must match BRIDGE_BASE_URL.")
+if not api_host or api_host.lower().rstrip(".") in {"example.com", "localhost"} or api_host.lower().rstrip(".").endswith(".example.com"):
+    raise SystemExit("BLOCKED: APP_DOMAIN must be a real hostname controlled by the operator.")
+if api_host.lower().rstrip(".") == host:
+    raise SystemExit("BLOCKED: APP_DOMAIN and BRIDGE_HOST must be separate HTTPS hostnames.")
+if "@" not in caddy_email or caddy_email.lower().endswith("@example.com"):
+    raise SystemExit("BLOCKED: set a real CADDY_EMAIL for TLS expiry notices.")
+if "@" not in admin_email or admin_email.lower().endswith("@example.com"):
+    raise SystemExit("BLOCKED: set the real initial administrator email in ADMIN_EMAILS.")
 path = Path(key_file)
 if not path.is_file() or path.is_symlink() or path.stat().st_size < 80:
     raise SystemExit("BLOCKED: management backend Ed25519 public key is missing.")
@@ -158,7 +184,7 @@ if not isinstance(key, Ed25519PublicKey):
     raise SystemExit("BLOCKED: management public key must be Ed25519.")
 print("SELF_HOSTED_DOMAIN_AND_MANAGEMENT_KEY_OK")
 PY
-for name in credentials-fernet-key worker-bootstrap-token host-agent-token; do
+for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password management-step-up-private-key-pem; do
   systemd-creds decrypt --name="$name" "$CREDENTIAL_DIR/destinedfx-$name.cred" /dev/null >/dev/null || block "encrypted credential invalid: $name"
 done
 
@@ -187,7 +213,9 @@ if pgrep -af 'terminal64\.exe|terminal\.exe' | grep -v -E 'pgrep -af|install-sel
   block "a MetaTrader process is already running outside the isolated host; reconcile it before migration. No process was stopped."
 fi
 
-install -d -o root -g root -m 0755 "$DEST_ROOT" "$DEST_ROOT/bridge" "$DEST_ROOT/managed-worker" "$DEST_ROOT/mt5-ea" "$DEST_ROOT/scripts/linux-host" "$UNIT_DIR"
+install -d -o root -g root -m 0755 "$DEST_ROOT" "$DEST_ROOT/bridge" "$DEST_ROOT/management" "$DEST_ROOT/managed-worker" "$DEST_ROOT/mt5-ea" "$DEST_ROOT/scripts/linux-host" "$UNIT_DIR"
+install -d -o "$API_UID" -g "$API_GID" -m 0700 /var/lib/destinedfx-api
+install -d -o root -g root -m 0700 /var/lib/destinedfx-management /var/lib/destinedfx-management/postgres
 install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0700 /var/lib/destinedfx /var/lib/destinedfx/host-runtime \
   /var/lib/destinedfx/host-runtime/runtime /var/lib/destinedfx/host-runtime/runtime/slot-runtime \
   /var/lib/destinedfx/host-runtime/isolated-slots
@@ -198,12 +226,19 @@ chmod 0750 "$TEMPLATE"
 
 "$PYTHON" -m venv "$DEST_ROOT/venv" || block "Python virtual environment creation failed; install python3-venv."
 "$DEST_ROOT/venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_ROOT/bridge/requirements-production.txt"
+"$PYTHON" -m venv "$DEST_ROOT/management/venv" || block "Management API Python virtual environment creation failed."
+"$DEST_ROOT/management/venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_ROOT/backend/requirements.txt"
 for rel in app.py host_lifecycle.py quantitative.py owner_ctl.py; do
   install -o root -g root -m 0644 "$SOURCE_ROOT/bridge/$rel" "$DEST_ROOT/bridge/$rel"
 done
 for rel in worker.py mt5_journal.py; do
   install -o root -g root -m 0644 "$SOURCE_ROOT/managed-worker/$rel" "$DEST_ROOT/managed-worker/$rel"
 done
+cp -a "$SOURCE_ROOT/backend/app" "$DEST_ROOT/management/app"
+cp -a "$SOURCE_ROOT/backend/alembic" "$DEST_ROOT/management/alembic"
+install -o root -g root -m 0644 "$SOURCE_ROOT/backend/alembic.ini" "$SOURCE_ROOT/backend/requirements.txt" "$DEST_ROOT/management/"
+chown -R root:root "$DEST_ROOT/management"
+chmod -R a+rX,go-w "$DEST_ROOT/management"
 for rel in host-agent.py linux-slot-worker.py linux_isolation.py host_lifecycle.py provision-worker-token.sh; do
   install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
 done
@@ -217,16 +252,18 @@ chmod 0640 "$BRIDGE_ENV"
 chown root:root "$HOST_ENV"
 chmod 0600 "$HOST_ENV"
 
-for unit in destinedfx-host-agent.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service; do
+for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx-management-api.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service; do
   install -o root -g root -m 0644 "$SCRIPT_DIR/systemd/$unit" "$UNIT_DIR/$unit"
 done
-systemd-analyze verify "$UNIT_DIR/destinedfx-host-agent.service" "$UNIT_DIR/destinedfx-bridge.service" \
+systemd-analyze verify "$UNIT_DIR/destinedfx-host-agent.service" "$UNIT_DIR/destinedfx-postgres.service" \
+  "$UNIT_DIR/destinedfx-management-api.service" "$UNIT_DIR/destinedfx-bridge.service" \
   "$UNIT_DIR/destinedfx-provision-linux-worker.service" "$UNIT_DIR/destinedfx-linux-slot-worker.service" \
   "$UNIT_DIR/destinedfx-caddy.service" || block "systemd unit validation failed."
 systemctl daemon-reload
+systemctl enable --now docker.service
 systemctl disable destinedfx-linux-worker.timer >/dev/null 2>&1 || true
 systemctl disable destinedfx-linux-worker.service destinedfx-mt5.service destinedfx-xvfb.service >/dev/null 2>&1 || true
-for unit in destinedfx-host-agent.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service; do
+for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx-management-api.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service; do
   systemctl enable "$unit" >/dev/null
   systemctl start "$unit"
 done
@@ -242,6 +279,23 @@ done
 curl --fail --silent --max-time 10 "$BRIDGE_BASE_URL/health/live" >/dev/null || block "public HTTPS failed; check DNS, TCP 80/443 and Caddy certificate issuance."
 READY_CODE="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "$BRIDGE_BASE_URL/health/ready" || true)"
 [[ "$READY_CODE" == "200" ]] || block "Bridge /health/ready returned HTTP $READY_CODE; inspect host-agent, Wine, Xvfb, xauth, memory and journals."
+for attempt in $(seq 1 30); do
+  if curl --fail --silent --max-time 5 "https://$APP_DOMAIN/ready" >/dev/null 2>&1; then break; fi
+  sleep 2
+done
+curl --fail --silent --max-time 10 "https://$APP_DOMAIN/health" >/dev/null || block "Management API liveness failed; inspect destinedfx-management-api.service."
+curl --fail --silent --max-time 10 "https://$APP_DOMAIN/ready" >/dev/null || block "Management API database readiness failed; inspect destinedfx-postgres.service."
+KEY_JSON="$(curl --fail --silent --show-error --max-time 10 "https://$APP_DOMAIN/api/v1/auth/bridge-verification-key")" || block "Management API cannot publish its Bridge verification key."
+"$PYTHON" - "$KEY_JSON" <<'PY'
+import json, sys
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    raise SystemExit("BLOCKED: management API verification-key response is not valid JSON.")
+if payload.get("algorithm") != "EdDSA" or payload.get("issuer") != "destinedfx-management" or payload.get("audience") != "destinedfx-bridge" or not str(payload.get("public_key_pem", "")).startswith("-----BEGIN PUBLIC KEY-----"):
+    raise SystemExit("BLOCKED: management API did not publish the expected EdDSA Bridge verification key.")
+print("MANAGEMENT_BRIDGE_VERIFICATION_KEY_OK")
+PY
 say SELF_HOSTED_RUNTIME_INSTALLED
 say "DestinedFX Bridge, root attestation agent, per-user slot worker and local Caddy HTTPS are enabled."
 say "No external execution host was configured. No broker credentials were requested or imported."
