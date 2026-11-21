@@ -24,7 +24,7 @@ import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-/** Android control/status client for the remote MT5 relay. Never places orders. */
+/** Android account-bound control client for a remote MT5 terminal and its managed EA. */
 data class VerifiedBrokerQuote(
     val symbol: String,
     val bid: Double,
@@ -478,9 +478,9 @@ class MT5RemoteBridgeClient(
 
     /** Creates one profile-scoped idempotency key; UNKNOWN is retained for reconciliation, never retried here. */
     suspend fun command(requestId: String, action: String, config: JSONObject = JSONObject()): CommandResult {
-        require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP", "CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL"))
+        require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + TRADE_ACTIONS + OPENING_ACTIONS)
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
-        if (action in TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
+        if (action in COMMAND_TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
             return CommandResult(requestId, false, "REAUTHENTICATION_REQUIRED: authenticate again before this trading action", rejected = true)
         }
         if (action == "EMERGENCY_STOP") {
@@ -488,7 +488,7 @@ class MT5RemoteBridgeClient(
                 ?: return CommandResult(requestId, false, "MODE_POLICY_NOT_CONFIGURED: cannot confirm local disarming", rejected = true)
             policy.emergencyStop()
         }
-        if (action in TRADE_ACTIONS) {
+        if (action in COMMAND_TRADE_ACTIONS) {
             val fresh = try { state() } catch (e: Exception) {
                 return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
             }
@@ -577,7 +577,7 @@ class MT5RemoteBridgeClient(
     }
 
     private fun tradeActionFailure(snapshot: Snapshot, action: String, config: JSONObject): String? {
-        val profileFailure = gateFailure(snapshot, requireLiveAuthorization = false)
+        val profileFailure = gateFailure(snapshot, requireLiveAuthorization = action in OPENING_ACTIONS && accountMode == "LIVE")
         if (profileFailure != null) return profileFailure
         if (!snapshot.snapshotsValid || snapshot.positions == null || snapshot.activeOrders == null) return "Fresh, complete position and pending-order snapshots are required."
         val login = config.optString("account_login")
@@ -597,6 +597,34 @@ class MT5RemoteBridgeClient(
             return out.takeIf { it.isNotEmpty() && it.distinct().size == it.size }
         }
         return when (action) {
+            "PLACE_MARKET_ORDER" -> {
+                if (snapshot.hostProfile != HostProfile.PERSISTENT) return "A persistent owner host is required for a new MT5 market order."
+                val symbol = config.optString("symbol")
+                val side = config.optString("side").uppercase()
+                val risk = config.optDouble("risk_percent", Double.NaN)
+                val sl = config.optDouble("stop_loss", Double.NaN)
+                val tp = config.optDouble("take_profit", Double.NaN)
+                val quote = snapshot.brokerQuotes?.singleOrNull { it.symbol == symbol }
+                    ?: return "The exact selected symbol has no fresh quote from this MT5 terminal."
+                val configured = snapshot.raw.optJSONObject("configuration")?.optJSONArray("symbols")
+                val newsSymbol = configured?.takeIf { it.length() > 0 }?.optString(0).orEmpty()
+                if (symbol.isBlank() || symbol != newsSymbol) return "This EA heartbeat has a fresh news verdict only for its first configured symbol."
+                if (quote.ageMs !in 0..15_000L || quote.timestampMs <= 0L) return "A fresh MT5 broker quote is required."
+                if (side !in setOf("BUY", "SELL") || !risk.isFinite() || risk <= 0.0 || risk > 1.0 ||
+                    !sl.isFinite() || !tp.isFinite() || sl <= 0.0 || tp <= 0.0) return "Order side, risk or protective prices are invalid."
+                val cap = snapshot.raw.optJSONObject("risk_controls")?.optDouble("risk_percent", Double.NaN) ?: Double.NaN
+                if (!cap.isFinite() || risk > cap + 1e-9) return "Requested risk exceeds the current EA-configured per-trade risk cap."
+                val controls = snapshot.raw.optJSONObject("risk_controls")
+                if (controls?.optBoolean("authorized", false) != true || controls.optBoolean("daily_loss_clear", false).not() ||
+                    controls.optBoolean("risk_caps_clear", false).not()) return "Fresh EA daily-risk telemetry is not clear."
+                val maxPositions = controls.optInt("max_concurrent_positions", 0)
+                if (snapshot.positions.orEmpty().size >= maxPositions) return "The configured maximum concurrent-position limit is reached."
+                val news = snapshot.newsVerdict
+                if (news?.optString("status") != "CLEAR") return "Fresh CLEAR economic-calendar evidence is required."
+                val priceOk = if (side == "BUY") sl < quote.ask && quote.ask < tp else tp < quote.bid && quote.bid < sl
+                if (!priceOk) return "Stop-loss and take-profit must be on the correct sides of the current broker quote."
+                null
+            }
             "CANCEL_PENDING_SELECTED" -> {
                 val selected = ticketsOrFailure()
                 when {
@@ -955,6 +983,8 @@ class MT5RemoteBridgeClient(
         }
 
         internal val TRADE_ACTIONS = setOf("CANCEL_PENDING_SELECTED", "CANCEL_EA_PENDING", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")
+        internal val OPENING_ACTIONS = setOf("PLACE_MARKET_ORDER")
+        internal val COMMAND_TRADE_ACTIONS = TRADE_ACTIONS + OPENING_ACTIONS
         private val MAX_UINT64 = BigInteger("18446744073709551615")
 
         /** Parses a non-empty unique list of canonical ticket strings; malformed/float IDs are rejected. */
@@ -986,6 +1016,62 @@ class MT5RemoteBridgeClient(
         }
 
         internal fun serverCommandId(obj: JSONObject): String? = exactIdentifier(obj, "id")
+
+        internal fun marketOrderConfig(
+            snapshot: Snapshot,
+            side: String,
+            stopLoss: Double,
+            takeProfit: Double,
+            riskPercent: Double
+        ): JSONObject {
+            require(snapshot.snapshotsValid && snapshot.heartbeatFresh && snapshot.terminalConnected &&
+                snapshot.accountVerified && snapshot.brokerIdentityVerified && snapshot.tradeAllowed &&
+                snapshot.managedState == "READY" && snapshot.accessType == "MASTER") {
+                "A fresh verified MASTER MT5 terminal snapshot is required before an order."
+            }
+            require(snapshot.hostProfile == HostProfile.PERSISTENT) {
+                "A persistent Windows owner host is required before a market order."
+            }
+            val normalizedSide = side.trim().uppercase()
+            require(normalizedSide in setOf("BUY", "SELL"))
+            require(riskPercent.isFinite() && riskPercent > 0.0 && riskPercent <= 1.0)
+            require(stopLoss.isFinite() && takeProfit.isFinite() && stopLoss > 0.0 && takeProfit > 0.0)
+            val symbols = snapshot.raw.optJSONObject("configuration")?.optJSONArray("symbols")
+            val symbol = symbols?.takeIf { it.length() > 0 }?.optString(0).orEmpty()
+            require(symbol.isNotBlank()) { "The EA has no configured broker symbol." }
+            val quote = snapshot.brokerQuotes?.singleOrNull { it.symbol == symbol }
+                ?: throw IllegalStateException("The first EA-configured symbol has no verified MT5 broker quote.")
+            require(quote.ageMs in 0..15_000L && quote.timestampMs > 0L)
+            val priceOk = if (normalizedSide == "BUY") stopLoss < quote.ask && quote.ask < takeProfit
+                else takeProfit < quote.bid && quote.bid < stopLoss
+            require(priceOk) { "Protective prices must be on the correct sides of the latest broker quote." }
+            val controls = snapshot.raw.optJSONObject("risk_controls")
+                ?: throw IllegalStateException("Fresh EA risk telemetry is unavailable.")
+            val cap = controls.optDouble("risk_percent", Double.NaN)
+            require(cap.isFinite() && riskPercent <= cap + 1e-9) {
+                "Requested risk exceeds the current EA-configured per-trade risk cap."
+            }
+            require(controls.optBoolean("authorized", false) &&
+                controls.optBoolean("daily_loss_clear", false) &&
+                controls.optBoolean("risk_caps_clear", false)) {
+                "Fresh EA daily-risk telemetry is not clear."
+            }
+            require(snapshot.newsVerdict?.optString("status") == "CLEAR") {
+                "Fresh CLEAR economic-calendar evidence is required."
+            }
+            return JSONObject()
+                .put("account_login", snapshot.actualLogin)
+                .put("account_server", snapshot.actualServer)
+                .put("account_mode", snapshot.actualAccountMode)
+                .put("symbol", symbol)
+                .put("side", normalizedSide)
+                .put("risk_percent", riskPercent)
+                .put("stop_loss", stopLoss)
+                .put("take_profit", takeProfit)
+                .put("expected_bid", quote.bid)
+                .put("expected_ask", quote.ask)
+                .put("quote_timestamp_ms", quote.timestampMs)
+        }
 
         internal fun actionConfig(snapshot: Snapshot, action: String, tickets: List<String> = emptyList(), confirmationToken: String = ""): JSONObject {
             require(action in TRADE_ACTIONS)
@@ -1140,7 +1226,19 @@ class MT5RemoteBridgeClient(
 
         internal fun commandPayload(requestId: String, action: String, config: JSONObject = JSONObject()): JSONObject {
             require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
-            require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + TRADE_ACTIONS)
+            require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + COMMAND_TRADE_ACTIONS)
+            if (action in OPENING_ACTIONS) {
+                require(config.optString("account_login").isNotBlank() && config.optString("account_server").isNotBlank() && config.optString("account_mode") in setOf("DEMO", "LIVE"))
+                require(config.optString("symbol").matches(Regex("[A-Za-z0-9._-]{1,32}")) && config.optString("side") in setOf("BUY", "SELL"))
+                val risk = config.optDouble("risk_percent", Double.NaN)
+                val sl = config.optDouble("stop_loss", Double.NaN)
+                val tp = config.optDouble("take_profit", Double.NaN)
+                val bid = config.optDouble("expected_bid", Double.NaN)
+                val ask = config.optDouble("expected_ask", Double.NaN)
+                require(risk.isFinite() && risk > 0.0 && risk <= 1.0 && sl.isFinite() && tp.isFinite() && bid.isFinite() && ask.isFinite())
+                require(sl > 0.0 && tp > 0.0 && bid > 0.0 && ask >= bid && config.optLong("quote_timestamp_ms", 0L) > 0L)
+                require(config.optJSONArray("tickets") == null)
+            }
             if (action in TRADE_ACTIONS) {
                 require(config.optString("account_login").isNotBlank() && config.optString("account_server").isNotBlank() && config.optString("account_mode") in setOf("DEMO", "LIVE"))
                 val tickets = config.optJSONArray("tickets")
