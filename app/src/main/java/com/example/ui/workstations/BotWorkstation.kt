@@ -730,6 +730,24 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                                 )
+                                val selectedStopPosition = (0 until (stopEditPositions?.length() ?: 0))
+                                    .mapNotNull { stopEditPositions?.optJSONObject(it) }
+                                    .singleOrNull { it.optString("ticket") == positionStopTicket }
+                                val selectedStopQuote = selectedStopPosition?.let { position ->
+                                    currentBrokerSnapshot?.brokerQuotes?.singleOrNull { it.symbol == position.optString("symbol") }
+                                }
+                                val proposedStopLoss = positionStopDraft.toDoubleOrNull()
+                                val currentStopLoss = selectedStopPosition?.optDouble("stop_loss", Double.NaN) ?: Double.NaN
+                                val selectedStopSide = selectedStopPosition?.optString("direction")?.uppercase().orEmpty()
+                                val stopSideValid = selectedStopQuote != null &&
+                                    selectedStopQuote.ageMs in 0..15_000L &&
+                                    proposedStopLoss != null && proposedStopLoss.isFinite() && proposedStopLoss > 0.0 &&
+                                    currentStopLoss.isFinite() &&
+                                    if (selectedStopSide == "BUY")
+                                        (currentStopLoss <= 0.0 || proposedStopLoss > currentStopLoss) && proposedStopLoss < selectedStopQuote.bid
+                                    else
+                                        selectedStopSide == "SELL" &&
+                                            (currentStopLoss <= 0.0 || proposedStopLoss < currentStopLoss) && proposedStopLoss > selectedStopQuote.ask
                                 OutlinedTextField(
                                     value = positionStopDraft,
                                     onValueChange = { positionStopDraft = it },
@@ -739,12 +757,17 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                                 )
                                 Button(
-                                    enabled = actionsReady && positionStopTicket.isNotBlank() &&
-                                        positionStopDraft.toDoubleOrNull()?.let { it.isFinite() && it > 0.0 } == true &&
+                                    enabled = actionsReady && selectedStopPosition != null && stopSideValid && (selectedAccountMode != "LIVE" || verifiedRemoteSnapshotForBot?.liveAuthorized == true) &&
                                         !bridgeCommandPending,
                                     modifier = Modifier.fillMaxWidth().testTag("mt5_position_stop_review"),
                                     onClick = { showPositionStopConfirm = true }
                                 ) { Text("REVIEW TIGHTER STOP", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                                if (selectedAccountMode == "LIVE" && verifiedRemoteSnapshotForBot?.liveAuthorized != true) {
+                                    Text("LIVE PROTECTION EDIT BLOCKED · arm the current account-bound LIVE lease first.", color = WarningAmber, fontSize = 9.sp)
+                                }
+                                if (positionStopTicket.isNotBlank() && selectedStopPosition == null) {
+                                    Text("The selected ticket is not in the current verified open-position snapshot.", color = WarningAmber, fontSize = 9.sp)
+                                }
                             }
                         }
                         if (showPositionStopConfirm) AlertDialog(
@@ -752,7 +775,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             title = { Text("Confirm stop-loss tightening?") },
                             text = {
                                 Text(
-                                    "This request can only move the selected position's SL closer to market or establish a missing SL. It cannot widen/remove a stop or change TP. The Windows EA will re-check the exact ticket, current SL, broker quote and stop/freeze levels before applying it."
+                                    "\${selectedBrokerBrand} \${selectedAccountMode} · \${currentBrokerSnapshot?.actualLogin} @ \${currentBrokerSnapshot?.actualServer}\n" +
+                                    "\${selectedStopSide} \${selectedStopPosition?.optString("symbol", "—")} · ticket \${positionStopTicket}\n" +
+                                    "Current SL \${currentStopLoss} → proposed SL \${positionStopDraft}\n" +
+                                    "TP \${selectedStopPosition?.optString("take_profit", "unavailable")} will remain unchanged.\n\n" +
+                                    "This request can only tighten protection. It cannot widen/remove a stop or change TP. The Windows EA re-checks both position identifiers, current SL, broker quote and stop/freeze levels before applying it."
                                 )
                             },
                             confirmButton = {
