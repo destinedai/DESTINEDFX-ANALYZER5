@@ -355,7 +355,7 @@ def test_journal_failure_contracts_fail_closed_before_ack_or_submission():
     assert commands.index("if(!PersistProcessed())", commands.index("g_ackOutcomes[intent]=outcome")) < commands.index("Ack(id,outcome,msg,results)")
     assert 'if(!SaveCursor())' in commands and 'g_cursor=previousCursor' in commands
     assert 'g_ackOutcomes[ai]=="IN_PROGRESS"' in commands and 'was not re-applied' in commands
-    assert 'if(g_sigExecutionState=="SUBMISSION_INTENT"' in scan
+    assert "if(PhoneTradeOutcomeUnresolved())" in scan
 
 
 def test_real_terminal_fixes_are_fail_closed_and_telemetry_is_authoritative():
