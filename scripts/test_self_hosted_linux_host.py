@@ -18,15 +18,14 @@ def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path
 
     source = tmp_path / "bridge.env"
     output = tmp_path / "public-endpoints.json"
-    source.write_text(
-        "BRIDGE_BASE_URL=https://bridge.destinedfx.example.org\\n"
-        "BRIDGE_HOST=bridge.destinedfx.example.org\\n"
-        "EXPECTED_FORWARDED_HOST=bridge.destinedfx.example.org\\n"
-        "APP_DOMAIN=api.destinedfx.example.org\\n"
-        "ADMIN_EMAILS=owner@example.org\\n"
-        "WORKER_TOKEN=must-not-be-copied\\n",
-        encoding="utf-8",
-    )
+    source.write_text("\\n".join([
+        "BRIDGE_BASE_URL=https://bridge.destinedfx.example.org",
+        "BRIDGE_HOST=bridge.destinedfx.example.org",
+        "EXPECTED_FORWARDED_HOST=bridge.destinedfx.example.org",
+        "APP_DOMAIN=api.destinedfx.example.org",
+        "ADMIN_EMAILS=owner@example.org",
+        "WORKER_TOKEN=must-not-be-copied",
+    ]) + "\\n", encoding="utf-8")
     helper = LINUX_HOST / "public-endpoints.py"
     result = subprocess.run([sys.executable, str(helper), "--source", str(source), "--output", str(output)],
                             capture_output=True, text=True)
@@ -40,13 +39,12 @@ def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path
     assert "WORKER_TOKEN" not in output.read_text(encoding="utf-8")
     assert output.stat().st_mode & 0o777 == 0o644
 
-    source.write_text(
-        "BRIDGE_BASE_URL=https://bridge.example.com\\n"
-        "BRIDGE_HOST=bridge.example.com\\n"
-        "EXPECTED_FORWARDED_HOST=bridge.example.com\\n"
-        "APP_DOMAIN=api.destinedfx.example.org\\n",
-        encoding="utf-8",
-    )
+    source.write_text("\\n".join([
+        "BRIDGE_BASE_URL=https://bridge.example.com",
+        "BRIDGE_HOST=bridge.example.com",
+        "EXPECTED_FORWARDED_HOST=bridge.example.com",
+        "APP_DOMAIN=api.destinedfx.example.org",
+    ]) + "\\n", encoding="utf-8")
     blocked = subprocess.run([sys.executable, str(helper), "--source", str(source), "--output", str(output)],
                              capture_output=True, text=True)
     assert blocked.returncode != 0
