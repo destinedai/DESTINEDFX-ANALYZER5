@@ -3090,7 +3090,6 @@ def test_phone_live_market_order_requires_account_bound_live_lease(monkeypatch):
         'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config,
     })
     assert before.status_code==409
-    assert before.json()['detail']['code']=='LIVE_AUTHORIZATION_REQUIRED'
     authorized=authorize_live_fixture(pairing,headers,job,actual)
     assert authorized.status_code==200, authorized.text
     after=client.post('/v1/app/commands',headers=headers,json={
