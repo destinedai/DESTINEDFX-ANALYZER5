@@ -403,7 +403,7 @@ bool ExecutePhoneMarketOrder(string cfg,string requestId,string &outcome,string 
    g_sigOrder="";
    g_sigCommandId="";
    g_sigPosition="";
-   g_sigRequestedVolume=0
+   g_sigRequestedVolume=0;
    g_sigExecutedVolume=0;
    g_sigActualEntry=0;
    g_sigSubmittedAt=0;
@@ -545,7 +545,7 @@ bool ExecutePhonePositionStopTighten(string cfg,string requestId,string commandI
    g_sigDeal="";
    g_sigOrder="";
    g_sigCommandId=commandId;
-   g_sigPosition=(string)ticket
+   g_sigPosition=(string)ticket;
    g_sigRequestedVolume=0;
    g_sigExecutedVolume=0;
    g_sigSubmittedAt=TimeGMT();
