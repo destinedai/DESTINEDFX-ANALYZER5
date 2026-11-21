@@ -2972,3 +2972,71 @@ def test_phone_market_order_rejects_ephemeral_host_and_investor_profile(monkeypa
     })
     assert blocked.status_code == 409
     assert blocked.json()['detail']['code'] == 'PERSISTENT_HOST_REQUIRED'
+
+
+def _store_test_open_position(pairing, *, ticket='920001', direction='BUY', stop_loss=1.09000):
+    with app.tx(True) as c:
+        row=c.execute('SELECT heartbeat FROM pairings WHERE id=?',(pairing['pairing_id'],)).fetchone()
+        assert row and row['heartbeat']
+        heartbeat=json.loads(row['heartbeat'])
+        heartbeat['open_positions']=[{
+            'ticket':ticket,'position_id':ticket,'symbol':'EURUSD','direction':direction,
+            'volume':0.10,'price_open':1.08000 if direction=='BUY' else 1.12000,
+            'price_current':1.10000,'stop_loss':stop_loss,
+            'take_profit':1.13000 if direction=='BUY' else 1.07000,
+            'profit':1.0,'swap':0.0,'commission':0.0,
+        }]
+        c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',
+                  (json.dumps(heartbeat,separators=(',',':')),pairing['pairing_id']))
+
+
+def test_phone_position_stop_command_only_allows_a_tighter_buy_stop(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    quote = _publish_market_order_quote(terminal_headers, actual)
+    _store_test_open_position(pairing, ticket='920001', direction='BUY', stop_loss=1.09000)
+    config = {
+        'account_login':actual['login'],'account_server':actual['server'],'account_mode':'DEMO',
+        'ticket':'920001','position_id':'920001','symbol':'EURUSD','direction':'BUY',
+        'expected_stop_loss':1.09000,'new_stop_loss':1.09500,
+        'expected_bid':quote['expected_bid'],'expected_ask':quote['expected_ask'],
+        'quote_timestamp_ms':quote['quote_timestamp_ms'],
+    }
+    request_id=str(uuid.uuid4())
+    response=client.post('/v1/app/commands',headers=headers,json={
+        'request_id':request_id,'action':'TIGHTEN_POSITION_SL','config':config,
+    })
+    assert response.status_code==202, response.text
+    assert response.json()['action']=='TIGHTEN_POSITION_SL'
+    assert response.json()['config']['new_stop_loss']==1.09500
+    assert 'take_profit' not in response.json()['config']
+
+    wider={**config,'new_stop_loss':1.08500}
+    blocked=client.post('/v1/app/commands',headers=headers,json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':wider,
+    })
+    assert blocked.status_code==422
+    assert blocked.json()['detail']['code']=='POSITION_STOP_MUST_TIGHTEN'
+
+
+def test_phone_position_stop_command_only_allows_a_tighter_sell_stop_and_exact_ticket(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    quote = _publish_market_order_quote(terminal_headers, actual)
+    _store_test_open_position(pairing, ticket='920002', direction='SELL', stop_loss=1.11000)
+    config = {
+        'account_login':actual['login'],'account_server':actual['server'],'account_mode':'DEMO',
+        'ticket':'920002','position_id':'920002','symbol':'EURUSD','direction':'SELL',
+        'expected_stop_loss':1.11000,'new_stop_loss':1.10500,
+        'expected_bid':quote['expected_bid'],'expected_ask':quote['expected_ask'],
+        'quote_timestamp_ms':quote['quote_timestamp_ms'],
+    }
+    ok=client.post('/v1/app/commands',headers=headers,json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':config,
+    })
+    assert ok.status_code==202, ok.text
+
+    wrong_ticket={**config,'ticket':'920099','position_id':'920099'}
+    missing=client.post('/v1/app/commands',headers=headers,json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':wrong_ticket,
+    })
+    assert missing.status_code==409
+    assert missing.json()['detail']['code']=='POSITION_STOP_TICKET_CHANGED'
