@@ -441,6 +441,21 @@ class MT5RemoteBridgeClientTest {
             "2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18", "TIGHTEN_POSITION_SL", config
         )
         assertEquals("TIGHTEN_POSITION_SL", payload.getString("action"))
+
+        val sellPosition = JSONObject()
+            .put("ticket", "920002")
+            .put("position_id", "920002")
+            .put("symbol", "EURUSD")
+            .put("direction", "SELL")
+            .put("stop_loss", 1.11000)
+            .put("take_profit", 1.07000)
+        val sellSnapshot = snapshot.copy(raw = JSONObject()
+            .put("configuration", JSONObject().put("symbols", JSONArray().put("EURUSD")))
+            .put("risk_controls", base.raw.optJSONObject("risk_controls"))
+            .put("open_positions", JSONArray().put(sellPosition)))
+        val sellConfig = MT5RemoteBridgeClient.positionStopTightenConfig(sellSnapshot, "920002", 1.10500)
+        assertEquals("SELL", sellConfig.getString("direction"))
+        assertEquals(1.10500, sellConfig.getDouble("new_stop_loss"), 0.0000001)
     }
 
     @Test fun phonePositionStopEditRejectsLooseningWrongSideAndUnknownTicket() {
