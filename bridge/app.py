@@ -3151,6 +3151,8 @@ def issue_position_stop_command(x,p):
     if HOST_PROFILE!='PERSISTENT':
         raise HTTPException(409,detail={'code':'PERSISTENT_HOST_REQUIRED','message':'Position protection edits require the persistent owner host'})
     managed,beat=destructive_context(p)
+    if managed['account_mode']=='LIVE' and not live_authorization_valid(p,managed,beat):
+        raise HTTPException(409,detail={'code':'LIVE_AUTHORIZATION_REQUIRED','message':'A current account-bound LIVE lease is required before changing a real-money position stop'})
     cfg=x.config
     account=beat.get('account') or {}
     if any((cfg.get('account_login')!=account.get('login'),
