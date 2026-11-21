@@ -21,7 +21,7 @@ Environment=PYTHONPATH=/opt/destinedfx/bridge:/opt/destinedfx/managed-worker
 LoadCredentialEncrypted=host-agent-token:/etc/credstore.encrypted/destinedfx-host-agent-token.cred
 LoadCredentialEncrypted=credentials-fernet-key:/etc/credstore.encrypted/destinedfx-credentials-fernet-key.cred
 LoadCredentialEncrypted=worker-bootstrap-token:/etc/credstore.encrypted/destinedfx-worker-bootstrap-token.cred
-ExecStart=/opt/destinedfx/venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers --timeout-keep-alive 5 --limit-concurrency 100
+ExecStart=/opt/destinedfx/venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1 --timeout-keep-alive 5 --limit-concurrency 100
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
