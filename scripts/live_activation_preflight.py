@@ -220,8 +220,8 @@ def authenticated_json(url: str, method: str, payload: dict[str, Any] | None = N
     return status,value
 
 
-def arm_live(management_url: str, bridge_url: str, *, app_token: str,
-             management_email: str, management_password: str,
+def arm_live(management_url: str, bridge_url: str, *,
+             credential_provider: Callable[[], tuple[str, str, str]],
              confirm_typed_phrase: Callable[[str], bool]) -> dict[str, Any]:
     """Create only the existing 15-minute LIVE lease after all server-side gates pass.
 
@@ -231,6 +231,10 @@ def arm_live(management_url: str, bridge_url: str, *, app_token: str,
     report = run(management_url,bridge_url)
     if report.get("overall_status") != "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY":
         raise PreflightError("LIVE_INFRASTRUCTURE_PREFLIGHT_BLOCKED")
+    try:
+        app_token, management_email, management_password = credential_provider()
+    except Exception:
+        raise PreflightError("LIVE_AUTH_INPUT_UNAVAILABLE") from None
     if not app_token or not management_email or not management_password:
         raise PreflightError("LIVE_AUTH_INPUT_MISSING")
     management = base_url(management_url,"MANAGEMENT")
@@ -350,18 +354,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print("This action creates only the existing 15-minute account-bound LIVE authorization lease. It does not place an order.")
-    app_token = os.environ.get("DESTINEDFX_APP_BEARER_TOKEN","").strip()
-    if not app_token:
-        app_token = getpass.getpass("LIVE profile app-pairing bearer token (hidden): ").strip()
-    email = input("DestinedFX management account email: ").strip()
-    password = getpass.getpass("DestinedFX management password (hidden): ")
+    def credentials() -> tuple[str, str, str]:
+        app_token = os.environ.get("DESTINEDFX_APP_BEARER_TOKEN","").strip()
+        if not app_token:
+            app_token = getpass.getpass("LIVE profile app-pairing bearer token (hidden): ").strip()
+        email = input("DestinedFX management account email: ").strip()
+        password = getpass.getpass("DestinedFX management password (hidden): ")
+        return app_token,email,password
     def confirm(phrase: str) -> bool:
         print("Type this exact account-specific phrase:")
         print(phrase)
         return hmac.compare_digest(input("> ").strip(),phrase)
     try:
-        result = arm_live(args.management_url,args.bridge_url,app_token=app_token,
-                          management_email=email,management_password=password,
+        result = arm_live(args.management_url,args.bridge_url,credential_provider=credentials,
                           confirm_typed_phrase=confirm)
     except PreflightError as exc:
         print(json.dumps({"live_authorization":"BLOCKED","code":str(exc)},indent=2))
