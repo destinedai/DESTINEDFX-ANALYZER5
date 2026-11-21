@@ -3395,9 +3395,23 @@ def acknowledge(command_id:int,x:Ack,authorization:str|None=Header(default=None)
             c.execute('UPDATE commands SET ack=? WHERE id=?',(ack,command_id))
             return {'id':command_id,'acknowledged':True}
         expected_state={'START':'RUNNING','RESUME':'RUNNING','PAUSE':'PAUSED','STOP':'STOPPED','EMERGENCY_STOP':'STOPPED'}.get(r['action'])
-        if x.outcome=='APPLIED' and x.state!=expected_state: raise HTTPException(422,'Applied acknowledgement state does not match command action')
+        if x.outcome=='APPLIED' and expected_state is not None and x.state!=expected_state:
+            raise HTTPException(422,'Applied acknowledgement state does not match command action')
+        prior_ack=json.loads(r['ack']) if r['ack'] else None
+        if prior_ack:
+            prior_outcome=prior_ack.get('outcome')
+            if prior_outcome in ('APPLIED','REJECTED'):
+                if x.outcome!=prior_outcome:
+                    raise HTTPException(409,'Final command acknowledgement cannot be changed')
+                return {'id':command_id,'acknowledged':True}
+            if prior_outcome=='UNKNOWN':
+                if x.outcome=='UNKNOWN':
+                    return {'id':command_id,'acknowledged':True}
+                if x.outcome not in ('APPLIED','REJECTED'):
+                    raise HTTPException(409,'UNKNOWN acknowledgement can only be upgraded to a final result')
+            else:
+                raise HTTPException(409,'Stored command acknowledgement is invalid; manual reconciliation is required')
         ack=json.dumps({'outcome':x.outcome,'state':x.state,'message':x.message},separators=(',',':'))
-        if r['ack'] and r['ack']!=ack: raise HTTPException(409,'Command already acknowledged differently')
         c.execute('UPDATE commands SET ack=? WHERE id=?',(ack,command_id))
     return {'id':command_id,'acknowledged':True}
 @app.post('/v1/terminal/heartbeat')
