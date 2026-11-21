@@ -16,6 +16,7 @@ class RemoteControllerPreflightTests(unittest.TestCase):
         checks = preflight.source_checks(ROOT)
         self.assertTrue(checks, "source checks must not be empty")
         self.assertEqual([], [item for item in checks if item["status"] != "PASS"])
+        self.assertIn("phone_position_stop_tightening_path", {item["name"] for item in checks})
         report = preflight.build_report(ROOT)
         self.assertEqual("SOURCE_READY_RUNTIME_NOT_CHECKED", report["overall_status"])
         self.assertTrue(any("No broker passwords" in item for item in report["non_actions"]))
