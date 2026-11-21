@@ -2857,8 +2857,17 @@ def create_live_challenge(authorization:str|None=Header(default=None)):
             (challenge_id,p['id'],digest(challenge_id),acceptance['id'],link['demo_pairing_id'],managed['broker_brand'],
              beat['account']['login'],beat['account']['server'],beat['account']['company'],
              job['worker_id'],worker['generation'],HOST_GENERATION,managed['credential_generation'] or '',expires,now_epoch))
-    return {'pairing_id':p['id'],'challenge_id':challenge_id,'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc)),
-            'typed_confirmation':f"ARM LIVE {managed['broker_brand']} {beat['account']['login']}"}
+    return {
+        'pairing_id':p['id'],
+        'challenge_id':challenge_id,
+        'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc)),
+        'typed_confirmation':f"ARM LIVE {managed['broker_brand']} {beat['account']['login']}",
+        'broker_brand':managed['broker_brand'],
+        'login':beat['account']['login'],
+        'server':beat['account']['server'],
+        'account_mode':managed['account_mode'],
+        'credential_generation':managed['credential_generation'] or '',
+    }
 
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
