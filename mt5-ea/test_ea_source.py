@@ -74,6 +74,7 @@ def test_ea_source_contract_and_balanced_delimiters():
         "processed command retains original ack": "Ack(id,g_ackOutcomes[ai],g_ackMessages[ai])" in source and "g_ackOutcomes[intent]=outcome" in source and "g_ackOutcomes[intent]=\"IN_PROGRESS\"" in source,
         "persistent daily equity": "GlobalVariableSet(equityKey,equity)" in source and "AccountInfoDouble(ACCOUNT_EQUITY)" in source,
         "rates readiness": "CopyRates(syms[si],mtf,0,80,hr)<50" in source and "MarketReady(syms[si],mtf)" in source,
+        "phone advertised weekly timeframe supported by EA": 'if(s=="W1")return PERIOD_W1;' in source,
         "trade permission readiness": "!MQLInfoInteger(MQL_TRADE_ALLOWED)||!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)" in source and "!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)" in source,
         "structured signal object": "LastSignalJson()" in source and '"last_signal\\":%s' in source and "ORDER_ACCEPTED" in source and "REJECTED" in source,
         "heartbeat reports active arrays": "JsonArray(g_symbols)" in source and "JsonArray(g_tfs)" in source and "g_riskPercent,g_dailyLossPercent,g_maxConcurrent" in source,
