@@ -1,23 +1,29 @@
 [Unit]
-Description=DestinedFX read-only Linux host agent
+Description=DestinedFX root-attested Linux MT5 host agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=destinedfx
-Group=destinedfx
+User=root
+Group=root
 WorkingDirectory=/opt/destinedfx
 EnvironmentFile=-/etc/destinedfx/host.env
-ExecStart=/usr/bin/python3 /opt/destinedfx/scripts/linux-host/host-agent.py
+Environment=HOST_AGENT_TOKEN_FILE=%d/host-agent-token
+LoadCredentialEncrypted=host-agent-token:/etc/credstore.encrypted/destinedfx-host-agent-token.cred
+ExecStart=/opt/destinedfx/venv/bin/python /opt/destinedfx/scripts/linux-host/host-agent.py --host 127.0.0.1 --port 8787
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
 ReadOnlyPaths=/proc /sys
-ReadWritePaths=/var/lib/destinedfx
+ReadWritePaths=/var/lib/destinedfx/host-runtime
 
 [Install]
 WantedBy=multi-user.target
