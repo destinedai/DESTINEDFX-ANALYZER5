@@ -61,6 +61,47 @@ def demo_pass_document(login='600001',server='Broker-Demo',broker='FBS',
     return app.json.dumps(evidence,separators=(',',':'))
 
 
+
+def seed_demo_soak_evidence(pairing,actual,worker_id='worker-demo'):
+    """Seed deterministic server-observed rows for contract tests only."""
+    today=app.now().astimezone(app.timezone.utc).date()
+    account_digest=app.demo_soak_account_digest(actual)
+    now_epoch=time.time()
+    rows=[]
+    for index in range(6):
+        day=today-app.timedelta(days=5-index)
+        if day==today:
+            last=now_epoch
+            first=max(app.datetime.combine(day,app.time(0,0),tzinfo=app.timezone.utc).timestamp(),last-120)
+        else:
+            first=app.datetime.combine(day,app.time(12,0),tzinfo=app.timezone.utc).timestamp()
+            last=first+120
+        instance='ea-instance-alpha' if index<3 else 'ea-instance-beta'
+        rows.append((pairing['pairing_id'],day.isoformat(),first,last,24,20,20,20,
+                     app.json.dumps([instance]),account_digest,'demo-generation',worker_id,1,app.HOST_GENERATION,0))
+    now_epoch=time.time()
+    with app.tx(True) as c:
+        c.executemany('''INSERT INTO demo_soak_daily(
+            pairing_id,day_utc,first_seen,last_seen,heartbeat_count,risk_clear_count,
+            news_clear_count,reconciliation_count,ea_instance_ids,account_digest,
+            credential_generation,worker_id,worker_generation,host_generation,invalid
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',rows)
+        deal={
+            'ticket':'990001','position_id':'880001','symbol':'EURUSD',
+            'closed_at':app.iso(),'profit':1.25,'commission':0.0,'swap':0.0,'fees':0.0,
+        }
+        payload={
+            'kind':'closed_position','account':actual,'deals':[deal],'positions':[],
+            'signal':{'order':'770001','deal':'990001','position':'880001'},
+            'closed_volume':0.01,'remaining_volume':0.0,'lifecycle':'CLOSED',
+        }
+        c.execute('''INSERT INTO trade_ledger(
+            pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,
+            direction,status,payload,first_seen,updated
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (pairing['pairing_id'],'position:880001','DEMO','880001','770001','990001',
+             'EURUSD','BUY','CLOSED',app.json.dumps(payload,separators=(',',':')),now_epoch,now_epoch))
+
 def demo_pass_context(pairing,worker_id='worker-demo'):
     return {
         'pairing_id':pairing['pairing_id'],
@@ -320,6 +361,9 @@ def managed_env(monkeypatch):
         c.execute('DELETE FROM managed_accounts')
         c.execute('DELETE FROM live_challenges')
         c.execute('DELETE FROM live_profile_links')
+        c.execute('DELETE FROM demo_soak_daily')
+        c.execute('DELETE FROM trade_ledger_events')
+        c.execute('DELETE FROM trade_ledger')
         c.execute('DELETE FROM demo_acceptances')
         c.execute('DELETE FROM rate')
         c.execute('DELETE FROM ip_guard')
@@ -1233,6 +1277,7 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     demo_job,demo_th,demo_actual=_ready_test_profile(
         demo_pairing,demo_headers,demo_worker,'worker-demo','600001','Broker-Demo','DEMO','demo-test-password'
     )
+    seed_demo_soak_evidence(demo_pairing,demo_actual,'worker-demo')
     demo_digest='a'*64
     demo_evidence_context=demo_pass_context(demo_pairing,'worker-demo')
     pass_document=demo_pass_document(**demo_evidence_context)
@@ -1304,6 +1349,19 @@ def test_managed_account_registration_requires_current_pairing_owner(monkeypatch
     assert current.status_code==202
 
 
+def test_demo_acceptance_rejects_self_asserted_soak_without_server_records(monkeypatch):
+    managed_env(monkeypatch)
+    pairing,headers=managed_pair()
+    worker=_test_worker('worker-demo-no-soak')
+    _ready_test_profile(pairing,headers,worker,'worker-demo-no-soak',
+                        '600001','Broker-Demo','DEMO','demo-test-password')
+    document=demo_pass_document(**demo_pass_context(pairing,'worker-demo-no-soak'))
+    response=client.post('/v1/app/demo-acceptance',headers=headers,json={
+        'confirm_demo':True,'evidence_document':document,
+    })
+    assert response.status_code==409, response.text
+    assert response.json()['detail']['code']=='DEMO_PASS_EVIDENCE_MISMATCH'
+
 def test_demo_acceptance_server_rejects_forged_or_mismatched_pass_documents(monkeypatch):
     managed_env(monkeypatch)
     pairing,headers=managed_pair()
@@ -1312,6 +1370,7 @@ def test_demo_acceptance_server_rejects_forged_or_mismatched_pass_documents(monk
         pairing,headers,worker,'worker-demo-evidence','600001','Broker-Demo','DEMO','demo-test-password'
     )
     evidence_context=demo_pass_context(pairing,'worker-demo-evidence')
+    seed_demo_soak_evidence(pairing,actual,'worker-demo-evidence')
     semantic_mismatches=[
         demo_pass_document(**{**evidence_context,'broker':'EXNESS'}),
         demo_pass_document(**{**evidence_context,'login':'999999'}),
@@ -1348,8 +1407,9 @@ def test_demo_pass_acceptance_digest_is_computed_from_exact_document(monkeypatch
     managed_env(monkeypatch)
     pairing,headers=managed_pair()
     worker=_test_worker('worker-demo-digest')
-    _ready_test_profile(pairing,headers,worker,'worker-demo-digest',
+    _,_,actual=_ready_test_profile(pairing,headers,worker,'worker-demo-digest',
                         '600001','Broker-Demo','DEMO','demo-test-password')
+    seed_demo_soak_evidence(pairing,actual,'worker-demo-digest')
     document=demo_pass_document(**demo_pass_context(pairing,'worker-demo-digest'))
     response=client.post('/v1/app/demo-acceptance',headers=headers,json={
         'confirm_demo':True,'evidence_document':document,
