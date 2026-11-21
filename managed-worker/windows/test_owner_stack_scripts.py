@@ -86,6 +86,7 @@ def test_windows_supervisor_configures_a_real_news_calendar_by_default():
     # owner host nevertheless needs an actual provider configured by default.
     assert "if ([string]::IsNullOrWhiteSpace($env:NEWS_PROVIDER_URL))" in SUPERVISOR
     assert "$env:NEWS_PROVIDER_URL='https://showmytrades.com/api/public/calendar/v1'" in SUPERVISOR
+    assert "$ready.news_provider_configured -eq $true" in SUPERVISOR
     assert SUPERVISOR.index("$env:NEWS_PROVIDER_URL='https://showmytrades.com/api/public/calendar/v1'") < SUPERVISOR.index("Start-ManagedChild 'bridge'")
     cleanup = SUPERVISOR.split("finally {", 1)[-1]
     assert "'NEWS_PROVIDER_URL'" in cleanup
