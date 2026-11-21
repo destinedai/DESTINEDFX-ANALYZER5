@@ -20,6 +20,8 @@ def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
     assert '$BRIDGE_BASE_URL/health/ready' in installer
     assert "bridge-verification-key" in installer
     assert "destinedfx-linux-slot-worker.service" in installer
+    assert "accept_two_user_runtime.py" in installer
+    assert "backup.sh" in installer and "restore-test.sh" in installer
 
 
 def test_public_ingress_is_only_caddy_and_backend_services_are_loopback():
@@ -77,3 +79,11 @@ def test_caddy_host_template_does_not_embed_vendor_hosts_or_secrets():
     assert "RAILWAY" not in caddy
     assert "POSTGRES_PASSWORD=" not in env
     assert "WORKER_BOOTSTRAP_TOKEN=" not in env
+
+def test_two_user_acceptance_defaults_to_persistent_host_state():
+    acceptance = (LINUX_HOST / "accept_two_user_runtime.py").read_text()
+    assert "DESTINEDFX_HOST_OWNER_UID" in acceptance
+    assert "DESTINEDFX_HOST_STATE_DIR" in acceptance
+    assert "/var/lib/destinedfx/host-runtime" in acceptance or "args.state_dir" in acceptance
+    assert "persistent self-hosted Linux runtime validation" in acceptance
+    assert "read-only live Codespaces host validation" not in acceptance
