@@ -1066,6 +1066,9 @@ class MT5RemoteBridgeClient(
             require(snapshot.hostProfile == HostProfile.PERSISTENT) {
                 "A persistent Windows owner host is required before editing position protection."
             }
+            if (snapshot.actualAccountMode == "LIVE") require(snapshot.liveAuthorized) {
+                "A current account-bound LIVE lease is required before editing a real-money position stop."
+            }
             require(ticket.matches(Regex("[1-9][0-9]{0,19}")) && newStopLoss.isFinite() && newStopLoss > 0.0) {
                 "A canonical position ticket and finite positive stop price are required."
             }
