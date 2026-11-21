@@ -691,6 +691,24 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
 
                         val stopEditPositions = (currentBrokerSnapshot?.raw?.optJSONArray("open_positions") ?: currentBrokerSnapshot?.raw?.optJSONArray("positions"))
+                                val selectedStopPosition = (0 until (stopEditPositions?.length() ?: 0))
+                                    .mapNotNull { stopEditPositions?.optJSONObject(it) }
+                                    .singleOrNull { it.optString("ticket") == positionStopTicket }
+                                val selectedStopQuote = selectedStopPosition?.let { position ->
+                                    currentBrokerSnapshot?.brokerQuotes?.singleOrNull { it.symbol == position.optString("symbol") }
+                                }
+                                val proposedStopLoss = positionStopDraft.toDoubleOrNull()
+                                val currentStopLoss = selectedStopPosition?.optDouble("stop_loss", Double.NaN) ?: Double.NaN
+                                val selectedStopSide = selectedStopPosition?.optString("direction")?.uppercase().orEmpty()
+                                val stopSideValid = selectedStopQuote != null &&
+                                    selectedStopQuote.ageMs in 0..15_000L &&
+                                    proposedStopLoss != null && proposedStopLoss.isFinite() && proposedStopLoss > 0.0 &&
+                                    currentStopLoss.isFinite() &&
+                                    if (selectedStopSide == "BUY")
+                                        (currentStopLoss <= 0.0 || proposedStopLoss > currentStopLoss) && proposedStopLoss < selectedStopQuote.bid
+                                    else
+                                        selectedStopSide == "SELL" &&
+                                            (currentStopLoss <= 0.0 || proposedStopLoss < currentStopLoss) && proposedStopLoss > selectedStopQuote.ask
                         Card(
                             modifier = Modifier.fillMaxWidth().testTag("mt5_position_stop_tighten_card"),
                             colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
@@ -734,24 +752,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                                 )
-                                val selectedStopPosition = (0 until (stopEditPositions?.length() ?: 0))
-                                    .mapNotNull { stopEditPositions?.optJSONObject(it) }
-                                    .singleOrNull { it.optString("ticket") == positionStopTicket }
-                                val selectedStopQuote = selectedStopPosition?.let { position ->
-                                    currentBrokerSnapshot?.brokerQuotes?.singleOrNull { it.symbol == position.optString("symbol") }
-                                }
-                                val proposedStopLoss = positionStopDraft.toDoubleOrNull()
-                                val currentStopLoss = selectedStopPosition?.optDouble("stop_loss", Double.NaN) ?: Double.NaN
-                                val selectedStopSide = selectedStopPosition?.optString("direction")?.uppercase().orEmpty()
-                                val stopSideValid = selectedStopQuote != null &&
-                                    selectedStopQuote.ageMs in 0..15_000L &&
-                                    proposedStopLoss != null && proposedStopLoss.isFinite() && proposedStopLoss > 0.0 &&
-                                    currentStopLoss.isFinite() &&
-                                    if (selectedStopSide == "BUY")
-                                        (currentStopLoss <= 0.0 || proposedStopLoss > currentStopLoss) && proposedStopLoss < selectedStopQuote.bid
-                                    else
-                                        selectedStopSide == "SELL" &&
-                                            (currentStopLoss <= 0.0 || proposedStopLoss < currentStopLoss) && proposedStopLoss > selectedStopQuote.ask
                                 OutlinedTextField(
                                     value = positionStopDraft,
                                     onValueChange = { positionStopDraft = it },
