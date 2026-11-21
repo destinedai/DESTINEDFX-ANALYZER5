@@ -124,9 +124,14 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
         news_ready = config.get("news_provider_configured") is True
         checks.append({"name":"news_calendar_provider","status":"PASS" if news_ready else "BLOCKED","code":"NEWS_PROVIDER_CONFIGURED" if news_ready else "NEWS_PROVIDER_NOT_CONFIGURED","provider_kind":config.get("news_provider_kind","unconfigured")})
         linux_mode = config.get("linux_host_mode") is True
-        checks.append({"name":"persistent_live_host_type","status":"BLOCKED" if linux_mode else "PASS","code":"LINUX_HOST_MODE_DEMO_ONLY" if linux_mode else "WINDOWS_OR_MANAGED_HOST"})
         isolation_status = config.get("multi_user_terminal_isolation")
         isolation_ready = isolation_status == "VERIFIED"
+        persistent_live_host = persistent and (not linux_mode or isolation_ready)
+        checks.append({
+            "name":"persistent_live_host_type",
+            "status":"PASS" if persistent_live_host else "BLOCKED",
+            "code":"PERSISTENT_ISOLATED_LINUX_HOST" if linux_mode and persistent_live_host else "PERSISTENT_WINDOWS_OR_MANAGED_HOST" if persistent_live_host else "EPHEMERAL_HOST_OR_UNVERIFIED_LINUX_ISOLATION",
+        })
         checks.append({"name":"multi_user_terminal_isolation","status":"PASS" if isolation_ready else "BLOCKED","code":"PER_USER_ISOLATION_VERIFIED" if isolation_ready else "MULTI_USER_OS_ISOLATION_NOT_VERIFIED"})
         active_slots = config.get("isolated_slots")
         max_slots = config.get("max_isolated_slots")
