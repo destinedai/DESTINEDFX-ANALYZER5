@@ -252,6 +252,46 @@ def linux_slot_isolation(host):
     return isolation if isinstance(isolation, dict) else {}
 
 
+def require_live_host_isolation(minimum_active_slots=2):
+    """Require a persistent host and verified independent OS slots for LIVE.
+
+    Linux LIVE is admitted only through the root-attested per-pairing Unix slot
+    runtime. The current Windows owner worker has not proved distinct Windows
+    security principals, so its production result remains fail-closed.
+    """
+    if HOST_PROFILE != 'PERSISTENT':
+        raise HTTPException(409, detail={
+            'code': 'EPHEMERAL_HOST_LIVE_BLOCKED',
+            'message': 'LIVE authorization requires a persistent execution host',
+        })
+    if LINUX_HOST_MODE:
+        host = linux_host_report()
+        isolation = linux_slot_isolation(host)
+        active = isolation.get('active_slots')
+        maximum = isolation.get('max_slots')
+        valid_active = isinstance(active, int) and not isinstance(active, bool)
+        valid_maximum = isinstance(maximum, int) and not isinstance(maximum, bool)
+        if isolation.get('enabled') is not True or isolation.get('ready') is not True:
+            raise HTTPException(503, detail={
+                'code': 'PER_USER_TERMINAL_ISOLATION_REQUIRED',
+                'message': 'The root host agent has not verified isolated per-user MT5 terminals',
+            })
+        if not valid_maximum or maximum < 2 or not valid_active or active < minimum_active_slots:
+            raise HTTPException(409, detail={
+                'code': 'LIVE_ISOLATION_CAPACITY_NOT_READY',
+                'message': 'LIVE requires two simultaneously active, root-attested MT5 terminal slots for the linked DEMO and LIVE profiles',
+                'active_slots': active if valid_active else 0,
+                'max_slots': maximum if valid_maximum else 0,
+            })
+        return isolation
+    if not _isolation_evidence_verified():
+        raise HTTPException(409, detail={
+            'code': 'MULTI_USER_OS_ISOLATION_NOT_VERIFIED',
+            'message': 'This Windows worker has not proved separate per-user process identities and account ACLs',
+        })
+    return {}
+
+
 def host_agent_slot_request(path, payload):
     """Request root-only validation of a reserved or running per-user MT5 slot."""
     if not LINUX_HOST_MODE or not path.startswith('/internal/slot/'):
@@ -1309,6 +1349,10 @@ def live_authorization_valid(p, managed, beat, now_epoch=None):
     now_epoch = time.time() if now_epoch is None else now_epoch
     if not p or not managed or managed['revoked'] or managed['access_type'] != 'MASTER':
         return False
+    try:
+        require_live_host_isolation(minimum_active_slots=2)
+    except HTTPException:
+        return False
     if managed['account_mode'] != 'LIVE' or not beat:
         return False
     if not execution_state_eligible(beat) or not beat.get('terminal_connected') or not beat.get('trade_allowed'):
@@ -1620,13 +1664,18 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
     if LINUX_HOST_MODE:
         host=linux_host_report()
         isolation=linux_slot_isolation(host)
-        if not isolation.get('enabled') or not isolation.get('ready'):
-            raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user MT5 slot capacity'})
-        # The isolated Linux slot worker is DEMO-only regardless of host profile.
-        # In particular, EPHEMERAL Codespaces must be able to enrol DEMO profiles,
-        # but LIVE must be rejected before credential encryption/storage or job creation.
-        if x.account_mode != 'DEMO':
-            raise HTTPException(409,detail={'code':'LINUX_HOST_DEMO_ONLY','message':'This isolated Linux MT5 worker accepts DEMO profiles only; LIVE requires a separately approved persistent Windows host'})
+        if isolation.get('enabled') is not True or isolation.get('ready') is not True:
+            raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user terminal slot capacity'})
+        # Ephemeral Codespaces remain DEMO-only. Persistent Linux may enrol a
+        # LIVE profile only when it can host the separate DEMO and LIVE slots.
+        if x.account_mode == 'LIVE':
+            if HOST_PROFILE != 'PERSISTENT':
+                raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE account provisioning is unavailable on ephemeral hosts'})
+            maximum=isolation.get('max_slots')
+            active=isolation.get('active_slots',0)
+            if (not isinstance(maximum,int) or isinstance(maximum,bool) or maximum < 2 or
+                    not isinstance(active,int) or isinstance(active,bool) or active >= maximum):
+                raise HTTPException(409,detail={'code':'LIVE_REQUIRES_TWO_ISOLATED_TERMINALS','message':'A persistent isolated Linux host needs capacity for separate DEMO and LIVE MT5 terminals','active_slots':active if isinstance(active,int) and not isinstance(active,bool) else 0,'max_slots':maximum if isinstance(maximum,int) and not isinstance(maximum,bool) else 0})
     p=auth(authorization,'app')
     if not x_management_identity:
         raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate to the DestinedFX management account before registering broker credentials'})
@@ -2834,9 +2883,8 @@ def revoke_demo_acceptance(authorization:str|None=Header(default=None)):
 
 @app.post('/v1/app/live-challenge')
 def create_live_challenge(authorization:str|None=Header(default=None)):
-    if HOST_PROFILE=='EPHEMERAL':
-        raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE authorization is unavailable on ephemeral hosts'})
     require_durable_execution()
+    require_live_host_isolation(minimum_active_slots=2)
     p=auth(authorization,'app')
     managed,job,worker,beat=_current_ready_context(p,'LIVE')
     if managed['access_type']!='MASTER':
@@ -2871,9 +2919,8 @@ def create_live_challenge(authorization:str|None=Header(default=None)):
 
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
-    if HOST_PROFILE=='EPHEMERAL':
-        raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE authorization is unavailable on ephemeral hosts'})
     require_durable_execution()
+    require_live_host_isolation(minimum_active_slots=2)
     p=auth(authorization,'app')
     with tx(True) as c:
         challenge=c.execute('SELECT * FROM live_challenges WHERE id=? AND challenge_hash=? AND pairing_id=?',
