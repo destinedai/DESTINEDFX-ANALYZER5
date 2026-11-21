@@ -2848,3 +2848,127 @@ def test_host_stop_rechecks_backup_and_clears_gate_when_state_changes(monkeypatc
     with app.tx() as c:
         row = c.execute("SELECT value FROM host_control WHERE key='shutdown_prepared'").fetchone()
     assert row is None
+
+
+def _market_order_ready_profile(monkeypatch, mode='DEMO'):
+    if mode == 'LIVE':
+        pairing, headers, worker, job, terminal_headers, actual = live_ready(monkeypatch)
+        return pairing, headers, worker, job, terminal_headers, actual
+    managed_env(monkeypatch)
+    pairing, headers = managed_pair()
+    worker = _test_worker('worker-phone-market-demo')
+    job, terminal_headers, actual = _ready_test_profile(
+        pairing, headers, worker, 'worker-phone-market-demo',
+        '630001', 'Broker-Demo', 'DEMO', 'demo-market-password'
+    )
+    return pairing, headers, worker, job, terminal_headers, actual
+
+
+def _publish_market_order_quote(terminal_headers, actual, *,
+                                symbol='EURUSD', bid=1.10000, ask=1.10020,
+                                age_ms=0, risk_percent=0.25):
+    now_ms = int(time.time() * 1000)
+    beat = heartbeat_data(
+        account={**actual, 'balance':10000, 'equity':10000,
+                 'margin':0, 'free_margin':10000, 'margin_level':0, 'leverage':100},
+        configuration={
+            'strategy':'ict-silver-bullet', 'symbols':[symbol],
+            'risk_percent':risk_percent, 'max_daily_loss_percent':2.0,
+            'max_concurrent_positions':2, 'daily_risk_status':'NORMAL',
+            'daily_loss_used_percent':10.0,
+        },
+        broker_quotes=[{
+            'symbol':symbol, 'bid':bid, 'ask':ask, 'digits':5,
+            'timestamp_ms':now_ms-age_ms,
+        }],
+    )
+    response = client.post('/v1/terminal/heartbeat', headers=terminal_headers, json=beat)
+    assert response.status_code == 200, response.text
+    return {'symbol':symbol,'side':'BUY','risk_percent':0.25,
+            'stop_loss':bid-0.01000,'take_profit':ask+0.02000,
+            'expected_bid':bid,'expected_ask':ask,'quote_timestamp_ms':now_ms-age_ms,
+            'account_login':actual['login'],'account_server':actual['server'],
+            'account_mode':actual['account_mode']}
+
+
+def test_demo_phone_market_order_is_validated_queued_and_idempotent(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    config = _publish_market_order_quote(terminal_headers, actual)
+    request_id = str(uuid.uuid4())
+    payload = {'request_id':request_id,'action':'PLACE_MARKET_ORDER','config':config}
+
+    response = client.post('/v1/app/commands', headers=headers, json=payload)
+    assert response.status_code == 202, response.text
+    result = response.json()
+    assert result['action'] == 'PLACE_MARKET_ORDER'
+    assert result['status'] == 'queued'
+    assert result['config']['account_mode'] == 'DEMO'
+    assert result['config']['symbol'] == 'EURUSD'
+    assert result['config']['side'] == 'BUY'
+    assert 'volume' not in result['config']
+    assert result['config']['expires_at_epoch'] <= int(time.time()) + 21
+
+    repeated = client.post('/v1/app/commands', headers=headers, json=payload)
+    assert repeated.status_code == 202, repeated.text
+    assert repeated.json()['id'] == result['id']
+    commands = client.get('/v1/terminal/commands', headers=terminal_headers)
+    assert commands.status_code == 200
+    queued = [row for row in commands.json()['commands'] if row['request_id'] == request_id]
+    assert len(queued) == 1 and queued[0]['action'] == 'PLACE_MARKET_ORDER'
+
+
+def test_live_phone_market_order_requires_current_account_bound_live_lease(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'LIVE')
+    config = _publish_market_order_quote(terminal_headers, actual)
+    request_id = str(uuid.uuid4())
+    payload = {'request_id':request_id,'action':'PLACE_MARKET_ORDER','config':config}
+
+    blocked = client.post('/v1/app/commands', headers=headers, json=payload)
+    assert blocked.status_code == 409
+    assert blocked.json()['detail']['code'] == 'LIVE_AUTHORIZATION_REQUIRED'
+
+    authorization = authorize_live_fixture(pairing, headers, job, actual)
+    assert authorization.status_code == 200, authorization.text
+    queued = client.post('/v1/app/commands', headers=headers, json=payload)
+    assert queued.status_code == 202, queued.text
+    assert queued.json()['config']['account_mode'] == 'LIVE'
+
+
+def test_phone_market_order_rejects_wrong_symbol_price_side_risk_and_stale_quote(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    good = _publish_market_order_quote(terminal_headers, actual)
+
+    wrong_symbol = {**good, 'symbol':'GBPUSD'}
+    assert client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':wrong_symbol
+    }).json()['detail']['code'] == 'MARKET_ORDER_NEWS_SYMBOL_UNVERIFIED'
+
+    bad_risk = {**good, 'risk_percent':0.30}
+    response = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':bad_risk
+    })
+    assert response.status_code == 422
+
+    bad_protection = {**good, 'stop_loss':1.10100}
+    response = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':bad_protection
+    })
+    assert response.status_code == 422
+
+    stale = _publish_market_order_quote(terminal_headers, actual, age_ms=20_000)
+    response = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':stale
+    })
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'MARKET_ORDER_QUOTE_CHANGED'
+
+
+def test_phone_market_order_rejects_ephemeral_host_and_investor_profile(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    config = _publish_market_order_quote(terminal_headers, actual)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
+    blocked = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config
+    })
+    assert blocked.status_code == 409
+    assert blocked.json()['detail']['code'] == 'PERSISTENT_HOST_REQUIRED'
