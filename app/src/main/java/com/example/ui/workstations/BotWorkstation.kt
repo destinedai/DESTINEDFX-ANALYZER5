@@ -53,6 +53,8 @@ import com.destinedfx.core.strategy.StrategyRegistry
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import com.example.data.trade.MT5RemoteBridgeClient
+import com.example.data.trade.sortedVerifiedBrokerQuotes
+import com.example.data.trade.verifiedBrokerSpread
 import com.example.util.TradeReportManager
 import com.example.service.DerivDemoBotService
 import com.example.data.deriv.DerivMultiplierRules
