@@ -1540,7 +1540,7 @@ def record_demo_soak_heartbeat(c,p,managed,job,worker,payload,received,day_utc):
         not math.isfinite(float(started_at_ms)) or started_at_ms<=0 or started_at_ms>received*1000+60000):
         return
     account_digest=demo_soak_account_digest(payload.get('account') or {})
-    worker_id=str(job.get('worker_id') or '')
+    worker_id=str(job['worker_id'] or '')
     worker_generation=int(worker['generation'])
     credential_generation=str(managed['credential_generation'] or '')
     host_generation=HOST_GENERATION
