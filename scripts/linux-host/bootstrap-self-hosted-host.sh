@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="/etc/destinedfx"
 CRED_DIR="/etc/credstore.encrypted"
-SERVICE_USER="${DESTINEDFX_SERVICE_USER:-destinedfx}"
+SERVICE_USER=destinedfx
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "BLOCKED: run bootstrap-self-hosted-host.sh as root." >&2
@@ -35,8 +35,14 @@ if ! id "$API_USER" >/dev/null 2>&1; then
 fi
 API_UID="$(id -u "$API_USER")"
 API_GID="$(id -g "$API_USER")"
-if [[ "$API_UID" -le 0 || "$API_GID" -le 0 ]]; then
-  echo "BLOCKED: management API service identity must not be root." >&2
+IFS=: read -r _ _ _ _ _ BRIDGE_HOME BRIDGE_SHELL < <(getent passwd "$SERVICE_USER")
+IFS=: read -r _ _ _ _ _ API_HOME API_SHELL < <(getent passwd "$API_USER")
+if [[ "$OWNER_UID" -le 0 || "$OWNER_GID" -le 0 || "$BRIDGE_HOME" != "/var/lib/destinedfx" || "$BRIDGE_SHELL" != "/usr/sbin/nologin" ]]; then
+  echo "BLOCKED: Bridge service identity must be non-root, nologin, and own /var/lib/destinedfx." >&2
+  exit 4
+fi
+if [[ "$API_UID" -le 0 || "$API_GID" -le 0 || "$API_HOME" != "/var/lib/destinedfx-api" || "$API_SHELL" != "/usr/sbin/nologin" ]]; then
+  echo "BLOCKED: management API identity must be non-root, nologin, and own /var/lib/destinedfx-api." >&2
   exit 4
 fi
 if [[ "$OWNER_UID" -le 0 || "$OWNER_GID" -le 0 ]]; then
