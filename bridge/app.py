@@ -3187,6 +3187,8 @@ def issue_position_stop_command(x,p):
     if (not isinstance(symbol,str) or not symbol or direction not in ('BUY','SELL') or
         not finite_number(current_stop,True)):
         raise HTTPException(409,'The selected MT5 position snapshot is incomplete')
+    if cfg.get('symbol')!=symbol or str(cfg.get('direction','')).upper()!=direction:
+        raise HTTPException(409,detail={'code':'POSITION_STOP_IDENTITY_CHANGED','message':'The selected position symbol or direction changed; refresh before editing'})
     quotes=fresh_terminal_broker_quotes(beat)
     quote_matches=[q for q in quotes if q['symbol']==symbol and q['timestamp_ms']==quote_timestamp]
     if len(quote_matches)!=1:
@@ -3208,25 +3210,8 @@ def issue_position_stop_command(x,p):
     position_id=snapshot_ticket(position.get('position_id') or ticket)
     if not position_id:
         raise HTTPException(409,'The selected position identity is unavailable')
-    with tx() as c:
-        unresolved=c.execute('''SELECT 1 FROM command_items i JOIN commands cmd ON cmd.id=i.command_id
-            WHERE cmd.pairing_id=? AND i.target_id=? AND i.operational_status IN ('PENDING','PARTIAL')
-            AND (cmd.ack IS NOT NULL OR cmd.expires_at>?) LIMIT 1''',(p['id'],position_id,time.time())).fetchone()
-        pending_stops=c.execute("SELECT config,ack FROM commands WHERE pairing_id=? AND action='TIGHTEN_POSITION_SL' AND expires_at>?",(p['id'],time.time())).fetchall()
-        matching_stop=False
-        for pending in pending_stops:
-            try:
-                ack_outcome=json.loads(pending['ack']).get('outcome') if pending['ack'] else None
-                pending_ticket=json.loads(pending['config']).get('ticket')
-            except Exception:
-                ack_outcome=None; pending_ticket=''
-            if pending_ticket==ticket and ack_outcome!='REJECTED':
-                matching_stop=True
-                break
-    if unresolved:
-        raise HTTPException(409,'A close or other unresolved operation is already queued for this position')
-    if matching_stop:
-        raise HTTPException(409,detail={'code':'POSITION_STOP_ALREADY_PENDING','message':'A stop-tightening request for this exact position is still unresolved; do not submit another'})
+    if cfg.get('position_id')!=position_id:
+        raise HTTPException(409,detail={'code':'POSITION_STOP_IDENTITY_CHANGED','message':'The selected broker position identifier changed; refresh before editing'})
     now_epoch=time.time()
     expiry=now_epoch+20
     queued_config={
@@ -3239,6 +3224,20 @@ def issue_position_stop_command(x,p):
     serialized=json.dumps(queued_config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
         _require_host_accepting_commands(c)
+        unresolved=c.execute('''SELECT 1 FROM command_items i JOIN commands cmd ON cmd.id=i.command_id
+            WHERE cmd.pairing_id=? AND i.target_id=? AND i.operational_status IN ('PENDING','PARTIAL')
+            AND (cmd.ack IS NOT NULL OR cmd.expires_at>?) LIMIT 1''',(p['id'],position_id,time.time())).fetchone()
+        if unresolved:
+            raise HTTPException(409,'A close or other unresolved operation is already queued for this position')
+        pending_stops=c.execute("SELECT config,ack FROM commands WHERE pairing_id=? AND action='TIGHTEN_POSITION_SL' AND expires_at>?",(p['id'],time.time())).fetchall()
+        for pending in pending_stops:
+            try:
+                ack_outcome=json.loads(pending['ack']).get('outcome') if pending['ack'] else None
+                pending_ticket=json.loads(pending['config']).get('ticket')
+            except Exception:
+                ack_outcome=None; pending_ticket=''
+            if pending_ticket==ticket and ack_outcome!='REJECTED':
+                raise HTTPException(409,detail={'code':'POSITION_STOP_ALREADY_PENDING','message':'A stop-tightening request for this exact position is still unresolved; do not submit another'})
         concurrent=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
         if concurrent:
             if concurrent['action']!=x.action or concurrent['request_config']!=raw_config:
