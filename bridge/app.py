@@ -1483,8 +1483,8 @@ def snapshot_ticket(value):
 def destructive_context(p):
     linux_host_report()
     with tx() as c:
-        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
-        job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
+        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc,credential_generation FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        job=c.execute("SELECT status,worker_id FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
     beat=fresh_heartbeat(p)
     if (not managed or managed['revoked'] or managed['access_type']!='MASTER' or managed['account_mode'] not in ('DEMO','LIVE')
         or not p['consumed'] or not beat or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,managed['account_mode'],beat)
@@ -1521,6 +1521,66 @@ def heartbeat_news_clear(beat, symbols=None):
     if not isinstance(verdict,dict) or str(verdict.get('status','')).upper()!='CLEAR': return False
     ok,_=validate_news_verdict(verdict, (symbols or [None])[0] if symbols else None)
     return ok
+
+
+def demo_soak_account_digest(account):
+    identity={key:str((account or {}).get(key) or '') for key in ('login','server','company','currency','account_mode')}
+    raw=json.dumps(identity,sort_keys=True,separators=(',',':'))
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def record_demo_soak_heartbeat(c,p,managed,job,worker,payload,received,day_utc):
+    """Accumulate server-observed, identity-bound daily evidence from a fresh EA heartbeat."""
+    configuration=payload.get('configuration') if isinstance(payload.get('configuration'),dict) else {}
+    instance_id=configuration.get('ea_instance_id')
+    started_at_ms=configuration.get('ea_started_at_ms')
+    if (not isinstance(instance_id,str) or not 8<=len(instance_id)<=128 or
+        any(ord(ch)<32 or ord(ch)==127 for ch in instance_id) or
+        isinstance(started_at_ms,bool) or not isinstance(started_at_ms,(int,float)) or
+        not math.isfinite(float(started_at_ms)) or started_at_ms<=0 or started_at_ms>received*1000+60000):
+        return
+    account_digest=demo_soak_account_digest(payload.get('account') or {})
+    worker_id=str(job.get('worker_id') or '')
+    worker_generation=int(worker['generation'])
+    credential_generation=str(managed['credential_generation'] or '')
+    host_generation=HOST_GENERATION
+    if not (worker_id and credential_generation and host_generation):
+        return
+    risk_clear=bool(live_risk_controls(payload).get('authorized'))
+    news_clear=bool(heartbeat_news_clear(payload))
+    snapshots_reconciled=all(isinstance(payload.get(key),list) for key in ('open_positions','active_orders','closed_deals'))
+    existing=c.execute('SELECT * FROM demo_soak_daily WHERE pairing_id=? AND day_utc=?',(p['id'],day_utc)).fetchone()
+    if existing:
+        identity_matches=(existing['account_digest']==account_digest and existing['credential_generation']==credential_generation and
+            existing['worker_id']==worker_id and existing['worker_generation']==worker_generation and existing['host_generation']==host_generation)
+        if not identity_matches or existing['invalid']:
+            c.execute('UPDATE demo_soak_daily SET invalid=1,last_seen=? WHERE pairing_id=? AND day_utc=?',(received,p['id'],day_utc))
+            return
+        try:
+            instance_ids=json.loads(existing['ea_instance_ids'])
+            if not isinstance(instance_ids,list) or not all(isinstance(value,str) for value in instance_ids):
+                raise ValueError('invalid EA instance list')
+        except (TypeError,ValueError,json.JSONDecodeError):
+            c.execute('UPDATE demo_soak_daily SET invalid=1,last_seen=? WHERE pairing_id=? AND day_utc=?',(received,p['id'],day_utc))
+            return
+        if instance_id not in instance_ids:
+            instance_ids.append(instance_id)
+        c.execute('''UPDATE demo_soak_daily SET last_seen=?,heartbeat_count=heartbeat_count+1,
+                     risk_clear_count=risk_clear_count+?,news_clear_count=news_clear_count+?,
+                     reconciliation_count=reconciliation_count+?,ea_instance_ids=?
+                     WHERE pairing_id=? AND day_utc=?''',
+                  (received,int(risk_clear),int(news_clear),int(snapshots_reconciled),
+                   json.dumps(instance_ids,separators=(',',':')),p['id'],day_utc))
+    else:
+        c.execute('''INSERT INTO demo_soak_daily(
+                     pairing_id,day_utc,first_seen,last_seen,heartbeat_count,risk_clear_count,
+                     news_clear_count,reconciliation_count,ea_instance_ids,account_digest,
+                     credential_generation,worker_id,worker_generation,host_generation,invalid
+                     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)''',
+                  (p['id'],day_utc,received,received,1,int(risk_clear),int(news_clear),
+                   int(snapshots_reconciled),json.dumps([instance_id],separators=(',',':')),
+                   account_digest,credential_generation,worker_id,worker_generation,host_generation))
+
 
 @app.post('/v1/app/managed-account',status_code=202)
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None),
@@ -3036,7 +3096,14 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
         if (managed and not managed['revoked'] and managed['access_type']=='MASTER' and managed['account_mode']==x.account.account_mode
             and broker_company_matches(managed['broker_brand'],x.account.company)
             and job and job['status']=='READY' and x.terminal_connected and terminal_identity_matches(p,managed['account_mode'],payload)):
+            received=time.time()
+            ingest_trade_ledger(c,p['id'],x.account.account_mode,payload,received)
             reconcile_command_items(c,p['id'],payload,seq)
+            worker=c.execute('SELECT generation,status,expires_at FROM worker_identities WHERE worker_id=?',(job['worker_id'],)).fetchone() if job['worker_id'] else None
+            if (x.account.account_mode=='DEMO' and worker and worker['status']=='ACTIVE' and
+                worker['expires_at']>received and x.state in ('READY','RUNNING') and x.trade_allowed and
+                managed['credential_generation']):
+                record_demo_soak_heartbeat(c,p,managed,job,worker,payload,received,dt.astimezone(timezone.utc).date().isoformat())
         # Heartbeats establish terminal telemetry only.  A heartbeat must never
         # promote a provisioning job: after lease expiry, an old terminal could
         # otherwise mark a job reclaimed by another worker as READY.  Only the
