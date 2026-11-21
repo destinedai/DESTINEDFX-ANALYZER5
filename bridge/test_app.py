@@ -2934,6 +2934,51 @@ def test_live_phone_market_order_requires_current_account_bound_live_lease(monke
     assert queued.json()['config']['account_mode'] == 'LIVE'
 
 
+
+def _set_terminal_trade_execution_state(pairing, execution_state):
+    with app.tx(True) as c:
+        row=c.execute('SELECT heartbeat FROM pairings WHERE id=?',(pairing['pairing_id'],)).fetchone()
+        assert row and row['heartbeat']
+        heartbeat=app.json.loads(row['heartbeat'])
+        heartbeat['last_signal']={
+            'state':'ORDER_ACCEPTED',
+            'signal_key':'MANUAL-prior-request',
+            'execution_state':execution_state,
+        }
+        c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',
+                  (app.json.dumps(heartbeat,separators=(',',':')),pairing['pairing_id']))
+
+
+def test_phone_market_order_fails_closed_when_terminal_trade_is_unresolved(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    config=_publish_market_order_quote(terminal_headers,actual)
+    _set_terminal_trade_execution_state(pairing,'ORDER_SUBMITTED')
+    response=client.post('/v1/app/commands',headers=headers,json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config,
+    })
+    assert response.status_code==409, response.text
+    assert response.json()['detail']['code']=='TERMINAL_TRADE_OUTCOME_UNRESOLVED'
+
+
+def test_phone_position_stop_fails_closed_when_terminal_order_is_unresolved(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    quote=_publish_market_order_quote(terminal_headers,actual)
+    _store_test_open_position(pairing,ticket='920010',direction='BUY',stop_loss=1.09000)
+    _set_terminal_trade_execution_state(pairing,'PARTIALLY_FILLED')
+    config={
+        'account_login':actual['login'],'account_server':actual['server'],'account_mode':'DEMO',
+        'ticket':'920010','position_id':'920010','symbol':'EURUSD','direction':'BUY',
+        'expected_stop_loss':1.09000,'new_stop_loss':1.09500,
+        'expected_bid':quote['expected_bid'],'expected_ask':quote['expected_ask'],
+        'quote_timestamp_ms':quote['quote_timestamp_ms'],
+    }
+    response=client.post('/v1/app/commands',headers=headers,json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':config,
+    })
+    assert response.status_code==409, response.text
+    assert response.json()['detail']['code']=='TERMINAL_TRADE_OUTCOME_UNRESOLVED'
+
+
 def test_phone_market_order_rejects_wrong_symbol_price_side_risk_and_stale_quote(monkeypatch):
     pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
     good = _publish_market_order_quote(terminal_headers, actual)
