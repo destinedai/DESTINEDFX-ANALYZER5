@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Read-only DestinedFX LIVE infrastructure preflight.
+"""DestinedFX LIVE infrastructure preflight and explicit lease-arming tool.
 
-Checks management API health and Ed25519 public-key publication, then compares
-that key's SHA-256 SPKI fingerprint with the running Bridge's health/config.
-It also checks persistent/durable Bridge configuration and terminal readiness.
-It NEVER changes LIVE state, reads account credentials, fabricates DEMO evidence,
-or submits a trading command/order. The optional PEM output is PUBLIC only.
+The default preflight is HTTPS GET-only and never changes LIVE state. The optional
+--arm-live path uses the existing one-time Bridge challenge, Management password
+step-up, exact typed confirmation, and 15-minute authorization endpoint. It does
+not submit or retry orders. Broker credentials are never requested; only the
+user's existing app-pairing bearer and Management password reauthentication are
+used for this account-specific authorization. The optional PEM output is PUBLIC.
 """
 from __future__ import annotations
 import argparse, getpass, hashlib, hmac, json, os, re, stat, tempfile, urllib.error, urllib.parse, urllib.request
