@@ -2583,12 +2583,67 @@ def accept_demo(x:DemoAcceptanceRequest,authorization:str|None=Header(default=No
         accepted_days=[datetime.strptime(day,'%Y-%m-%d').date() for day in evidence.accepted_days]
     except ValueError as exc:
         raise HTTPException(422,detail={'code':'DEMO_PASS_EVIDENCE_INVALID','message':'Accepted DEMO soak days must use YYYY-MM-DD dates'}) from exc
-    today=now().date()
+    today=now().astimezone(timezone.utc).date()
+    expected_account_digest=demo_soak_account_digest(beat['account'])
+    with tx() as c:
+        soak_rows_desc=c.execute('''SELECT * FROM demo_soak_daily WHERE pairing_id=? AND invalid=0
+                                   AND account_digest=? AND credential_generation=? AND worker_id=?
+                                   AND worker_generation=? AND host_generation=?
+                                   ORDER BY day_utc DESC LIMIT 7''',
+                                 (p['id'],expected_account_digest,managed['credential_generation'],
+                                  job['worker_id'],worker['generation'],HOST_GENERATION)).fetchall()
+        closed_rows=c.execute('''SELECT identity,position_id,deal_ticket,payload FROM trade_ledger
+                                 WHERE pairing_id=? AND account_mode='DEMO' AND status='CLOSED'
+                                 AND position_id IS NOT NULL AND deal_ticket IS NOT NULL''',(p['id'],)).fetchall()
+    selected_rows=list(reversed(soak_rows_desc[:evidence.soak_days]))
+    recorded_days=[row['day_utc'] for row in selected_rows]
+    try:
+        recorded_dates=[datetime.strptime(day,'%Y-%m-%d').date() for day in recorded_days]
+    except ValueError:
+        recorded_dates=[]
     accepted_days_are_valid=(
-        len(accepted_days)==evidence.soak_days and
-        accepted_days==sorted(set(accepted_days)) and
+        len(selected_rows)==evidence.soak_days and len(accepted_days)>=5 and
+        accepted_days==sorted(set(accepted_days)) and accepted_days==recorded_dates and
         all((accepted_days[index]-accepted_days[index-1]).days==1 for index in range(1,len(accepted_days))) and
         accepted_days[-1] <= today and (today-accepted_days[-1]).days <= 1
+    )
+    daily_soak_quality=True
+    observed_instance_ids=set()
+    for row in selected_rows:
+        try:
+            instance_ids=json.loads(row['ea_instance_ids'])
+            day=datetime.strptime(row['day_utc'],'%Y-%m-%d').date()
+            first=datetime.fromtimestamp(row['first_seen'],timezone.utc).date()
+            last=datetime.fromtimestamp(row['last_seen'],timezone.utc).date()
+        except Exception:
+            daily_soak_quality=False
+            continue
+        if (not isinstance(instance_ids,list) or not instance_ids or
+            row['heartbeat_count']<12 or row['risk_clear_count']<1 or
+            row['news_clear_count']<1 or row['reconciliation_count']<1 or
+            row['last_seen']-row['first_seen']<60 or
+            first!=day or last!=day or row['last_seen']>time.time()+5):
+            daily_soak_quality=False
+        else:
+            observed_instance_ids.update(value for value in instance_ids if isinstance(value,str) and value)
+    restart_instances_observed=len(observed_instance_ids)
+    closed_trade_count_observed=len(closed_rows)
+    closed_trade_rows_valid=True
+    for row in closed_rows:
+        try:
+            trade=json.loads(row['payload'])
+        except Exception:
+            closed_trade_rows_valid=False
+            continue
+        if (not isinstance(trade,dict) or trade.get('kind')!='closed_position' or
+            trade.get('lifecycle')!='CLOSED' or not isinstance(trade.get('deals'),list) or
+            not trade['deals'] or not row['identity'] or not row['position_id'] or not row['deal_ticket']):
+            closed_trade_rows_valid=False
+    evidence_paths_valid=(
+        len(set(evidence.evidence_paths))==len(evidence.evidence_paths) and
+        all(item.strip() and len(item)<=512 and not item.startswith('/') and chr(92) not in item and
+            not any(part in ('','.','..') for part in item.split('/')) and
+            not any(ord(ch)<32 or ord(ch)==127 for ch in item) for item in evidence.evidence_paths)
     )
     if any((
         evidence.evidence_version != 1,
@@ -2604,17 +2659,19 @@ def accept_demo(x:DemoAcceptanceRequest,authorization:str|None=Header(default=No
         evidence.host_generation != HOST_GENERATION,
         evidence.soak_days not in range(5,8),
         not accepted_days_are_valid,
-        evidence.restart_instances < 2,
-        evidence.closed_trade_count < 1,
-        evidence.order_lifecycle_pass is not True,
-        evidence.daily_reconciliation_pass is not True,
-        evidence.restart_test_pass is not True,
-        evidence.risk_controls_pass is not True,
-        len(set(evidence.evidence_paths)) != len(evidence.evidence_paths),
-        any(not item.strip() or len(item)>512 or any(ord(ch)<32 or ord(ch)==127 for ch in item) for item in evidence.evidence_paths),
+        not daily_soak_quality,
+        evidence.restart_instances != restart_instances_observed or restart_instances_observed<2,
+        evidence.closed_trade_count != closed_trade_count_observed or closed_trade_count_observed<1,
+        not closed_trade_rows_valid,
+        evidence.order_lifecycle_pass is not True or closed_trade_count_observed<1,
+        evidence.daily_reconciliation_pass is not True or not selected_rows or any(row['reconciliation_count']<1 for row in selected_rows),
+        evidence.restart_test_pass is not True or restart_instances_observed<2,
+        evidence.risk_controls_pass is not True or not selected_rows or any(row['risk_clear_count']<1 for row in selected_rows),
+        not selected_rows or any(row['news_clear_count']<1 for row in selected_rows),
+        not evidence_paths_valid,
         evidence.bridge_proof != demo_pass_bridge_proof(evidence),
     )):
-        raise HTTPException(409,detail={'code':'DEMO_PASS_EVIDENCE_MISMATCH','message':'The submitted DEMO PASS does not bind the current broker, account, credential generation, worker, host and required soak/test evidence'})
+        raise HTTPException(409,detail={'code':'DEMO_PASS_EVIDENCE_MISMATCH','message':'The DEMO PASS must match five-to-seven server-recorded soak days, risk/news/reconciliation telemetry, two EA instances, a reconciled closed trade, and the current pairing/worker/host identity'})
     # Hash the exact UTF-8 JSON document received by the Bridge; never trust a client-supplied digest.
     pass_evidence_digest=hashlib.sha256(x.evidence_document.encode('utf-8')).hexdigest()
     account=beat['account']
