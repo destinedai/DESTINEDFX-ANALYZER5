@@ -2991,6 +2991,12 @@ def issue_destructive_command(x,p):
     serialized=json.dumps(config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
         _require_host_accepting_commands(c)
+        pending_orders=c.execute("SELECT ack FROM commands WHERE pairing_id=? AND action='PLACE_MARKET_ORDER' AND expires_at>?",(p['id'],time.time())).fetchall()
+        for pending in pending_orders:
+            try: pending_outcome=json.loads(pending['ack']).get('outcome') if pending['ack'] else None
+            except Exception: pending_outcome=None
+            if pending_outcome!='REJECTED':
+                raise HTTPException(409,detail={'code':'MARKET_ORDER_ALREADY_PENDING','message':'A recent market-order request is still awaiting broker/heartbeat reconciliation; do not submit another'})
         concurrent=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
         if concurrent:
             if concurrent['action']!=x.action or concurrent['request_config']!=raw_config: raise HTTPException(409,'request_id was already used for a different command payload')
@@ -3204,8 +3210,21 @@ def issue_position_stop_command(x,p):
         unresolved=c.execute('''SELECT 1 FROM command_items i JOIN commands cmd ON cmd.id=i.command_id
             WHERE cmd.pairing_id=? AND i.target_id=? AND i.operational_status IN ('PENDING','PARTIAL')
             AND (cmd.ack IS NOT NULL OR cmd.expires_at>?) LIMIT 1''',(p['id'],position_id,time.time())).fetchone()
+        pending_stops=c.execute("SELECT config,ack FROM commands WHERE pairing_id=? AND action='TIGHTEN_POSITION_SL' AND expires_at>?",(p['id'],time.time())).fetchall()
+        matching_stop=False
+        for pending in pending_stops:
+            try:
+                ack_outcome=json.loads(pending['ack']).get('outcome') if pending['ack'] else None
+                pending_ticket=json.loads(pending['config']).get('ticket')
+            except Exception:
+                ack_outcome=None; pending_ticket=''
+            if pending_ticket==ticket and ack_outcome!='REJECTED':
+                matching_stop=True
+                break
     if unresolved:
         raise HTTPException(409,'A close or other unresolved operation is already queued for this position')
+    if matching_stop:
+        raise HTTPException(409,detail={'code':'POSITION_STOP_ALREADY_PENDING','message':'A stop-tightening request for this exact position is still unresolved; do not submit another'})
     now_epoch=time.time()
     expiry=now_epoch+20
     queued_config={
