@@ -3143,9 +3143,11 @@ def issue_market_order_command(x,p):
             except Exception:
                 pending_config={}; pending_outcome=None
             same_symbol=pending_config.get('symbol')==symbol
-            queued_unexpired=(pending['ack'] is None and pending['expires_at'] is not None and pending['expires_at']>time.time())
+            expiry_active=(pending['expires_at'] is not None and pending['expires_at']>time.time())
+            queued_unexpired=(pending['ack'] is None and expiry_active)
             unresolved_unknown=(pending['ack'] is not None and pending_outcome not in ('APPLIED','REJECTED'))
-            if same_symbol and (queued_unexpired or unresolved_unknown):
+            just_applied=(pending['ack'] is not None and pending_outcome=='APPLIED' and expiry_active)
+            if same_symbol and (queued_unexpired or unresolved_unknown or just_applied):
                 raise HTTPException(409,detail={'code':'MARKET_ORDER_ALREADY_PENDING','message':'A market-order command for this symbol is queued or has an unresolved broker result; do not submit another'})
         concurrent=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
         if concurrent:
