@@ -1,12 +1,10 @@
-import os
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app.db import Base
+from app.config import get_settings
 from app import models
 config = context.config
-url = os.environ.get("DATABASE_URL")
-if not url:
-    raise RuntimeError("DATABASE_URL is required to run migrations")
+url = get_settings().database_url.get_secret_value()
 config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
 target_metadata = Base.metadata
 
