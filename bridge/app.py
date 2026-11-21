@@ -3009,6 +3009,20 @@ def issue_destructive_command(x,p):
         for _,target_id,kind,_ in targets:
             unresolved=c.execute("SELECT 1 FROM command_items i JOIN commands cmd ON cmd.id=i.command_id WHERE cmd.pairing_id=? AND i.target_kind=? AND i.target_id=? AND i.operational_status IN ('PENDING','PARTIAL') AND (cmd.ack IS NOT NULL OR cmd.expires_at>?) LIMIT 1",(p['id'],kind,target_id,time.time())).fetchone()
             if unresolved: raise HTTPException(409,'An unresolved destructive operation already exists for this target')
+            if kind=='POSITION':
+                stop_rows=c.execute("SELECT config,ack,expires_at FROM commands WHERE pairing_id=? AND action='TIGHTEN_POSITION_SL'",(p['id'],)).fetchall()
+                for stop_row in stop_rows:
+                    try:
+                        stop_cfg=json.loads(stop_row['config'])
+                        stop_ack=json.loads(stop_row['ack']) if stop_row['ack'] else None
+                        stop_outcome=stop_ack.get('outcome') if isinstance(stop_ack,dict) else None
+                    except Exception:
+                        stop_cfg={}; stop_outcome=None
+                    same_position=stop_cfg.get('position_id')==target_id
+                    queued_unexpired=(stop_row['ack'] is None and stop_row['expires_at'] is not None and stop_row['expires_at']>time.time())
+                    unresolved_unknown=(stop_row['ack'] is not None and stop_outcome not in ('APPLIED','REJECTED'))
+                    if same_position and (queued_unexpired or unresolved_unknown):
+                        raise HTTPException(409,'A position stop-tightening request is unresolved for this exact position')
         c.execute('INSERT INTO commands(pairing_id,request_id,action,config,expires_at,request_config) VALUES(?,?,?,?,?,?)',
                   (p['id'],x.request_id,x.action,serialized,expiry,raw_config))
         command_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -3229,14 +3243,18 @@ def issue_position_stop_command(x,p):
             AND (cmd.ack IS NOT NULL OR cmd.expires_at>?) LIMIT 1''',(p['id'],position_id,time.time())).fetchone()
         if unresolved:
             raise HTTPException(409,'A close or other unresolved operation is already queued for this position')
-        pending_stops=c.execute("SELECT config,ack FROM commands WHERE pairing_id=? AND action='TIGHTEN_POSITION_SL' AND expires_at>?",(p['id'],time.time())).fetchall()
+        pending_stops=c.execute("SELECT config,ack,expires_at FROM commands WHERE pairing_id=? AND action='TIGHTEN_POSITION_SL'",(p['id'],)).fetchall()
         for pending in pending_stops:
             try:
-                ack_outcome=json.loads(pending['ack']).get('outcome') if pending['ack'] else None
-                pending_ticket=json.loads(pending['config']).get('ticket')
+                pending_config=json.loads(pending['config'])
+                pending_ack=json.loads(pending['ack']) if pending['ack'] else None
+                ack_outcome=pending_ack.get('outcome') if isinstance(pending_ack,dict) else None
+                pending_ticket=pending_config.get('ticket')
             except Exception:
                 ack_outcome=None; pending_ticket=''
-            if pending_ticket==ticket and ack_outcome!='REJECTED':
+            queued_unexpired=(pending['ack'] is None and pending['expires_at'] is not None and pending['expires_at']>time.time())
+            unresolved_unknown=(pending['ack'] is not None and ack_outcome not in ('APPLIED','REJECTED'))
+            if pending_ticket==ticket and (queued_unexpired or unresolved_unknown):
                 raise HTTPException(409,detail={'code':'POSITION_STOP_ALREADY_PENDING','message':'A stop-tightening request for this exact position is still unresolved; do not submit another'})
         concurrent=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
         if concurrent:
