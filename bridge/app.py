@@ -1494,6 +1494,31 @@ def destructive_context(p):
         raise HTTPException(409,'Destructive action requires an active MASTER profile and a fresh authenticated matching terminal and ready worker')
     return managed,beat
 
+UNRESOLVED_TERMINAL_TRADE_STATES = frozenset({
+    'SUBMISSION_INTENT',
+    'SUBMISSION_UNKNOWN',
+    'UNKNOWN_REQUIRES_RECONCILIATION',
+    'ORDER_SUBMITTED',
+    'PARTIALLY_FILLED',
+    'FILLED',
+    'FILLED_POSITION_NOT_FOUND',
+    'POSITION_RECONCILED_SLTP_UNVERIFIED',
+    'POSITION_SL_MODIFY_INTENT',
+})
+
+
+def require_terminal_trade_outcome_resolved(beat):
+    signal=beat.get('last_signal')
+    if not isinstance(signal,dict):
+        return
+    execution_state=str(signal.get('execution_state') or '').strip().upper()
+    if execution_state in UNRESOLVED_TERMINAL_TRADE_STATES:
+        raise HTTPException(409,detail={
+            'code':'TERMINAL_TRADE_OUTCOME_UNRESOLVED',
+            'message':f'MT5 reports {execution_state}; new orders and position edits are blocked until the existing broker result is reconciled',
+        })
+
+
 def reconcile_command_items(c,pairing_id,beat,heartbeat_seq):
     orders={snapshot_ticket(x.get('ticket')):x.get('remaining_volume') for x in beat.get('active_orders',[]) if isinstance(x,dict)}
     positions={snapshot_ticket(x.get('position_id')):x.get('volume') for x in beat.get('open_positions',[]) if isinstance(x,dict)}
@@ -3057,6 +3082,7 @@ def issue_market_order_command(x,p):
     if HOST_PROFILE!='PERSISTENT':
         raise HTTPException(409,detail={'code':'PERSISTENT_HOST_REQUIRED','message':'New MT5 market orders require the persistent owner host'})
     managed,beat=destructive_context(p)
+    require_terminal_trade_outcome_resolved(beat)
     cfg=x.config
     account=beat.get('account') or {}
     if any((cfg.get('account_login')!=account.get('login'),
@@ -3181,6 +3207,7 @@ def issue_position_stop_command(x,p):
     if HOST_PROFILE!='PERSISTENT':
         raise HTTPException(409,detail={'code':'PERSISTENT_HOST_REQUIRED','message':'Position protection edits require the persistent owner host'})
     managed,beat=destructive_context(p)
+    require_terminal_trade_outcome_resolved(beat)
     if managed['account_mode']=='LIVE' and not live_authorization_valid(p,managed,beat):
         raise HTTPException(409,detail={'code':'LIVE_AUTHORIZATION_REQUIRED','message':'A current account-bound LIVE lease is required before changing a real-money position stop'})
     cfg=x.config
