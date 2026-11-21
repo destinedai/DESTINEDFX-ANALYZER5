@@ -11,6 +11,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 2
 fi
 command -v systemd-creds >/dev/null || { echo "BLOCKED: systemd-creds is required." >&2; exit 3; }
+command -v openssl >/dev/null || { echo "BLOCKED: openssl is required to create the management signing key." >&2; exit 3; }
 command -v systemctl >/dev/null
 command -v findmnt >/dev/null
 SYSTEMD_VERSION="$(systemctl --version | awk 'NR==1 {print $2}')"
@@ -28,6 +29,17 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 OWNER_UID="$(id -u "$SERVICE_USER")"
 OWNER_GID="$(id -g "$SERVICE_USER")"
+API_USER=destinedfx-api
+if [[ -n "$DESTINEDFX_API_USER" ]]; then API_USER="$DESTINEDFX_API_USER"; fi
+if ! id "$API_USER" >/dev/null 2>&1; then
+  useradd --system --user-group --home-dir /var/lib/destinedfx-api --create-home --shell /usr/sbin/nologin "$API_USER"
+fi
+API_UID="$(id -u "$API_USER")"
+API_GID="$(id -g "$API_USER")"
+if [[ "$API_UID" -le 0 || "$API_GID" -le 0 ]]; then
+  echo "BLOCKED: management API service identity must not be root." >&2
+  exit 4
+fi
 if [[ "$OWNER_UID" -le 0 || "$OWNER_GID" -le 0 ]]; then
   echo "BLOCKED: the DestinedFX service account must not be root." >&2
   exit 4
@@ -36,6 +48,8 @@ fi
 install -d -o root -g root -m 0700 "$CONFIG_DIR" "$CRED_DIR"
 install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0700   /var/lib/destinedfx   /var/lib/destinedfx/host-runtime   /var/lib/destinedfx/host-runtime/runtime   /var/lib/destinedfx/host-runtime/runtime/slot-runtime   /var/lib/destinedfx/host-runtime/isolated-slots
 install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0750 /var/lib/destinedfx/terminal-template-prefix
+install -d -o "$API_UID" -g "$API_GID" -m 0700 /var/lib/destinedfx-api
+install -d -o root -g root -m 0700 /var/lib/destinedfx-management /var/lib/destinedfx-management/postgres
 install -d -o root -g root -m 0711 /home/destinedfx-slots
 
 if [[ ! -f "$CONFIG_DIR/host.env" ]]; then
@@ -93,14 +107,30 @@ make_credential() {
 make_credential credentials-fernet-key "$CRED_DIR/destinedfx-credentials-fernet-key.cred" fernet
 make_credential worker-bootstrap-token "$CRED_DIR/destinedfx-worker-bootstrap-token.cred" token
 make_credential host-agent-token "$CRED_DIR/destinedfx-host-agent-token.cred" token
+make_credential postgres-password "$CRED_DIR/destinedfx-postgres-password.cred" token
+
+if [[ ! -f "$CRED_DIR/destinedfx-management-step-up-private-key-pem.cred" ]]; then
+  openssl genpkey -algorithm ED25519 -out "$TMP_DIR/step-up-private-key-pem"
+  chmod 0600 "$TMP_DIR/step-up-private-key-pem"
+  systemd-creds encrypt --name=step-up-private-key-pem "$TMP_DIR/step-up-private-key-pem" "$CRED_DIR/destinedfx-management-step-up-private-key-pem.cred"
+  chown root:root "$CRED_DIR/destinedfx-management-step-up-private-key-pem.cred"
+  chmod 0600 "$CRED_DIR/destinedfx-management-step-up-private-key-pem.cred"
+fi
+systemd-creds decrypt --name=step-up-private-key-pem "$CRED_DIR/destinedfx-management-step-up-private-key-pem.cred" "$TMP_DIR/step-up-private-key-pem"
+chmod 0600 "$TMP_DIR/step-up-private-key-pem"
+openssl pkey -in "$TMP_DIR/step-up-private-key-pem" -pubout -out "$CONFIG_DIR/management-step-up-public.pem"
+chmod 0644 "$CONFIG_DIR/management-step-up-public.pem"
+rm -f "$TMP_DIR/step-up-private-key-pem"
 
 chown root:root "$CONFIG_DIR/host.env" "$CONFIG_DIR/bridge.env" "$CONFIG_DIR/management-step-up-public.pem"
 chmod 0600 "$CONFIG_DIR/host.env" "$CONFIG_DIR/bridge.env"
 chmod 0644 "$CONFIG_DIR/management-step-up-public.pem"
 
 echo "DESTINEDFX_HOST_BOOTSTRAP_FILES_READY"
-echo "Service identity: $SERVICE_USER (uid=$OWNER_UID gid=$OWNER_GID)"
+echo "Bridge service identity: $SERVICE_USER (uid=$OWNER_UID gid=$OWNER_GID)"
+echo "Management API service identity: $API_USER (uid=$API_UID gid=$API_GID)"
 echo "Created non-secret configuration: $CONFIG_DIR/host.env and $CONFIG_DIR/bridge.env (existing files were preserved)."
-echo "Created/retained encrypted systemd credentials under $CRED_DIR; plaintext values were not printed."
+echo "Created/retained encrypted Bridge, worker, PostgreSQL and management-signing credentials under $CRED_DIR; plaintext values were not printed."
+echo "The management API Ed25519 public key was derived locally; its private key remains host-bound and encrypted."
 echo "Next: install genuine MT5/MetaEditor with --wineprefix /var/lib/destinedfx/terminal-template-prefix, then review the template paths in host.env."
 echo "Then edit bridge.env with your HTTPS domain, set the Ed25519 public key in management-step-up-public.pem, configure the news provider, and run rebuild.sh self-hosted."
