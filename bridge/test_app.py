@@ -72,9 +72,9 @@ def seed_demo_soak_evidence(pairing,actual,worker_id='worker-demo'):
         day=today-app.timedelta(days=5-index)
         if day==today:
             last=now_epoch
-            first=max(app.datetime.combine(day,app.time(0,0),tzinfo=app.timezone.utc).timestamp(),last-120)
+            first=max(app.datetime(day.year,day.month,day.day,tzinfo=app.timezone.utc).timestamp(),last-120)
         else:
-            first=app.datetime.combine(day,app.time(12,0),tzinfo=app.timezone.utc).timestamp()
+            first=app.datetime(day.year,day.month,day.day,12,0,tzinfo=app.timezone.utc).timestamp()
             last=first+120
         instance='ea-instance-alpha' if index<3 else 'ea-instance-beta'
         rows.append((pairing['pairing_id'],day.isoformat(),first,last,24,20,20,20,
