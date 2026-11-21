@@ -433,7 +433,6 @@ class MT5RemoteBridgeClientTest {
                 .put("open_positions", JSONArray().put(position))
         )
         val config = MT5RemoteBridgeClient.positionStopTightenConfig(snapshot, "920001", 1.09500)
-        assertEquals("TIGHTEN_POSITION_SL", "TIGHTEN_POSITION_SL")
         assertEquals("920001", config.getString("ticket"))
         assertEquals(1.09000, config.getDouble("expected_stop_loss"), 0.0000001)
         assertEquals(1.09500, config.getDouble("new_stop_loss"), 0.0000001)
