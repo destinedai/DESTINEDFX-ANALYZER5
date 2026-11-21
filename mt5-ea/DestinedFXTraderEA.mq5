@@ -637,6 +637,46 @@ void RetryPhonePositionStopAck(){
       }
    }
 }
+void ReconcilePhonePositionStopState(){
+   if(g_sigExecutionState=="POSITION_SL_TIGHTENED"||g_sigExecutionState=="POSITION_SL_NOT_APPLIED"){
+      RetryPhonePositionStopAck();
+      return;
+   }
+   if(StringFind(g_lastSignal,"TIGHTEN-")!=0||
+      (g_sigExecutionState!="POSITION_SL_MODIFY_INTENT"&&g_sigExecutionState!="SUBMISSION_UNKNOWN"))return;
+   ulong ticket=(ulong)StringToInteger(g_sigPosition);
+   if(ticket==0||!PositionSelectByTicket(ticket))return;
+   double actualStop=PositionGetDouble(POSITION_SL);
+   double actualTake=PositionGetDouble(POSITION_TP);
+   string symbol=PositionGetString(POSITION_SYMBOL);
+   double tick=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(tick<=0)return;
+   double tolerance=tick*0.5;
+   if(MathAbs(actualTake-g_sigTP)>tolerance)return;
+   if(MathAbs(actualStop-g_sigSL)<=tolerance){
+      g_sigExecutionState="POSITION_SL_TIGHTENED";
+      g_sigState="MANUAL_MANAGEMENT";
+      g_sigRationale="Reconciled from the current broker position after an uncertain response; TP remained unchanged";
+   }else if(MathAbs(actualStop-g_sigActualEntry)<=tolerance){
+      // A timed-out server request can still be in flight. Do not call it
+      // unapplied until the same broker position has remained unchanged for
+      // a conservative reconciliation interval.
+      if(g_sigSubmittedAt<=0||TimeGMT()-g_sigSubmittedAt<30)return;
+      g_sigExecutionState="POSITION_SL_NOT_APPLIED";
+      g_sigState="MANUAL_MANAGEMENT";
+      g_sigRationale="After the reconciliation interval, the broker position still has its original SL and TP; no change was applied";
+   }else return;
+   if(!PersistOrderState()){
+      g_sigExecutionState="SUBMISSION_UNKNOWN";
+      g_state="STOPPED";
+      g_lastError="Protective stop reconciliation could not be persisted; new trading actions are blocked";
+      return;
+   }
+   RetryPhonePositionStopAck();
+}
+
+
+void SetWait(string sym,string tf,string why){g_sigState="WAIT";g_sigExecutionState="NONE";g_sigCommandId="";g_sigSymbol=sym;g_sigTf=tf;g_sigDirection="";g_sigEntry=0;g_sigSL=0;g_sigTP=0;g_sigRisk=g_riskPercent;g_sigRequestedVolume=0;g_sigExecutedVolume=0;g_sigRationale=why;g_sigRetcode="";g_sigDeal="";g_sigOrder="";g_sigPosition="";g_lastReason=why;}
 void Scan(){if(!g_startupRecoveryReady){g_state="STOPPED";g_lastError="Startup broker snapshot and persisted journals are not reconciled; new orders withheld";return;}if(PhoneTradeOutcomeUnresolved()){g_state="STOPPED";g_lastError="Unresolved MT5 trade result; reconcile before any new order";return;}if(g_sigExecutionState=="POSITION_SL_MODIFY_INTENT"||g_sigCommandId!=""){g_lastError="Position protection request is being reconciled; new entries held until broker acknowledgement";return;}if(g_state!="RUNNING"||g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS)return;if((g_sigExecutionState=="POSITION_SL_TIGHTENED"||g_sigExecutionState=="POSITION_SL_NOT_APPLIED")&&g_sigSubmittedAt>0&&TimeGMT()-g_sigSubmittedAt<30)return;if(g_sigOrder!=""&&g_sigExecutionState!="CLOSED_DEAL_RECONCILED"&&g_sigExecutionState!="CANCELLED_OR_EXPIRED"&&g_sigExecutionState!="REJECTED"&&g_sigExecutionState!="UNKNOWN_REQUIRES_RECONCILIATION"&&g_sigExecutionState!="FILLED_POSITION_NOT_FOUND")return;SetWait("","","No eligible setup in active scan list");for(int s=0;s<ArraySize(g_symbols);s++){string sym=g_symbols[s];if(!SymbolSelect(sym,true)){SetWait(sym,"","Symbol unavailable");continue;}for(int t=0;t<ArraySize(g_tfs);t++){ENUM_TIMEFRAMES tf=ParseTF(g_tfs[t]);string why;bool bull;double en,sl,tp;datetime bt;if(!FindStrategySetup(sym,tf,bull,en,sl,tp,why,bt)){SetWait(sym,g_tfs[t],why);continue;}string key=SignalKey(sym,tf,bt);g_sigSymbol=sym;g_sigTf=g_tfs[t];g_sigDirection=bull?"BUY":"SELL";g_sigEntry=en;g_sigActualEntry=0;g_sigSubmittedAt=0;g_sigOpenedAt=0;g_sigSL=sl;g_sigTP=tp;g_sigRisk=g_riskPercent;g_sigRationale="Eligible "+g_strategy+" closed-candle setup";if(Seen(key)){SetWait(sym,g_tfs[t],"Duplicate signal suppressed");continue;}bool accepted=Place(sym,tf,bull,en,sl,tp,bt,key);if(!accepted){g_sigState="REJECTED";g_sigRationale=g_lastReason;g_sigRetcode=IntegerToString((int)trade.ResultRetcode());g_sigDeal=(string)trade.ResultDeal();}}}}
 bool Ack(string id,string outcome,string msg,string resultJson){if(resultJson==""){for(int i=0;i<ArraySize(g_processed);i++)if(g_processed[i]==id){resultJson=g_ackResults[i];break;}}if(resultJson=="")resultJson="[]";string b=StringFormat("{\"outcome\":\"%s\",\"state\":\"%s\",\"message\":\"%s\",\"results\":%s}",outcome,g_state,Esc(msg),resultJson);string response=Api("POST","/v1/terminal/commands/"+id+"/ack",b);return response!=""&&StringFind(response,"\"acknowledged\":true")>=0;}
 bool SaveCursor(){return AtomicWrite("DestinedFX_cursor.txt",IntegerToString(g_cursor));}
