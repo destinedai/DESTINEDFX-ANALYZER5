@@ -291,15 +291,24 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "The Azure bootstrap must remain blocked until its isolated-slot systemd runtime, encrypted credentials and MT5 template are installed.",
     )
 
-    manual_order_api = any(token in bridge_client for token in (
-        '"OPEN_MARKET_ORDER"', '"PLACE_MARKET_ORDER"', '"OPEN_PENDING_ORDER"', '"SUBMIT_ORDER"'
-    ))
+    phone_market_order_contract = (
+        '"PLACE_MARKET_ORDER"' in bridge_client
+        and 'OPENING_ACTIONS' in bridge_client
+        and 'marketOrderConfig' in bridge_client
+        and 'def issue_market_order_command' in bridge
+        and 'if x.action in OPENING_ACTIONS: return issue_market_order_command(x,p)' in bridge
+        and 'bool ExecutePhoneMarketOrder(' in ea
+        and 'action=="PLACE_MARKET_ORDER"' in ea
+        and '"MANUAL-"+requestId' in ea
+        and '"signal_key"' in ea
+        and 'mt5_phone_market_order_card' in bot_ui
+    )
     add_check(
         checks,
-        "no misleading phone-side MT5 market-order API",
-        not manual_order_api,
-        "The current MT5 command contract has no phone-side arbitrary market-order action. "
-        "New managed entries are generated and submitted by the EA after START.",
+        "phone MT5 market orders route through the Windows EA",
+        phone_market_order_contract,
+        "The phone only queues an account-bound, quote/news/risk-validated Bridge command. "
+        "The Windows MT5 EA computes volume and submits through its broker-side risk engine; it is never a direct Android broker order.",
     )
 
     documentation_ok = all(term.lower() in readme.lower() for term in (
