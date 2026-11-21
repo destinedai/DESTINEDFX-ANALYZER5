@@ -121,7 +121,7 @@ def source_checks(root: Path) -> list[dict[str, str]]:
                 and 'ReconcilePhonePositionStopState()' in ea
                 and 'g_sigCommandId=commandId' in ea
                 and 'RetryPhonePositionStopAck()' in ea
-                and 'bool Ack(string id,string outcome,string msg,string resultJson);' in ea
+                and 'bool Ack(string id,string outcome,string msg,string resultJson' in ea
                 and 'mt5_position_stop_tighten_card' in workstation
                 and 'TIGHTEN_POSITION_SL' in workstation
             ),
