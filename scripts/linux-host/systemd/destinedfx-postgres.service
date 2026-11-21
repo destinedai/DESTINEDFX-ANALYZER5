@@ -13,8 +13,8 @@ LoadCredentialEncrypted=postgres-app-password:/etc/credstore.encrypted/destinedf
 Environment=POSTGRES_APP_PASSWORD_FILE=%d/postgres-app-password
 ExecStartPre=-/usr/bin/docker stop --time 30 destinedfx-management-postgres
 ExecStartPre=-/usr/bin/docker rm destinedfx-management-postgres
-ExecStartPre=/bin/bash -lc '/usr/bin/docker image inspect postgres:16-alpine >/dev/null 2>&1 || /usr/bin/docker pull postgres:16-alpine'
-ExecStart=/usr/bin/docker run --rm --name destinedfx-management-postgres --publish 127.0.0.1:5433:5432 --volume /var/lib/destinedfx-management/postgres:/var/lib/postgresql/data --mount type=bind,src=%d/postgres-password,dst=/run/secrets/postgres-password,readonly --env POSTGRES_DB=app_management --env POSTGRES_USER=destinedfx_db_admin --env POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password --memory=1g --cpus=1.0 --pids-limit=256 --log-opt max-size=10m --log-opt max-file=5 postgres:16-alpine
+ExecStartPre=/bin/bash -lc '/usr/bin/docker image inspect postgres:16.16-bookworm >/dev/null 2>&1 || /usr/bin/docker pull postgres:16.16-bookworm'
+ExecStart=/usr/bin/docker run --rm --name destinedfx-management-postgres --publish 127.0.0.1:5433:5432 --volume /var/lib/destinedfx-management/postgres:/var/lib/postgresql/data --mount type=bind,src=%d/postgres-password,dst=/run/secrets/postgres-password,readonly --env POSTGRES_DB=app_management --env POSTGRES_USER=destinedfx_db_admin --env POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password --memory=1g --cpus=1.0 --pids-limit=256 --log-opt max-size=10m --log-opt max-file=5 postgres:16.16-bookworm
 ExecStartPost=/bin/bash -lc 'for attempt in $(seq 1 60); do /usr/bin/docker exec destinedfx-management-postgres pg_isready -U destinedfx_db_admin -d app_management >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 ExecStartPost=/bin/bash /opt/destinedfx/scripts/linux-host/provision-postgres-app-role.sh
 ExecStop=/usr/bin/docker stop --time 30 destinedfx-management-postgres
