@@ -84,7 +84,7 @@ def source_checks(root: Path) -> list[dict[str, str]]:
             all(token in workstation for token in (
                 "mt5_phone_market_order_card",
                 "mt5_phone_market_order_review",
-                'sendBridgeTradeCommand(\n                                                bridgeClient, "PLACE_MARKET_ORDER"',
+                'bridgeClient, "PLACE_MARKET_ORDER", config, emptyList()',
                 "signal_key",
                 "MANUAL-$bridgePendingId",
             )),
