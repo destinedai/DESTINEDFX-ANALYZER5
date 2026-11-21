@@ -1033,6 +1033,9 @@ class MT5RemoteBridgeClient(
             require(snapshot.hostProfile == HostProfile.PERSISTENT) {
                 "A persistent Windows owner host is required before a market order."
             }
+            if (snapshot.actualAccountMode == "LIVE") require(snapshot.liveAuthorized) {
+                "A current account-bound LIVE lease is required before a real-money order."
+            }
             val normalizedSide = side.trim().uppercase()
             require(normalizedSide in setOf("BUY", "SELL"))
             require(riskPercent.isFinite() && riskPercent > 0.0 && riskPercent <= 1.0)
