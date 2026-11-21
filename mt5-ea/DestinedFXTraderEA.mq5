@@ -448,7 +448,9 @@ bool ExecutePhonePositionStopTighten(string cfg,string requestId,string commandI
    string login=JStr(cfg,"account_login",""),server=JStr(cfg,"account_server","");
    string mode=JStr(cfg,"account_mode",""),symbol=JStr(cfg,"symbol","");
    string ticketText=JStr(cfg,"ticket","");
+   string positionIdText=JStr(cfg,"position_id","");
    ulong ticket=(ulong)StringToInteger(ticketText);
+   ulong expectedPositionId=(ulong)StringToInteger(positionIdText);
    double expectedStop=JNum(cfg,"expected_stop_loss",-1),newStop=JNum(cfg,"new_stop_loss",0);
    double expectedBid=JNum(cfg,"expected_bid",0),expectedAsk=JNum(cfg,"expected_ask",0);
    long quoteStamp=(long)JNum(cfg,"quote_timestamp_ms",0);
@@ -460,8 +462,10 @@ bool ExecutePhonePositionStopTighten(string cfg,string requestId,string commandI
       message="A previous broker operation has an unresolved result; reconcile it before another position edit";
       return false;
    }
-   if(StringLen(requestId)!=36||ticket==0||StringFormat("%I64u",ticket)!=ticketText||symbol==""){
-      message="Invalid canonical MT5 position ticket, symbol or request ID";return false;
+   if(StringLen(requestId)!=36||ticket==0||expectedPositionId==0||
+      StringFormat("%I64u",ticket)!=ticketText||
+      StringFormat("%I64u",expectedPositionId)!=positionIdText||symbol==""){
+      message="Invalid canonical MT5 position ticket/identifier, symbol or request ID";return false;
    }
    if(login!=InpExpectedLogin||server!=InpExpectedServer||mode!=InpExpectedAccountMode||
       !AccountIdentityMatches()){message="Position stop request does not match the provisioned MT5 account";return false;}
@@ -481,12 +485,14 @@ bool ExecutePhonePositionStopTighten(string cfg,string requestId,string commandI
    }
    if(!PositionSelectByTicket(ticket)){message="The exact MT5 position ticket is no longer open";return false;}
    string actualSymbol=PositionGetString(POSITION_SYMBOL);
+   ulong actualPositionId=(ulong)PositionGetInteger(POSITION_IDENTIFIER);
    long positionType=PositionGetInteger(POSITION_TYPE);
    double currentStop=PositionGetDouble(POSITION_SL);
    double currentTake=PositionGetDouble(POSITION_TP);
    double volume=PositionGetDouble(POSITION_VOLUME);
    double openPrice=PositionGetDouble(POSITION_PRICE_OPEN);
-   if(actualSymbol!=symbol||(positionType!=POSITION_TYPE_BUY&&positionType!=POSITION_TYPE_SELL)||
+   if(actualSymbol!=symbol||actualPositionId!=expectedPositionId||
+      (positionType!=POSITION_TYPE_BUY&&positionType!=POSITION_TYPE_SELL)||
       !Finite(currentStop)||!Finite(currentTake)||!Finite(expectedStop)||!Finite(newStop)||
       !Finite(expectedBid)||!Finite(expectedAsk)||expectedStop<0||newStop<=0||
       volume<=0||openPrice<=0){
