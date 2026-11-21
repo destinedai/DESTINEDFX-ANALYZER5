@@ -67,6 +67,26 @@ def test_settings_loads_management_signing_key_from_protected_credential(monkeyp
     )
 
 
+def test_settings_loads_owner_setup_token_from_protected_credential(monkeypatch, tmp_path):
+    token_file = _private_file(tmp_path / "owner-setup-token", "owner-setup-" + "x" * 64)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://test:test@127.0.0.1/test")
+    monkeypatch.delenv("OWNER_SETUP_TOKEN", raising=False)
+    monkeypatch.setenv("OWNER_SETUP_TOKEN_FILE", str(token_file))
+    settings = Settings(_env_file=None)
+    assert settings.owner_setup_token.get_secret_value() == "owner-setup-" + "x" * 64
+
+
+def test_settings_rejects_public_owner_setup_token_file(monkeypatch, tmp_path):
+    token_file = tmp_path / "owner-setup-token"
+    token_file.write_text("owner-setup-" + "x" * 64, encoding="ascii")
+    token_file.chmod(0o644)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://test:test@127.0.0.1/test")
+    monkeypatch.delenv("OWNER_SETUP_TOKEN", raising=False)
+    monkeypatch.setenv("OWNER_SETUP_TOKEN_FILE", str(token_file))
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
 def test_settings_rejects_public_management_signing_key_file(monkeypatch, tmp_path):
     key = Ed25519PrivateKey.generate()
     pem = key.private_bytes(

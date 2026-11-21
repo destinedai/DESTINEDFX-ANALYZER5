@@ -15,6 +15,9 @@ def test_initial_migration_creates_and_downgrades_schema(tmp_path, monkeypatch):
     assert set(inspect(engine).get_table_names()) >= {
         "alembic_version", "users", "sessions", "preferences", "devices", "audit_events"
     }
+    assert "uq_users_single_admin" in {
+        item["name"] for item in inspect(engine).get_indexes("users")
+    }
     engine.dispose()
 
     command.downgrade(config, "base")

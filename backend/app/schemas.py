@@ -8,6 +8,10 @@ class Credentials(BaseModel):
     password: str = Field(min_length=12, max_length=128)
 
 
+class RegisterCredentials(Credentials):
+    owner_setup_token: str | None = Field(default=None, min_length=40, max_length=512)
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

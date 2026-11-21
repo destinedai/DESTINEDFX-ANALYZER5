@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 120
     cors_origins: str = ""
     step_up_private_key_pem: SecretStr = SecretStr("")
+    owner_setup_token: SecretStr = SecretStr("")
     step_up_issuer: str = "destinedfx-management"
     step_up_audience: str = "destinedfx-bridge"
 
@@ -106,6 +107,19 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.strip():
             return value
         return _read_systemd_credential("STEP_UP_PRIVATE_KEY_PEM_FILE")
+
+    @field_validator("owner_setup_token", mode="before")
+    @classmethod
+    def load_owner_setup_token_from_credential(cls, value):
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        if isinstance(value, str) and value.strip():
+            token = value.strip()
+        else:
+            token = _read_systemd_credential("OWNER_SETUP_TOKEN_FILE")
+        if token and (len(token) < 40 or len(token) > 512 or any(ord(ch) < 33 or ord(ch) > 126 for ch in token)):
+            raise ValueError("OWNER_SETUP_TOKEN_FILE must contain a bounded printable token")
+        return token
 
     @property
     def admins(self) -> set[str]:

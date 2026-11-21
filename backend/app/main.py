@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import uuid
 import jwt
 import logging
@@ -22,7 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from . import models
 from .config import get_settings
 from .db import SessionLocal, engine
-from .schemas import AuditOut, Credentials, DeviceIn, PreferenceIn, TokenOut, UserOut
+from .schemas import AuditOut, Credentials, DeviceIn, PreferenceIn, RegisterCredentials, TokenOut, UserOut
 
 settings = get_settings()
 log = logging.getLogger("app")
@@ -116,9 +117,29 @@ def admin_user(user: models.User = Depends(current_user)):
 
 
 @app.post("/api/v1/auth/register", response_model=UserOut, status_code=201)
-def register(body: Credentials, request: Request, db: Session = Depends(get_db)):
+def register(body: RegisterCredentials, request: Request, db: Session = Depends(get_db)):
     email = str(body.email).lower()
-    user = models.User(email=email, password_hash=hasher.hash(body.password), is_admin=email in settings.admins)
+    supplied_owner_token = (body.owner_setup_token or "").strip()
+    is_admin = False
+
+    # ADMIN_EMAILS is only an allowlist; it is not proof of ownership. The
+    # first administrator must also possess a host-generated secret stored
+    # in systemd's encrypted credential store. The database's partial unique
+    # index prevents concurrent bootstrap requests from creating two owners.
+    if email in settings.admins or supplied_owner_token:
+        expected_owner_token = settings.owner_setup_token.get_secret_value().strip()
+        if (
+            email not in settings.admins
+            or not expected_owner_token
+            or not supplied_owner_token
+            or not hmac.compare_digest(supplied_owner_token, expected_owner_token)
+        ):
+            raise HTTPException(403, "The host-issued owner setup credential is required.")
+        if db.scalar(select(models.User.id).where(models.User.is_admin.is_(True)).limit(1)) is not None:
+            raise HTTPException(409, "The initial administrator has already been registered.")
+        is_admin = True
+
+    user = models.User(email=email, password_hash=hasher.hash(body.password), is_admin=is_admin)
     db.add(user)
     try:
         db.flush()
@@ -126,7 +147,7 @@ def register(body: Credentials, request: Request, db: Session = Depends(get_db))
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(409, "Account already exists")
+        raise HTTPException(409, "Account already exists or owner setup has already been completed.")
     db.refresh(user)
     return user
 

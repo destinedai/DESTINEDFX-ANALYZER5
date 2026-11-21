@@ -1,8 +1,34 @@
-def register(client, email="alice@example.com"):
-    return client.post("/api/v1/auth/register", json={"email": email, "password": "Correct horse battery staple 92!"})
+def register(client, email="alice@example.com", owner_setup_token=None):
+    body = {"email": email, "password": "Correct horse battery staple 92!"}
+    if owner_setup_token is not None:
+        body["owner_setup_token"] = owner_setup_token
+    return client.post("/api/v1/auth/register", json=body)
 
 def login(client, email="alice@example.com"):
     return client.post("/api/v1/auth/login", json={"email": email, "password": "Correct horse battery staple 92!"})
+
+
+def test_owner_registration_requires_host_issued_token_and_is_single_admin(client, monkeypatch):
+    from app import main
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(main.settings, "admin_emails", "owner@example.com,second-owner@example.com")
+    monkeypatch.setattr(main.settings, "owner_setup_token", SecretStr("owner-setup-" + "x" * 64))
+
+    assert register(client, "owner@example.com").status_code == 403
+    assert register(client, "owner@example.com", "wrong-" + "x" * 64).status_code == 403
+
+    response = register(client, "owner@example.com", "owner-setup-" + "x" * 64)
+    assert response.status_code == 201
+    assert response.json()["email"] == "owner@example.com"
+
+    assert register(client, "second-owner@example.com", "owner-setup-" + "x" * 64).status_code == 409
+    assert register(client, "member@example.com").status_code == 201
+    token = login(client, "owner@example.com").json()["access_token"]
+    assert client.get("/api/v1/admin/audit-events", headers={"Authorization": "Bearer " + token}).status_code == 200
+    member_token = login(client, "member@example.com").json()["access_token"]
+    assert client.get("/api/v1/admin/audit-events", headers={"Authorization": "Bearer " + member_token}).status_code == 403
+
 
 def test_auth_preferences_isolation_and_revoke(client):
     assert register(client).status_code == 201
