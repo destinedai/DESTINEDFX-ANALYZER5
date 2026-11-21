@@ -2,6 +2,9 @@ package com.example
 
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.data.trade.parseVerifiedBrokerQuotes
+import com.example.data.trade.sortedVerifiedBrokerQuotes
+import com.example.data.trade.verifiedBrokerSpread
+import com.example.data.trade.VerifiedBrokerQuote
 import com.example.security.SecretsManager
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
@@ -477,5 +480,28 @@ class MT5RemoteBridgeClientTest {
         assertThrows(IllegalStateException::class.java) {
             MT5RemoteBridgeClient.positionStopTightenConfig(snapshot, "920099", 1.09500)
         }
+    }
+
+    @Test fun brokerQuoteBoardUsesExactPriceSpreadAndStableSymbolOrdering() {
+        val quotes = listOf(
+            VerifiedBrokerQuote("USDJPY", 150.120, 150.132, 3, 1_800_000_000_000L, 20L),
+            VerifiedBrokerQuote("eurusd", 1.08231, 1.08245, 5, 1_800_000_000_000L, 30L),
+            VerifiedBrokerQuote("AUDUSD", 0.65001, 0.65021, 5, 1_800_000_000_000L, 10L)
+        )
+        assertEquals(0.00014, verifiedBrokerSpread(quotes[1])!!, 0.000000001)
+        assertEquals(0.00020, verifiedBrokerSpread(quotes[2])!!, 0.000000001)
+        assertEquals(listOf("AUDUSD", "eurusd", "USDJPY"), sortedVerifiedBrokerQuotes(quotes).map { it.symbol })
+    }
+
+    @Test fun brokerQuoteSpreadRejectsInvalidPricesRatherThanDisplayingNegativeOrNanSpread() {
+        assertEquals(null, verifiedBrokerSpread(
+            VerifiedBrokerQuote("EURUSD", 1.1, 1.0, 5, 1L, 0L)
+        ))
+        assertEquals(null, verifiedBrokerSpread(
+            VerifiedBrokerQuote("EURUSD", Double.NaN, 1.1, 5, 1L, 0L)
+        ))
+        assertEquals(null, verifiedBrokerSpread(
+            VerifiedBrokerQuote("EURUSD", Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, 5, 1L, 0L)
+        ))
     }
 }
