@@ -35,7 +35,7 @@ fi
 
 install -d -o root -g root -m 0700 "$CONFIG_DIR" "$CRED_DIR"
 install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0700   /var/lib/destinedfx   /var/lib/destinedfx/host-runtime   /var/lib/destinedfx/host-runtime/runtime   /var/lib/destinedfx/host-runtime/runtime/slot-runtime   /var/lib/destinedfx/host-runtime/isolated-slots
-install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0750 /var/lib/destinedfx/terminal-template
+install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0750 /var/lib/destinedfx/terminal-template-prefix
 install -d -o root -g root -m 0711 /home/destinedfx-slots
 
 if [[ ! -f "$CONFIG_DIR/host.env" ]]; then
@@ -102,5 +102,5 @@ echo "DESTINEDFX_HOST_BOOTSTRAP_FILES_READY"
 echo "Service identity: $SERVICE_USER (uid=$OWNER_UID gid=$OWNER_GID)"
 echo "Created non-secret configuration: $CONFIG_DIR/host.env and $CONFIG_DIR/bridge.env (existing files were preserved)."
 echo "Created/retained encrypted systemd credentials under $CRED_DIR; plaintext values were not printed."
-echo "Next: install a genuine MT5 terminal/MetaEditor into /var/lib/destinedfx/terminal-template."
+echo "Next: install genuine MT5/MetaEditor with --wineprefix /var/lib/destinedfx/terminal-template-prefix, then review the template paths in host.env."
 echo "Then edit bridge.env with your HTTPS domain, set the Ed25519 public key in management-step-up-public.pem, configure the news provider, and run rebuild.sh self-hosted."
