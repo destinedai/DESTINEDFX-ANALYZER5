@@ -419,3 +419,15 @@ def test_requested_phone_take_profit_must_meet_existing_cost_adjusted_net_two_r(
     assert "if(preserveRequestedTarget)" in source
     assert "suppliedDistance+tick*0.5<requiredTargetDistance" in source
     assert "Requested take-profit does not meet the cost-adjusted net 1:2 risk/reward requirement" in source
+
+
+def test_phone_position_stop_edit_only_tightens_sl_and_preserves_tp():
+    source = (Path(__file__).parent / "DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
+    assert 'action=="TIGHTEN_POSITION_SL"' in source
+    assert "bool ExecutePhonePositionStopTighten(" in source
+    assert "PositionSelectByTicket(ticket)" in source
+    assert "trade.PositionModify(ticket,newStop,currentTake)" in source
+    assert "SYMBOL_TRADE_STOPS_LEVEL" in source
+    assert "SYMBOL_TRADE_FREEZE_LEVEL" in source
+    assert 'g_lastSignal="TIGHTEN-"+requestId' in source
+    assert 'g_sigExecutionState="POSITION_SL_TIGHTENED"' in source
