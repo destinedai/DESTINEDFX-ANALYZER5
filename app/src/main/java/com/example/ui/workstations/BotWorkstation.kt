@@ -611,7 +611,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     }
                                 }
                             }
-                    }
+                    } else {
                         Text(
                             text = when {
                                 currentBrokerSnapshot == null -> "Broker prices unavailable · waiting for a verified terminal snapshot."
