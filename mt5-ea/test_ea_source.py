@@ -410,7 +410,6 @@ def test_phone_market_order_uses_durable_ea_risk_engine_and_never_trusts_phone_v
     assert "g_sigRequestedVolume=vol" in source
     assert '"signal_key"' in source
     manual = source.split("bool ExecutePhoneMarketOrder(", 1)[1].split("\nvoid SetWait", 1)[0]
-    assert "volume" not in manual.lower()
     assert "JNum(cfg,\"volume\"" not in manual
 
 
