@@ -107,6 +107,24 @@ def source_checks(root: Path) -> list[dict[str, str]]:
             "The Windows MT5 EA checks the current account, quote, news, risk, margin and broker result; volume is sized on-terminal.",
         ),
         (
+            "phone_position_stop_tightening_path",
+            (
+                'POSITION_MANAGEMENT_ACTIONS' in android
+                and 'TIGHTEN_POSITION_SL' in android
+                and 'positionStopTightenConfig(' in android
+                and 'def issue_position_stop_command(x,p):' in bridge
+                and 'if x.action in POSITION_MANAGEMENT_ACTIONS: return issue_position_stop_command(x,p)' in bridge
+                and 'POSITION_STOP_ALREADY_PENDING' in bridge
+                and 'POSITION_STOP_MUST_TIGHTEN' in bridge
+                and 'bool ExecutePhonePositionStopTighten(' in ea
+                and 'trade.PositionModify(ticket,newStop,currentTake)' in ea
+                and 'ReconcilePhonePositionStopState()' in ea
+                and 'mt5_position_stop_tighten_card' in workstation
+                and 'TIGHTEN_POSITION_SL' in workstation
+            ),
+            "A position edit may only tighten SL, preserves TP, and is reconciled from the exact broker ticket on the Windows EA.",
+        ),
+        (
             "apk_service_origins_are_configurable",
             all(token in gradle for token in (
                 'System.getenv("MT5_MANAGED_SERVICE_URL")',
