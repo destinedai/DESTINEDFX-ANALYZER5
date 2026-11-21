@@ -617,7 +617,7 @@ class MT5RemoteBridgeClient(
                 val currentStop = position.optDouble("stop_loss", Double.NaN)
                 val quote = snapshot.brokerQuotes?.singleOrNull { it.symbol == symbol }
                     ?: return "A fresh quote for the selected position symbol is unavailable."
-                val tolerance = kotlin.math.pow(10.0, -quote.digits.toDouble()) * 0.51
+                val tolerance = Math.pow(10.0, -quote.digits.toDouble()) * 0.51
                 if (!newStop.isFinite() || newStop <= 0.0 || !expectedStop.isFinite() ||
                     !currentStop.isFinite() || kotlin.math.abs(currentStop - expectedStop) > tolerance) {
                     return "The selected position SL changed or the new SL is invalid; refresh the position."
@@ -1083,7 +1083,7 @@ class MT5RemoteBridgeClient(
             val quote = snapshot.brokerQuotes?.singleOrNull { it.symbol == symbol }
                 ?: throw IllegalStateException("A verified quote for the selected position symbol is unavailable.")
             require(quote.ageMs in 0..15_000L && quote.timestampMs > 0L)
-            val tolerance = kotlin.math.pow(10.0, -quote.digits.toDouble()) * 0.51
+            val tolerance = Math.pow(10.0, -quote.digits.toDouble()) * 0.51
             val tighter = when (direction) {
                 "BUY" -> (currentStop <= 0.0 || newStopLoss > currentStop + tolerance) && newStopLoss < quote.bid
                 "SELL" -> (currentStop <= 0.0 || newStopLoss < currentStop - tolerance) && newStopLoss > quote.ask
