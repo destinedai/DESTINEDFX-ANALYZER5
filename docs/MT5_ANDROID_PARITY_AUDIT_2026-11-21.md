@@ -36,6 +36,7 @@
 - Exact spread is calculated from that terminal quote's own ask minus bid, formatted using the quote's broker-reported digits. It is not converted into broker "points" because the EA heartbeat does not include symbol tick-size metadata.
 - Invalid/non-finite/negative spread values are withheld.
 - Tests cover ordering and spread validation.
+- Corrected the EA's timeframe parser to accept W1 because the Bot strategy selector already advertises weekly scans; added a source-contract regression test.
 
 ## Acceptance still required
 
