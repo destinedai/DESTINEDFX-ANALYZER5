@@ -41,7 +41,7 @@ def test_public_ingress_is_only_caddy_and_backend_services_are_loopback():
 
 def test_host_bootstrap_provisions_encrypted_credentials_without_printing_them():
     bootstrap = (LINUX_HOST / "bootstrap-self-hosted-host.sh").read_text()
-    assert 'API_USER="${DESTINEDFX_API_USER:-destinedfx-api}"' in bootstrap
+    assert "API_USER=destinedfx-api" in bootstrap
     assert "destinedfx-postgres-password.cred" in bootstrap
     assert "destinedfx-management-step-up-private-key-pem.cred" in bootstrap
     assert 'systemd-creds encrypt --name=step-up-private-key-pem' in bootstrap
@@ -57,6 +57,7 @@ def test_slot_worker_and_bridge_use_persistent_credentials_and_isolation():
     assert "User=root" in slot_worker
     assert "LoadCredentialEncrypted=worker-token:" in slot_worker
     assert "DESTINEDFX_HOST_STATE_DIR=/var/lib/destinedfx/host-runtime" in slot_worker
+    assert "/etc/passwd /etc/shadow /etc/group /etc/gshadow /etc/subuid /etc/subgid" in slot_worker
     assert "linux-slot-worker.py --loop" in slot_worker
     assert "User=destinedfx" in bridge
     assert "LoadCredentialEncrypted=credentials-fernet-key:" in bridge
