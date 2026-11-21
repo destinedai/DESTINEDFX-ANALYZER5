@@ -582,10 +582,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Text("SELECTED BROKER · MT5 TERMINAL PRICES", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_broker_quotes_header"))
                     if (brokerQuotesReady) {
                         terminalQuotes
-                            .sortedWith(compareBy({ it.symbol.lowercase(java.util.Locale.ROOT) }, { it.symbol }))
+                            .let(::sortedVerifiedBrokerQuotes)
                             .forEach { quote ->
                                 val priceFormat = "%.${quote.digits}f"
-                                val spread = (quote.ask - quote.bid).takeIf { it.isFinite() && it >= 0.0 }
+                                val spread = verifiedBrokerSpread(quote)
                                 Row(
                                     modifier = Modifier.fillMaxWidth().testTag("mt5_broker_quote_${quote.symbol}"),
                                     horizontalArrangement = Arrangement.SpaceBetween,
