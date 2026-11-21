@@ -775,10 +775,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             title = { Text("Confirm stop-loss tightening?") },
                             text = {
                                 Text(
-                                    "\${selectedBrokerBrand} \${selectedAccountMode} · \${currentBrokerSnapshot?.actualLogin} @ \${currentBrokerSnapshot?.actualServer}\n" +
-                                    "\${selectedStopSide} \${selectedStopPosition?.optString("symbol", "—")} · ticket \${positionStopTicket}\n" +
-                                    "Current SL \${currentStopLoss} → proposed SL \${positionStopDraft}\n" +
-                                    "TP \${selectedStopPosition?.optString("take_profit", "unavailable")} will remain unchanged.\n\n" +
+                                    "${selectedBrokerBrand} ${selectedAccountMode} · ${currentBrokerSnapshot?.actualLogin} @ ${currentBrokerSnapshot?.actualServer}\n" +
+                                    "${selectedStopSide} ${selectedStopPosition?.optString("symbol", "—")} · ticket ${positionStopTicket}\n" +
+                                    "Current SL ${currentStopLoss} → proposed SL ${positionStopDraft}\n" +
+                                    "TP ${selectedStopPosition?.optString("take_profit", "unavailable")} will remain unchanged.\n\n" +
                                     "This request can only tighten protection. It cannot widen/remove a stop or change TP. The Windows EA re-checks both position identifiers, current SL, broker quote and stop/freeze levels before applying it."
                                 )
                             },
