@@ -49,6 +49,22 @@ def secret_value(name):
     finally:
         if fd is not None:
             os.close(fd)
+def text_setting(name):
+    """Resolve non-secret multiline configuration from the environment or an owner-managed file."""
+    value=os.getenv(name,'')
+    if value:
+        return value.strip()
+    file_path=os.getenv(name+'_FILE','').strip()
+    if not file_path:
+        return ''
+    try:
+        fd=os.open(file_path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_CLOEXEC',0))
+        with os.fdopen(fd,'r',encoding='utf-8') as stream:
+            return stream.read(16385).strip()
+    except (OSError,UnicodeError):
+        return ''
+
+
 def configured_host_profile(value=None):
     """Resolve an explicit host profile; an unspecified deployment is never trusted as persistent."""
     configured=os.getenv('BRIDGE_HOST_PROFILE','EPHEMERAL') if value is None else value
@@ -153,7 +169,7 @@ def news_provider_configuration():
         return {'configured':configured,'kind':kind if configured else 'unconfigured'}
     except Exception:
         return {'configured':False,'kind':'unconfigured'}
-MANAGEMENT_STEP_UP_PUBLIC_KEY=os.getenv('MANAGEMENT_STEP_UP_PUBLIC_KEY','').strip()
+MANAGEMENT_STEP_UP_PUBLIC_KEY=text_setting('MANAGEMENT_STEP_UP_PUBLIC_KEY')
 MANAGEMENT_STEP_UP_ISSUER=os.getenv('MANAGEMENT_STEP_UP_ISSUER','destinedfx-management').strip()
 MANAGEMENT_STEP_UP_AUDIENCE=os.getenv('MANAGEMENT_STEP_UP_AUDIENCE','destinedfx-bridge').strip()
 
