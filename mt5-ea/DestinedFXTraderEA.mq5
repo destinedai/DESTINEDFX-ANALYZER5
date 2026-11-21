@@ -454,6 +454,12 @@ bool ExecutePhonePositionStopTighten(string cfg,string requestId,string &outcome
    long quoteStamp=(long)JNum(cfg,"quote_timestamp_ms",0);
    long expires=(long)JNum(cfg,"expires_at_epoch",0);
    if(!g_startupRecoveryReady){message="Startup broker snapshot and persisted journals are not reconciled";return false;}
+   if(g_sigExecutionState=="SUBMISSION_INTENT"||g_sigExecutionState=="SUBMISSION_UNKNOWN"||
+      g_sigExecutionState=="UNKNOWN_REQUIRES_RECONCILIATION"||
+      g_sigExecutionState=="POSITION_SL_MODIFY_INTENT"){
+      message="A previous broker operation has an unresolved result; reconcile it before another position edit";
+      return false;
+   }
    if(StringLen(requestId)!=36||ticket==0||StringFormat("%I64u",ticket)!=ticketText||symbol==""){
       message="Invalid canonical MT5 position ticket, symbol or request ID";return false;
    }
@@ -614,9 +620,13 @@ void ReconcilePhonePositionStopState(){
       g_sigState="MANUAL_MANAGEMENT";
       g_sigRationale="Reconciled from the current broker position after an uncertain response; TP remained unchanged";
    }else if(MathAbs(actualStop-g_sigActualEntry)<=tolerance){
+      // A timed-out server request can still be in flight. Do not call it
+      // unapplied until the same broker position has remained unchanged for
+      // a conservative reconciliation interval.
+      if(g_sigSubmittedAt<=0||TimeGMT()-g_sigSubmittedAt<30)return;
       g_sigExecutionState="POSITION_SL_NOT_APPLIED";
       g_sigState="MANUAL_MANAGEMENT";
-      g_sigRationale="Current broker position confirms the requested tighter stop was not applied; original SL and TP remain unchanged";
+      g_sigRationale="After the reconciliation interval, the broker position still has its original SL and TP; no change was applied";
    }else return;
    if(!PersistOrderState()){
       g_sigExecutionState="SUBMISSION_UNKNOWN";
