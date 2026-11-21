@@ -340,7 +340,7 @@ bool ExecutePhoneMarketOrder(string cfg,string requestId,string &outcome,string 
    if(!TerminalInfoInteger(TERMINAL_CONNECTED)||!MQLInfoInteger(MQL_TRADE_ALLOWED)||
       !AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)){message="MT5 terminal or broker trade permission is unavailable";return false;}
    if(g_state!="READY"&&g_state!="RUNNING"){message="Phone market orders are blocked while the EA is "+g_state;return false;}
-   if(g_terminalToken==""||g_lastAuthenticatedBridgeUtc==0||
+   if(g_lastAuthenticatedBridgeUtc==0||
       TimeGMT()-g_lastAuthenticatedBridgeUtc>=HEARTBEAT_STALE_SECONDS){message="Authenticated Bridge heartbeat is missing or stale";return false;}
    if(risk<=0||risk>1.0||risk>g_riskPercent+0.0000001||!Finite(risk)||
       !Finite(sl)||!Finite(tp)||sl<=0||tp<=0){message="Phone order risk or protective prices exceed the configured EA limits";return false;}
