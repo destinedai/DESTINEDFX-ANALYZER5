@@ -273,6 +273,72 @@ class MT5RemoteBridgeClientTest {
         lastSignal = null, newsVerdict = null, raw = JSONObject()
     )
 
+
+
+    @Test fun phoneMarketOrderConfigIsBrokerQuoteBoundAndSerializedWithoutLotSize() {
+        val snapshot = phoneMarketOrderSnapshot()
+        val config = MT5RemoteBridgeClient.marketOrderConfig(
+            snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.25
+        )
+        assertEquals("123", config.getString("account_login"))
+        assertEquals("Broker-Demo", config.getString("account_server"))
+        assertEquals("DEMO", config.getString("account_mode"))
+        assertEquals("EURUSD", config.getString("symbol"))
+        assertEquals("BUY", config.getString("side"))
+        assertEquals(1.10000, config.getDouble("expected_bid"), 0.0000001)
+        assertEquals(1.10020, config.getDouble("expected_ask"), 0.0000001)
+        assertFalse(config.has("volume"))
+
+        val requestId = "2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18"
+        val payload = MT5RemoteBridgeClient.commandPayload(requestId, "PLACE_MARKET_ORDER", config)
+        assertEquals("PLACE_MARKET_ORDER", payload.getString("action"))
+        assertEquals(requestId, payload.getString("request_id"))
+        assertEquals("EURUSD", payload.getJSONObject("config").getString("symbol"))
+        assertFalse(payload.getJSONObject("config").has("tickets"))
+    }
+
+    @Test fun phoneMarketOrderConfigRejectsRiskAboveEaCapAndInvalidProtection() {
+        val snapshot = phoneMarketOrderSnapshot()
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.marketOrderConfig(
+                snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.30
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.marketOrderConfig(
+                snapshot, side = "BUY", stopLoss = 1.10100, takeProfit = 1.12000, riskPercent = 0.20
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.marketOrderConfig(
+                snapshot.copy(hostProfile = com.example.data.broker.HostProfile.EPHEMERAL),
+                side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.20
+            )
+        }
+    }
+
+    private fun phoneMarketOrderSnapshot(): MT5RemoteBridgeClient.Snapshot {
+        val base = snapshot(emptyList())
+        val now = System.currentTimeMillis()
+        val raw = JSONObject()
+            .put("configuration", JSONObject().put("symbols", JSONArray().put("EURUSD")))
+            .put("risk_controls", JSONObject()
+                .put("risk_percent", 0.25)
+                .put("max_concurrent_positions", 2)
+                .put("authorized", true)
+                .put("daily_loss_clear", true)
+                .put("risk_caps_clear", true))
+        return base.copy(
+            hostProfile = com.example.data.broker.HostProfile.PERSISTENT,
+            newsVerdict = JSONObject().put("status", "CLEAR"),
+            raw = raw,
+            brokerQuotes = listOf(com.example.data.trade.VerifiedBrokerQuote(
+                symbol = "EURUSD", bid = 1.10000, ask = 1.10020, digits = 5,
+                timestampMs = now, ageMs = 0L
+            ))
+        )
+    }
+
     @Test fun serverReturnedTradeTargetListsMustBeCanonicalAndUnique() {
         assertEquals(
             listOf("1", "42"),
