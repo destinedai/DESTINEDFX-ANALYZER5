@@ -16,7 +16,8 @@ The Android app is the remote controller. The actual MT5 terminal and broker exe
 | History | Broker closed-deal snapshots and trade-report synchronization | Implemented, subject to broker history returned by terminal |
 | Analyzer charts | Separate analysis/provider market-data path | Available, but not claimed as the same broker-native MT5 chart |
 | Pending order placement | Limit/stop order entry from phone | Not yet implemented |
-| Modify position SL/TP | Remote broker-side position protection edits | Not yet implemented |
+| Tighten position SL | Exact-ticket, account-bound, quote-bound stop tightening; EA checks broker stop/freeze distance and preserves the current TP | Implemented (tighten-only) |
+| Widen/remove position SL or modify TP | Broader broker-side protection changes | Not implemented; loosening/removal is intentionally blocked |
 | Modify pending order | Remote pending entry/SL/TP/expiry edits | Not yet implemented |
 | Full MT5 chart workflow | Broker OHLC/timeframe switching and terminal-native chart object/indicator settings | Not yet verified |
 | Market Depth | Broker DOM subscriptions and level snapshots | Not yet implemented/verified |
@@ -41,6 +42,11 @@ The EA records a durable order intent before calling the broker. The Bridge retu
 ### Current symbol limitation
 
 The EA heartbeat currently carries one news verdict at a time, for the first configured symbol. Until per-symbol news telemetry is implemented, manual market orders are limited to that same first configured symbol. The app does not reuse a verdict for another symbol.
+
+
+### Position stop tightening
+
+The phone can select a fresh open-position ticket and request a tighter SL. The Bridge checks the current ticket, direction, old SL, fresh bid/ask and exact account. The Windows EA then rechecks the authenticated Bridge session, position ticket, old SL, current quote, broker tick size and stop/freeze levels before using `CTrade.PositionModify(ticket,newSL,currentTP)`. The existing TP is passed through unchanged. BUY stops can only move upward and remain below bid; SELL stops can only move downward and remain above ask. A wider or removed SL is rejected. The app only clears the pending request after a fresh heartbeat shows the same ticket with the new SL.
 
 ## DEMO and LIVE
 
