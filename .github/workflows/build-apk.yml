@@ -35,6 +35,8 @@ jobs:
         run: python -m pytest -q bridge
       - name: Run LIVE activation preflight tests (read-only)
         run: python -m pytest -q scripts/test_live_activation_preflight.py
+      - name: Run phone-to-MT5 remote-controller preflight tests (read-only)
+        run: python -m pytest -q scripts/test_mt5_remote_controller_preflight.py
       - name: Build and smoke-test the owner Docker bridge image
         run: |
           env BRIDGE_BASE_URL=https://bridge.ci.example.ts.net \
