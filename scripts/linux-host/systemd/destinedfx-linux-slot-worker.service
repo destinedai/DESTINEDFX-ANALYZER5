@@ -37,7 +37,8 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 LockPersonality=true
-ReadWritePaths=/var/lib/destinedfx/host-runtime /home/destinedfx-slots /etc/passwd /etc/shadow /etc/group /etc/gshadow /etc/subuid /etc/subgid
+# useradd/userdel lock, write temporary account files and atomically rename them in /etc.
+ReadWritePaths=/var/lib/destinedfx/host-runtime /home/destinedfx-slots /etc
 TimeoutStopSec=30
 
 [Install]
