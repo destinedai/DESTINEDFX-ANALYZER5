@@ -30,6 +30,12 @@ try {
     $env:BRIDGE_HOST_MODE='windows-owner'
     $env:BRIDGE_HOST_PROFILE='PERSISTENT'
     $env:EXECUTION_STORAGE_DURABLE='true'
+    # Without a configured economic calendar, the Bridge correctly reports NEWS UNKNOWN
+    # and blocks every new entry. Use the documented no-key public calendar by default;
+    # an operator may override it with another compatible HTTPS provider.
+    if ([string]::IsNullOrWhiteSpace($env:NEWS_PROVIDER_URL)) {
+        $env:NEWS_PROVIDER_URL='https://showmytrades.com/api/public/calendar/v1'
+    }
     $env:DESTINEDFX_WORKER_ID=$workerId
     $env:PYTHONUNBUFFERED='1'
 } catch {
@@ -135,7 +141,7 @@ function Wait-BridgeConfiguration {
         Start-Sleep -Seconds 2
         try {
             $ready=Invoke-RestMethod -Uri 'http://127.0.0.1:8000/health/config' -TimeoutSec 5
-            if($ready.database -eq 'ok' -and $ready.managed_execution -eq 'configured'){return}
+            if($ready.database -eq 'ok' -and $ready.managed_execution -eq 'configured' -and $ready.news_provider_configured -eq $true){return}
         } catch {}
     }
     throw 'Bridge did not reach durable local readiness.'
@@ -216,7 +222,7 @@ try {
     }
 } finally {
     foreach($proc in @($worker,$bridge)){if($proc -and -not $proc.HasExited){Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue}}
-    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','BRIDGE_HOST_MODE','BRIDGE_HOST_PROFILE','EXECUTION_STORAGE_DURABLE','MANAGEMENT_STEP_UP_PUBLIC_KEY','MANAGEMENT_STEP_UP_ISSUER','MANAGEMENT_STEP_UP_AUDIENCE','CREDENTIALS_FERNET_KEY','WORKER_BOOTSTRAP_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','DESTINEDFX_WORKER_RENEWAL_CHECK_SECONDS','DESTINEDFX_WORKER_RENEWAL_MARGIN_SECONDS','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
+    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','BRIDGE_HOST_MODE','BRIDGE_HOST_PROFILE','EXECUTION_STORAGE_DURABLE','MANAGEMENT_STEP_UP_PUBLIC_KEY','MANAGEMENT_STEP_UP_ISSUER','MANAGEMENT_STEP_UP_AUDIENCE','CREDENTIALS_FERNET_KEY','WORKER_BOOTSTRAP_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','DESTINEDFX_WORKER_RENEWAL_CHECK_SECONDS','DESTINEDFX_WORKER_RENEWAL_MARGIN_SECONDS','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','NEWS_PROVIDER_URL','NEWS_PROVIDER_TOKEN','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
     $env:CREDENTIALS_FERNET_KEY=$null;$env:WORKER_BOOTSTRAP_TOKEN=$null;$env:DESTINEDFX_WORKER_TOKEN=$null
     if($mutexOwned){$mutex.ReleaseMutex()}
     if($mutex){$mutex.Dispose()}

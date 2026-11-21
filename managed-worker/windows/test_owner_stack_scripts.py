@@ -12,6 +12,11 @@ INSTALLER = (ROOT / "install-owner-stack.ps1").read_text(encoding="utf-8")
 SUPERVISOR = (ROOT / "run-owner-stack.ps1").read_text(encoding="utf-8")
 
 
+def test_installer_explains_two_terminal_minimum_for_live():
+    assert "LIVE needs at least 2 for separate DEMO and LIVE profiles" in INSTALLER
+    assert "Measured safe simultaneous MT5 terminal capacity" in INSTALLER
+
+
 def test_installer_migrates_and_atomically_validates_dpapi_bundle():
     assert "$secretNeedsWrite = $false" in INSTALLER
     assert "Write-DpapiSecretBundle" in INSTALLER
@@ -43,7 +48,7 @@ def test_windows_supervisor_declares_host_mode_and_loads_validated_step_up_publi
     assert "management_step_up_public_key" in SUPERVISOR
     assert "MANAGEMENT_STEP_UP_PUBLIC_KEY" in SUPERVISOR
     assert "Ed25519PublicKey" in SUPERVISOR
-    assert "MANAGEMENT_STEP_UP_PUBLIC_KEY" in SUPERVISOR.split("finally {", 1)[-1]
+    assert "MANAGEMENT_STEP_UP_PUBLIC_KEY" in SUPERVISOR.rsplit("} finally {", 1)[-1]
 
 
 def test_installer_accepts_only_backend_ed25519_public_key_file_and_persists_it():
@@ -79,3 +84,15 @@ def test_step_up_key_exporter_derives_matching_public_key_without_copying_privat
     )
     assert b"PRIVATE KEY" not in exported
     assert "private key was not copied" in result.stdout.lower()
+
+
+def test_windows_supervisor_configures_a_real_news_calendar_by_default():
+    # New entries must remain blocked when the feed is unavailable; the Windows
+    # owner host nevertheless needs an actual provider configured by default.
+    assert "if ([string]::IsNullOrWhiteSpace($env:NEWS_PROVIDER_URL))" in SUPERVISOR
+    assert "$env:NEWS_PROVIDER_URL='https://showmytrades.com/api/public/calendar/v1'" in SUPERVISOR
+    assert "$ready.news_provider_configured -eq $true" in SUPERVISOR
+    assert SUPERVISOR.index("$env:NEWS_PROVIDER_URL='https://showmytrades.com/api/public/calendar/v1'") < SUPERVISOR.index("Start-ManagedChild 'bridge'")
+    cleanup = SUPERVISOR.split("finally {", 1)[-1]
+    assert "'NEWS_PROVIDER_URL'" in cleanup
+    assert "'NEWS_PROVIDER_TOKEN'" in cleanup
