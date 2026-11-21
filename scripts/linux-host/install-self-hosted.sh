@@ -134,8 +134,10 @@ API_USER=destinedfx-api
 id "$API_USER" >/dev/null 2>&1 || block "management service account '$API_USER' is missing; run bootstrap-self-hosted-host.sh."
 API_UID="$(id -u "$API_USER")"
 API_GID="$(id -g "$API_USER")"
-[[ "$API_UID" -gt 0 && "$API_GID" -gt 0 ]] || block "Management API service account must not be root."
-[[ "$OWNER_UID" -gt 0 && "$OWNER_GID" -gt 0 ]] || block "Bridge service account must not be root."
+IFS=: read -r _ _ _ _ _ BRIDGE_HOME BRIDGE_SHELL < <(getent passwd "$SERVICE_USER")
+IFS=: read -r _ _ _ _ _ API_HOME API_SHELL < <(getent passwd "$API_USER")
+[[ "$API_UID" -gt 0 && "$API_GID" -gt 0 && "$API_HOME" == "/var/lib/destinedfx-api" && "$API_SHELL" == "/usr/sbin/nologin" ]] || block "Management API service identity must be non-root, nologin, and own /var/lib/destinedfx-api."
+[[ "$OWNER_UID" -gt 0 && "$OWNER_GID" -gt 0 && "$BRIDGE_HOME" == "/var/lib/destinedfx" && "$BRIDGE_SHELL" == "/usr/sbin/nologin" ]] || block "Bridge service identity must be non-root, nologin, and own /var/lib/destinedfx."
 [[ "$DESTINEDFX_HOST_OWNER_UID" == "$OWNER_UID" && "$DESTINEDFX_HOST_OWNER_GID" == "$OWNER_GID" ]] || block "host.env owner UID/GID does not match the Bridge service user."
 [[ "$BRIDGE_HOST_PROFILE" == "PERSISTENT" && "$BRIDGE_HOST_MODE" == "linux-host" && "$EXECUTION_STORAGE_DURABLE" == "true" ]] || block "host.env must select persistent Linux execution."
 [[ "$DESTINEDFX_ISOLATED_SLOTS" == "true" ]] || block "per-user isolated slots must be enabled."
