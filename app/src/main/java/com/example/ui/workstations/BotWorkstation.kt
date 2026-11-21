@@ -286,7 +286,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     )
                                     val positionTicket = signal?.optString("position").orEmpty()
                                     val signalStop = signal?.optDouble("stop_loss", Double.NaN) ?: Double.NaN
-                                    val openPositions = fresh.raw.optJSONArray("open_positions")
+                                    val openPositions = (fresh.raw.optJSONArray("open_positions") ?: fresh.raw.optJSONArray("positions"))
                                     val confirmedStop = if (bridgePendingAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS) {
                                         (0 until (openPositions?.length() ?: 0)).mapNotNull { openPositions?.optJSONObject(it) }
                                             .firstOrNull { it.optString("ticket") == positionTicket }
