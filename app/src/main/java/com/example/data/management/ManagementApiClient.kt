@@ -32,14 +32,6 @@ class ManagementApiClient(
     private fun currentBaseUrl(): String =
         validatedOrigin(originProvider()) ?: throw ManagementException(ManagementFailure.UNCONFIGURED)
 
-    companion object {
-        /** Production builds use only their embedded host. Dev builds may select a verified runtime origin. */
-        internal fun resolveConfiguredOrigin(savedOrigin: String, buildOrigin: String, locked: Boolean): String =
-            if (locked) validatedOrigin(buildOrigin).orEmpty()
-            else validatedOrigin(savedOrigin).takeIf { savedOrigin.isNotBlank() }
-                ?: validatedOrigin(buildOrigin).orEmpty()
-    }
-
     private fun verifiedBaseUrl(): String {
         val origin = currentBaseUrl()
         verifyOrigin(origin, http)
@@ -208,6 +200,12 @@ class ManagementApiClient(
     }
 
     companion object {
+        /** Production builds use only their embedded host. Dev builds may select a verified runtime origin. */
+        internal fun resolveConfiguredOrigin(savedOrigin: String, buildOrigin: String, locked: Boolean): String =
+            if (locked) validatedOrigin(buildOrigin).orEmpty()
+            else validatedOrigin(savedOrigin).takeIf { savedOrigin.isNotBlank() }
+                ?: validatedOrigin(buildOrigin).orEmpty()
+
         private val JSON = "application/json; charset=utf-8".toMediaType()
         private const val EXPECTED_STEP_UP_ISSUER = "destinedfx-management"
         private const val EXPECTED_STEP_UP_AUDIENCE = "destinedfx-bridge"
