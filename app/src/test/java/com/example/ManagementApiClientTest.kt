@@ -191,7 +191,7 @@ class ManagementApiClientTest {
         assertEquals(ManagementFailure.SERVICE_UNAVAILABLE, error.failure)
     }
 
-    private class FakeTokenStore(var token: String?, var expiry: String? = null, override val isAvailable: Boolean = true) : AccessTokenStore {
+    private open class FakeTokenStore(var token: String?, var expiry: String? = null, override val isAvailable: Boolean = true) : AccessTokenStore {
         override fun save(token: String, expiresAt: String): Boolean { this.token = token; expiry = expiresAt; return true }
         override fun validToken(nowMs: Long): String? = token
         override fun clear(): Boolean { token = null; expiry = null; return true }
