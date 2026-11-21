@@ -1,0 +1,38 @@
+[Unit]
+Description=DestinedFX application-management API (same self-hosted machine)
+Requires=destinedfx-postgres.service
+After=destinedfx-postgres.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=destinedfx-api
+Group=destinedfx-api
+WorkingDirectory=/opt/destinedfx/management
+EnvironmentFile=-/etc/destinedfx/bridge.env
+Environment=POSTGRES_DB=app_management
+Environment=POSTGRES_USER=destinedfx_management
+Environment=POSTGRES_HOST=127.0.0.1
+Environment=POSTGRES_PORT=5433
+Environment=POSTGRES_PASSWORD_FILE=%d/postgres-password
+Environment=STEP_UP_PRIVATE_KEY_PEM_FILE=%d/step-up-private-key-pem
+Environment=STEP_UP_ISSUER=destinedfx-management
+Environment=STEP_UP_AUDIENCE=destinedfx-bridge
+LoadCredentialEncrypted=postgres-password:/etc/credstore.encrypted/destinedfx-postgres-password.cred
+LoadCredentialEncrypted=step-up-private-key-pem:/etc/credstore.encrypted/destinedfx-management-step-up-private-key-pem.cred
+ExecStartPre=/opt/destinedfx/management/venv/bin/alembic upgrade head
+ExecStart=/opt/destinedfx/management/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --proxy-headers --forwarded-allow-ips=127.0.0.1 --timeout-keep-alive 5 --limit-concurrency 100
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+ReadWritePaths=/var/lib/destinedfx-api
+
+[Install]
+WantedBy=multi-user.target
