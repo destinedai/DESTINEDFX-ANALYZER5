@@ -13,6 +13,10 @@ CONTAINER=destinedfx-management-postgres
   echo "BLOCKED: protected PostgreSQL app credential is missing." >&2
   exit 3
 }
+[[ "$(stat -c '%u' "$POSTGRES_APP_PASSWORD_FILE")" == "0" && "$(stat -c '%h' "$POSTGRES_APP_PASSWORD_FILE")" == "1" ]] || {
+  echo "BLOCKED: PostgreSQL app credential must be root-owned and single-linked." >&2
+  exit 3
+}
 mode="$(stat -c '%a' "$POSTGRES_APP_PASSWORD_FILE")"
 [[ "$mode" == "400" || "$mode" == "600" ]] || {
   echo "BLOCKED: PostgreSQL app credential permissions are too broad." >&2
@@ -35,8 +39,8 @@ app_password="$(cat -- "$POSTGRES_APP_PASSWORD_FILE")"
   printf '%s\n' "GRANT ALL PRIVILEGES ON SCHEMA public TO $APP_USER;"
   printf '%s\n' "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $APP_USER;"
   printf '%s\n' "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $APP_USER;"
-  printf '%s\n' "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $APP_USER;"
-  printf '%s\n' "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $APP_USER;"
+  printf '%s\n' "ALTER DEFAULT PRIVILEGES FOR ROLE $APP_USER IN SCHEMA public GRANT ALL ON TABLES TO $APP_USER;"
+  printf '%s\n' "ALTER DEFAULT PRIVILEGES FOR ROLE $APP_USER IN SCHEMA public GRANT ALL ON SEQUENCES TO $APP_USER;"
 } | docker exec -i "$CONTAINER" psql --no-psqlrc --set=ON_ERROR_STOP=1 --quiet --username="$ADMIN_USER" --dbname=postgres
 
 unset app_password
