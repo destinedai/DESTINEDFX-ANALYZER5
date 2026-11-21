@@ -54,7 +54,8 @@ install -d -o root -g root -m 0700 "$CONFIG_DIR" "$CRED_DIR"
 install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0700   /var/lib/destinedfx   /var/lib/destinedfx/host-runtime   /var/lib/destinedfx/host-runtime/runtime   /var/lib/destinedfx/host-runtime/runtime/slot-runtime   /var/lib/destinedfx/host-runtime/isolated-slots
 install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0750 /var/lib/destinedfx/terminal-template-prefix
 install -d -o "$API_UID" -g "$API_GID" -m 0700 /var/lib/destinedfx-api
-install -d -o root -g root -m 0700 /var/lib/destinedfx-management /var/lib/destinedfx-management/postgres
+install -d -o root -g root -m 0700 /var/lib/destinedfx-management
+install -d -o 999 -g 999 -m 0700 /var/lib/destinedfx-management/postgres
 install -d -o root -g root -m 0711 /home/destinedfx-slots
 
 if [[ ! -f "$CONFIG_DIR/host.env" ]]; then
