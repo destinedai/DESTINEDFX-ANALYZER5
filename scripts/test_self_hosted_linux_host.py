@@ -60,7 +60,7 @@ def test_slot_worker_and_bridge_use_persistent_credentials_and_isolation():
     assert "User=root" in slot_worker
     assert "LoadCredentialEncrypted=worker-token:" in slot_worker
     assert "DESTINEDFX_HOST_STATE_DIR=/var/lib/destinedfx/host-runtime" in slot_worker
-    assert "/etc/passwd /etc/shadow /etc/group /etc/gshadow /etc/subuid /etc/subgid" in slot_worker
+    assert "ReadWritePaths=/var/lib/destinedfx/host-runtime /home/destinedfx-slots /etc" in slot_worker
     assert "linux-slot-worker.py --loop" in slot_worker
     assert "User=destinedfx" in bridge
     assert "LoadCredentialEncrypted=credentials-fernet-key:" in bridge
@@ -98,3 +98,11 @@ def test_management_api_does_not_use_postgres_superuser():
     assert "PASSWORD '$app_password'" in provisioner
     assert "docker exec -i" in provisioner
     assert "superuser=false" in provisioner
+
+def test_slot_worker_sandbox_allows_atomic_system_account_updates_only_in_host_worker():
+    worker = (LINUX_HOST / "systemd" / "destinedfx-linux-slot-worker.service").read_text()
+    bridge = (LINUX_HOST / "systemd" / "destinedfx-bridge.service").read_text()
+    management = (LINUX_HOST / "systemd" / "destinedfx-management-api.service").read_text()
+    assert "ReadWritePaths=/var/lib/destinedfx/host-runtime /home/destinedfx-slots /etc" in worker
+    assert "ReadWritePaths=/etc" not in bridge
+    assert "ReadWritePaths=/etc" not in management
