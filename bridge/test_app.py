@@ -1313,7 +1313,14 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
 def authorize_live_fixture(p, ah, job, actual):
     challenge=client.post('/v1/app/live-challenge',headers=ah)
     assert challenge.status_code==200, challenge.text
-    phrase=challenge.json()['typed_confirmation']
+    challenge_body=challenge.json()
+    assert challenge_body['pairing_id']==p['pairing_id']
+    assert challenge_body['broker_brand']=='FBS'
+    assert challenge_body['login']==actual['login']
+    assert challenge_body['server']==actual['server']
+    assert challenge_body['account_mode']=='LIVE'
+    assert challenge_body['credential_generation']=='live-generation'
+    phrase=challenge_body['typed_confirmation']
     claims={'iss':'destinedfx-management','aud':'destinedfx-bridge','sub':'fixture-user','tenant_id':'fixture-user','sid':'fixture-session',
             'jti':uuid.uuid4().hex,'iat':int(time.time()),'exp':int(time.time())+120,
             'pairing_id':p['pairing_id'],'challenge_id':challenge.json()['challenge_id'],
