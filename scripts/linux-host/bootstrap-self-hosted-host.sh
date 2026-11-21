@@ -29,7 +29,7 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 OWNER_UID="$(id -u "$SERVICE_USER")"
 OWNER_GID="$(id -g "$SERVICE_USER")"
-API_USER="${DESTINEDFX_API_USER:-destinedfx-api}"
+API_USER=destinedfx-api
 if ! id "$API_USER" >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /var/lib/destinedfx-api --create-home --shell /usr/sbin/nologin "$API_USER"
 fi
