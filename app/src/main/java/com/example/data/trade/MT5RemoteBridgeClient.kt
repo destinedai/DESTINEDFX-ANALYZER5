@@ -610,7 +610,7 @@ class MT5RemoteBridgeClient(
                 val ticket = config.optString("ticket")
                 val newStop = config.optDouble("new_stop_loss", Double.NaN)
                 val expectedStop = config.optDouble("expected_stop_loss", Double.NaN)
-                val position = snapshot.positions.orEmpty().singleOrNull { exactIdentifier(it, "ticket") == ticket }
+                val position = positionRows(snapshot)?.singleOrNull { exactIdentifier(it, "ticket") == ticket }
                     ?: return "The exact MT5 position ticket is no longer present."
                 val symbol = position.optString("symbol")
                 val direction = position.optString("direction").uppercase()
