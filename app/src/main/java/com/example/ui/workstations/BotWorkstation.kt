@@ -676,7 +676,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
 
-                        val stopEditPositions = currentBrokerSnapshot?.raw?.optJSONArray("open_positions")
+                        val stopEditPositions = (currentBrokerSnapshot?.raw?.optJSONArray("open_positions") ?: currentBrokerSnapshot?.raw?.optJSONArray("positions"))
                         Card(
                             modifier = Modifier.fillMaxWidth().testTag("mt5_position_stop_tighten_card"),
                             colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
