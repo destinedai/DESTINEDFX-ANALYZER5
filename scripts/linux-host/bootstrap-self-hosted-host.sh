@@ -107,6 +107,7 @@ make_credential credentials-fernet-key "$CRED_DIR/destinedfx-credentials-fernet-
 make_credential worker-bootstrap-token "$CRED_DIR/destinedfx-worker-bootstrap-token.cred" token
 make_credential host-agent-token "$CRED_DIR/destinedfx-host-agent-token.cred" token
 make_credential postgres-password "$CRED_DIR/destinedfx-postgres-password.cred" token
+make_credential postgres-app-password "$CRED_DIR/destinedfx-postgres-app-password.cred" token
 
 if [[ ! -f "$CRED_DIR/destinedfx-management-step-up-private-key-pem.cred" ]]; then
   openssl genpkey -algorithm ED25519 -out "$TMP_DIR/step-up-private-key-pem"
