@@ -43,7 +43,7 @@ def test_windows_supervisor_declares_host_mode_and_loads_validated_step_up_publi
     assert "management_step_up_public_key" in SUPERVISOR
     assert "MANAGEMENT_STEP_UP_PUBLIC_KEY" in SUPERVISOR
     assert "Ed25519PublicKey" in SUPERVISOR
-    assert "MANAGEMENT_STEP_UP_PUBLIC_KEY" in SUPERVISOR.split("finally {", 1)[-1]
+    assert "MANAGEMENT_STEP_UP_PUBLIC_KEY" in SUPERVISOR.rsplit("} finally {", 1)[-1]
 
 
 def test_installer_accepts_only_backend_ed25519_public_key_file_and_persists_it():
