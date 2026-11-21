@@ -1475,7 +1475,7 @@ def test_demo_reacceptance_updates_stable_acceptance_and_revokes_live_lease(monk
         'X-Management-Identity':management_identity_assertion(),
     }
     refreshed=client.post('/v1/app/demo-acceptance',headers=demo_headers,json={
-        'confirm_demo':True,'evidence_document':demo_pass_document(),
+        'confirm_demo':True,'evidence_document':demo_pass_document(**pairing['demo_evidence_context']),
     })
     assert refreshed.status_code==200, refreshed.text
     assert refreshed.json()['acceptance_id']==pairing['demo_acceptance_id']
