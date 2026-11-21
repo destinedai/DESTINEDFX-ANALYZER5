@@ -19,7 +19,7 @@ def test_settings_builds_postgres_url_from_protected_password_file(monkeypatch, 
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL_FILE", raising=False)
     monkeypatch.setenv("POSTGRES_PASSWORD_FILE", str(password_file))
-    monkeypatch.setenv("POSTGRES_USER", "destinedfx_management")
+    monkeypatch.setenv("POSTGRES_USER", "destinedfx_app")
     monkeypatch.setenv("POSTGRES_DB", "app_management")
     monkeypatch.setenv("POSTGRES_HOST", "127.0.0.1")
     monkeypatch.setenv("POSTGRES_PORT", "5433")
@@ -27,7 +27,7 @@ def test_settings_builds_postgres_url_from_protected_password_file(monkeypatch, 
     settings = Settings(_env_file=None)
     url = settings.database_url.get_secret_value()
     assert url == (
-        "postgresql+psycopg://destinedfx_management:local-db%3Apassword%2F%23"
+        "postgresql+psycopg://destinedfx_app:local-db%3Apassword%2F%23"
         "@127.0.0.1:5433/app_management"
     )
     assert "local-db:password" not in url
