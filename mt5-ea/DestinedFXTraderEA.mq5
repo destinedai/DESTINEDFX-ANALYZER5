@@ -55,6 +55,12 @@ long g_eaStartedAtMs=0;
 string g_symbols[],g_tfs[]; string g_strategy="ict-silver-bullet"; double g_riskPercent=0.25,g_dailyLossPercent=2.0,g_initialVolume=0.01,g_maxVolume=0.01; bool g_scalingEnabled=false; bool g_startupRecoveryReady=false,g_journalsLoaded=false; int g_scalingMinClosedTrades=20,g_maxConcurrent=2; string g_sigState="WAIT",g_sigExecutionState="NONE",g_sigSymbol="",g_sigTf="",g_sigDirection="",g_sigRationale="Not scanned",g_sigRetcode="",g_sigDeal="",g_sigOrder="",g_sigPosition=""; double g_sigEntry=0,g_sigSL=0,g_sigTP=0,g_sigRisk=0,g_sigRequestedVolume=0,g_sigExecutedVolume=0,g_sigActualEntry=0; datetime g_sigSubmittedAt=0,g_sigOpenedAt=0; string g_newsStatus="UNKNOWN",g_newsDetail="NEWS UNKNOWN: no authenticated verdict",g_newsSource="",g_newsEvent="",g_newsCurrency=""; long g_newsRetrievedMs=0,g_newsCoverageFromMs=0,g_newsCoverageToMs=0,g_newsEventMs=0,g_newsBlackoutStartMs=0,g_newsBlackoutEndMs=0; int g_cursor=0; datetime g_lastScan=0,g_lastHeartbeat=0,g_lastAuthenticatedBridgeUtc=0,g_lastHeartbeatAcceptedUtc=0; double g_dayStartEquity=0; int g_day=-1; datetime g_liveAuthorizedUntil=0; bool g_dailyLossLocked=false; string g_dailyRiskStatus="UNKNOWN"; double g_dailyRiskUsedPct=-1.0;
 string g_processed[],g_ackOutcomes[],g_ackMessages[],g_ackResults[]; string g_seenSignals[]; string g_lastCommand="";
 string g_opRequest[],g_opAction[],g_opTicket[],g_opStatus[],g_opPhase[],g_opMessage[]; datetime g_opStarted[];
+// Forward declarations for shared parsers/serializers used by early config validation.
+void SplitCsv(string src,string &out[]);
+ENUM_TIMEFRAMES ParseTF(string s);
+bool Finite(double x);
+string Esc(string s);
+string JStr(string j,string key,string def);
 bool PendingType(long typ){return typ==ORDER_TYPE_BUY_LIMIT||typ==ORDER_TYPE_SELL_LIMIT||typ==ORDER_TYPE_BUY_STOP||typ==ORDER_TYPE_SELL_STOP||typ==ORDER_TYPE_BUY_STOP_LIMIT||typ==ORDER_TYPE_SELL_STOP_LIMIT;}
 
 string Trim(string s){ StringTrimLeft(s); StringTrimRight(s); return s; }
@@ -72,7 +78,7 @@ bool ValidConfig(string cfg,string &syms[],string &tfs[],double &risk,double &da
 string JsonArray(string &a[]){string r="[";for(int i=0;i<ArraySize(a);i++){if(i)r+=",";r+="\""+Esc(a[i])+"\"";}return r+"]";}
 bool MarketReady(string sym,ENUM_TIMEFRAMES tf){ MqlRates rates[]; ArraySetAsSeries(rates,true); if(CopyRates(sym,tf,0,2,rates)<2)return false; return rates[0].time>0 && TimeCurrent()-rates[0].time<=MathMax(120,PeriodSeconds(tf)*3); }
 bool Finite(double x){ return MathIsValidNumber(x) && x!=EMPTY_VALUE; }
-string Esc(string s){ StringReplace(s,"\","\\\"); StringReplace(s,"\"","\\""); StringReplace(s,"\r",""); StringReplace(s,"\n","\\n"); return s; }
+string Esc(string s){ StringReplace(s,"\\","\\\\"); StringReplace(s,"\"","\\\""); StringReplace(s,"\r",""); StringReplace(s,"\n","\\n"); return s; }
 string JStr(string j,string key,string def=""){ string k="\""+key+"\""; int p=StringFind(j,k); if(p<0)return def; p=StringFind(j,":",p+StringLen(k)); if(p<0)return def; p++; while(p<StringLen(j)&&(StringGetCharacter(j,p)==' '||StringGetCharacter(j,p)=='\t'))p++; if(StringGetCharacter(j,p)=='\"'){int e=p+1; while(e<StringLen(j)){if(StringGetCharacter(j,e)=='\"'&&StringGetCharacter(j,e-1)!='\\')break;e++;} return StringSubstr(j,p+1,e-p-1);} int e=p; while(e<StringLen(j)&&StringGetCharacter(j,e)!=','&&StringGetCharacter(j,e)!='}'&&StringGetCharacter(j,e)!=']')e++; return Trim(StringSubstr(j,p,e-p)); }
 double JNum(string j,string k,double d){string s=JStr(j,k,""); if(s=="")return d; return StringToDouble(s);}
 void RevokeSession(string reason){g_state="STOPPED";g_terminalToken="";g_lastAuthenticatedBridgeUtc=0;g_lastError=reason;g_lastReason="Bridge authorization revoked; fresh pairing code and EA reinitialization required";FileDelete("DestinedFX_terminal_token.txt");}
