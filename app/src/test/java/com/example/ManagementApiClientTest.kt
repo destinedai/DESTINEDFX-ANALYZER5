@@ -23,6 +23,75 @@ class ManagementApiClientTest {
             .forEach { assertNull("must reject $it", ManagementApiClient.validatedOrigin(it)) }
     }
 
+    @Test fun runtimeOriginIsAcceptedOnlyWhenBackendAndEdDsaKeyAreReady() {
+        val requests = mutableListOf<String>()
+        val pem = "-----BEGIN PUBLIC KEY-----\\n" + "A".repeat(48) + "\\n-----END PUBLIC KEY-----"
+        val http = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            val request = chain.request()
+            requests += request.url.encodedPath
+            assertNull("Public configuration probes must not carry a bearer", request.header("Authorization"))
+            val body = when (request.url.encodedPath) {
+                "/ready" -> """{"status":"ready","database":"ok"}"""
+                "/api/v1/auth/bridge-verification-key" -> JSONObject()
+                    .put("algorithm", "EdDSA")
+                    .put("public_key_pem", pem)
+                    .put("issuer", "destinedfx-management")
+                    .put("audience", "destinedfx-bridge").toString()
+                else -> "{}"
+            }
+            response(request, 200, body)
+        }).build()
+
+        assertEquals("https://api.example.org", ManagementApiClient.verifyOrigin("https://api.example.org/", http))
+        assertEquals(listOf("/ready", "/api/v1/auth/bridge-verification-key"), requests)
+    }
+
+    @Test fun runtimeOriginProbeRejectsBackendWithoutBridgeVerificationKey() {
+        val http = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            val request = chain.request()
+            val body = if (request.url.encodedPath == "/ready") """{"status":"ready"}"""
+                else """{"algorithm":"RS256","public_key_pem":"not-ed25519","issuer":"wrong","audience":"wrong"}"""
+            response(request, 200, body)
+        }).build()
+        val error = runCatching {
+            ManagementApiClient.verifyOrigin("https://api.example.org", http)
+        }.exceptionOrNull() as ManagementException
+        assertEquals(ManagementFailure.INVALID_RESPONSE, error.failure)
+    }
+
+    @Test fun managementBearerRemainsBoundToTheOriginThatIssuedIt() {
+        var origin = "https://first.example.org"
+        var savedOrigin = ""
+        val requests = mutableListOf<Pair<String, String?>>()
+        val store = object : FakeTokenStore(null) {
+            override fun saveForOrigin(token: String, expiresAt: String, origin: String): Boolean {
+                savedOrigin = origin
+                return save(token, expiresAt)
+            }
+            override fun validTokenForOrigin(origin: String, nowMs: Long): String? =
+                if (savedOrigin == origin) validToken(nowMs) else null
+        }
+        val http = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            val request = chain.request()
+            requests += request.url.host to request.header("Authorization")
+            if (request.url.encodedPath.endsWith("/auth/login")) {
+                response(request, 200,
+                    """{"access_token":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","expires_at":"2099-01-01T00:00:00Z","user":{"id":"u1","email":"a@example.org"}}""")
+            } else {
+                response(request, 200, """{"id":"u1","email":"a@example.org"}""")
+            }
+        }).build()
+        val client = ManagementApiClient({ origin }, store, http)
+        client.login("a@example.org", "pw")
+        assertEquals("https://first.example.org", savedOrigin)
+        origin = "https://second.example.org"
+
+        val error = runCatching { client.currentUser() }.exceptionOrNull() as ManagementException
+        assertEquals(ManagementFailure.AUTH_EXPIRED, error.failure)
+        assertEquals(1, requests.size)
+        assertEquals("first.example.org", requests.single().first)
+    }
+
     @Test fun absentOrExpiredTokenNeverReachesNetwork() {
         var networkCalled = false
         val http = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
