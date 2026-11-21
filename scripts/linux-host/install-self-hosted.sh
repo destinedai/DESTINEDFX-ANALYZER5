@@ -26,6 +26,7 @@ for rel in \
   scripts/linux-host/host_lifecycle.py scripts/linux-host/provision-worker-token.sh scripts/linux-host/provision-postgres-app-role.sh \
   scripts/linux-host/accept_two_user_runtime.py scripts/linux-host/backup.sh scripts/linux-host/restore-test.sh \
   scripts/linux-host/backup-management-postgres.sh scripts/linux-host/show-owner-setup-token.sh \
+  scripts/linux-host/public-endpoints.py scripts/linux-host/build-self-hosted-apk.sh \
   scripts/linux-host/host-doctor.sh scripts/linux-host/setup-unattended-upgrades.sh scripts/linux-host/wine-guard.sh \
   scripts/linux-host/Caddyfile \
   scripts/linux-host/systemd/destinedfx-host-agent.service scripts/linux-host/systemd/destinedfx-bridge.service \
@@ -53,7 +54,7 @@ for item in [
     "managed-worker/worker.py", "managed-worker/mt5_journal.py",
     "scripts/linux-host/host-agent.py", "scripts/linux-host/linux-slot-worker.py",
     "scripts/linux-host/linux_isolation.py", "scripts/linux-host/host_lifecycle.py",
-    "scripts/linux-host/accept_two_user_runtime.py",
+    "scripts/linux-host/accept_two_user_runtime.py", "scripts/linux-host/public-endpoints.py",
 ]:
     path = root / item
     ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -341,6 +342,10 @@ if payload.get("algorithm") != "EdDSA" or payload.get("issuer") != "destinedfx-m
     raise SystemExit("BLOCKED: management API did not publish the expected EdDSA Bridge verification key.")
 print("MANAGEMENT_BRIDGE_VERIFICATION_KEY_OK")
 PY
+"$PYTHON" "$SCRIPT_DIR/public-endpoints.py" --source "$BRIDGE_ENV" --output "$CONFIG_DIR/public-endpoints.json" || block "could not publish the verified public endpoint manifest."
+chown root:root "$CONFIG_DIR/public-endpoints.json"
+chmod 0644 "$CONFIG_DIR/public-endpoints.json"
+say "Published public-only endpoint manifest at $CONFIG_DIR/public-endpoints.json."
 say SELF_HOSTED_RUNTIME_INSTALLED
 say "DestinedFX Bridge, root attestation agent, per-user slot worker and local Caddy HTTPS are enabled."
 say "No external execution host was configured. No broker credentials were requested or imported."
