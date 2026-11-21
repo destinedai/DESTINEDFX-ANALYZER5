@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Read-only two-user MT5 runtime acceptance for a real DestinedFX Codespaces host.
+"""Read-only two-user MT5 runtime acceptance for a persistent DestinedFX Linux host.
 
 Run only on the Codespaces host after two separate DEMO pairings have reached READY:
-    sudo -E python3 scripts/linux-host/accept_two_user_runtime.py --expected-users 2
+    sudo python3 /opt/destinedfx/scripts/linux-host/accept_two_user_runtime.py --expected-users 2 --owner-uid <destinedfx-uid> --state-dir /var/lib/destinedfx/host-runtime
 
 This script never provisions, revokes, launches, or modifies a terminal. It emits
 sanitized evidence only; it never prints pairing IDs, logins, server names or tokens.
@@ -96,7 +96,7 @@ def require_distinct(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> Non
 def _owner_uid(args: argparse.Namespace) -> int:
     value = args.owner_uid
     if value is None:
-        value = os.environ.get("HOST_OWNER_UID") or os.environ.get("SUDO_UID")
+        value = (os.environ.get("DESTINEDFX_HOST_OWNER_UID") or os.environ.get("HOST_OWNER_UID") or os.environ.get("SUDO_UID"))
     if value is None:
         raise AcceptanceError("HOST_OWNER_UID_REQUIRED_USE_SUDO_E")
     try:
@@ -290,7 +290,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         raise AcceptanceError("RUN_AS_ROOT_WITH_SUDO_E")
     owner_uid = _owner_uid(args)
     owner_home = Path(pwd.getpwuid(owner_uid).pw_dir)
-    state_dir = Path(args.state_dir or os.environ.get("DESTINEDFX_CODESPACES_STATE_DIR") or (owner_home / ".local/share/destinedfx-codespaces"))
+    state_dir = Path(args.state_dir or os.environ.get("DESTINEDFX_HOST_STATE_DIR") or os.environ.get("DESTINEDFX_CODESPACES_STATE_DIR") or (owner_home / ".local/share/destinedfx-codespaces"))
     manifest_dir = state_dir / "isolated-slots"
     slots_root = Path(args.slots_root or os.environ.get("DESTINEDFX_SLOT_ROOT", "/home/destinedfx-slots")).resolve()
 
@@ -331,7 +331,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
 
     return {
         "accepted": True,
-        "scope": "read-only live Codespaces host validation",
+        "scope": "read-only persistent self-hosted Linux runtime validation",
         "active_ready_slots": len(active),
         "expected_minimum_users": args.expected_users,
         "unique_os_uids": len({item[0] for item in checked}),
@@ -342,7 +342,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         "cross_user_xauthority_read_write_denied": True,
         "cross_user_permission_probes": cross_user_probes,
         "startup_credentials_removed": True,
-        "linux_demo_only_guard_present": True,
+        "ephemeral_host_live_guard_present": True,
         "host_agent_ready": True,
         "credentials_or_account_identifiers_emitted": False,
     }
