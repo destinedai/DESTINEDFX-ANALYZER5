@@ -233,7 +233,8 @@ fi
 
 install -d -o root -g root -m 0755 "$DEST_ROOT" "$DEST_ROOT/bridge" "$DEST_ROOT/management" "$DEST_ROOT/managed-worker" "$DEST_ROOT/mt5-ea" "$DEST_ROOT/scripts/linux-host" "$UNIT_DIR"
 install -d -o "$API_UID" -g "$API_GID" -m 0700 /var/lib/destinedfx-api
-install -d -o root -g root -m 0700 /var/lib/destinedfx-management /var/lib/destinedfx-management/postgres
+install -d -o root -g root -m 0700 /var/lib/destinedfx-management
+install -d -o 999 -g 999 -m 0700 /var/lib/destinedfx-management/postgres
 install -d -o root -g root -m 0700 /var/backups/destinedfx-management
 install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0700 /var/lib/destinedfx /var/lib/destinedfx/host-runtime \
   /var/lib/destinedfx/host-runtime/runtime /var/lib/destinedfx/host-runtime/runtime/slot-runtime \
