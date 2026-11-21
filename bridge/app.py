@@ -3116,11 +3116,12 @@ def issue_market_order_command(x,p):
         raise HTTPException(422,'SELL protection must satisfy take-profit < current bid < stop-loss')
 
     positions=beat.get('open_positions')
-    if not isinstance(positions,list):
-        raise HTTPException(409,'A complete broker position snapshot is required before a new order')
+    active_orders=beat.get('active_orders')
+    if not isinstance(positions,list) or not isinstance(active_orders,list):
+        raise HTTPException(409,'Complete broker position and active-order snapshots are required before a new order')
     max_concurrent=int(risk['max_concurrent_positions'])
-    if len(positions)>=max_concurrent:
-        raise HTTPException(409,detail={'code':'MARKET_ORDER_POSITION_LIMIT','message':'The configured maximum concurrent-position limit is already reached'})
+    if len(positions)+len(active_orders)>=max_concurrent:
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_POSITION_LIMIT','message':'The configured maximum concurrent-position and pending-order limit is already reached'})
     now_epoch=time.time()
     expiry=now_epoch+20
     queued_config={
@@ -3133,6 +3134,19 @@ def issue_market_order_command(x,p):
     serialized=json.dumps(queued_config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
         _require_host_accepting_commands(c)
+        pending_orders=c.execute("SELECT config,ack,expires_at FROM commands WHERE pairing_id=? AND action='PLACE_MARKET_ORDER'",(p['id'],)).fetchall()
+        for pending in pending_orders:
+            try:
+                pending_config=json.loads(pending['config'])
+                pending_ack=json.loads(pending['ack']) if pending['ack'] else None
+                pending_outcome=pending_ack.get('outcome') if isinstance(pending_ack,dict) else None
+            except Exception:
+                pending_config={}; pending_outcome=None
+            same_symbol=pending_config.get('symbol')==symbol
+            queued_unexpired=(pending['ack'] is None and pending['expires_at'] is not None and pending['expires_at']>time.time())
+            unresolved_unknown=(pending['ack'] is not None and pending_outcome not in ('APPLIED','REJECTED'))
+            if same_symbol and (queued_unexpired or unresolved_unknown):
+                raise HTTPException(409,detail={'code':'MARKET_ORDER_ALREADY_PENDING','message':'A market-order command for this symbol is queued or has an unresolved broker result; do not submit another'})
         concurrent=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
         if concurrent:
             if concurrent['action']!=x.action or concurrent['request_config']!=raw_config:
