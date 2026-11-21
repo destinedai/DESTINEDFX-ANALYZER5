@@ -3,19 +3,14 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DEST_ROOT="$DESTINEDFX_ROOT"
-CONFIG_DIR="$DESTINEDFX_CONFIG_DIR"
-CREDENTIAL_DIR="$DESTINEDFX_CREDENTIAL_DIR"
-UNIT_DIR="$DESTINEDFX_SYSTEMD_DIR"
-SERVICE_USER="$DESTINEDFX_SERVICE_USER"
+DEST_ROOT=/opt/destinedfx
+CONFIG_DIR=/etc/destinedfx
+CREDENTIAL_DIR=/etc/credstore.encrypted
+UNIT_DIR=/etc/systemd/system
+SERVICE_USER=destinedfx
 PYTHON=python3
 MODE=install
 if [[ -n "$1" ]]; then MODE="$1"; fi
-if [[ -z "$DEST_ROOT" ]]; then DEST_ROOT=/opt/destinedfx; fi
-if [[ -z "$CONFIG_DIR" ]]; then CONFIG_DIR=/etc/destinedfx; fi
-if [[ -z "$CREDENTIAL_DIR" ]]; then CREDENTIAL_DIR=/etc/credstore.encrypted; fi
-if [[ -z "$UNIT_DIR" ]]; then UNIT_DIR=/etc/systemd/system; fi
-if [[ -z "$SERVICE_USER" ]]; then SERVICE_USER=destinedfx; fi
 HOST_ENV="$CONFIG_DIR/host.env"
 BRIDGE_ENV="$CONFIG_DIR/bridge.env"
 
@@ -124,7 +119,7 @@ private_root_file() {
 }
 private_root_file "$HOST_ENV"
 private_root_file "$BRIDGE_ENV"
-for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password management-step-up-private-key-pem; do
+for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password postgres-app-password management-step-up-private-key-pem; do
   private_root_file "$CREDENTIAL_DIR/destinedfx-$name.cred"
 done
 set -a
