@@ -786,8 +786,8 @@ open class DestinedFXViewModel(
         managementMessage.value = "Management API endpoint saved. Sign in again to bind a fresh session to this endpoint."
     }
 
-    fun managementRegister(email: String, password: String) = managementAction {
-        val user = managementClient.register(email, password)
+    fun managementRegister(email: String, password: String, ownerSetupToken: String = "") = managementAction {
+        val user = managementClient.register(email, password, ownerSetupToken)
         managementMessage.value = "Account registered for ${user.email}. Sign in to manage settings."
     }
 

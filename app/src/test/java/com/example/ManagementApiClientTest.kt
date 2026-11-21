@@ -149,6 +149,34 @@ class ManagementApiClientTest {
         assertEquals(1, postAttempts)
     }
 
+
+    @Test fun registrationSendsOwnerSetupTokenOnlyInTheHttpsJsonBody() {
+        val token = "owner-setup-" + "x".repeat(64)
+        var captured = false
+        val http = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            val request = chain.request()
+            when (request.url.encodedPath) {
+                "/ready" -> response(request, 200, """{"status":"ready"}""")
+                "/api/v1/auth/bridge-verification-key" -> response(request, 200, validKeyDocument())
+                "/api/v1/auth/register" -> {
+                    assertNull(request.url.query)
+                    assertNull(request.header("Authorization"))
+                    val buffer = okio.Buffer()
+                    request.body!!.writeTo(buffer)
+                    val body = JSONObject(buffer.readUtf8())
+                    assertEquals(token, body.getString("owner_setup_token"))
+                    assertEquals("owner@example.org", body.getString("email"))
+                    captured = true
+                    response(request, 201, """{"id":"1","email":"owner@example.org"}""")
+                }
+                else -> response(request, 404, "{}")
+            }
+        }).build()
+        val client = ManagementApiClient("https://api.example.org", FakeTokenStore(null), http)
+        assertEquals("owner@example.org", client.register("owner@example.org", "long enough password", token).email)
+        assertTrue(captured)
+    }
+
     @Test fun loginStoresOpaqueTokenAndExpiryAndPreferencePutUsesBearer() {
         val store = FakeTokenStore(null)
         var preferenceBody: JSONObject? = null

@@ -38,10 +38,13 @@ class ManagementApiClient(
         return origin
     }
 
-    fun register(email: String, password: String): ManagementUser {
+    fun register(email: String, password: String, ownerSetupToken: String = ""): ManagementUser {
         requireSecureStorage()
         val origin = verifiedBaseUrl()
-        return userFrom(executeAt(origin, "POST", "/api/v1/auth/register", credentials(email, password), auth = false))
+        val body = credentials(email, password).apply {
+            if (ownerSetupToken.isNotBlank()) put("owner_setup_token", ownerSetupToken.trim())
+        }
+        return userFrom(executeAt(origin, "POST", "/api/v1/auth/register", body, auth = false))
     }
 
     fun login(email: String, password: String): ManagementUser {

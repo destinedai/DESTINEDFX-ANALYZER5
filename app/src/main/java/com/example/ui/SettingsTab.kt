@@ -38,6 +38,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     var managementApiOriginInput by remember { mutableStateOf(managementApiOrigin) }
     var accountEmail by remember { mutableStateOf("") }
     var accountPassword by remember { mutableStateOf("") }
+    var ownerSetupToken by remember { mutableStateOf("") }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(DarkBackground).padding(horizontal = 12.dp, vertical = 10.dp),
@@ -120,9 +121,19 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                     OutlinedTextField(value = accountPassword, onValueChange = { accountPassword = it },
                         label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth().testTag("management_password"))
+                    OutlinedTextField(value = ownerSetupToken, onValueChange = { ownerSetupToken = it },
+                        label = { Text("Owner setup token (first administrator only)") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth().testTag("management_owner_setup_token"))
+                    Text("The initial administrator must enter the one-time token created on the self-hosted host. Other users leave this field empty.",
+                        fontSize = 9.sp, color = TextMuted)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedButton(enabled = !managementBusy && accountEmail.isNotBlank() && accountPassword.isNotEmpty(),
-                            onClick = { viewModel.managementRegister(accountEmail, accountPassword); accountPassword = "" }, modifier = Modifier.weight(1f)) { Text("Register", fontSize = 10.sp) }
+                            onClick = {
+                                viewModel.managementRegister(accountEmail, accountPassword, ownerSetupToken)
+                                accountPassword = ""
+                                ownerSetupToken = ""
+                            }, modifier = Modifier.weight(1f)) { Text("Register", fontSize = 10.sp) }
                         OutlinedButton(enabled = !managementBusy && accountEmail.isNotBlank() && accountPassword.isNotEmpty(),
                             onClick = { viewModel.managementLogin(accountEmail, accountPassword); accountPassword = "" }, modifier = Modifier.weight(1f)) { Text("Sign in", fontSize = 10.sp) }
                         OutlinedButton(enabled = !managementBusy && managementEmail.isNotBlank(),
