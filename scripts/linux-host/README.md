@@ -40,7 +40,7 @@ The host needs two separate DNS names controlled by the operator: one for the Br
 | Component | Runtime identity | Purpose |
 |---|---|---|
 | `destinedfx-host-agent.service` | root | Sanitized health, root-attested slot reservation and terminal-process identity |
-| `destinedfx-postgres.service` | root-managed local Docker container | PostgreSQL 16 for app-management only; data is stored on this machine and the port is loopback-only |
+| `destinedfx-postgres.service` | root-managed local Docker container | PostgreSQL 16.16 Debian image for app-management only; data is stored on this machine with the image's documented postgres UID/GID 999 and the port is loopback-only |
 | `destinedfx-management-api.service` | `destinedfx-api` | Account/session/preferences API and Ed25519 LIVE step-up issuer; local loopback port 8010 |
 | `destinedfx-bridge.service` | `destinedfx` | FastAPI pairing/session control, encrypted broker credential store, health and order-control APIs |
 | `destinedfx-provision-linux-worker.service` | root, oneshot | Uses the owner-only bootstrap credential to issue/rotate the named worker token and encrypt it |
