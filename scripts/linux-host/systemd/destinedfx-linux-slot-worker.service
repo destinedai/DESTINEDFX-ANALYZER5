@@ -1,7 +1,7 @@
 [Unit]
 Description=DestinedFX isolated per-pairing Linux MT5 slot worker
-After=network-online.target destinedfx-host-agent.service destinedfx-bridge.service
-Requires=destinedfx-host-agent.service destinedfx-bridge.service
+After=network-online.target destinedfx-host-agent.service destinedfx-bridge.service destinedfx-provision-linux-worker.service
+Requires=destinedfx-host-agent.service destinedfx-bridge.service destinedfx-provision-linux-worker.service
 Wants=network-online.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
