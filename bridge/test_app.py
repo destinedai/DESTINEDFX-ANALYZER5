@@ -3096,3 +3096,52 @@ def test_phone_live_market_order_requires_account_bound_live_lease(monkeypatch):
         'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config,
     })
     assert after.status_code==202, after.text
+
+
+def test_phone_live_position_stop_tightening_requires_current_account_bound_lease(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = live_ready(monkeypatch)
+    quote = _publish_market_order_quote(terminal_headers, actual)
+    _store_test_open_position(pairing, ticket='920004', direction='BUY', stop_loss=1.09000)
+    config = {
+        'account_login':actual['login'],'account_server':actual['server'],'account_mode':'LIVE',
+        'ticket':'920004','position_id':'920004','symbol':'EURUSD','direction':'BUY',
+        'expected_stop_loss':1.09000,'new_stop_loss':1.09500,
+        'expected_bid':quote['expected_bid'],'expected_ask':quote['expected_ask'],
+        'quote_timestamp_ms':quote['quote_timestamp_ms'],
+    }
+    blocked = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':config,
+    })
+    assert blocked.status_code == 409
+    assert blocked.json()['detail']['code'] == 'LIVE_AUTHORIZATION_REQUIRED'
+
+    authorized = authorize_live_fixture(pairing, headers, job, actual)
+    assert authorized.status_code == 200, authorized.text
+    allowed = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':config,
+    })
+    assert allowed.status_code == 202, allowed.text
+
+
+def test_phone_position_stop_rejects_changed_position_direction_and_position_id(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    quote = _publish_market_order_quote(terminal_headers, actual)
+    _store_test_open_position(pairing, ticket='920005', direction='BUY', stop_loss=1.09000)
+    config = {
+        'account_login':actual['login'],'account_server':actual['server'],'account_mode':'DEMO',
+        'ticket':'920005','position_id':'920005','symbol':'EURUSD','direction':'SELL',
+        'expected_stop_loss':1.09000,'new_stop_loss':1.09500,
+        'expected_bid':quote['expected_bid'],'expected_ask':quote['expected_ask'],
+        'quote_timestamp_ms':quote['quote_timestamp_ms'],
+    }
+    direction = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':config,
+    })
+    assert direction.status_code == 409
+    assert direction.json()['detail']['code'] == 'POSITION_STOP_IDENTITY_CHANGED'
+    identity = {**config, 'direction':'BUY', 'position_id':'920099'}
+    mismatched = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'TIGHTEN_POSITION_SL','config':identity,
+    })
+    assert mismatched.status_code == 409
+    assert mismatched.json()['detail']['code'] == 'POSITION_STOP_IDENTITY_CHANGED'
