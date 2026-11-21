@@ -108,14 +108,17 @@ def test_preflight_blocks_when_live_cannot_run_two_verified_terminals(monkeypatc
 
 def test_arm_live_refuses_before_requesting_any_credential_when_preflight_is_blocked(monkeypatch):
     monkeypatch.setattr(preflight,"run",lambda *a,**k:{"overall_status":"BLOCKED","checks":[]})
-    called=[]
+    requested=[]
+    def credentials():
+        requested.append(True)
+        return "test-app-token","owner@example.net","not-real"
     with pytest.raises(preflight.PreflightError,match="LIVE_INFRASTRUCTURE_PREFLIGHT_BLOCKED"):
         preflight.arm_live(
             "https://management.owner.ts.net","https://bridge.owner.ts.net",
-            app_token="test-app-token",management_email="owner@example.net",
-            management_password="not-real",confirm_typed_phrase=lambda phrase:called.append(phrase) or True,
+            credential_provider=credentials,
+            confirm_typed_phrase=lambda phrase:True,
         )
-    assert called==[]
+    assert requested==[]
 
 
 def test_arm_live_uses_existing_challenge_step_up_and_authorization_only(monkeypatch):
@@ -138,8 +141,7 @@ def test_arm_live_uses_existing_challenge_step_up_and_authorization_only(monkeyp
     monkeypatch.setattr(preflight,"authenticated_json",fake_request)
     result=preflight.arm_live(
         "https://management.owner.ts.net","https://bridge.owner.ts.net",
-        app_token="app-pair-token-test",management_email="owner@example.net",
-        management_password="management-password-test",
+        credential_provider=lambda:("app-pair-token-test","owner@example.net","management-password-test"),
         confirm_typed_phrase=lambda phrase:phrase=="ARM LIVE FBS 700001",
     )
     assert result["authorized"] is True and result["duration_seconds"]==900
@@ -175,8 +177,7 @@ def test_arm_live_rejects_wrong_typed_confirmation_and_logs_out(monkeypatch):
     with pytest.raises(preflight.PreflightError,match="LIVE_TYPED_CONFIRMATION_MISMATCH"):
         preflight.arm_live(
             "https://management.owner.ts.net","https://bridge.owner.ts.net",
-            app_token="app-pair-token-test",management_email="owner@example.net",
-            management_password="management-password-test",
+            credential_provider=lambda:("app-pair-token-test","owner@example.net","management-password-test"),
             confirm_typed_phrase=lambda phrase:False,
         )
     assert len(calls)==3 and calls[-1][0].endswith("/api/v1/auth/logout")
@@ -201,8 +202,7 @@ def test_arm_live_challenge_must_be_exact_live_identity(monkeypatch):
     with pytest.raises(preflight.PreflightError,match="LIVE_CHALLENGE_IDENTITY_INVALID"):
         preflight.arm_live(
             "https://management.owner.ts.net","https://bridge.owner.ts.net",
-            app_token="app-pair-token-test",management_email="owner@example.net",
-            management_password="management-password-test",
+            credential_provider=lambda:("app-pair-token-test","owner@example.net","management-password-test"),
             confirm_typed_phrase=lambda phrase:True,
         )
     assert len(calls)==3 and calls[-1][0].endswith("/api/v1/auth/logout")
