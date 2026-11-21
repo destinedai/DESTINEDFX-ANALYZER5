@@ -257,7 +257,41 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val observedServerId = cmd?.let { MT5RemoteBridgeClient.serverCommandId(it) }.orEmpty()
                     if (bridgeCommandPending && cmd != null && cmd.optString("request_id") == bridgePendingId &&
                         cmd.optString("action") == bridgePendingAction && (bridgePendingServerId.isBlank() || observedServerId == bridgePendingServerId) && cmd.optString("status") == "ACKNOWLEDGED") {
-                        if (bridgePendingAction in MT5RemoteBridgeClient.TRADE_ACTIONS) {
+                        if (bridgePendingAction in MT5RemoteBridgeClient.OPENING_ACTIONS) {
+                            val signal = fresh.lastSignal
+                            val signalMatches = signal?.optString("signal_key") == "MANUAL-$bridgePendingId"
+                            val executionState = signal?.optString("execution_state").orEmpty().uppercase()
+                            when (cmd.optString("outcome").uppercase()) {
+                                "REJECTED" -> {
+                                    val action = bridgePendingAction
+                                    bridgeSecrets.clearMT5BridgeAccountPendingCommand(bridgeProfileKey)
+                                    bridgeCommandPending = false
+                                    bridgePendingId = ""; bridgePendingAction = ""; bridgePendingServerId = ""
+                                    bridgeTradePendingTickets = emptyList()
+                                    bridgeMessage = "$action rejected by the remote MT5 EA before a broker order was confirmed: ${cmd.optString("message", "No reason supplied")}"
+                                }
+                                "APPLIED", "UNKNOWN" -> {
+                                    val reconciledStates = setOf(
+                                        "FILLED", "PARTIALLY_FILLED", "ORDER_SUBMITTED",
+                                        "POSITION_RECONCILED_SLTP_VERIFIED", "POSITION_RECONCILED_SLTP_UNVERIFIED",
+                                        "CLOSED_DEAL_RECONCILED", "CANCELLED_OR_EXPIRED"
+                                    )
+                                    if (fresh.heartbeatFresh && signalMatches && executionState in reconciledStates) {
+                                        val order = signal?.optString("order").orEmpty()
+                                        val deal = signal?.optString("deal").orEmpty()
+                                        val executed = signal?.optString("executed_volume").orEmpty()
+                                        bridgeSecrets.clearMT5BridgeAccountPendingCommand(bridgeProfileKey)
+                                        bridgeCommandPending = false
+                                        bridgePendingId = ""; bridgePendingAction = ""; bridgePendingServerId = ""
+                                        bridgeTradePendingTickets = emptyList()
+                                        bridgeMessage = "MT5 broker response reconciled for $executionState · order ${order.ifBlank { "—" }} · deal ${deal.ifBlank { "—" }} · executed volume ${executed.ifBlank { "0" }}. ORDER_SUBMITTED is not a confirmed fill."
+                                    } else {
+                                        bridgeMessage = "PLACE_MARKET_ORDER $observedServerId acknowledged as ${cmd.optString("outcome")}; waiting for a fresh heartbeat correlated to this exact request. Signal correlation=${if (signalMatches) "MATCHED" else "PENDING"}, execution=$executionState. Do not resend."
+                                    }
+                                }
+                                else -> bridgeMessage = "PLACE_MARKET_ORDER acknowledgement is unresolved; do not resend request $bridgePendingId."
+                            }
+                        } else if (bridgePendingAction in MT5RemoteBridgeClient.TRADE_ACTIONS) {
                             val results = cmd.optJSONArray("results")
                             val statuses = linkedMapOf<String, String>()
                             val resultDetails = linkedMapOf<String, String>()
@@ -3087,7 +3121,7 @@ private suspend fun sendBridgeTradeCommand(
             }
             result.queued -> {
                 serverId(result.serverCommandId)
-                message("$action queued as server command ${result.serverCommandId} (request ${result.requestId}); awaiting matching per-ticket results and fresh telemetry. Not confirmed.")
+                message(if (action in MT5RemoteBridgeClient.OPENING_ACTIONS) "$action queued as server command ${result.serverCommandId} (request ${result.requestId}); awaiting the EA broker response and a fresh heartbeat. Not a fill." else "$action queued as server command ${result.serverCommandId} (request ${result.requestId}); awaiting matching per-ticket results and fresh telemetry. Not confirmed.")
             }
             else -> {
                 serverId(result.serverCommandId)
