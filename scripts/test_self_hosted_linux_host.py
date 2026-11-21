@@ -18,7 +18,7 @@ def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
     assert 'systemctl enable --now docker.service' in installer
     assert "https://$APP_DOMAIN/ready" in installer
     assert '$BRIDGE_BASE_URL/health/ready' in installer
-    assert "management API verification key" in installer
+    assert "bridge-verification-key" in installer
     assert "destinedfx-linux-slot-worker.service" in installer
 
 
