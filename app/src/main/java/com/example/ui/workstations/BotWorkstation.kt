@@ -198,6 +198,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var instantSlPips by remember { mutableStateOf("20") }
     var instantTpPips by remember { mutableStateOf("50") }
     var instantExecutionStatus by remember { mutableStateOf<String?>(null) }
+    var manualOrderSide by remember(bridgeProfileKey) { mutableStateOf("BUY") }
+    var manualOrderStopLoss by remember(bridgeProfileKey) { mutableStateOf("") }
+    var manualOrderTakeProfit by remember(bridgeProfileKey) { mutableStateOf("") }
+    var manualOrderRiskPercent by remember(bridgeProfileKey) { mutableStateOf("0.25") }
+    var showManualOrderConfirm by remember(bridgeProfileKey) { mutableStateOf(false) }
     val terminalSymbol = viewModel.app.secretsManager.getBrokerSymbolOverrides()[activeSymbol]
         ?.trim()?.takeIf { it.isNotEmpty() } ?: activeSymbol.replace("/", "").replace(" ", "")
     val coroutineScope = rememberCoroutineScope()
@@ -523,6 +528,140 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     }
                     Text("These are quotes from this account's authenticated MT5 terminal. Analyzer/provider prices remain a separate feed and are not substituted for these broker prices.",
                         color = TextSecondary, fontSize = 9.sp)
+
+                    if (bridgeMode) {
+                        val configuredSymbols = currentBrokerSnapshot?.raw?.optJSONObject("configuration")?.optJSONArray("symbols")
+                        val phoneOrderSymbol = configuredSymbols?.takeIf { it.length() > 0 }?.optString(0).orEmpty()
+                        val phoneOrderQuote = currentBrokerSnapshot?.brokerQuotes?.singleOrNull { it.symbol == phoneOrderSymbol }
+                        val phoneRiskCap = currentBrokerSnapshot?.raw?.optJSONObject("risk_controls")?.optDouble("risk_percent", Double.NaN) ?: Double.NaN
+                        Card(
+                            modifier = Modifier.fillMaxWidth().testTag("mt5_phone_market_order_card"),
+                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                            border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.35f))
+                        ) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("PHONE → MT5 MARKET ORDER", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (phoneOrderQuote != null)
+                                        "${phoneOrderSymbol} · BID ${String.format(java.util.Locale.US, "%.${phoneOrderQuote.digits}f", phoneOrderQuote.bid)} · ASK ${String.format(java.util.Locale.US, "%.${phoneOrderQuote.digits}f", phoneOrderQuote.ask)} · ${phoneOrderQuote.ageMs} ms"
+                                    else
+                                        "Waiting for a fresh quote for the first EA-configured symbol (${phoneOrderSymbol}).",
+                                    color = if (phoneOrderQuote != null) ProfitGreen else WarningAmber,
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    "The Windows MT5 EA calculates volume from broker contract data. You enter SL/TP prices; the EA enforces its configured risk cap, verified costs, margin and minimum net 1:2 reward/risk. Only this first configured symbol has a current EA news verdict.",
+                                    color = TextSecondary, fontSize = 9.sp
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        enabled = !bridgeBusy && !bridgeCommandPending,
+                                        onClick = { manualOrderSide = "BUY" },
+                                        modifier = Modifier.weight(1f).testTag("mt5_phone_order_buy_side")
+                                    ) { Text(if (manualOrderSide == "BUY") "BUY · SELECTED" else "BUY", fontSize = 9.sp) }
+                                    OutlinedButton(
+                                        enabled = !bridgeBusy && !bridgeCommandPending,
+                                        onClick = { manualOrderSide = "SELL" },
+                                        modifier = Modifier.weight(1f).testTag("mt5_phone_order_sell_side")
+                                    ) { Text(if (manualOrderSide == "SELL") "SELL · SELECTED" else "SELL", fontSize = 9.sp) }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = manualOrderStopLoss,
+                                        onValueChange = { manualOrderStopLoss = it },
+                                        modifier = Modifier.weight(1f).testTag("mt5_phone_order_stop_loss"),
+                                        label = { Text("Stop loss price") },
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                    )
+                                    OutlinedTextField(
+                                        value = manualOrderTakeProfit,
+                                        onValueChange = { manualOrderTakeProfit = it },
+                                        modifier = Modifier.weight(1f).testTag("mt5_phone_order_take_profit"),
+                                        label = { Text("Take profit price") },
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = manualOrderRiskPercent,
+                                    onValueChange = { manualOrderRiskPercent = it },
+                                    modifier = Modifier.fillMaxWidth().testTag("mt5_phone_order_risk_percent"),
+                                    label = { Text("Risk per trade (%) · EA cap ${if (phoneRiskCap.isFinite()) phoneRiskCap else "unknown"}") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                )
+                                val requestedRisk = manualOrderRiskPercent.toDoubleOrNull()
+                                val requestedSl = manualOrderStopLoss.toDoubleOrNull()
+                                val requestedTp = manualOrderTakeProfit.toDoubleOrNull()
+                                val orderInputValid = phoneOrderQuote != null &&
+                                    requestedRisk != null && requestedRisk.isFinite() && requestedRisk > 0.0 &&
+                                    requestedSl != null && requestedSl.isFinite() && requestedSl > 0.0 &&
+                                    requestedTp != null && requestedTp.isFinite() && requestedTp > 0.0 &&
+                                    if (manualOrderSide == "BUY") requestedSl < phoneOrderQuote.ask && requestedTp > phoneOrderQuote.ask
+                                    else requestedTp < phoneOrderQuote.bid && requestedSl > phoneOrderQuote.bid
+                                Button(
+                                    enabled = actionsReady && orderInputValid && !bridgeCommandPending &&
+                                        (selectedAccountMode != "LIVE" || verifiedRemoteSnapshotForBot?.liveAuthorized == true),
+                                    modifier = Modifier.fillMaxWidth().testTag("mt5_phone_market_order_review"),
+                                    onClick = { showManualOrderConfirm = true }
+                                ) {
+                                    Text("REVIEW ${manualOrderSide} MARKET ORDER", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                                if (selectedAccountMode == "LIVE" && verifiedRemoteSnapshotForBot?.liveAuthorized != true) {
+                                    Text("LIVE ORDER BLOCKED · arm the current account-bound LIVE lease first.", color = WarningAmber, fontSize = 9.sp)
+                                }
+                            }
+                        }
+                        if (showManualOrderConfirm) AlertDialog(
+                            onDismissRequest = { if (!bridgeBusy) showManualOrderConfirm = false },
+                            title = { Text("Confirm ${manualOrderSide} market order?") },
+                            text = {
+                                Text(
+                                    "${selectedBrokerBrand} ${selectedAccountMode} · ${currentBrokerSnapshot?.actualLogin} @ ${currentBrokerSnapshot?.actualServer}\n" +
+                                    "${phoneOrderSymbol} · " +
+                                    "${if (manualOrderSide == "BUY") "ASK ${phoneOrderQuote?.ask}" else "BID ${phoneOrderQuote?.bid}"}\n" +
+                                    "SL ${manualOrderStopLoss} · TP ${manualOrderTakeProfit} · risk ${manualOrderRiskPercent}%\n\n" +
+                                    "This sends a new order to the paired Windows MT5 terminal. The EA determines lot size and may reject it if broker min-lot, verified costs, stop distance, margin, news or risk controls fail. A queued request is not a fill."
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(enabled = !bridgeBusy && !bridgeCommandPending, onClick = {
+                                    showManualOrderConfirm = false
+                                    if (bridgeBusy || bridgeCommandPending) return@TextButton
+                                    bridgeBusy = true
+                                    coroutineScope.launch {
+                                        try {
+                                            val fresh = bridgeClient.state()
+                                            bridgeSnapshot = fresh
+                                            val risk = manualOrderRiskPercent.toDoubleOrNull()
+                                                ?: error("Risk percentage is invalid.")
+                                            val sl = manualOrderStopLoss.toDoubleOrNull()
+                                                ?: error("Stop-loss price is invalid.")
+                                            val tp = manualOrderTakeProfit.toDoubleOrNull()
+                                                ?: error("Take-profit price is invalid.")
+                                            val config = MT5RemoteBridgeClient.marketOrderConfig(
+                                                fresh, manualOrderSide, sl, tp, risk
+                                            )
+                                            sendBridgeTradeCommand(
+                                                bridgeClient, "PLACE_MARKET_ORDER", config, emptyList(),
+                                                bridgeSecrets, bridgeProfileKey,
+                                                { bridgeBusy = it }, { bridgeCommandPending = it },
+                                                { bridgePendingId = it }, { bridgePendingAction = it },
+                                                { bridgePendingServerId = it }, { bridgeTradePendingTickets = it },
+                                                { bridgeMessage = it }
+                                            )
+                                        } catch (e: Exception) {
+                                            bridgeMessage = e.message ?: "MT5 market order was blocked; no broker execution is claimed."
+                                            bridgeBusy = false
+                                        }
+                                    }
+                                }) { Text("SEND TO MT5") }
+                            },
+                            dismissButton = { TextButton(onClick = { showManualOrderConfirm = false }) { Text("CANCEL") } }
+                        )
+                    }
                     if (verifiedActionSnapshot != null) {
                         val verifiedOrders = verifiedActionSnapshot.activeOrders.orEmpty()
                         Text("PENDING ORDERS (${verifiedOrders.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_pending_orders_section"))
