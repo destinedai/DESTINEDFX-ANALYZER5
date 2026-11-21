@@ -581,22 +581,35 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     } == true && terminalQuotes.isNotEmpty()
                     Text("SELECTED BROKER · MT5 TERMINAL PRICES", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_broker_quotes_header"))
                     if (brokerQuotesReady) {
-                        terminalQuotes.forEach { quote ->
-                            val priceFormat = "%.${quote.digits}f"
-                            Row(
-                                modifier = Modifier.fillMaxWidth().testTag("mt5_broker_quote_${quote.symbol}"),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(quote.symbol, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                    Text("BID ${String.format(java.util.Locale.US, priceFormat, quote.bid)}  ·  ASK ${String.format(java.util.Locale.US, priceFormat, quote.ask)}",
-                                        color = ProfitGreen, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                        terminalQuotes
+                            .sortedWith(compareBy({ it.symbol.lowercase(java.util.Locale.ROOT) }, { it.symbol }))
+                            .forEach { quote ->
+                                val priceFormat = "%.${quote.digits}f"
+                                val spread = (quote.ask - quote.bid).takeIf { it.isFinite() && it >= 0.0 }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().testTag("mt5_broker_quote_${quote.symbol}"),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(quote.symbol, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                        Text("BID ${String.format(java.util.Locale.US, priceFormat, quote.bid)}  ·  ASK ${String.format(java.util.Locale.US, priceFormat, quote.ask)}",
+                                            color = ProfitGreen, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                        Text(
+                                            "SPREAD ${spread?.let { String.format(java.util.Locale.US, priceFormat, it) } ?: "UNAVAILABLE"}",
+                                            color = TextSecondary,
+                                            fontSize = 8.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.testTag("mt5_broker_quote_spread_${quote.symbol}")
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text("${quote.ageMs} ms", color = if (quote.ageMs <= 5_000L) ProfitGreen else WarningAmber, fontSize = 8.sp)
+                                        Text(quote.source, color = TextSecondary, fontSize = 8.sp)
+                                    }
                                 }
-                                Text("${quote.ageMs} ms · ${quote.source}", color = TextSecondary, fontSize = 8.sp)
                             }
-                        }
-                    } else {
+                    }
                         Text(
                             text = when {
                                 currentBrokerSnapshot == null -> "Broker prices unavailable · waiting for a verified terminal snapshot."
