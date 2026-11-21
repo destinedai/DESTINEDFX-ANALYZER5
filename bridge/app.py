@@ -1964,6 +1964,8 @@ def configuration_health():
         'news_provider_configured': news_provider_configuration()['configured'],
         'news_provider_kind': news_provider_configuration()['kind'],
         'per_user_terminal_isolation': isolation_status,
+        'multi_user_terminal_isolation': 'VERIFIED' if isolation_verified else 'NOT_VERIFIED',
+        'linux_host_mode': LINUX_HOST_MODE,
         'isolated_slots': int(isolation.get('active_slots', 0)) if isolation_verified else 0,
         'max_isolated_slots': int(isolation.get('max_slots', 0)) if isolation_verified else 0,
         **host_lifecycle_state(),
