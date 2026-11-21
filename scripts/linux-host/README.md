@@ -58,7 +58,11 @@ After two different authenticated DEMO pairings have been added through the app 
 ```sh
 sudo /opt/destinedfx/venv/bin/python \
   /opt/destinedfx/scripts/linux-host/accept_two_user_runtime.py \
-  --expected-users 2
+  --expected-users 2 \
+  --owner-uid "$(id -u destinedfx)" \
+  --state-dir /var/lib/destinedfx/host-runtime \
+  --slots-root /home/destinedfx-slots \
+  --host-agent-url http://127.0.0.1:8787/health/ready
 ```
 
 The acceptance must prove distinct Unix UIDs, separate slot homes, terminal copies, Wine prefixes, Xvfb displays and process ownership. It must fail rather than count the same terminal twice. Capture the sanitized result and retain it with the host release evidence. This is a real-host acceptance command; a CI fixture is not a substitute.
@@ -67,12 +71,12 @@ Actual DEMO acceptance additionally requires two genuine broker DEMO profiles, s
 
 ## Maintenance and recovery
 
-- `backup.sh [DATABASE] [BACKUP_DIR]` creates an atomic SQLite backup and SHA-256 sidecar for Bridge pairing/job state.
+- `/opt/destinedfx/scripts/linux-host/backup.sh [DATABASE] [BACKUP_DIR]` creates an atomic SQLite backup and SHA-256 sidecar for Bridge pairing/job state. Run it as the `destinedfx` service owner, for example with `sudo -u destinedfx`.
 - Back up the management PostgreSQL database separately with `docker exec destinedfx-management-postgres pg_dump -U destinedfx_management -d app_management --format=custom`; store the dump on a protected persistent volume and test restore into a separate scratch database. The PostgreSQL container and data volume are on this same machine.
 - Keep encrypted copies of both databases, the `/etc/credstore.encrypted` files, and the systemd credential host key in an operator-controlled recovery location. A same-disk backup does not survive host loss. Never upload plaintext databases or credentials into the repository.
-- `restore-test.sh BACKUP.sqlite3` checks the sidecar and SQLite integrity in a temporary directory. It never overwrites the live database.
-- `setup-unattended-upgrades.sh` enables security-origin updates and leaves automatic reboot disabled.
-- `host-doctor.sh` and the host-agent health endpoints provide diagnostics; health output must remain sanitized.
+- `/opt/destinedfx/scripts/linux-host/restore-test.sh BACKUP.sqlite3` checks the sidecar and SQLite integrity in a temporary directory. It never overwrites the live database.
+- `/opt/destinedfx/scripts/linux-host/setup-unattended-upgrades.sh` enables security-origin updates and leaves automatic reboot disabled.
+- `/opt/destinedfx/scripts/linux-host/host-doctor.sh` and the host-agent health endpoints provide diagnostics; health output must remain sanitized.
 - `rebuild.sh self-hosted --check` validates source and units without touching services. Reinstall only after reviewing host-service changes and confirming the active sessions will not be interrupted.
 
 The host-agent never returns account passwords, broker login credentials, tokens, signing keys or raw journal content. It only exposes sanitized health and terminal identity evidence. Preserve database backups, credential recovery, restore drills, disk monitoring, and security patching as ongoing operations.
