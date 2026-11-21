@@ -15,8 +15,12 @@ Environment=BRIDGE_HOST_PROFILE=PERSISTENT
 Environment=BRIDGE_HOST_MODE=linux-host
 Environment=HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
 Environment=HOST_AGENT_TOKEN_FILE=%d/host-agent-token
+Environment=CREDENTIALS_FERNET_KEY_FILE=%d/credentials-fernet-key
+Environment=WORKER_BOOTSTRAP_TOKEN_FILE=%d/worker-bootstrap-token
 Environment=PYTHONPATH=/opt/destinedfx/bridge:/opt/destinedfx/managed-worker
 LoadCredentialEncrypted=host-agent-token:/etc/credstore.encrypted/destinedfx-host-agent-token.cred
+LoadCredentialEncrypted=credentials-fernet-key:/etc/credstore.encrypted/destinedfx-credentials-fernet-key.cred
+LoadCredentialEncrypted=worker-bootstrap-token:/etc/credstore.encrypted/destinedfx-worker-bootstrap-token.cred
 ExecStart=/opt/destinedfx/venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers --timeout-keep-alive 5 --limit-concurrency 100
 Restart=always
 RestartSec=5
