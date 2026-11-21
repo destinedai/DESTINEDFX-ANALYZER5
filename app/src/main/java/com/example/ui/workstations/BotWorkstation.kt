@@ -302,8 +302,15 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     } else {
                                         executionState in marketOrderStates
                                     }
-                                    val actionConfirmed = if (bridgePendingAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS)
-                                        executionState == "POSITION_SL_TIGHTENED" && confirmedStop else confirmed
+                                    val actionConfirmed = if (bridgePendingAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS) {
+                                        executionState == "POSITION_SL_TIGHTENED" && confirmedStop
+                                    } else {
+                                        executionState in setOf(
+                                            "FILLED", "PARTIALLY_FILLED", "ORDER_SUBMITTED",
+                                            "POSITION_RECONCILED_SLTP_VERIFIED", "POSITION_RECONCILED_SLTP_UNVERIFIED",
+                                            "CLOSED_DEAL_RECONCILED", "CANCELLED_OR_EXPIRED"
+                                        )
+                                    }
                                     val stopNotApplied = bridgePendingAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS &&
                                         executionState in setOf("POSITION_SL_NOT_APPLIED", "REJECTED") &&
                                         fresh.heartbeatFresh && signalMatches
