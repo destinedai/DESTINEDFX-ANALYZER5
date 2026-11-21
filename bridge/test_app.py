@@ -3081,3 +3081,19 @@ def test_phone_position_stop_edit_is_idempotent_and_blocks_conflicting_pending_e
     })
     assert second.status_code==409
     assert second.json()['detail']['code']=='POSITION_STOP_ALREADY_PENDING'
+
+
+def test_phone_live_market_order_requires_account_bound_live_lease(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = live_ready(monkeypatch)
+    config = _publish_market_order_quote(terminal_headers, actual)
+    before=client.post('/v1/app/commands',headers=headers,json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config,
+    })
+    assert before.status_code==409
+    assert before.json()['detail']['code']=='LIVE_AUTHORIZATION_REQUIRED'
+    authorized=authorize_live_fixture(pairing,headers,job,actual)
+    assert authorized.status_code==200, authorized.text
+    after=client.post('/v1/app/commands',headers=headers,json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config,
+    })
+    assert after.status_code==202, after.text
