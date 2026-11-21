@@ -1,6 +1,6 @@
 [Unit]
-Description=DestinedFX FastAPI bridge
-After=destinedfx-host-agent.service network-online.target
+Description=DestinedFX FastAPI bridge for the self-hosted Linux execution host
+After=network-online.target destinedfx-host-agent.service
 Requires=destinedfx-host-agent.service
 Wants=network-online.target
 
@@ -9,16 +9,25 @@ Type=simple
 User=destinedfx
 Group=destinedfx
 WorkingDirectory=/opt/destinedfx/bridge
+EnvironmentFile=-/etc/destinedfx/host.env
 EnvironmentFile=-/etc/destinedfx/bridge.env
+Environment=BRIDGE_HOST_PROFILE=PERSISTENT
 Environment=BRIDGE_HOST_MODE=linux-host
 Environment=HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
-ExecStart=/usr/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8000
+Environment=HOST_AGENT_TOKEN_FILE=%d/host-agent-token
+Environment=PYTHONPATH=/opt/destinedfx/bridge:/opt/destinedfx/managed-worker
+LoadCredentialEncrypted=host-agent-token:/etc/credstore.encrypted/destinedfx-host-agent-token.cred
+ExecStart=/opt/destinedfx/venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-proxy-headers --timeout-keep-alive 5 --limit-concurrency 100
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
 ReadWritePaths=/var/lib/destinedfx
 
 [Install]
