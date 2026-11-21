@@ -28,7 +28,7 @@ for rel in \
   backend/alembic/env.py backend/alembic.ini backend/requirements.txt \
   managed-worker/worker.py managed-worker/mt5_journal.py mt5-ea/DestinedFXTraderEA.mq5 \
   scripts/linux-host/host-agent.py scripts/linux-host/linux-slot-worker.py scripts/linux-host/linux_isolation.py \
-  scripts/linux-host/host_lifecycle.py scripts/linux-host/provision-worker-token.sh \
+  scripts/linux-host/host_lifecycle.py scripts/linux-host/provision-worker-token.sh scripts/linux-host/provision-postgres-app-role.sh \
   scripts/linux-host/accept_two_user_runtime.py scripts/linux-host/backup.sh scripts/linux-host/restore-test.sh \
   scripts/linux-host/host-doctor.sh scripts/linux-host/setup-unattended-upgrades.sh scripts/linux-host/wine-guard.sh \
   scripts/linux-host/Caddyfile \
@@ -192,7 +192,7 @@ if not isinstance(key, Ed25519PublicKey):
     raise SystemExit("BLOCKED: management public key must be Ed25519.")
 print("SELF_HOSTED_DOMAIN_AND_MANAGEMENT_KEY_OK")
 PY
-for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password; do
+for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password postgres-app-password; do
   systemd-creds decrypt --name="$name" "$CREDENTIAL_DIR/destinedfx-$name.cred" /dev/null >/dev/null || block "encrypted credential invalid: $name"
 done
 systemd-creds decrypt --name=step-up-private-key-pem "$CREDENTIAL_DIR/destinedfx-management-step-up-private-key-pem.cred" /dev/null >/dev/null || block "encrypted management signing credential is invalid."
@@ -256,6 +256,7 @@ for rel in backup.sh restore-test.sh host-doctor.sh setup-unattended-upgrades.sh
   install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
 done
 install -o root -g root -m 0755 "$SCRIPT_DIR/provision-worker-token.sh" "$DEST_ROOT/scripts/linux-host/provision-worker-token.sh"
+install -o root -g root -m 0755 "$SCRIPT_DIR/provision-postgres-app-role.sh" "$DEST_ROOT/scripts/linux-host/provision-postgres-app-role.sh"
 install -o root -g root -m 0644 "$SOURCE_ROOT/bridge/requirements-production.txt" "$DEST_ROOT/bridge/requirements-production.txt"
 cp -a "$SOURCE_ROOT/mt5-ea/." "$DEST_ROOT/mt5-ea/"
 chown -R root:root "$DEST_ROOT/mt5-ea"
