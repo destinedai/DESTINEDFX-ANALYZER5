@@ -298,7 +298,17 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     } else {
                                         executionState in marketOrderStates
                                     }
-                                    if (fresh.heartbeatFresh && signalMatches && confirmed) {
+                                    val stopNotApplied = bridgePendingAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS &&
+                                        executionState in setOf("POSITION_SL_NOT_APPLIED", "REJECTED") &&
+                                        fresh.heartbeatFresh && signalMatches
+                                    if (stopNotApplied) {
+                                        val completedAction = bridgePendingAction
+                                        bridgeSecrets.clearMT5BridgeAccountPendingCommand(bridgeProfileKey)
+                                        bridgeCommandPending = false
+                                        bridgePendingId = ""; bridgePendingAction = ""; bridgePendingServerId = ""
+                                        bridgeTradePendingTickets = emptyList()
+                                        bridgeMessage = "$completedAction reconciled by the MT5 EA: no stop change was made; the existing broker SL and TP remain unchanged."
+                                    } else if (fresh.heartbeatFresh && signalMatches && confirmed) {
                                         val completedAction = bridgePendingAction
                                         val order = signal?.optString("order").orEmpty()
                                         val deal = signal?.optString("deal").orEmpty()
