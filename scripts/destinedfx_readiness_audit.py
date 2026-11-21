@@ -300,7 +300,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         and 'bool ExecutePhoneMarketOrder(' in ea
         and 'action=="PLACE_MARKET_ORDER"' in ea
         and '"MANUAL-"+requestId' in ea
-        and '"signal_key"' in ea
+        and "signal_key" in ea
         and 'mt5_phone_market_order_card' in bot_ui
     )
     add_check(
