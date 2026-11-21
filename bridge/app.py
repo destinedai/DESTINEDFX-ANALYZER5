@@ -3180,7 +3180,7 @@ def issue_position_stop_command(x,p):
         raise HTTPException(409,detail={'code':'POSITION_STOP_TICKET_CHANGED','message':'The exact open position ticket is no longer present'})
     position=matches[0]
     symbol=position.get('symbol')
-    direction=str(position.get('direction','')).upper()
+    direction=str(position.get('direction') or position.get('side') or position.get('type','')).upper()
     current_stop=position.get('stop_loss')
     if (not isinstance(symbol,str) or not symbol or direction not in ('BUY','SELL') or
         not finite_number(current_stop,True)):
@@ -3203,7 +3203,7 @@ def issue_position_stop_command(x,p):
         price_valid=float(new_stop)>quote['ask']
     if not tighter or not price_valid:
         raise HTTPException(422,detail={'code':'POSITION_STOP_MUST_TIGHTEN','message':'The new stop must strictly reduce or establish protection and stay on the broker-valid side of price; widening/removing a stop is blocked'})
-    position_id=snapshot_ticket(position.get('position_id'))
+    position_id=snapshot_ticket(position.get('position_id') or ticket)
     if not position_id:
         raise HTTPException(409,'The selected position identity is unavailable')
     with tx() as c:
