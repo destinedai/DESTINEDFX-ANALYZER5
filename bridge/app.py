@@ -3249,6 +3249,7 @@ def command(x:Command,authorization:str|None=Header(default=None)):
     except ValueError: raise HTTPException(422,'request_id must be a UUID')
     if x.action in DESTRUCTIVE_ACTIONS: return issue_destructive_command(x,p)
     if x.action in OPENING_ACTIONS: return issue_market_order_command(x,p)
+    if x.action in POSITION_MANAGEMENT_ACTIONS: return issue_position_stop_command(x,p)
     if x.action not in ('START','STOP','PAUSE','RESUME','EMERGENCY_STOP'): raise HTTPException(422,'Invalid action')
     with tx() as c:
         m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
