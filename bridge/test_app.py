@@ -449,6 +449,33 @@ def test_configuration_health_is_distinct_from_terminal_readiness(monkeypatch):
     assert configured.json()['managed_execution']=='configured'
     assert client.get('/health/ready').status_code == 503
 
+def test_news_provider_health_is_safe_and_fails_closed(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'NEWS_PROVIDER_URL', '')
+    absent=client.get('/health/config').json()
+    assert absent['news_provider_configured'] is False
+    assert absent['news_provider_kind'] == 'unconfigured'
+
+    monkeypatch.setattr(app, 'NEWS_PROVIDER_URL', 'https://www.showmytrades.com/api/public/calendar/v1')
+    public=client.get('/health/config').json()
+    assert public['news_provider_configured'] is True
+    assert public['news_provider_kind'] == 'showmytrades-public-calendar'
+
+    monkeypatch.setattr(app, 'NEWS_PROVIDER_URL', 'https://calendar.example.org/api/v1')
+    monkeypatch.setattr(app, 'NEWS_PROVIDER_TOKEN', 'never-return-this-token')
+    custom=client.get('/health/config').json()
+    assert custom['news_provider_configured'] is True
+    assert custom['news_provider_kind'] == 'custom-json-provider'
+    assert 'never-return-this-token' not in app.json.dumps(custom)
+
+
+def test_health_config_does_not_claim_windows_multi_user_terminal_isolation(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', False)
+    body=client.get('/health/config').json()
+    assert body['multi_user_terminal_isolation'] == 'NOT_VERIFIED'
+    assert body['linux_host_mode'] is False
+
 def test_configuration_health_exposes_only_matching_step_up_public_key_fingerprint(monkeypatch):
     managed_env(monkeypatch)
     response=client.get('/health/config')
