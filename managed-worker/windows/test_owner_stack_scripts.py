@@ -12,6 +12,11 @@ INSTALLER = (ROOT / "install-owner-stack.ps1").read_text(encoding="utf-8")
 SUPERVISOR = (ROOT / "run-owner-stack.ps1").read_text(encoding="utf-8")
 
 
+def test_installer_explains_two_terminal_minimum_for_live():
+    assert "LIVE needs at least 2 for separate DEMO and LIVE profiles" in INSTALLER
+    assert "Measured safe simultaneous MT5 terminal capacity" in INSTALLER
+
+
 def test_installer_migrates_and_atomically_validates_dpapi_bundle():
     assert "$secretNeedsWrite = $false" in INSTALLER
     assert "Write-DpapiSecretBundle" in INSTALLER
