@@ -35,7 +35,6 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     val managementEmail by viewModel.managementEmail.collectAsStateWithLifecycle()
     val managementServiceState by viewModel.managementServiceState.collectAsStateWithLifecycle()
     val managementApiOrigin by viewModel.managementApiOrigin.collectAsStateWithLifecycle()
-    var managementApiOriginInput by remember { mutableStateOf(managementApiOrigin) }
     var accountEmail by remember { mutableStateOf("") }
     var accountPassword by remember { mutableStateOf("") }
     var ownerSetupToken by remember { mutableStateOf("") }
@@ -95,25 +94,16 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                     HorizontalDivider(color = CardBorder, modifier = Modifier.padding(vertical = 4.dp))
                     Text("ACCOUNT & MANAGEMENT SERVICE", fontSize = 9.sp, color = ElectricCyan,
                         fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                    OutlinedTextField(
-                        value = managementApiOriginInput,
-                        onValueChange = { managementApiOriginInput = it },
-                        label = { Text("Management API HTTPS origin") },
-                        placeholder = { Text("https://your-management-domain") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    Text(
+                        "Management API (embedded in this APK): ${managementApiOrigin.ifBlank { "NOT CONFIGURED IN THIS BUILD" }}",
+                        fontSize = 10.sp, color = if (managementApiOrigin.isBlank()) WarningAmber else TextSecondary,
                         modifier = Modifier.fillMaxWidth().testTag("management_api_origin")
                     )
                     Text(
-                        "This is the separate DestinedFX account/reauthentication API, not the MT5 Bridge URL. " +
-                            "Verification checks /ready and the public EdDSA Bridge key before saving. Changing it clears the old management session.",
+                        "The self-hosted host supplies this verified HTTPS endpoint at build time. " +
+                            "There is no phone-side URL field; changing hosts requires a new APK build from the host's endpoint manifest.",
                         fontSize = 9.sp, color = TextMuted
                     )
-                    OutlinedButton(
-                        enabled = !managementBusy && managementApiOriginInput.isNotBlank(),
-                        onClick = { viewModel.verifyAndSaveManagementApiOrigin(managementApiOriginInput) },
-                        modifier = Modifier.fillMaxWidth().testTag("verify_management_api_origin")
-                    ) { Text("VERIFY & SAVE MANAGEMENT API", fontSize = 10.sp) }
                     if (managementEmail == "Saved session") Text("Encrypted session is saved; account identity has not been refreshed yet.", fontSize = 10.sp, color = TextSecondary)
                     else if (managementEmail.isNotBlank()) Text("Signed in as $managementEmail", fontSize = 10.sp, color = ProfitGreen)
                     OutlinedTextField(value = accountEmail, onValueChange = { accountEmail = it },

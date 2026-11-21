@@ -84,7 +84,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgeSnapshot by remember(bridgeProfileKey) { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
     var managedBridgeUrlInput by remember {
         mutableStateOf(MT5RemoteBridgeClient.initialServiceUrl(
-            bridgeSecrets.getManagedMT5ServiceUrl(), com.example.BuildConfig.MT5_MANAGED_SERVICE_URL
+            bridgeSecrets.getManagedMT5ServiceUrl(),
+            com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
+            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
         ))
     }
     var bridgeBusy by remember { mutableStateOf(false) }
@@ -438,16 +440,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     OutlinedButton(onClick = { showBridgeDetails = !showBridgeDetails }, modifier = Modifier.fillMaxWidth().testTag("bridge_setup_details_toggle")) {
                         Text(if (showBridgeDetails) "HIDE CONNECTION DETAILS" else "CONNECTION SETUP & POSITION DETAILS", fontSize = 10.sp)
                     }
-                    CodespacesHostControls(
-                        secrets = bridgeSecrets,
-                        bridgeClient = bridgeClient,
-                        onBridgeOriginDiscovered = { origin ->
-                            // The child control saves the same encrypted origin used by bridgeClient.
-                            // Keep the Bot's editable field and visible snapshot in sync with that connection.
-                            managedBridgeUrlInput = origin
-                            bridgeSnapshot = null
-                        }
-                    )
+                    if (!com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) {
+                        CodespacesHostControls(
+                            secrets = bridgeSecrets,
+                            bridgeClient = bridgeClient,
+                            onBridgeOriginDiscovered = { origin ->
+                                managedBridgeUrlInput = origin
+                                bridgeSnapshot = null
+                            }
+                        )
+                    }
                     if (showBridgeDetails) {
                     val news = bridgeSnapshot?.newsVerdict.takeIf { verifiedRemoteSnapshotForBot != null }
                     val newsStatus = news?.optString("status", "UNKNOWN")?.uppercase() ?: "UNKNOWN"
@@ -456,17 +458,28 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Text(reportStatus, color = TextSecondary, fontSize = 10.sp)
                     Text("Selected profile: $selectedAccountMode · Verified terminal: ${if (bridgeIdentityFresh) bridgeSnapshot?.account?.ifBlank { "not verified" } ?: "not verified" else "STALE / UNVERIFIED"} · Actual mode: ${if (bridgeIdentityFresh) bridgeSnapshot?.actualAccountMode?.ifBlank { "UNVERIFIED" } ?: "UNVERIFIED" else "UNVERIFIED"}", color = TextSecondary, fontSize = 10.sp)
                     Text("Managed service: ${if (bridgeClient.managedConfigured()) "configured" else "CONFIGURATION_REQUIRED"}", color = TextSecondary, fontSize = 10.sp)
-                    OutlinedTextField(
-                        value = managedBridgeUrlInput,
-                        onValueChange = { managedBridgeUrlInput = it },
-                        modifier = Modifier.fillMaxWidth().testTag("managed_bridge_url"),
-                        enabled = !bridgeBusy,
-                        label = { Text("Managed bridge HTTPS URL") },
-                        placeholder = { Text("https://your-service.onrender.com") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        supportingText = { Text("Enter the public service origin only. Never enter a token or password here.") }
-                    )
+                    if (com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) {
+                        Text(
+                            "Managed MT5 Bridge (embedded): ${MT5RemoteBridgeClient.initialServiceUrl("", com.example.BuildConfig.MT5_MANAGED_SERVICE_URL, locked = true).ifBlank { "NOT CONFIGURED IN THIS BUILD" }}",
+                            color = if (bridgeClient.managedConfigured()) TextSecondary else WarningAmber,
+                            fontSize = 10.sp,
+                            modifier = Modifier.fillMaxWidth().testTag("managed_bridge_url")
+                        )
+                        Text("This endpoint is compiled from the self-hosted host manifest and cannot be changed from the phone.",
+                            color = TextMuted, fontSize = 9.sp)
+                    } else {
+                        OutlinedTextField(
+                            value = managedBridgeUrlInput,
+                            onValueChange = { managedBridgeUrlInput = it },
+                            modifier = Modifier.fillMaxWidth().testTag("managed_bridge_url"),
+                            enabled = !bridgeBusy,
+                            label = { Text("Managed bridge HTTPS URL") },
+                            placeholder = { Text("https://your-service.onrender.com") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            supportingText = { Text("Enter the public service origin only. Never enter a token or password here.") }
+                        )
+                    }
                     if (bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isBlank()) {
                         OutlinedTextField(
                             value = ownerBootstrapCodeInput,
@@ -482,7 +495,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         )
                     }
-                    if (managedBridgeUrlInput.contains(".trycloudflare.com", ignoreCase = true)) {
+                    if (!com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED && managedBridgeUrlInput.contains(".trycloudflare.com", ignoreCase = true)) {
                         Text(
                             "DEMO / DEVELOPMENT ONLY — Cloudflare Quick Tunnel URLs are temporary and are not a production endpoint.",
                             color = WarningAmber,
@@ -491,6 +504,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (!com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) {
                         Button(enabled = !bridgeBusy, onClick = {
                             val origin = MT5RemoteBridgeClient.validServiceOrigin(managedBridgeUrlInput)
                             when {
@@ -505,6 +519,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 }
                             }
                         }) { Text("SAVE BRIDGE URL") }
+                        }
                         OutlinedButton(enabled = !bridgeBusy && bridgeClient.managedConfigured(), onClick = {
                             coroutineScope.launch {
                                 bridgeBusy = true
