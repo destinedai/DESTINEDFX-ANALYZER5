@@ -10,8 +10,15 @@ LOGROTATE_DIR="${DESTINEDFX_LOGROTATE_DIR:-/etc/logrotate.d}"
 ROLE="${1:-all}"
 MODE="${2:-install}"
 if [[ "$ROLE" == "--check" ]]; then ROLE="all"; MODE="--check"; fi
+if [[ "$ROLE" == "self-hosted" ]]; then
+  if [[ "$MODE" != "install" && "$MODE" != "--check" ]]; then
+    echo "Usage: rebuild.sh self-hosted [install|--check]" >&2
+    exit 2
+  fi
+  exec "$SCRIPT_DIR/install-self-hosted.sh" "$MODE"
+fi
 if [[ "$ROLE" != "all" && "$ROLE" != "terminal" && "$ROLE" != "bridge" ]]; then
-  echo "Usage: rebuild.sh [all|terminal|bridge] [install|--check]" >&2
+  echo "Usage: rebuild.sh [all|terminal|bridge|self-hosted] [install|--check]" >&2
   exit 2
 fi
 
