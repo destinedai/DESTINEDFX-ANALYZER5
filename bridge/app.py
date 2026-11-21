@@ -106,6 +106,26 @@ NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
 NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
+
+def news_provider_configuration():
+    """Expose a safe readiness flag without revealing provider URL or bearer token."""
+    try:
+        parsed=urlparse(NEWS_PROVIDER_URL)
+        host=(parsed.hostname or '').lower().rstrip('.')
+        configured=bool(
+            parsed.scheme.lower()=='https' and host and
+            not parsed.username and not parsed.password and
+            not parsed.query and not parsed.fragment and
+            parsed.path not in ('/.well-known/security.txt',)
+        )
+        if configured and host in ('showmytrades.com','www.showmytrades.com'):
+            configured=parsed.path.rstrip('/')=='/api/public/calendar/v1'
+            kind='showmytrades-public-calendar' if configured else 'invalid'
+        else:
+            kind='custom-json-provider' if configured else 'unconfigured'
+        return {'configured':configured,'kind':kind if configured else 'unconfigured'}
+    except Exception:
+        return {'configured':False,'kind':'unconfigured'}
 MANAGEMENT_STEP_UP_PUBLIC_KEY=os.getenv('MANAGEMENT_STEP_UP_PUBLIC_KEY','').strip()
 MANAGEMENT_STEP_UP_ISSUER=os.getenv('MANAGEMENT_STEP_UP_ISSUER','destinedfx-management').strip()
 MANAGEMENT_STEP_UP_AUDIENCE=os.getenv('MANAGEMENT_STEP_UP_AUDIENCE','destinedfx-bridge').strip()
@@ -1941,6 +1961,8 @@ def configuration_health():
         'management_step_up_key_fingerprint_sha256': management_step_up_key_fingerprint(),
         'management_step_up_issuer': MANAGEMENT_STEP_UP_ISSUER if management_step_up_key_fingerprint() else '',
         'management_step_up_audience': MANAGEMENT_STEP_UP_AUDIENCE if management_step_up_key_fingerprint() else '',
+        'news_provider_configured': news_provider_configuration()['configured'],
+        'news_provider_kind': news_provider_configuration()['kind'],
         'per_user_terminal_isolation': isolation_status,
         'isolated_slots': int(isolation.get('active_slots', 0)) if isolation_verified else 0,
         'max_isolated_slots': int(isolation.get('max_slots', 0)) if isolation_verified else 0,
