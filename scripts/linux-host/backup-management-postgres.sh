@@ -33,10 +33,10 @@ docker exec "$CONTAINER" pg_dump --no-password --format=custom --no-owner --no-a
   --username="$DB_USER" --dbname="$DB_NAME" > "$tmp_dump"
 [[ -s "$tmp_dump" ]] || { echo "BLOCKED: PostgreSQL produced an empty backup." >&2; exit 4; }
 chmod 0600 "$tmp_dump"
-sha256sum "$tmp_dump" > "$tmp_sha"
+digest="$(sha256sum "$tmp_dump" | cut -d ' ' -f1)"
+printf '%s  %s\\n' "$digest" "$name.dump" > "$tmp_sha"
 chmod 0600 "$tmp_sha"
 mv -- "$tmp_dump" "$final_dump"
-sha256sum "$final_dump" | awk '{print $1 "  " ENVIRON["BACKUP_NAME"]}' BACKUP_NAME="$name.dump" > "$tmp_sha"
 mv -- "$tmp_sha" "$final_sha"
 
 # Delete only backups with our exact name pattern after verifying the file
