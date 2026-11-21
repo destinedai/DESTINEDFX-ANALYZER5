@@ -58,7 +58,9 @@ python scripts/live_activation_preflight.py \
   --arm-live
 ```
 
-The script refuses to request credentials unless Management readiness, the Ed25519 public-key match, persistent durable Windows host, configured news provider, verified per-user terminal isolation, two simultaneously active isolated DEMO/LIVE terminal slots, and fresh authenticated MT5 readiness all pass. It then asks for Management account email, hidden password reauthentication, and the exact account-specific `ARM LIVE <BROKER> <LOGIN>` phrase.
+The script refuses to request credentials unless Management readiness, the Ed25519 public-key match, persistent durable Windows host, configured news provider, verified per-user terminal isolation, two simultaneously active isolated DEMO/LIVE terminal slots, and fresh authenticated MT5 readiness all pass.
+
+The current Windows owner-worker implementation creates per-account /portable terminal directories but runs the processes under the same Windows user identity. The Bridge therefore reports `multi_user_terminal_isolation=NOT_VERIFIED` and zero verified isolated slots. This is a real LIVE blocker; do not override it or change health configuration by hand. A Windows per-user OS isolation mechanism with verified process identity and account-specific ACL evidence must be implemented and tested first. It then asks for Management account email, hidden password reauthentication, and the exact account-specific `ARM LIVE <BROKER> <LOGIN>` phrase.
 
 On success it reports only the 15-minute account-bound lease expiry and a Management-session logout result. Tokens, passwords and signed assertions remain in memory; authenticated redirects are refused. The script does not submit, retry, close, cancel, or modify any broker order. An unsuccessful Management logout is reported as a warning because the already-issued lease can remain active until its 15-minute expiry.
 
