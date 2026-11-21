@@ -25,12 +25,15 @@ for rel in \
   scripts/linux-host/host-agent.py scripts/linux-host/linux-slot-worker.py scripts/linux-host/linux_isolation.py \
   scripts/linux-host/host_lifecycle.py scripts/linux-host/provision-worker-token.sh scripts/linux-host/provision-postgres-app-role.sh \
   scripts/linux-host/accept_two_user_runtime.py scripts/linux-host/backup.sh scripts/linux-host/restore-test.sh \
+  scripts/linux-host/backup-management-postgres.sh \
   scripts/linux-host/host-doctor.sh scripts/linux-host/setup-unattended-upgrades.sh scripts/linux-host/wine-guard.sh \
   scripts/linux-host/Caddyfile \
   scripts/linux-host/systemd/destinedfx-host-agent.service scripts/linux-host/systemd/destinedfx-bridge.service \
   scripts/linux-host/systemd/destinedfx-linux-slot-worker.service \
   scripts/linux-host/systemd/destinedfx-provision-linux-worker.service scripts/linux-host/systemd/destinedfx-caddy.service \
-  scripts/linux-host/systemd/destinedfx-postgres.service scripts/linux-host/systemd/destinedfx-management-api.service; do
+  scripts/linux-host/systemd/destinedfx-postgres.service scripts/linux-host/systemd/destinedfx-management-api.service \
+  scripts/linux-host/systemd/destinedfx-management-postgres-backup.service \
+  scripts/linux-host/systemd/destinedfx-management-postgres-backup.timer; do
   [[ -f "$SOURCE_ROOT/$rel" && ! -L "$SOURCE_ROOT/$rel" ]] || block "required source file missing or symlinked: $rel"
 done
 
@@ -61,6 +64,7 @@ units = {
     "provision": (base / "destinedfx-provision-linux-worker.service").read_text(),
     "postgres": (base / "destinedfx-postgres.service").read_text(),
     "management": (base / "destinedfx-management-api.service").read_text(),
+    "pg_backup": (base / "destinedfx-management-postgres-backup.service").read_text(),
     "caddy": (base / "destinedfx-caddy.service").read_text(),
 }
 for name, text in units.items():
@@ -81,7 +85,12 @@ assert "127.0.0.1:5433:5432" in units["postgres"]
 assert "LoadCredentialEncrypted=postgres-password:" in units["postgres"]
 assert "User=destinedfx-api" in units["management"]
 assert "LoadCredentialEncrypted=step-up-private-key-pem:" in units["management"]
+assert "ReadWritePaths=/var/backups/destinedfx-management /run/docker.sock" in units["pg_backup"]
+assert "backup-management-postgres.sh" in units["pg_backup"]
 assert "User=caddy" in units["caddy"] and "CAP_NET_BIND_SERVICE" in units["caddy"]
+timer = (base / "destinedfx-management-postgres-backup.timer").read_text()
+if not timer.startswith("[Unit]\\n") or "[Timer]\\n" not in timer or "OnCalendar=*-*-* 02:25:00 UTC" not in timer:
+    raise SystemExit("invalid PostgreSQL backup timer: must have the daily persistent schedule")
 print("SELF_HOSTED_SOURCE_CHECK_OK")
 PY
   if command -v systemd-analyze >/dev/null 2>&1; then
@@ -91,6 +100,8 @@ PY
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-provision-linux-worker.service" \
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-postgres.service" \
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-management-api.service" \
+      "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-management-postgres-backup.service" \
+      "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-management-postgres-backup.timer" \
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-caddy.service"
   fi
   say SELF_HOSTED_INSTALL_CHECK_OK
@@ -223,6 +234,7 @@ fi
 install -d -o root -g root -m 0755 "$DEST_ROOT" "$DEST_ROOT/bridge" "$DEST_ROOT/management" "$DEST_ROOT/managed-worker" "$DEST_ROOT/mt5-ea" "$DEST_ROOT/scripts/linux-host" "$UNIT_DIR"
 install -d -o "$API_UID" -g "$API_GID" -m 0700 /var/lib/destinedfx-api
 install -d -o root -g root -m 0700 /var/lib/destinedfx-management /var/lib/destinedfx-management/postgres
+install -d -o root -g root -m 0700 /var/backups/destinedfx-management
 install -d -o "$OWNER_UID" -g "$OWNER_GID" -m 0700 /var/lib/destinedfx /var/lib/destinedfx/host-runtime \
   /var/lib/destinedfx/host-runtime/runtime /var/lib/destinedfx/host-runtime/runtime/slot-runtime \
   /var/lib/destinedfx/host-runtime/isolated-slots
@@ -254,6 +266,7 @@ for rel in backup.sh restore-test.sh host-doctor.sh setup-unattended-upgrades.sh
 done
 install -o root -g root -m 0755 "$SCRIPT_DIR/provision-worker-token.sh" "$DEST_ROOT/scripts/linux-host/provision-worker-token.sh"
 install -o root -g root -m 0755 "$SCRIPT_DIR/provision-postgres-app-role.sh" "$DEST_ROOT/scripts/linux-host/provision-postgres-app-role.sh"
+install -o root -g root -m 0755 "$SCRIPT_DIR/backup-management-postgres.sh" "$DEST_ROOT/scripts/linux-host/backup-management-postgres.sh"
 install -o root -g root -m 0644 "$SOURCE_ROOT/bridge/requirements-production.txt" "$DEST_ROOT/bridge/requirements-production.txt"
 cp -a "$SOURCE_ROOT/mt5-ea/." "$DEST_ROOT/mt5-ea/"
 chown -R root:root "$DEST_ROOT/mt5-ea"
@@ -264,12 +277,13 @@ chmod 0640 "$BRIDGE_ENV"
 chown root:root "$HOST_ENV"
 chmod 0600 "$HOST_ENV"
 
-for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx-management-api.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service; do
+for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx-management-api.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service destinedfx-management-postgres-backup.service destinedfx-management-postgres-backup.timer; do
   install -o root -g root -m 0644 "$SCRIPT_DIR/systemd/$unit" "$UNIT_DIR/$unit"
 done
 systemd-analyze verify "$UNIT_DIR/destinedfx-host-agent.service" "$UNIT_DIR/destinedfx-postgres.service" \
   "$UNIT_DIR/destinedfx-management-api.service" "$UNIT_DIR/destinedfx-bridge.service" \
   "$UNIT_DIR/destinedfx-provision-linux-worker.service" "$UNIT_DIR/destinedfx-linux-slot-worker.service" \
+  "$UNIT_DIR/destinedfx-management-postgres-backup.service" "$UNIT_DIR/destinedfx-management-postgres-backup.timer" \
   "$UNIT_DIR/destinedfx-caddy.service" || block "systemd unit validation failed."
 systemctl daemon-reload
 systemctl enable --now docker.service
@@ -285,6 +299,7 @@ for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx
   systemctl enable "$unit" >/dev/null
   systemctl start "$unit"
 done
+systemctl enable --now destinedfx-management-postgres-backup.timer >/dev/null
 for attempt in $(seq 1 30); do
   if curl --fail --silent --max-time 3 -H 'X-Forwarded-Proto: https' -H "Host: $BRIDGE_HOST" http://127.0.0.1:8000/health/live >/dev/null 2>&1; then break; fi
   sleep 2
