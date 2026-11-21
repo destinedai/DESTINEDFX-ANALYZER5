@@ -35,16 +35,40 @@ def management_identity_assertion(subject='fixture-user',tenant='fixture-user'):
     return jwt.encode(claims,app.TEST_STEP_UP_PRIVATE_KEY,algorithm='EdDSA')
 
 
-def demo_pass_document(login='600001',server='Broker-Demo',broker='FBS',**overrides):
+def demo_pass_document(login='600001',server='Broker-Demo',broker='FBS',
+                      pairing_id='fixture-pairing',credential_generation='demo-generation',
+                      worker_id='worker-demo',worker_generation=1,host_generation=None,**overrides):
+    today=app.datetime.now(app.timezone.utc).date()
     evidence={
+        'evidence_version':1,'pairing_id':pairing_id,
         'broker':broker,'mode':'DEMO','status':'PASS',
-        'account_login':login,'server':server,'soak_days':6,
+        'account_login':login,'server':server,
+        'credential_generation':credential_generation,
+        'worker_id':worker_id,'worker_generation':worker_generation,
+        'host_generation':host_generation or app.HOST_GENERATION,
+        'soak_days':6,
+        'accepted_days':[(today-app.timedelta(days=5-index)).isoformat() for index in range(6)],
+        'restart_instances':2,'closed_trade_count':1,
         'order_lifecycle_pass':True,'daily_reconciliation_pass':True,
         'restart_test_pass':True,'risk_controls_pass':True,
-        'evidence_paths':['evidence/soak-summary.json','evidence/order-lifecycle.json'],
+        'evidence_paths':[
+            'evidence/soak-summary.json','evidence/day-1.json','evidence/day-2.json',
+            'evidence/order-lifecycle.json','evidence/restart-reconciliation.json',
+        ],
     }
     evidence.update(overrides)
+    evidence['bridge_proof']=app.demo_pass_bridge_proof(evidence)
     return app.json.dumps(evidence,separators=(',',':'))
+
+
+def demo_pass_context(pairing,worker_id='worker-demo'):
+    return {
+        'pairing_id':pairing['pairing_id'],
+        'credential_generation':'demo-generation',
+        'worker_id':worker_id,
+        'worker_generation':1,
+        'host_generation':app.HOST_GENERATION,
+    }
 
 def test_bridge_tests_use_a_process_isolated_database():
     assert app.DB_PATH.startswith(f'/tmp/destinedfx-bridge-test-{os.getpid()}-')
@@ -1210,7 +1234,8 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
         demo_pairing,demo_headers,demo_worker,'worker-demo','600001','Broker-Demo','DEMO','demo-test-password'
     )
     demo_digest='a'*64
-    pass_document=demo_pass_document()
+    demo_evidence_context=demo_pass_context(demo_pairing,'worker-demo')
+    pass_document=demo_pass_document(**demo_evidence_context)
     acceptance=client.post('/v1/app/demo-acceptance',headers=demo_headers,json={
         'confirm_demo':True,'evidence_document':pass_document,
     })
@@ -1227,6 +1252,7 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     live_pairing['demo_pairing_id']=demo_pairing['pairing_id']
     live_pairing['demo_app_token']=demo_pairing['app_token']
     live_pairing['demo_acceptance_id']=accepted['acceptance_id']
+    live_pairing['demo_evidence_context']=demo_evidence_context
     if access_type=='MASTER':
         association=client.post('/v1/app/live-profile-association',headers=live_headers,json={
             'demo_pairing_id':demo_pairing['pairing_id'],
@@ -1285,14 +1311,15 @@ def test_demo_acceptance_server_rejects_forged_or_mismatched_pass_documents(monk
     job,terminal_headers,actual=_ready_test_profile(
         pairing,headers,worker,'worker-demo-evidence','600001','Broker-Demo','DEMO','demo-test-password'
     )
+    evidence_context=demo_pass_context(pairing,'worker-demo-evidence')
     semantic_mismatches=[
-        demo_pass_document(broker='EXNESS'),
-        demo_pass_document(login='999999'),
-        demo_pass_document(server='Wrong-Server'),
-        demo_pass_document(order_lifecycle_pass=False),
-        demo_pass_document(daily_reconciliation_pass=False),
-        demo_pass_document(restart_test_pass=False),
-        demo_pass_document(risk_controls_pass=False),
+        demo_pass_document(**{**evidence_context,'broker':'EXNESS'}),
+        demo_pass_document(**{**evidence_context,'login':'999999'}),
+        demo_pass_document(**{**evidence_context,'server':'Wrong-Server'}),
+        demo_pass_document(**{**evidence_context,'order_lifecycle_pass':False}),
+        demo_pass_document(**{**evidence_context,'daily_reconciliation_pass':False}),
+        demo_pass_document(**{**evidence_context,'restart_test_pass':False}),
+        demo_pass_document(**{**evidence_context,'risk_controls_pass':False}),
     ]
     for document in semantic_mismatches:
         response=client.post('/v1/app/demo-acceptance',headers=headers,json={
@@ -1301,8 +1328,8 @@ def test_demo_acceptance_server_rejects_forged_or_mismatched_pass_documents(monk
         assert response.status_code==409, response.text
         assert response.json()['detail']['code']=='DEMO_PASS_EVIDENCE_MISMATCH'
     schema_invalid_documents=[
-        demo_pass_document(soak_days=4),
-        demo_pass_document(evidence_paths=[]),
+        demo_pass_document(**{**evidence_context,'soak_days':4}),
+        demo_pass_document(**{**evidence_context,'evidence_paths':[]}),
     ]
     for document in schema_invalid_documents:
         response=client.post('/v1/app/demo-acceptance',headers=headers,json={
@@ -1323,7 +1350,7 @@ def test_demo_pass_acceptance_digest_is_computed_from_exact_document(monkeypatch
     worker=_test_worker('worker-demo-digest')
     _ready_test_profile(pairing,headers,worker,'worker-demo-digest',
                         '600001','Broker-Demo','DEMO','demo-test-password')
-    document=demo_pass_document()
+    document=demo_pass_document(**demo_pass_context(pairing,'worker-demo-digest'))
     response=client.post('/v1/app/demo-acceptance',headers=headers,json={
         'confirm_demo':True,'evidence_document':document,
     })
@@ -1341,7 +1368,7 @@ def test_demo_acceptance_and_cross_profile_link_require_fresh_management_identit
     pairing,live_headers,wh,job,th,actual=live_ready(monkeypatch)
     demo_headers={'Authorization':'Bearer '+pairing['demo_app_token']}
     missing=client.post('/v1/app/demo-acceptance',headers=demo_headers,json={
-        'confirm_demo':True,'evidence_document':demo_pass_document(),
+        'confirm_demo':True,'evidence_document':demo_pass_document(**pairing['demo_evidence_context']),
     })
     assert missing.status_code==401
     live_bearer={'Authorization':live_headers['Authorization']}
