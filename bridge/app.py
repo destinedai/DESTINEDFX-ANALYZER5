@@ -1463,6 +1463,7 @@ def verified_terminal_pairing_exists():
 
 UINT64_MAX=18446744073709551615
 DESTRUCTIVE_ACTIONS={'CANCEL_PENDING_SELECTED','CANCEL_EA_PENDING','CLOSE_POSITION_SELECTED','CLOSE_ALL'}
+OPENING_ACTIONS={'PLACE_MARKET_ORDER'}
 
 def canonical_ticket(value):
     if not isinstance(value,str) or not value or len(value)>20 or not value.isascii() or not value.isdecimal() or value.startswith('0'):
@@ -3011,6 +3012,119 @@ def issue_destructive_command(x,p):
             if updated.rowcount!=1: raise HTTPException(409,'Close-all confirmation was already used or expired')
     return {'id':command_id,'request_id':x.request_id,'action':x.action,'config':config,'status':'queued'}
 
+
+def issue_market_order_command(x,p):
+    """Queue one account-bound phone market order after fresh broker-side checks.
+
+    Volume is deliberately not accepted from the phone. The EA computes it from
+    broker contract metadata, stop distance, verified costs, margin, and its
+    configured per-trade volume cap immediately before submission.
+    """
+    try:
+        raw_config=json.dumps(x.config,sort_keys=True,separators=(',',':'),allow_nan=False)
+    except (TypeError,ValueError):
+        raise HTTPException(422,'Invalid market-order config')
+    with tx() as c:
+        prior=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
+    if prior:
+        if prior['action']!=x.action or prior['request_config']!=raw_config:
+            raise HTTPException(409,'request_id was already used for a different command payload')
+        return {'id':prior['id'],'request_id':prior['request_id'],'action':prior['action'],
+                'config':json.loads(prior['config']),'status':'acknowledged' if prior['ack'] else 'queued'}
+
+    require_durable_execution()
+    if HOST_PROFILE!='PERSISTENT':
+        raise HTTPException(409,detail={'code':'PERSISTENT_HOST_REQUIRED','message':'New MT5 market orders require the persistent owner host'})
+    managed,beat=destructive_context(p)
+    cfg=x.config
+    account=beat.get('account') or {}
+    if any((cfg.get('account_login')!=account.get('login'),
+            cfg.get('account_server')!=account.get('server'),
+            cfg.get('account_mode')!=managed['account_mode'])):
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_ACCOUNT_MISMATCH','message':'Order profile does not match the fresh authenticated MT5 account'})
+    if managed['account_mode']=='LIVE' and not live_authorization_valid(p,managed,beat):
+        raise HTTPException(409,detail={'code':'LIVE_AUTHORIZATION_REQUIRED','message':'A current account-bound LIVE lease is required before a real-money order'})
+    risk=live_risk_controls(beat)
+    if not risk['authorized']:
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_RISK_EVIDENCE_INVALID','message':'Fresh EA daily-risk evidence and configured risk caps are required'})
+    symbol=cfg.get('symbol')
+    side=cfg.get('side')
+    if not isinstance(symbol,str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,32}',symbol):
+        raise HTTPException(422,'A valid broker symbol is required')
+    if side not in ('BUY','SELL'):
+        raise HTTPException(422,'Market-order side must be BUY or SELL')
+    def finite_positive(value):
+        return (isinstance(value,(int,float)) and not isinstance(value,bool)
+                and math.isfinite(float(value)) and float(value)>0)
+    risk_percent=cfg.get('risk_percent')
+    stop_loss=cfg.get('stop_loss')
+    take_profit=cfg.get('take_profit')
+    expected_bid=cfg.get('expected_bid')
+    expected_ask=cfg.get('expected_ask')
+    quote_timestamp=cfg.get('quote_timestamp_ms')
+    if not finite_positive(risk_percent) or float(risk_percent)>min(1.0,float(risk['risk_percent'])):
+        raise HTTPException(422,'Requested per-trade risk must be positive and no higher than the current EA risk cap (maximum 1%)')
+    if not all(finite_positive(v) for v in (stop_loss,take_profit,expected_bid,expected_ask)):
+        raise HTTPException(422,'Fresh quote, stop-loss and take-profit prices must be finite and positive')
+    if isinstance(quote_timestamp,bool) or not isinstance(quote_timestamp,int) or quote_timestamp<=0:
+        raise HTTPException(422,'A canonical MT5 quote timestamp is required')
+
+    config=beat.get('configuration') if isinstance(beat.get('configuration'),dict) else {}
+    configured_symbols=config.get('symbols')
+    # The current EA heartbeat publishes one news verdict at a time, for the
+    # first configured symbol. Do not trade a different symbol against that
+    # unrelated verdict; per-symbol news telemetry is a separate required extension.
+    if not isinstance(configured_symbols,list) or not configured_symbols or symbol!=configured_symbols[0]:
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_NEWS_SYMBOL_UNVERIFIED',
+            'message':'Market orders are limited to the first MT5 EA-configured symbol until per-symbol news telemetry is available'})
+    if not heartbeat_news_clear(beat,[symbol]):
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_NEWS_NOT_CLEAR','message':'Fresh CLEAR economic-calendar evidence is required for this exact symbol'})
+
+    quotes=fresh_terminal_broker_quotes(beat)
+    matches=[q for q in quotes if q['symbol']==symbol and q['timestamp_ms']==quote_timestamp]
+    if len(matches)!=1:
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_QUOTE_CHANGED','message':'The submitted quote is no longer the exact fresh quote reported by this MT5 terminal'})
+    quote=matches[0]
+    tolerance=0.5*(10.0**(-quote['digits']))
+    if (abs(float(expected_bid)-quote['bid'])>tolerance or
+        abs(float(expected_ask)-quote['ask'])>tolerance or quote['age_ms']>BROKER_QUOTE_MAX_AGE_MS):
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_QUOTE_CHANGED','message':'MT5 bid/ask has changed or is stale; refresh the quote before submitting'})
+    if side=='BUY' and not (float(stop_loss)<quote['ask']<float(take_profit)):
+        raise HTTPException(422,'BUY protection must satisfy stop-loss < current ask < take-profit')
+    if side=='SELL' and not (float(take_profit)<quote['bid']<float(stop_loss)):
+        raise HTTPException(422,'SELL protection must satisfy take-profit < current bid < stop-loss')
+
+    positions=beat.get('open_positions')
+    if not isinstance(positions,list):
+        raise HTTPException(409,'A complete broker position snapshot is required before a new order')
+    max_concurrent=int(risk['max_concurrent_positions'])
+    if len(positions)>=max_concurrent:
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_POSITION_LIMIT','message':'The configured maximum concurrent-position limit is already reached'})
+    now_epoch=time.time()
+    expiry=now_epoch+20
+    queued_config={
+        'account_login':account['login'],'account_server':account['server'],'account_mode':managed['account_mode'],
+        'symbol':symbol,'side':side,'risk_percent':float(risk_percent),
+        'stop_loss':float(stop_loss),'take_profit':float(take_profit),
+        'expected_bid':quote['bid'],'expected_ask':quote['ask'],
+        'quote_timestamp_ms':quote['timestamp_ms'],'expires_at_epoch':int(expiry),
+    }
+    serialized=json.dumps(queued_config,separators=(',',':'),allow_nan=False)
+    with tx(True) as c:
+        _require_host_accepting_commands(c)
+        concurrent=c.execute('SELECT * FROM commands WHERE pairing_id=? AND request_id=?',(p['id'],x.request_id)).fetchone()
+        if concurrent:
+            if concurrent['action']!=x.action or concurrent['request_config']!=raw_config:
+                raise HTTPException(409,'request_id was already used for a different command payload')
+            return {'id':concurrent['id'],'request_id':concurrent['request_id'],'action':concurrent['action'],
+                    'config':json.loads(concurrent['config']),'status':'acknowledged' if concurrent['ack'] else 'queued'}
+        c.execute('''INSERT INTO commands(pairing_id,request_id,action,config,expires_at,request_config,host_generation)
+                     VALUES(?,?,?,?,?,?,?)''',
+                  (p['id'],x.request_id,x.action,serialized,expiry,raw_config,HOST_GENERATION))
+        command_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    return {'id':command_id,'request_id':x.request_id,'action':x.action,'config':queued_config,'status':'queued'}
+
+
 @app.post('/v1/app/commands',status_code=202)
 def command(x:Command,authorization:str|None=Header(default=None)):
     p=auth(authorization,'app')
@@ -3028,6 +3142,7 @@ def command(x:Command,authorization:str|None=Header(default=None)):
     try: uuid.UUID(x.request_id)
     except ValueError: raise HTTPException(422,'request_id must be a UUID')
     if x.action in DESTRUCTIVE_ACTIONS: return issue_destructive_command(x,p)
+    if x.action in OPENING_ACTIONS: return issue_market_order_command(x,p)
     if x.action not in ('START','STOP','PAUSE','RESUME','EMERGENCY_STOP'): raise HTTPException(422,'Invalid action')
     with tx() as c:
         m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
