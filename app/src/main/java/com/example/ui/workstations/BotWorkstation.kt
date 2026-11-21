@@ -286,12 +286,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     )
                                     val positionTicket = signal?.optString("position").orEmpty()
                                     val signalStop = signal?.optDouble("stop_loss", Double.NaN) ?: Double.NaN
+                                    val signalTake = signal?.optDouble("take_profit", Double.NaN) ?: Double.NaN
                                     val openPositions = (fresh.raw.optJSONArray("open_positions") ?: fresh.raw.optJSONArray("positions"))
                                     val confirmedStop = if (bridgePendingAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS) {
-                                        (0 until (openPositions?.length() ?: 0)).mapNotNull { openPositions?.optJSONObject(it) }
+                                        val selected = (0 until (openPositions?.length() ?: 0)).mapNotNull { openPositions?.optJSONObject(it) }
                                             .firstOrNull { it.optString("ticket") == positionTicket }
-                                            ?.optDouble("stop_loss", Double.NaN)
-                                            ?.let { it.isFinite() && signalStop.isFinite() && kotlin.math.abs(it - signalStop) <= 1e-8 } == true
+                                        val actualStop = selected?.optDouble("stop_loss", Double.NaN) ?: Double.NaN
+                                        val actualTake = selected?.optDouble("take_profit", Double.NaN) ?: Double.NaN
+                                        actualStop.isFinite() && actualTake.isFinite() && signalStop.isFinite() &&
+                                            signalTake.isFinite() && kotlin.math.abs(actualStop - signalStop) <= 1e-8 &&
+                                            kotlin.math.abs(actualTake - signalTake) <= 1e-8
                                     } else false
                                     val confirmed = if (bridgePendingAction in MT5RemoteBridgeClient.POSITION_MANAGEMENT_ACTIONS) {
                                         executionState == "POSITION_SL_TIGHTENED" && confirmedStop
