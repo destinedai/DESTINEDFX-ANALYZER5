@@ -92,8 +92,12 @@ class ManagementApiClientTest {
 
         val error = runCatching { client.currentUser() }.exceptionOrNull() as ManagementException
         assertEquals(ManagementFailure.AUTH_EXPIRED, error.failure)
-        assertEquals(1, requests.size)
-        assertEquals("first.example.org", requests.single().first)
+        // The new origin is probed without credentials, but the previous bearer
+        // must never be forwarded and /auth/me must not be reached on that origin.
+        assertEquals(5, requests.size)
+        assertEquals(3, requests.count { it.first == "first.example.org" })
+        assertEquals(2, requests.count { it.first == "second.example.org" })
+        assertTrue(requests.all { it.second == null })
     }
 
     @Test fun absentOrExpiredTokenNeverReachesNetwork() {
