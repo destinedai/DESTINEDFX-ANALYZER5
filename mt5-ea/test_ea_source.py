@@ -392,3 +392,31 @@ def test_restart_recovery_precedes_start_resume_and_scanning():
     assert "if(!g_startupRecoveryReady)" in scan
     timer = source[source.index("void OnTimer()") : source.index("void OnTick()")]
     assert timer.index("StartupBrokerSnapshotReady()") < timer.index("ProcessCommands()")
+
+
+def test_phone_market_order_uses_durable_ea_risk_engine_and_never_trusts_phone_volume():
+    source = (Path(__file__).parent / "DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
+    assert 'action=="PLACE_MARKET_ORDER"' in source
+    assert "ExecutePhoneMarketOrder(orderConfig,orderRequest,outcome,msg)" in source
+    assert "bool ExecutePhoneMarketOrder(" in source
+    assert 'Place(symbol,PERIOD_M5,side=="BUY"' in source
+    assert '"MANUAL-"+requestId' in source
+    assert "g_liveAuthorizedUntil<=0" in source
+    assert "QuoteFresh(symbol,q)" in source
+    assert "NewsClear(symbol)" in source
+    assert "RiskDayOK()" in source
+    assert "OrderCalcProfit" in source
+    assert "OrderCalcMargin" in source
+    assert "g_sigRequestedVolume=vol" in source
+    assert '"signal_key"' in source
+    manual = source.split("bool ExecutePhoneMarketOrder(", 1)[1].split("\nvoid SetWait", 1)[0]
+    assert "volume" not in manual.lower()
+    assert "JNum(cfg,\"volume\"" not in manual
+
+
+def test_requested_phone_take_profit_must_meet_existing_cost_adjusted_net_two_r():
+    source = (Path(__file__).parent / "DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
+    assert "bool preserveRequestedTarget=false" in source
+    assert "if(preserveRequestedTarget)" in source
+    assert "suppliedDistance+tick*0.5<requiredTargetDistance" in source
+    assert "Requested take-profit does not meet the cost-adjusted net 1:2 risk/reward requirement" in source
