@@ -79,7 +79,7 @@ if ($AddBroker) {
         Write-Host "$broker already has this exact terminal mapping; add-broker operation is an idempotent no-op."
     }
 }
-$capacityText = (Read-Host 'Measured safe simultaneous DEMO terminal capacity on this PC (1-4)').Trim()
+$capacityText = (Read-Host 'Measured safe simultaneous MT5 terminal capacity (1-4; LIVE needs at least 2 for separate DEMO and LIVE profiles; 1 is DEMO-only)').Trim()
 [int]$measuredCapacity = 0
 if (-not [int]::TryParse($capacityText,[ref]$measuredCapacity) -or $measuredCapacity -lt 1 -or $measuredCapacity -gt 4) { throw 'Enter a measured safe capacity from 1 through 4; do not claim capacity from account-slot count.' }
 if ($resume -and (Test-Path $identityPath)) { $workerId = [IO.File]::ReadAllText($identityPath).Trim(); Write-Host 'Preserving installed worker identity.' } else { $workerId = (Read-Host 'Stable worker ID (letters, digits, underscore, hyphen)').Trim() }
