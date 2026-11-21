@@ -302,10 +302,15 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         and '"MANUAL-"+requestId' in ea
         and "signal_key" in ea
         and 'mt5_phone_market_order_card' in bot_ui
+        and 'TIGHTEN_POSITION_SL' in bridge
+        and 'issue_position_stop_command' in bridge
+        and 'positionStopTightenConfig' in bridge_client
+        and 'mt5_position_stop_tighten_card' in bot_ui
+        and 'ExecutePhonePositionStopTighten' in ea
     )
     add_check(
         checks,
-        "phone MT5 market orders route through the Windows EA",
+        "phone MT5 orders and position protection route through the Windows EA",
         phone_market_order_contract,
         "The phone only queues an account-bound, quote/news/risk-validated Bridge command. "
         "The Windows MT5 EA computes volume and submits through its broker-side risk engine; it is never a direct Android broker order.",
