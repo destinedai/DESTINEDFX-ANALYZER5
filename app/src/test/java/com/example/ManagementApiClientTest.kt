@@ -74,11 +74,15 @@ class ManagementApiClientTest {
         val http = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
             val request = chain.request()
             requests += request.url.host to request.header("Authorization")
-            if (request.url.encodedPath.endsWith("/auth/login")) {
-                response(request, 200,
-                    """{"access_token":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","expires_at":"2099-01-01T00:00:00Z","user":{"id":"u1","email":"a@example.org"}}""")
-            } else {
-                response(request, 200, """{"id":"u1","email":"a@example.org"}""")
+            when (request.url.encodedPath) {
+                "/ready" -> response(request, 200, """{"status":"ready"}""")
+                "/api/v1/auth/bridge-verification-key" -> response(request, 200, validKeyDocument())
+                else -> if (request.url.encodedPath.endsWith("/auth/login")) {
+                    response(request, 200,
+                        """{"access_token":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","expires_at":"2099-01-01T00:00:00Z","user":{"id":"u1","email":"a@example.org"}}""")
+                } else {
+                    response(request, 200, """{"id":"u1","email":"a@example.org"}""")
+                }
             }
         }).build()
         val client = ManagementApiClient({ origin }, store, http)
@@ -147,6 +151,8 @@ class ManagementApiClientTest {
         val http = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
             val request = chain.request()
             when {
+                request.url.encodedPath == "/ready" -> response(request, 200, """{"status":"ready"}""")
+                request.url.encodedPath == "/api/v1/auth/bridge-verification-key" -> response(request, 200, validKeyDocument())
                 request.url.encodedPath.endsWith("/auth/login") -> response(request, 200,
                     """{"access_token":"${"x".repeat(64)}","expires_at":"2099-01-01T00:00:00Z","user":{"id":"u1","email":"a@example.org"}}""")
                 request.url.encodedPath.endsWith("/preferences/theme") -> {
@@ -196,6 +202,13 @@ class ManagementApiClientTest {
         override fun validToken(nowMs: Long): String? = token
         override fun clear(): Boolean { token = null; expiry = null; return true }
     }
+
+    private fun validKeyDocument(): String = JSONObject()
+        .put("algorithm", "EdDSA")
+        .put("public_key_pem", "-----BEGIN PUBLIC KEY-----" + "A".repeat(48) + "-----END PUBLIC KEY-----")
+        .put("issuer", "destinedfx-management")
+        .put("audience", "destinedfx-bridge")
+        .toString()
 
     private fun response(request: okhttp3.Request, code: Int, text: String) = Response.Builder()
         .request(request).protocol(Protocol.HTTP_1_1).code(code).message("mock")
