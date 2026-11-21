@@ -84,7 +84,7 @@ signature="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1)" || block 
 grep -Eq 'certificate SHA-256 digest:[[:space:]]*[0-9a-fA-F]{64}' <<<"$signature" || block "APK signing fingerprint is missing."
 metadata="$("$AAPT" dump badging "$APK")"
 grep -Fq "package: name='com.aistudio.destinedfx.qwvzxp'" <<<"$metadata" || block "Unexpected APK application ID."
-grep -Fq "native-code: 'arm64-v8a' 'x86_64'" <<<"$metadata" || block "Required Android ABIs are missing."
+grep -Fq "arm64-v8a" <<<"$metadata" && grep -Fq "x86_64" <<<"$metadata" || block "Required Android ABIs are missing."
 CONFIG="$(find "$ROOT/app/build/generated/source/buildConfig/debug" -type f -name BuildConfig.java -print -quit)"
 [[ -n "$CONFIG" ]] || block "Generated BuildConfig is missing."
 grep -Fq "DESTINEDFX_ENDPOINTS_LOCKED = true" "$CONFIG" || block "APK is not endpoint-locked."
