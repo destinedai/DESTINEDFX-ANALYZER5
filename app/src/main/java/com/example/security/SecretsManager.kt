@@ -80,6 +80,8 @@ class SecretsManager internal constructor(
         private const val BROKER_ACCOUNT_PROFILE_PREFIX = "broker_account_profile_"
         private const val MANAGEMENT_ACCESS_TOKEN = "management_access_token"
         private const val MANAGEMENT_ACCESS_EXPIRES_AT_MS = "management_access_expires_at_ms"
+        private const val MANAGEMENT_ACCESS_ORIGIN = "management_access_origin"
+        private const val MANAGEMENT_API_ORIGIN = "management_api_origin"
         private const val MODE_DEMO_ACCEPTANCE_PREFIX = "mode_demo_acceptance_"
         private const val MODE_ARMING_AUDIT = "mode_arming_audit_v1"
         private val MODE_ARMING_AUDIT_LOCK = Any()
@@ -766,21 +768,40 @@ class SecretsManager internal constructor(
         mode in setOf("System", "Light", "Dark") && prefs.edit().putString(BOT_THEME_MODE, mode).commit()
 
     /** Management API bearer token is opaque and isolated from trading/broker credentials. */
-    fun saveManagementAccessToken(token: String, expiresAtMs: Long): Boolean =
+    fun saveManagementAccessToken(token: String, expiresAtMs: Long, origin: String = ""): Boolean =
         isSecureStorageAvailable && token.length in 32..256 && expiresAtMs > System.currentTimeMillis() &&
-            prefs.edit().putString(MANAGEMENT_ACCESS_TOKEN, token)
-                .putLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, expiresAtMs).commit()
+            origin.isNotBlank() && prefs.edit().putString(MANAGEMENT_ACCESS_TOKEN, token)
+                .putLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, expiresAtMs)
+                .putString(MANAGEMENT_ACCESS_ORIGIN, origin).commit()
 
-    fun getValidManagementAccessToken(nowMs: Long = System.currentTimeMillis()): String? {
+    /** Management sessions are origin-bound so changing the API host cannot forward an old bearer. */
+    fun getValidManagementAccessToken(
+        nowMs: Long = System.currentTimeMillis(),
+        expectedOrigin: String? = null
+    ): String? {
         if (!isSecureStorageAvailable) return null
         val expiry = runCatching { prefs.getLong(MANAGEMENT_ACCESS_EXPIRES_AT_MS, 0L) }.getOrDefault(0L)
         if (expiry <= nowMs) { clearManagementAccessToken(); return null }
+        if (expectedOrigin != null) {
+            val storedOrigin = runCatching { prefs.getString(MANAGEMENT_ACCESS_ORIGIN, null) }.getOrNull()
+            if (storedOrigin != expectedOrigin) { clearManagementAccessToken(); return null }
+        }
         return runCatching { prefs.getString(MANAGEMENT_ACCESS_TOKEN, null) }
             .getOrNull()?.takeIf { it.length in 32..256 }
     }
 
     fun clearManagementAccessToken(): Boolean = isSecureStorageAvailable && prefs.edit()
-        .remove(MANAGEMENT_ACCESS_TOKEN).remove(MANAGEMENT_ACCESS_EXPIRES_AT_MS).commit()
+        .remove(MANAGEMENT_ACCESS_TOKEN).remove(MANAGEMENT_ACCESS_EXPIRES_AT_MS)
+        .remove(MANAGEMENT_ACCESS_ORIGIN).commit()
+
+    /** Runtime management API origin is public configuration; persist it in the encrypted preference store. */
+    fun saveManagementApiOrigin(origin: String): Boolean =
+        isSecureStorageAvailable && origin.isNotBlank() &&
+            prefs.edit().putString(MANAGEMENT_API_ORIGIN, origin).commit()
+
+    fun getManagementApiOrigin(): String =
+        if (isSecureStorageAvailable) runCatching { prefs.getString(MANAGEMENT_API_ORIGIN, "") }.getOrNull().orEmpty()
+        else ""
 
     /** Deriv credentials are persisted only after encrypted Keystore storage is initialized. */
     fun saveDerivApiToken(v: String, mode: String = getDerivAccountMode()): Boolean {
