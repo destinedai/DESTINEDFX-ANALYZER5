@@ -27,6 +27,9 @@ try {
     $env:BRIDGE_DB_PATH=Join-Path (Join-Path $base 'data') 'bridge.sqlite3'
     $env:BRIDGE_BASE_URL=$bridgeOrigin.Trim()
     $env:ALLOW_LOOPBACK_HTTP='true'
+    $env:BRIDGE_HOST_MODE='windows-owner'
+    $env:BRIDGE_HOST_PROFILE='PERSISTENT'
+    $env:EXECUTION_STORAGE_DURABLE='true'
     $env:DESTINEDFX_WORKER_ID=$workerId
     $env:PYTHONUNBUFFERED='1'
 } catch {
@@ -139,6 +142,25 @@ function Wait-BridgeConfiguration {
 }
 try {
     $secrets=Read-DpapiBundle $secretFile
+    $stepUpPublicKey=[string]$secrets.management_step_up_public_key
+    if (-not [string]::IsNullOrWhiteSpace($stepUpPublicKey)) {
+        $env:MANAGEMENT_STEP_UP_PUBLIC_KEY=$stepUpPublicKey
+        $stepUpIssuer=[string]$secrets.management_step_up_issuer
+        $stepUpAudience=[string]$secrets.management_step_up_audience
+        if ([string]::IsNullOrWhiteSpace($stepUpIssuer)) { $stepUpIssuer='destinedfx-management' }
+        if ([string]::IsNullOrWhiteSpace($stepUpAudience)) { $stepUpAudience='destinedfx-bridge' }
+        $env:MANAGEMENT_STEP_UP_ISSUER=$stepUpIssuer
+        $env:MANAGEMENT_STEP_UP_AUDIENCE=$stepUpAudience
+        $keyCheck=& $python -c 'import os; from cryptography.hazmat.primitives import serialization; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey; key=serialization.load_pem_public_key(os.environ["MANAGEMENT_STEP_UP_PUBLIC_KEY"].encode()); assert isinstance(key,Ed25519PublicKey); print("ED25519_PUBLIC_KEY_VALID")'
+        if ($LASTEXITCODE -ne 0 -or $keyCheck -notmatch 'ED25519_PUBLIC_KEY_VALID') {
+            throw 'DPAPI management step-up verification key is invalid; refusing to start an incorrectly configured Bridge.'
+        }
+    } else {
+        Remove-Item Env:MANAGEMENT_STEP_UP_PUBLIC_KEY -ErrorAction SilentlyContinue
+        Remove-Item Env:MANAGEMENT_STEP_UP_ISSUER -ErrorAction SilentlyContinue
+        Remove-Item Env:MANAGEMENT_STEP_UP_AUDIENCE -ErrorAction SilentlyContinue
+        Write-Warning 'Management step-up public key is not configured. Account identity registration and LIVE authorization will remain blocked; configure it with -ManagementStepUpPublicKeyPath during the owner-stack installer/repair.'
+    }
     $env:CF_ACCESS_CLIENT_ID=[string]$secrets.cf_access_client_id
     $env:CF_ACCESS_CLIENT_SECRET=[string]$secrets.cf_access_client_secret
     $env:CREDENTIALS_FERNET_KEY=$secrets.fernet_key
@@ -194,7 +216,7 @@ try {
     }
 } finally {
     foreach($proc in @($worker,$bridge)){if($proc -and -not $proc.HasExited){Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue}}
-    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','CREDENTIALS_FERNET_KEY','WORKER_BOOTSTRAP_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','DESTINEDFX_WORKER_RENEWAL_CHECK_SECONDS','DESTINEDFX_WORKER_RENEWAL_MARGIN_SECONDS','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
+    foreach($name in @('BRIDGE_DB_PATH','BRIDGE_BASE_URL','ALLOW_LOOPBACK_HTTP','BRIDGE_HOST_MODE','BRIDGE_HOST_PROFILE','EXECUTION_STORAGE_DURABLE','MANAGEMENT_STEP_UP_PUBLIC_KEY','MANAGEMENT_STEP_UP_ISSUER','MANAGEMENT_STEP_UP_AUDIENCE','CREDENTIALS_FERNET_KEY','WORKER_BOOTSTRAP_TOKEN','DESTINEDFX_WORKER_TOKEN','DESTINEDFX_WORKER_ID','DESTINEDFX_WORKER_RENEWAL_CHECK_SECONDS','DESTINEDFX_WORKER_RENEWAL_MARGIN_SECONDS','CF_ACCESS_CLIENT_ID','CF_ACCESS_CLIENT_SECRET','PYTHONUNBUFFERED')){Remove-Item "Env:$name" -ErrorAction SilentlyContinue}
     $env:CREDENTIALS_FERNET_KEY=$null;$env:WORKER_BOOTSTRAP_TOKEN=$null;$env:DESTINEDFX_WORKER_TOKEN=$null
     if($mutexOwned){$mutex.ReleaseMutex()}
     if($mutex){$mutex.Dispose()}

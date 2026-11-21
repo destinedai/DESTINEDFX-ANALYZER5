@@ -6,6 +6,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 from pydantic import ValidationError
 os.environ['ALLOW_LOOPBACK_HTTP']='true'
+# Test-only storage is explicitly opted into; production defaults remain fail-closed.
+os.environ['BRIDGE_HOST_PROFILE']='EPHEMERAL'
+os.environ['EXECUTION_STORAGE_DURABLE']='true'
 os.environ['BRIDGE_DB_PATH']=f'/tmp/destinedfx-bridge-test-{os.getpid()}-{uuid.uuid4().hex}.sqlite3'
 os.environ['PAIR_RATE_LIMIT']='1000'
 try: os.unlink(os.environ['BRIDGE_DB_PATH'])
@@ -32,20 +35,93 @@ def management_identity_assertion(subject='fixture-user',tenant='fixture-user'):
     return jwt.encode(claims,app.TEST_STEP_UP_PRIVATE_KEY,algorithm='EdDSA')
 
 
-def demo_pass_document(login='600001',server='Broker-Demo',broker='FBS',**overrides):
+def demo_pass_document(login='600001',server='Broker-Demo',broker='FBS',
+                      pairing_id='fixture-pairing',credential_generation='demo-generation',
+                      worker_id='worker-demo',worker_generation=1,host_generation=None,**overrides):
+    today=app.datetime.now(app.timezone.utc).date()
     evidence={
+        'evidence_version':1,'pairing_id':pairing_id,
         'broker':broker,'mode':'DEMO','status':'PASS',
-        'account_login':login,'server':server,'soak_days':6,
+        'account_login':login,'server':server,
+        'credential_generation':credential_generation,
+        'worker_id':worker_id,'worker_generation':worker_generation,
+        'host_generation':host_generation or app.HOST_GENERATION,
+        'soak_days':6,
+        'accepted_days':[(today-app.timedelta(days=5-index)).isoformat() for index in range(6)],
+        'restart_instances':2,'closed_trade_count':1,
         'order_lifecycle_pass':True,'daily_reconciliation_pass':True,
         'restart_test_pass':True,'risk_controls_pass':True,
-        'evidence_paths':['evidence/soak-summary.json','evidence/order-lifecycle.json'],
+        'evidence_paths':[
+            'evidence/soak-summary.json','evidence/day-1.json','evidence/day-2.json',
+            'evidence/order-lifecycle.json','evidence/restart-reconciliation.json',
+        ],
     }
     evidence.update(overrides)
+    evidence['bridge_proof']=app.demo_pass_bridge_proof(evidence)
     return app.json.dumps(evidence,separators=(',',':'))
+
+
+
+def seed_demo_soak_evidence(pairing,actual,worker_id='worker-demo'):
+    """Seed deterministic server-observed rows for contract tests only."""
+    today=app.now().astimezone(app.timezone.utc).date()
+    account_digest=app.demo_soak_account_digest(actual)
+    now_epoch=time.time()
+    rows=[]
+    for index in range(6):
+        day=today-app.timedelta(days=5-index)
+        if day==today:
+            last=now_epoch
+            first=max(app.datetime(day.year,day.month,day.day,tzinfo=app.timezone.utc).timestamp(),last-120)
+        else:
+            first=app.datetime(day.year,day.month,day.day,12,0,tzinfo=app.timezone.utc).timestamp()
+            last=first+120
+        instance='ea-instance-alpha' if index<3 else 'ea-instance-beta'
+        rows.append((pairing['pairing_id'],day.isoformat(),first,last,24,20,20,20,
+                     app.json.dumps([instance]),account_digest,'demo-generation',worker_id,1,app.HOST_GENERATION,0))
+    now_epoch=time.time()
+    with app.tx(True) as c:
+        c.executemany('''INSERT INTO demo_soak_daily(
+            pairing_id,day_utc,first_seen,last_seen,heartbeat_count,risk_clear_count,
+            news_clear_count,reconciliation_count,ea_instance_ids,account_digest,
+            credential_generation,worker_id,worker_generation,host_generation,invalid
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',rows)
+        deal={
+            'ticket':'990001','position_id':'880001','symbol':'EURUSD',
+            'closed_at':app.iso(),'profit':1.25,'commission':0.0,'swap':0.0,'fees':0.0,
+        }
+        payload={
+            'kind':'closed_position','account':actual,'deals':[deal],'positions':[],
+            'signal':{'order':'770001','deal':'990001','position':'880001'},
+            'closed_volume':0.01,'remaining_volume':0.0,'lifecycle':'CLOSED',
+        }
+        c.execute('''INSERT INTO trade_ledger(
+            pairing_id,identity,account_mode,position_id,order_ticket,deal_ticket,symbol,
+            direction,status,payload,first_seen,updated
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (pairing['pairing_id'],'position:880001','DEMO','880001','770001','990001',
+             'EURUSD','BUY','CLOSED',app.json.dumps(payload,separators=(',',':')),now_epoch,now_epoch))
+
+def demo_pass_context(pairing,worker_id='worker-demo'):
+    return {
+        'pairing_id':pairing['pairing_id'],
+        'credential_generation':'demo-generation',
+        'worker_id':worker_id,
+        'worker_generation':1,
+        'host_generation':app.HOST_GENERATION,
+    }
 
 def test_bridge_tests_use_a_process_isolated_database():
     assert app.DB_PATH.startswith(f'/tmp/destinedfx-bridge-test-{os.getpid()}-')
     assert app.DB_PATH != '/tmp/destinedfx-bridge-test.sqlite3'
+
+def test_unspecified_bridge_host_and_storage_defaults_fail_closed(monkeypatch):
+    monkeypatch.delenv('BRIDGE_HOST_PROFILE', raising=False)
+    monkeypatch.delenv('EXECUTION_STORAGE_DURABLE', raising=False)
+    assert app.configured_host_profile() == 'EPHEMERAL'
+    assert app.durable_execution_enabled() is False
+    with pytest.raises(ValueError, match='BRIDGE_HOST_PROFILE'):
+        app.configured_host_profile('UNKNOWN')
 
 def pair(subject='fixture-user',tenant='fixture-user'):
     assertion=management_identity_assertion(subject,tenant)
@@ -285,6 +361,9 @@ def managed_env(monkeypatch):
         c.execute('DELETE FROM managed_accounts')
         c.execute('DELETE FROM live_challenges')
         c.execute('DELETE FROM live_profile_links')
+        c.execute('DELETE FROM demo_soak_daily')
+        c.execute('DELETE FROM trade_ledger_events')
+        c.execute('DELETE FROM trade_ledger')
         c.execute('DELETE FROM demo_acceptances')
         c.execute('DELETE FROM rate')
         c.execute('DELETE FROM ip_guard')
@@ -437,6 +516,60 @@ def test_configuration_health_is_distinct_from_terminal_readiness(monkeypatch):
     assert configured.status_code == 200
     assert configured.json()['managed_execution']=='configured'
     assert client.get('/health/ready').status_code == 503
+
+def test_news_provider_health_is_safe_and_fails_closed(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'NEWS_PROVIDER_URL', '')
+    absent=client.get('/health/config').json()
+    assert absent['news_provider_configured'] is False
+    assert absent['news_provider_kind'] == 'unconfigured'
+
+    monkeypatch.setattr(app, 'NEWS_PROVIDER_URL', 'https://www.showmytrades.com/api/public/calendar/v1')
+    public=client.get('/health/config').json()
+    assert public['news_provider_configured'] is True
+    assert public['news_provider_kind'] == 'showmytrades-public-calendar'
+
+    monkeypatch.setattr(app, 'NEWS_PROVIDER_URL', 'https://calendar.example.org/api/v1')
+    monkeypatch.setattr(app, 'NEWS_PROVIDER_TOKEN', 'never-return-this-token')
+    custom=client.get('/health/config').json()
+    assert custom['news_provider_configured'] is True
+    assert custom['news_provider_kind'] == 'custom-json-provider'
+    assert 'never-return-this-token' not in app.json.dumps(custom)
+
+
+def test_health_config_does_not_claim_windows_multi_user_terminal_isolation(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app, 'LINUX_HOST_MODE', False)
+    body=client.get('/health/config').json()
+    assert body['multi_user_terminal_isolation'] == 'NOT_VERIFIED'
+    assert body['linux_host_mode'] is False
+
+def test_configuration_health_exposes_only_matching_step_up_public_key_fingerprint(monkeypatch):
+    managed_env(monkeypatch)
+    response=client.get('/health/config')
+    assert response.status_code == 200
+    body=response.json()
+    public_key=app.TEST_STEP_UP_PRIVATE_KEY.public_key()
+    der=public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    expected=__import__('hashlib').sha256(der).hexdigest()
+    assert body['management_step_up_key_fingerprint_sha256']==expected
+    assert body['management_step_up_issuer']=='destinedfx-management'
+    assert body['management_step_up_audience']=='destinedfx-bridge'
+    assert 'private' not in str(body).lower()
+
+
+def test_configuration_health_reports_missing_or_invalid_step_up_key(monkeypatch):
+    managed_env(monkeypatch)
+    monkeypatch.setattr(app,'MANAGEMENT_STEP_UP_PUBLIC_KEY','not-a-valid-public-key')
+    response=client.get('/health/config')
+    assert response.status_code == 200
+    body=response.json()
+    assert body['management_step_up_key_fingerprint_sha256']==''
+    assert body['management_step_up_issuer']==''
+    assert body['management_step_up_audience']==''
 
 def test_worker_attestation_is_signed_bound_and_single_use(monkeypatch):
     managed_env(monkeypatch)
@@ -1144,8 +1277,10 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     demo_job,demo_th,demo_actual=_ready_test_profile(
         demo_pairing,demo_headers,demo_worker,'worker-demo','600001','Broker-Demo','DEMO','demo-test-password'
     )
+    seed_demo_soak_evidence(demo_pairing,demo_actual,'worker-demo')
     demo_digest='a'*64
-    pass_document=demo_pass_document()
+    demo_evidence_context=demo_pass_context(demo_pairing,'worker-demo')
+    pass_document=demo_pass_document(**demo_evidence_context)
     acceptance=client.post('/v1/app/demo-acceptance',headers=demo_headers,json={
         'confirm_demo':True,'evidence_document':pass_document,
     })
@@ -1162,6 +1297,7 @@ def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker
     live_pairing['demo_pairing_id']=demo_pairing['pairing_id']
     live_pairing['demo_app_token']=demo_pairing['app_token']
     live_pairing['demo_acceptance_id']=accepted['acceptance_id']
+    live_pairing['demo_evidence_context']=demo_evidence_context
     if access_type=='MASTER':
         association=client.post('/v1/app/live-profile-association',headers=live_headers,json={
             'demo_pairing_id':demo_pairing['pairing_id'],
@@ -1213,6 +1349,19 @@ def test_managed_account_registration_requires_current_pairing_owner(monkeypatch
     assert current.status_code==202
 
 
+def test_demo_acceptance_rejects_self_asserted_soak_without_server_records(monkeypatch):
+    managed_env(monkeypatch)
+    pairing,headers=managed_pair()
+    worker=_test_worker('worker-demo-no-soak')
+    _ready_test_profile(pairing,headers,worker,'worker-demo-no-soak',
+                        '600001','Broker-Demo','DEMO','demo-test-password')
+    document=demo_pass_document(**demo_pass_context(pairing,'worker-demo-no-soak'))
+    response=client.post('/v1/app/demo-acceptance',headers=headers,json={
+        'confirm_demo':True,'evidence_document':document,
+    })
+    assert response.status_code==409, response.text
+    assert response.json()['detail']['code']=='DEMO_PASS_EVIDENCE_MISMATCH'
+
 def test_demo_acceptance_server_rejects_forged_or_mismatched_pass_documents(monkeypatch):
     managed_env(monkeypatch)
     pairing,headers=managed_pair()
@@ -1220,14 +1369,16 @@ def test_demo_acceptance_server_rejects_forged_or_mismatched_pass_documents(monk
     job,terminal_headers,actual=_ready_test_profile(
         pairing,headers,worker,'worker-demo-evidence','600001','Broker-Demo','DEMO','demo-test-password'
     )
+    evidence_context=demo_pass_context(pairing,'worker-demo-evidence')
+    seed_demo_soak_evidence(pairing,actual,'worker-demo-evidence')
     semantic_mismatches=[
-        demo_pass_document(broker='EXNESS'),
-        demo_pass_document(login='999999'),
-        demo_pass_document(server='Wrong-Server'),
-        demo_pass_document(order_lifecycle_pass=False),
-        demo_pass_document(daily_reconciliation_pass=False),
-        demo_pass_document(restart_test_pass=False),
-        demo_pass_document(risk_controls_pass=False),
+        demo_pass_document(**{**evidence_context,'broker':'EXNESS'}),
+        demo_pass_document(**{**evidence_context,'login':'999999'}),
+        demo_pass_document(**{**evidence_context,'server':'Wrong-Server'}),
+        demo_pass_document(**{**evidence_context,'order_lifecycle_pass':False}),
+        demo_pass_document(**{**evidence_context,'daily_reconciliation_pass':False}),
+        demo_pass_document(**{**evidence_context,'restart_test_pass':False}),
+        demo_pass_document(**{**evidence_context,'risk_controls_pass':False}),
     ]
     for document in semantic_mismatches:
         response=client.post('/v1/app/demo-acceptance',headers=headers,json={
@@ -1236,8 +1387,8 @@ def test_demo_acceptance_server_rejects_forged_or_mismatched_pass_documents(monk
         assert response.status_code==409, response.text
         assert response.json()['detail']['code']=='DEMO_PASS_EVIDENCE_MISMATCH'
     schema_invalid_documents=[
-        demo_pass_document(soak_days=4),
-        demo_pass_document(evidence_paths=[]),
+        demo_pass_document(**{**evidence_context,'soak_days':4}),
+        demo_pass_document(**{**evidence_context,'evidence_paths':[]}),
     ]
     for document in schema_invalid_documents:
         response=client.post('/v1/app/demo-acceptance',headers=headers,json={
@@ -1256,9 +1407,10 @@ def test_demo_pass_acceptance_digest_is_computed_from_exact_document(monkeypatch
     managed_env(monkeypatch)
     pairing,headers=managed_pair()
     worker=_test_worker('worker-demo-digest')
-    _ready_test_profile(pairing,headers,worker,'worker-demo-digest',
+    _,_,actual=_ready_test_profile(pairing,headers,worker,'worker-demo-digest',
                         '600001','Broker-Demo','DEMO','demo-test-password')
-    document=demo_pass_document()
+    seed_demo_soak_evidence(pairing,actual,'worker-demo-digest')
+    document=demo_pass_document(**demo_pass_context(pairing,'worker-demo-digest'))
     response=client.post('/v1/app/demo-acceptance',headers=headers,json={
         'confirm_demo':True,'evidence_document':document,
     })
@@ -1276,7 +1428,7 @@ def test_demo_acceptance_and_cross_profile_link_require_fresh_management_identit
     pairing,live_headers,wh,job,th,actual=live_ready(monkeypatch)
     demo_headers={'Authorization':'Bearer '+pairing['demo_app_token']}
     missing=client.post('/v1/app/demo-acceptance',headers=demo_headers,json={
-        'confirm_demo':True,'evidence_document':demo_pass_document(),
+        'confirm_demo':True,'evidence_document':demo_pass_document(**pairing['demo_evidence_context']),
     })
     assert missing.status_code==401
     live_bearer={'Authorization':live_headers['Authorization']}
@@ -1323,7 +1475,7 @@ def test_demo_reacceptance_updates_stable_acceptance_and_revokes_live_lease(monk
         'X-Management-Identity':management_identity_assertion(),
     }
     refreshed=client.post('/v1/app/demo-acceptance',headers=demo_headers,json={
-        'confirm_demo':True,'evidence_document':demo_pass_document(),
+        'confirm_demo':True,'evidence_document':demo_pass_document(**pairing['demo_evidence_context']),
     })
     assert refreshed.status_code==200, refreshed.text
     assert refreshed.json()['acceptance_id']==pairing['demo_acceptance_id']

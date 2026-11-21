@@ -739,10 +739,17 @@ open class DestinedFXViewModel(
         return true
     }
 
-    // The application-management API is intentionally separate from broker/trading gateways.
+    // The management API origin can be provisioned at build time or safely selected at runtime.
+    // Management sessions are encrypted and origin-bound by SecretsManagerAccessTokenStore.
+    private fun effectiveManagementApiOrigin(): String =
+        app.secretsManager.getManagementApiOrigin().ifBlank { com.example.BuildConfig.MANAGEMENT_API_ORIGIN }
+
+    val managementApiOrigin = MutableStateFlow(
+        com.example.data.management.ManagementApiClient.validatedOrigin(effectiveManagementApiOrigin()).orEmpty()
+    )
     private val managementClient by lazy {
         com.example.data.management.ManagementApiClient(
-            com.example.BuildConfig.MANAGEMENT_API_ORIGIN,
+            { effectiveManagementApiOrigin() },
             com.example.data.management.SecretsManagerAccessTokenStore(app.secretsManager)
         )
     }
@@ -752,6 +759,32 @@ open class DestinedFXViewModel(
         if (!isPreview && app.secretsManager.getValidManagementAccessToken() != null) "Saved session" else ""
     )
     val managementServiceState = MutableStateFlow("")
+
+    /** Verify readiness and EdDSA public-key publication before persisting a runtime API origin. */
+    fun verifyAndSaveManagementApiOrigin(rawOrigin: String) = managementAction {
+        if (!app.secretsManager.isSecureStorageAvailable) {
+            throw com.example.data.management.ManagementException(
+                com.example.data.management.ManagementFailure.SECURE_STORAGE_UNAVAILABLE
+            )
+        }
+        val verifiedOrigin = withContext(Dispatchers.IO) {
+            com.example.data.management.ManagementApiClient.verifyOrigin(rawOrigin)
+        }
+        val currentOrigin = com.example.data.management.ManagementApiClient.validatedOrigin(effectiveManagementApiOrigin())
+        if (currentOrigin != verifiedOrigin || app.secretsManager.getManagementApiOrigin() != verifiedOrigin) {
+            // An old or unbound session must never be forwarded to a different management host.
+            check(app.secretsManager.clearManagementAccessToken()) {
+                "Could not clear the previous management session; endpoint was not changed."
+            }
+            managementEmail.value = ""
+        }
+        check(app.secretsManager.saveManagementApiOrigin(verifiedOrigin)) {
+            "The verified management API origin could not be saved in encrypted storage."
+        }
+        managementApiOrigin.value = verifiedOrigin
+        managementServiceState.value = "Verified: backend ready, PostgreSQL connected, EdDSA Bridge key published."
+        managementMessage.value = "Management API endpoint saved. Sign in again to bind a fresh session to this endpoint."
+    }
 
     fun managementRegister(email: String, password: String) = managementAction {
         val user = managementClient.register(email, password)

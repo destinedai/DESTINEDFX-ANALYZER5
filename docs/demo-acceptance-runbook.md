@@ -37,6 +37,16 @@ After the first broker-confirmed fill, wait for the Android Bot screen to synchr
 
 Retain timestamped redacted bridge health/readiness responses, worker lifecycle markers without secrets, Android screenshots, EA heartbeat samples, MT5 terminal journal excerpts, order/deal/position exports, and the final bridge command history. Redact login if organizational policy requires it, and always remove passwords, tokens, encryption keys, and private URLs before sharing.
 
+## Server-recorded DEMO soak evidence
+
+The Bridge records daily DEMO telemetry only from fresh authenticated heartbeats belonging to the current READY MASTER pairing. Each daily row is bound to the exact login/server/company/currency/mode digest, broker-credential generation, worker ID and generation, and host generation. A changed identity in the same UTC day invalidates that day's row.
+
+Acceptance compares the submitted `accepted_days` with the Bridge's own consecutive UTC daily rows. Each selected day requires at least 12 heartbeats, a sample span of at least 60 seconds, a clear risk sample, a clear news sample, and a reconciliation snapshot. The accepted record also requires at least two distinct EA process instance IDs observed in those days and at least one fully closed trade in the Bridge trade ledger for that same DEMO pairing.
+
+`bridge_proof` is a canonical SHA-256 checksum of the evidence JSON fields (excluding `bridge_proof`). It detects document mismatch; it is **not** a broker signature, a host signature, or independent verification of external files. `evidence_paths` must identify retained redacted owner-side artifacts. The Bridge validates these as safe relative path references but does not read arbitrary files from the owner's PC. The owner must inspect and retain the terminal journal, broker history, reconciliation export, restart proof, and final report described above.
+
+Automated tests seed synthetic daily rows and a synthetic closed ledger record to exercise the contract. They do not count as a real soak, broker confirmation, or DEMO acceptance.
+
 ## All four MT5 broker DEMO acceptances
 
 The Bot supports four MT5 terminal broker profiles. Execute a separate acceptance for each profile; do not copy an identity, server, heartbeat, acceptance digest, or order result between brokers.

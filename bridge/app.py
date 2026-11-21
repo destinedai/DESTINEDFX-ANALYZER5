@@ -11,6 +11,8 @@ from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 import jwt
 from jwt import PyJWKClient
 from host_lifecycle import backup_database, cancel_stop, inspect_shutdown_safety, read_status, touch_activity
@@ -20,9 +22,15 @@ from quantitative import STRATEGY_RULESETS, analyze_json
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
 HOST_CONTROL_DIR=os.getenv('DESTINEDFX_HOST_CONTROL_DIR',os.path.join(os.path.dirname(os.path.abspath(DB_PATH)),'runtime'))
-HOST_PROFILE=os.getenv('BRIDGE_HOST_PROFILE','PERSISTENT').strip().upper()
-if HOST_PROFILE not in ('PERSISTENT','EPHEMERAL'):
-    raise ValueError('BRIDGE_HOST_PROFILE must be PERSISTENT or EPHEMERAL')
+def configured_host_profile(value=None):
+    """Resolve an explicit host profile; an unspecified deployment is never trusted as persistent."""
+    configured=os.getenv('BRIDGE_HOST_PROFILE','EPHEMERAL') if value is None else value
+    profile=str(configured).strip().upper()
+    if profile not in ('PERSISTENT','EPHEMERAL'):
+        raise ValueError('BRIDGE_HOST_PROFILE must be PERSISTENT or EPHEMERAL')
+    return profile
+
+HOST_PROFILE=configured_host_profile()
 HOST_GENERATION=os.getenv('HOST_GENERATION','persistent-default').strip()
 if not HOST_GENERATION or len(HOST_GENERATION)>128:
     raise ValueError('HOST_GENERATION must be a bounded non-empty identifier')
@@ -98,9 +106,45 @@ NEWS_MAX_AGE=min(120,max(1,int(os.getenv('NEWS_MAX_AGE_SECONDS','120'))))
 NEWS_CACHE_TTL=min(NEWS_MAX_AGE,max(1,int(os.getenv('NEWS_CACHE_TTL_SECONDS','10'))))
 NEWS_PROVIDER_URL=os.getenv('NEWS_PROVIDER_URL','').strip()
 NEWS_PROVIDER_TOKEN=os.getenv('NEWS_PROVIDER_TOKEN','').strip()
+
+def news_provider_configuration():
+    """Expose a safe readiness flag without revealing provider URL or bearer token."""
+    try:
+        parsed=urlparse(NEWS_PROVIDER_URL)
+        host=(parsed.hostname or '').lower().rstrip('.')
+        configured=bool(
+            parsed.scheme.lower()=='https' and host and
+            not parsed.username and not parsed.password and
+            not parsed.query and not parsed.fragment and
+            parsed.path not in ('/.well-known/security.txt',)
+        )
+        if configured and host in ('showmytrades.com','www.showmytrades.com'):
+            configured=parsed.path.rstrip('/')=='/api/public/calendar/v1'
+            kind='showmytrades-public-calendar' if configured else 'invalid'
+        else:
+            kind='custom-json-provider' if configured else 'unconfigured'
+        return {'configured':configured,'kind':kind if configured else 'unconfigured'}
+    except Exception:
+        return {'configured':False,'kind':'unconfigured'}
 MANAGEMENT_STEP_UP_PUBLIC_KEY=os.getenv('MANAGEMENT_STEP_UP_PUBLIC_KEY','').strip()
 MANAGEMENT_STEP_UP_ISSUER=os.getenv('MANAGEMENT_STEP_UP_ISSUER','destinedfx-management').strip()
 MANAGEMENT_STEP_UP_AUDIENCE=os.getenv('MANAGEMENT_STEP_UP_AUDIENCE','destinedfx-bridge').strip()
+
+def management_step_up_key_fingerprint():
+    """Return the configured Ed25519 public-key fingerprint, or empty when invalid/missing."""
+    if not MANAGEMENT_STEP_UP_PUBLIC_KEY:
+        return ''
+    try:
+        key=serialization.load_pem_public_key(MANAGEMENT_STEP_UP_PUBLIC_KEY.encode('utf-8'))
+        if not isinstance(key,Ed25519PublicKey):
+            return ''
+        der=key.public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return hashlib.sha256(der).hexdigest()
+    except Exception:
+        return ''
 LINUX_HOST_MODE=os.getenv('BRIDGE_HOST_MODE','').strip().lower()=='linux-host'
 HOST_AGENT_URL=os.getenv('HOST_AGENT_URL','http://127.0.0.1:8787/health/ready').strip()
 ANALYSIS_CLOCK_SKEW_MS=max(0,int(os.getenv('ANALYSIS_CLOCK_SKEW_SECONDS','120')))*1000
@@ -319,6 +363,17 @@ def db():
         worker_generation INTEGER NOT NULL DEFAULT 0, host_generation TEXT NOT NULL DEFAULT '',
         pass_evidence_digest TEXT NOT NULL DEFAULT '', revoked INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS demo_soak_daily(
+        pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE,
+        day_utc TEXT NOT NULL, first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+        heartbeat_count INTEGER NOT NULL DEFAULT 0, risk_clear_count INTEGER NOT NULL DEFAULT 0,
+        news_clear_count INTEGER NOT NULL DEFAULT 0, reconciliation_count INTEGER NOT NULL DEFAULT 0,
+        ea_instance_ids TEXT NOT NULL DEFAULT '[]', account_digest TEXT NOT NULL,
+        credential_generation TEXT NOT NULL, worker_id TEXT NOT NULL, worker_generation INTEGER NOT NULL,
+        host_generation TEXT NOT NULL, invalid INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(pairing_id,day_utc)
+    );
+    CREATE INDEX IF NOT EXISTS idx_demo_soak_pair_day ON demo_soak_daily(pairing_id,day_utc);
     CREATE TABLE IF NOT EXISTS live_challenges(
         id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE,
         challenge_hash TEXT NOT NULL UNIQUE, demo_acceptance_id TEXT NOT NULL REFERENCES demo_acceptances(id),
@@ -656,17 +711,38 @@ class LiveAuthorization(BaseModel):
     step_up_assertion:str=Field(min_length=100,max_length=8192)
 class DemoPassEvidence(BaseModel):
     model_config=ConfigDict(extra='forbid')
+    evidence_version:StrictInt=Field(ge=1,le=1)
+    pairing_id:StrictStr=Field(min_length=1,max_length=128)
     broker:StrictStr=Field(min_length=1,max_length=20)
     mode:StrictStr=Field(min_length=1,max_length=16)
     status:StrictStr=Field(min_length=1,max_length=16)
     account_login:StrictStr=Field(pattern=r'^[0-9]{1,20}$')
     server:StrictStr=Field(min_length=1,max_length=128)
+    credential_generation:StrictStr=Field(min_length=1,max_length=128)
+    worker_id:StrictStr=Field(min_length=1,max_length=128)
+    worker_generation:StrictInt=Field(ge=1)
+    host_generation:StrictStr=Field(min_length=1,max_length=128)
     soak_days:StrictInt=Field(ge=5,le=7)
+    accepted_days:list[StrictStr]=Field(min_length=5,max_length=7)
+    restart_instances:StrictInt=Field(ge=2)
+    closed_trade_count:StrictInt=Field(ge=1)
     order_lifecycle_pass:StrictBool
     daily_reconciliation_pass:StrictBool
     restart_test_pass:StrictBool
     risk_controls_pass:StrictBool
-    evidence_paths:list[StrictStr]=Field(min_length=1,max_length=128)
+    evidence_paths:list[StrictStr]=Field(min_length=5,max_length=7)
+    bridge_proof:StrictStr=Field(pattern=r'^[0-9a-f]{64}$')
+
+def demo_pass_bridge_proof(evidence):
+    """Checksum the canonical evidence payload, excluding its own checksum.
+
+    This binds the submitted fields to one exact document; it is not a broker
+    signature or proof that referenced files were independently inspected.
+    """
+    payload=evidence.model_dump(mode='json') if isinstance(evidence,DemoPassEvidence) else dict(evidence)
+    payload.pop('bridge_proof',None)
+    raw=json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False)
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
 class DemoAcceptanceRequest(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -1015,7 +1091,8 @@ def managed_config():
     try: return Fernet(key.encode()), ''
     except Exception: raise HTTPException(503, detail={'code':'CONFIGURATION_REQUIRED','message':'Managed execution is not configured'})
 def durable_execution_enabled():
-    return os.getenv('EXECUTION_STORAGE_DURABLE','true').lower() == 'true'
+    """Require explicit operator confirmation that execution storage survives restarts."""
+    return os.getenv('EXECUTION_STORAGE_DURABLE','false').strip().lower() == 'true'
 
 def trusted_analysis_sources():
     return {value.strip() for value in os.getenv('ANALYSIS_TRUSTED_SOURCES','').split(',') if value.strip()}
@@ -1406,8 +1483,8 @@ def snapshot_ticket(value):
 def destructive_context(p):
     linux_host_report()
     with tx() as c:
-        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
-        job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
+        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc,credential_generation FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        job=c.execute("SELECT status,worker_id FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
     beat=fresh_heartbeat(p)
     if (not managed or managed['revoked'] or managed['access_type']!='MASTER' or managed['account_mode'] not in ('DEMO','LIVE')
         or not p['consumed'] or not beat or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,managed['account_mode'],beat)
@@ -1444,6 +1521,66 @@ def heartbeat_news_clear(beat, symbols=None):
     if not isinstance(verdict,dict) or str(verdict.get('status','')).upper()!='CLEAR': return False
     ok,_=validate_news_verdict(verdict, (symbols or [None])[0] if symbols else None)
     return ok
+
+
+def demo_soak_account_digest(account):
+    identity={key:str((account or {}).get(key) or '') for key in ('login','server','company','currency','account_mode')}
+    raw=json.dumps(identity,sort_keys=True,separators=(',',':'))
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def record_demo_soak_heartbeat(c,p,managed,job,worker,payload,received,day_utc):
+    """Accumulate server-observed, identity-bound daily evidence from a fresh EA heartbeat."""
+    configuration=payload.get('configuration') if isinstance(payload.get('configuration'),dict) else {}
+    instance_id=configuration.get('ea_instance_id')
+    started_at_ms=configuration.get('ea_started_at_ms')
+    if (not isinstance(instance_id,str) or not 8<=len(instance_id)<=128 or
+        any(ord(ch)<32 or ord(ch)==127 for ch in instance_id) or
+        isinstance(started_at_ms,bool) or not isinstance(started_at_ms,(int,float)) or
+        not math.isfinite(float(started_at_ms)) or started_at_ms<=0 or started_at_ms>received*1000+60000):
+        return
+    account_digest=demo_soak_account_digest(payload.get('account') or {})
+    worker_id=str(job['worker_id'] or '')
+    worker_generation=int(worker['generation'])
+    credential_generation=str(managed['credential_generation'] or '')
+    host_generation=HOST_GENERATION
+    if not (worker_id and credential_generation and host_generation):
+        return
+    risk_clear=bool(live_risk_controls(payload).get('authorized'))
+    news_clear=bool(heartbeat_news_clear(payload))
+    snapshots_reconciled=all(isinstance(payload.get(key),list) for key in ('open_positions','active_orders','closed_deals'))
+    existing=c.execute('SELECT * FROM demo_soak_daily WHERE pairing_id=? AND day_utc=?',(p['id'],day_utc)).fetchone()
+    if existing:
+        identity_matches=(existing['account_digest']==account_digest and existing['credential_generation']==credential_generation and
+            existing['worker_id']==worker_id and existing['worker_generation']==worker_generation and existing['host_generation']==host_generation)
+        if not identity_matches or existing['invalid']:
+            c.execute('UPDATE demo_soak_daily SET invalid=1,last_seen=? WHERE pairing_id=? AND day_utc=?',(received,p['id'],day_utc))
+            return
+        try:
+            instance_ids=json.loads(existing['ea_instance_ids'])
+            if not isinstance(instance_ids,list) or not all(isinstance(value,str) for value in instance_ids):
+                raise ValueError('invalid EA instance list')
+        except (TypeError,ValueError,json.JSONDecodeError):
+            c.execute('UPDATE demo_soak_daily SET invalid=1,last_seen=? WHERE pairing_id=? AND day_utc=?',(received,p['id'],day_utc))
+            return
+        if instance_id not in instance_ids:
+            instance_ids.append(instance_id)
+        c.execute('''UPDATE demo_soak_daily SET last_seen=?,heartbeat_count=heartbeat_count+1,
+                     risk_clear_count=risk_clear_count+?,news_clear_count=news_clear_count+?,
+                     reconciliation_count=reconciliation_count+?,ea_instance_ids=?
+                     WHERE pairing_id=? AND day_utc=?''',
+                  (received,int(risk_clear),int(news_clear),int(snapshots_reconciled),
+                   json.dumps(instance_ids,separators=(',',':')),p['id'],day_utc))
+    else:
+        c.execute('''INSERT INTO demo_soak_daily(
+                     pairing_id,day_utc,first_seen,last_seen,heartbeat_count,risk_clear_count,
+                     news_clear_count,reconciliation_count,ea_instance_ids,account_digest,
+                     credential_generation,worker_id,worker_generation,host_generation,invalid
+                     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)''',
+                  (p['id'],day_utc,received,received,1,int(risk_clear),int(news_clear),
+                   int(snapshots_reconciled),json.dumps([instance_id],separators=(',',':')),
+                   account_digest,credential_generation,worker_id,worker_generation,host_generation))
+
 
 @app.post('/v1/app/managed-account',status_code=202)
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None),
@@ -1913,7 +2050,14 @@ def configuration_health():
         'database': 'ok',
         'managed_execution': 'configured',
         'host_profile': HOST_PROFILE,
+        'management_step_up_key_fingerprint_sha256': management_step_up_key_fingerprint(),
+        'management_step_up_issuer': MANAGEMENT_STEP_UP_ISSUER if management_step_up_key_fingerprint() else '',
+        'management_step_up_audience': MANAGEMENT_STEP_UP_AUDIENCE if management_step_up_key_fingerprint() else '',
+        'news_provider_configured': news_provider_configuration()['configured'],
+        'news_provider_kind': news_provider_configuration()['kind'],
         'per_user_terminal_isolation': isolation_status,
+        'multi_user_terminal_isolation': 'VERIFIED' if isolation_verified else 'NOT_VERIFIED',
+        'linux_host_mode': LINUX_HOST_MODE,
         'isolated_slots': int(isolation.get('active_slots', 0)) if isolation_verified else 0,
         'max_isolated_slots': int(isolation.get('max_slots', 0)) if isolation_verified else 0,
         **host_lifecycle_state(),
@@ -1921,7 +2065,7 @@ def configuration_health():
 @app.get('/health/ready')
 def readiness():
     """Report infrastructure and isolated-slot capacity without claiming an account is logged in."""
-    if os.getenv('EXECUTION_STORAGE_DURABLE', 'true').lower() != 'true':
+    if not durable_execution_enabled():
         raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Execution readiness is disabled because this deployment uses ephemeral storage'})
     try:
         managed_config()
@@ -2435,20 +2579,99 @@ def accept_demo(x:DemoAcceptanceRequest,authorization:str|None=Header(default=No
         evidence=DemoPassEvidence.model_validate_json(x.evidence_document)
     except Exception as exc:
         raise HTTPException(422,detail={'code':'DEMO_PASS_EVIDENCE_INVALID','message':'The submitted DEMO PASS document is malformed or incomplete'}) from exc
+    try:
+        accepted_days=[datetime.strptime(day,'%Y-%m-%d').date() for day in evidence.accepted_days]
+    except ValueError as exc:
+        raise HTTPException(422,detail={'code':'DEMO_PASS_EVIDENCE_INVALID','message':'Accepted DEMO soak days must use YYYY-MM-DD dates'}) from exc
+    today=now().astimezone(timezone.utc).date()
+    expected_account_digest=demo_soak_account_digest(beat['account'])
+    with tx() as c:
+        soak_rows_desc=c.execute('''SELECT * FROM demo_soak_daily WHERE pairing_id=? AND invalid=0
+                                   AND account_digest=? AND credential_generation=? AND worker_id=?
+                                   AND worker_generation=? AND host_generation=?
+                                   ORDER BY day_utc DESC LIMIT 7''',
+                                 (p['id'],expected_account_digest,managed['credential_generation'],
+                                  job['worker_id'],worker['generation'],HOST_GENERATION)).fetchall()
+        closed_rows=c.execute('''SELECT identity,position_id,deal_ticket,payload FROM trade_ledger
+                                 WHERE pairing_id=? AND account_mode='DEMO' AND status='CLOSED'
+                                 AND position_id IS NOT NULL AND deal_ticket IS NOT NULL''',(p['id'],)).fetchall()
+    selected_rows=list(reversed(soak_rows_desc[:evidence.soak_days]))
+    recorded_days=[row['day_utc'] for row in selected_rows]
+    try:
+        recorded_dates=[datetime.strptime(day,'%Y-%m-%d').date() for day in recorded_days]
+    except ValueError:
+        recorded_dates=[]
+    accepted_days_are_valid=(
+        len(selected_rows)==evidence.soak_days and len(accepted_days)>=5 and
+        accepted_days==sorted(set(accepted_days)) and accepted_days==recorded_dates and
+        all((accepted_days[index]-accepted_days[index-1]).days==1 for index in range(1,len(accepted_days))) and
+        accepted_days[-1] <= today and (today-accepted_days[-1]).days <= 1
+    )
+    daily_soak_quality=True
+    observed_instance_ids=set()
+    for row in selected_rows:
+        try:
+            instance_ids=json.loads(row['ea_instance_ids'])
+            day=datetime.strptime(row['day_utc'],'%Y-%m-%d').date()
+            first=datetime.fromtimestamp(row['first_seen'],timezone.utc).date()
+            last=datetime.fromtimestamp(row['last_seen'],timezone.utc).date()
+        except Exception:
+            daily_soak_quality=False
+            continue
+        if (not isinstance(instance_ids,list) or not instance_ids or
+            row['heartbeat_count']<12 or row['risk_clear_count']<1 or
+            row['news_clear_count']<1 or row['reconciliation_count']<1 or
+            row['last_seen']-row['first_seen']<60 or
+            first!=day or last!=day or row['last_seen']>time.time()+5):
+            daily_soak_quality=False
+        else:
+            observed_instance_ids.update(value for value in instance_ids if isinstance(value,str) and value)
+    restart_instances_observed=len(observed_instance_ids)
+    closed_trade_count_observed=len(closed_rows)
+    closed_trade_rows_valid=True
+    for row in closed_rows:
+        try:
+            trade=json.loads(row['payload'])
+        except Exception:
+            closed_trade_rows_valid=False
+            continue
+        if (not isinstance(trade,dict) or trade.get('kind')!='closed_position' or
+            trade.get('lifecycle')!='CLOSED' or not isinstance(trade.get('deals'),list) or
+            not trade['deals'] or not row['identity'] or not row['position_id'] or not row['deal_ticket']):
+            closed_trade_rows_valid=False
+    evidence_paths_valid=(
+        len(set(evidence.evidence_paths))==len(evidence.evidence_paths) and
+        all(item.strip() and len(item)<=512 and not item.startswith('/') and chr(92) not in item and
+            not any(part in ('','.','..') for part in item.split('/')) and
+            not any(ord(ch)<32 or ord(ch)==127 for ch in item) for item in evidence.evidence_paths)
+    )
     if any((
+        evidence.evidence_version != 1,
+        evidence.pairing_id != p['id'],
         evidence.broker.strip().upper() != managed['broker_brand'],
         evidence.mode.strip().upper() != 'DEMO',
         evidence.status.strip().upper() != 'PASS',
         evidence.account_login != beat['account'].get('login'),
         evidence.server != beat['account'].get('server'),
+        evidence.credential_generation != managed['credential_generation'],
+        evidence.worker_id != job['worker_id'],
+        evidence.worker_generation != worker['generation'],
+        evidence.host_generation != HOST_GENERATION,
         evidence.soak_days not in range(5,8),
-        evidence.order_lifecycle_pass is not True,
-        evidence.daily_reconciliation_pass is not True,
-        evidence.restart_test_pass is not True,
-        evidence.risk_controls_pass is not True,
-        any(not item.strip() or len(item)>512 or any(ord(ch)<32 or ord(ch)==127 for ch in item) for item in evidence.evidence_paths),
+        not accepted_days_are_valid,
+        not daily_soak_quality,
+        evidence.restart_instances != restart_instances_observed or restart_instances_observed<2,
+        evidence.closed_trade_count != closed_trade_count_observed or closed_trade_count_observed<1,
+        not closed_trade_rows_valid,
+        evidence.order_lifecycle_pass is not True or closed_trade_count_observed<1,
+        evidence.daily_reconciliation_pass is not True or not selected_rows or any(row['reconciliation_count']<1 for row in selected_rows),
+        evidence.restart_test_pass is not True or restart_instances_observed<2,
+        evidence.risk_controls_pass is not True or not selected_rows or any(row['risk_clear_count']<1 for row in selected_rows),
+        not selected_rows or any(row['news_clear_count']<1 for row in selected_rows),
+        not evidence_paths_valid,
+        evidence.bridge_proof != demo_pass_bridge_proof(evidence),
     )):
-        raise HTTPException(409,detail={'code':'DEMO_PASS_EVIDENCE_MISMATCH','message':'The submitted DEMO PASS does not prove the current broker, account, soak duration and required test gates'})
+        raise HTTPException(409,detail={'code':'DEMO_PASS_EVIDENCE_MISMATCH','message':'The DEMO PASS must match five-to-seven server-recorded soak days, risk/news/reconciliation telemetry, two EA instances, a reconciled closed trade, and the current pairing/worker/host identity'})
     # Hash the exact UTF-8 JSON document received by the Bridge; never trust a client-supplied digest.
     pass_evidence_digest=hashlib.sha256(x.evidence_document.encode('utf-8')).hexdigest()
     account=beat['account']
@@ -2920,8 +3143,8 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     with tx(True) as c:
         c.execute('UPDATE pairings SET heartbeat=?,heartbeat_seq=heartbeat_seq+1 WHERE id=?',(json.dumps(payload,separators=(',',':'),allow_nan=False),p['id']))
         seq=c.execute('SELECT heartbeat_seq FROM pairings WHERE id=?',(p['id'],)).fetchone()['heartbeat_seq']
-        managed=c.execute('SELECT access_type,revoked,account_mode,broker_brand,server_enc FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
-        job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
+        managed=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
+        job=c.execute("SELECT * FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
         if (managed and not managed['revoked'] and managed['account_mode']=='LIVE'
             and not live_risk_controls(payload)['authorized']):
             # Risk evidence loss or a breached EA daily-loss guard immediately removes the lease.
@@ -2930,7 +3153,14 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
         if (managed and not managed['revoked'] and managed['access_type']=='MASTER' and managed['account_mode']==x.account.account_mode
             and broker_company_matches(managed['broker_brand'],x.account.company)
             and job and job['status']=='READY' and x.terminal_connected and terminal_identity_matches(p,managed['account_mode'],payload)):
+            received=time.time()
+            ingest_trade_ledger(c,p['id'],x.account.account_mode,payload,received)
             reconcile_command_items(c,p['id'],payload,seq)
+            worker=c.execute('SELECT generation,status,expires_at FROM worker_identities WHERE worker_id=?',(job['worker_id'],)).fetchone() if job['worker_id'] else None
+            if (x.account.account_mode=='DEMO' and worker and worker['status']=='ACTIVE' and
+                worker['expires_at']>received and x.state in ('READY','RUNNING') and x.trade_allowed and
+                managed['credential_generation']):
+                record_demo_soak_heartbeat(c,p,managed,job,worker,payload,received,dt.astimezone(timezone.utc).date().isoformat())
         # Heartbeats establish terminal telemetry only.  A heartbeat must never
         # promote a provisioning job: after lease expiry, an old terminal could
         # otherwise mark a job reclaimed by another worker as READY.  Only the

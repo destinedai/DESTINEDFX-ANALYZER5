@@ -62,6 +62,20 @@ The app's LIVE selector is disabled until the current app process imports a brok
 
 No live order was placed as part of this work. The sandbox cannot create the required real terminal, investor login, broker heartbeat, soak evidence, or owner approval. The owner must not skip or combine gates.
 
+### Persistent Windows management step-up key
+
+The persistent Windows Bridge must verify management identity assertions with the Ed25519 **public** key corresponding to the management backend's `STEP_UP_PRIVATE_KEY_PEM`. The private key stays exclusively in the management backend's protected secret store.
+
+After the backend is deployed with its real Ed25519 private key, retrieve the public verification key from:
+
+`GET https://<management-api-origin>/api/v1/auth/bridge-verification-key`
+
+This endpoint returns only the public PEM, algorithm, issuer, and audience. Save its `public_key_pem` value to a local file on the Windows owner machine. Do not copy the private key to Windows, Android, the EA, a worker, source control, or chat.
+
+Pass that file to `install-owner-stack.ps1` with `-ManagementStepUpPublicKeyPath <path-to-public-pem>`. The installer validates that it is an Ed25519 public key and stores it in the existing owner-user DPAPI bundle. The supervisor sets `BRIDGE_HOST_MODE=windows-owner`, `BRIDGE_HOST_PROFILE=PERSISTENT`, and `EXECUTION_STORAGE_DURABLE=true`, then supplies the public key and matching issuer/audience to the Bridge. A missing key produces an explicit warning and leaves management account enrollment and LIVE step-up blocked; a malformed key prevents the supervisor from starting a misconfigured Bridge. After rotating the backend private key, retrieve and install its matching new public key before using identity-protected account flows.
+
+This wiring only establishes the cryptographic trust configuration. It does **not** authorize trading. LIVE still requires the exact broker/account's accepted 5–7 day DEMO evidence, a separately enrolled LIVE MASTER profile, a fresh matching terminal/EA heartbeat, conservative risk and daily-loss telemetry, a ready worker on a persistent host, and the short-lived challenge plus typed confirmation and password reauthentication. Codespaces/Linux remains DEMO-only.
+
 ### Cloudflare Access service-token owner steps
 
 Cloudflare Access is optional and remains disabled for the selected private Tailscale Serve deployment. If the owner separately chooses Cloudflare Access, create distinct Service Auth credentials for the phone, Windows worker/doctor, and EA. Configure an Access Service Auth policy for the bridge application and use each client's own Client ID and Client Secret. Cloudflare validates the client credentials at its edge and forwards a `Cf-Access-Jwt-Assertion`; the bridge validates that assertion. Never reuse or paste these values into chat, source control, command-line arguments, or logs.
@@ -83,3 +97,18 @@ MetaQuotes Virtual Hosting is not offered by this design. It runs a terminal and
 [5]: https://www.metatrader5.com/en/terminal/help/virtual_hosting/virtual_hosting_migration "MetaTrader 5 Virtual Hosting migration"
 [6]: https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/ "Cloudflare Access Service Tokens, headers and rotation"
 [7]: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/ "Cloudflare Access JWT assertion verification, JWKS, issuer, and audience"
+
+## LIVE infrastructure preflight
+
+After the management backend and persistent Windows Bridge have been deployed, run the read-only preflight from a machine that can reach both HTTPS endpoints:
+
+```powershell
+python scripts/live_activation_preflight.py `
+  --management-url https://YOUR-MANAGEMENT-ORIGIN `
+  --bridge-url https://YOUR-OWNER-HOST.ts.net `
+  --write-public-key .\management-step-up-public.pem
+```
+
+The script compares the backend's published Ed25519 public-key fingerprint with the public-key fingerprint actually loaded by the Bridge, verifies that the Bridge reports a persistent host and durable managed-execution configuration, and checks whether a real terminal pairing is ready. The optional output is a public key only; it can be supplied to `install-owner-stack.ps1 -ManagementStepUpPublicKeyPath`. Do not copy a private key to the Bridge. The key file written here is not itself proof that the DPAPI bundle was updated; rerun the preflight after the installer/supervisor restart and require the Bridge fingerprint check to pass.
+
+The script is read-only apart from the optional local public PEM output. It does not enable LIVE, read account credentials, fabricate the DEMO PASS record, provision MT5 accounts, or submit orders. A successful result still does not replace each user's same-broker DEMO acceptance, LIVE account pairing, fresh EA identity/risk telemetry, and explicit password/typed-confirmation step-up. A pending `NO_VERIFIED_TERMINAL_PAIRING` result means the infrastructure is configured but the actual MT5 terminal has not yet established a verified fresh heartbeat.
