@@ -45,6 +45,7 @@ def test_host_bootstrap_provisions_encrypted_credentials_without_printing_them()
     bootstrap = (LINUX_HOST / "bootstrap-self-hosted-host.sh").read_text()
     assert "API_USER=destinedfx-api" in bootstrap
     assert "destinedfx-postgres-password.cred" in bootstrap
+    assert "destinedfx-postgres-app-password.cred" in bootstrap
     assert "destinedfx-management-step-up-private-key-pem.cred" in bootstrap
     assert 'systemd-creds encrypt --name=step-up-private-key-pem' in bootstrap
     assert 'systemd-creds decrypt --name=step-up-private-key-pem' in bootstrap
@@ -87,3 +88,13 @@ def test_two_user_acceptance_defaults_to_persistent_host_state():
     assert "/var/lib/destinedfx/host-runtime" in acceptance or "args.state_dir" in acceptance
     assert "persistent self-hosted Linux runtime validation" in acceptance
     assert "read-only live Codespaces host validation" not in acceptance
+
+def test_management_api_does_not_use_postgres_superuser():
+    service = (LINUX_HOST / "systemd" / "destinedfx-management-api.service").read_text()
+    provisioner = (LINUX_HOST / "provision-postgres-app-role.sh").read_text()
+    assert "POSTGRES_USER=destinedfx_app" in service
+    assert "destinedfx_db_admin" in provisioner
+    assert "destinedfx_app" in provisioner
+    assert "PASSWORD '$app_password'" in provisioner
+    assert "docker exec -i" in provisioner
+    assert "superuser=false" in provisioner
