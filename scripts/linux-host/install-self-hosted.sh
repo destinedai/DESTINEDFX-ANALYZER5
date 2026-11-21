@@ -29,6 +29,8 @@ for rel in \
   managed-worker/worker.py managed-worker/mt5_journal.py mt5-ea/DestinedFXTraderEA.mq5 \
   scripts/linux-host/host-agent.py scripts/linux-host/linux-slot-worker.py scripts/linux-host/linux_isolation.py \
   scripts/linux-host/host_lifecycle.py scripts/linux-host/provision-worker-token.sh \
+  scripts/linux-host/accept_two_user_runtime.py scripts/linux-host/backup.sh scripts/linux-host/restore-test.sh \
+  scripts/linux-host/host-doctor.sh scripts/linux-host/setup-unattended-upgrades.sh scripts/linux-host/wine-guard.sh \
   scripts/linux-host/Caddyfile \
   scripts/linux-host/systemd/destinedfx-host-agent.service scripts/linux-host/systemd/destinedfx-bridge.service \
   scripts/linux-host/systemd/destinedfx-linux-slot-worker.service \
@@ -52,6 +54,7 @@ for item in [
     "managed-worker/worker.py", "managed-worker/mt5_journal.py",
     "scripts/linux-host/host-agent.py", "scripts/linux-host/linux-slot-worker.py",
     "scripts/linux-host/linux_isolation.py", "scripts/linux-host/host_lifecycle.py",
+    "scripts/linux-host/accept_two_user_runtime.py",
 ]:
     path = root / item
     ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -246,9 +249,13 @@ cp -a "$SOURCE_ROOT/backend/alembic" "$DEST_ROOT/management/alembic"
 install -o root -g root -m 0644 "$SOURCE_ROOT/backend/alembic.ini" "$SOURCE_ROOT/backend/requirements.txt" "$DEST_ROOT/management/"
 chown -R root:root "$DEST_ROOT/management"
 chmod -R a+rX,go-w "$DEST_ROOT/management"
-for rel in host-agent.py linux-slot-worker.py linux_isolation.py host_lifecycle.py provision-worker-token.sh; do
+for rel in host-agent.py linux-slot-worker.py linux_isolation.py host_lifecycle.py accept_two_user_runtime.py; do
   install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
 done
+for rel in backup.sh restore-test.sh host-doctor.sh setup-unattended-upgrades.sh wine-guard.sh; do
+  install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
+done
+install -o root -g root -m 0755 "$SCRIPT_DIR/provision-worker-token.sh" "$DEST_ROOT/scripts/linux-host/provision-worker-token.sh"
 install -o root -g root -m 0644 "$SOURCE_ROOT/bridge/requirements-production.txt" "$DEST_ROOT/bridge/requirements-production.txt"
 cp -a "$SOURCE_ROOT/mt5-ea/." "$DEST_ROOT/mt5-ea/"
 chown -R root:root "$DEST_ROOT/mt5-ea"
