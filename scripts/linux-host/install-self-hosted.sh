@@ -147,6 +147,7 @@ MAX_SLOTS="$DESTINEDFX_SLOT_MAX_TERMINALS"
 [[ "$MAX_SLOTS" -ge 2 && "$MAX_SLOTS" -le 8 ]] || block "configure 2..8 isolated slots."
 
 "$PYTHON" - "$BRIDGE_BASE_URL" "$BRIDGE_HOST" "$EXPECTED_FORWARDED_HOST" "$APP_DOMAIN" "$CADDY_EMAIL" "$ADMIN_EMAILS" "$MANAGEMENT_STEP_UP_PUBLIC_KEY_FILE" <<'PY'
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -154,6 +155,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 origin, proxy_host, allowed_host, api_host, caddy_email, admin_email, key_file = sys.argv[1:]
 u = urlsplit(origin)
+dns_name = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+email_pattern = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
 host = (u.hostname or "").lower().rstrip(".")
 try:
     port = u.port
@@ -161,18 +164,20 @@ except ValueError:
     raise SystemExit("BLOCKED: invalid Bridge HTTPS port.") from None
 if u.scheme != "https" or not host or u.username or u.password or port not in (None, 443) or u.path not in ("", "/") or u.query or u.fragment:
     raise SystemExit("BLOCKED: BRIDGE_BASE_URL must be an exact HTTPS origin without credentials, custom port, path, query or fragment.")
-if host.endswith(".example.com") or host in {"example.com", "localhost"}:
-    raise SystemExit("BLOCKED: replace the sample domain with a hostname controlled by the operator.")
+if host.endswith(".example.com") or host in {"example.com", "localhost"} or not dns_name.fullmatch(host):
+    raise SystemExit("BLOCKED: replace the sample Bridge domain with a real operator-controlled DNS hostname.")
 if host != proxy_host.lower().rstrip(".") or host != allowed_host.lower().rstrip("."):
     raise SystemExit("BLOCKED: BRIDGE_HOST and EXPECTED_FORWARDED_HOST must match BRIDGE_BASE_URL.")
-if not api_host or api_host.lower().rstrip(".") in {"example.com", "localhost"} or api_host.lower().rstrip(".").endswith(".example.com"):
-    raise SystemExit("BLOCKED: APP_DOMAIN must be a real hostname controlled by the operator.")
-if api_host.lower().rstrip(".") == host:
+api_host = api_host.lower().rstrip(".")
+if not dns_name.fullmatch(api_host) or api_host in {"example.com", "localhost"} or api_host.endswith(".example.com"):
+    raise SystemExit("BLOCKED: APP_DOMAIN must be a real operator-controlled DNS hostname.")
+if api_host == host:
     raise SystemExit("BLOCKED: APP_DOMAIN and BRIDGE_HOST must be separate HTTPS hostnames.")
-if "@" not in caddy_email or caddy_email.lower().endswith("@example.com"):
-    raise SystemExit("BLOCKED: set a real CADDY_EMAIL for TLS expiry notices.")
-if "@" not in admin_email or admin_email.lower().endswith("@example.com"):
-    raise SystemExit("BLOCKED: set the real initial administrator email in ADMIN_EMAILS.")
+if not email_pattern.fullmatch(caddy_email) or caddy_email.lower().endswith("@example.com"):
+    raise SystemExit("BLOCKED: set a valid real CADDY_EMAIL for TLS expiry notices.")
+admin_emails = [item.strip() for item in admin_email.split(",") if item.strip()]
+if not admin_emails or any(not email_pattern.fullmatch(item) or item.lower().endswith("@example.com") for item in admin_emails):
+    raise SystemExit("BLOCKED: set one or more valid initial administrator email addresses in ADMIN_EMAILS.")
 path = Path(key_file)
 if not path.is_file() or path.is_symlink() or path.stat().st_size < 80:
     raise SystemExit("BLOCKED: management backend Ed25519 public key is missing.")
@@ -263,6 +268,12 @@ systemd-analyze verify "$UNIT_DIR/destinedfx-host-agent.service" "$UNIT_DIR/dest
   "$UNIT_DIR/destinedfx-caddy.service" || block "systemd unit validation failed."
 systemctl daemon-reload
 systemctl enable --now docker.service
+for attempt in $(seq 1 30); do
+  if docker info >/dev/null 2>&1; then break; fi
+  sleep 2
+done
+docker info >/dev/null 2>&1 || block "local Docker Engine did not become ready."
+caddy validate --config /etc/caddy/Caddyfile || block "Caddy rejected the self-hosted two-origin ingress configuration."
 systemctl disable destinedfx-linux-worker.timer >/dev/null 2>&1 || true
 systemctl disable destinedfx-linux-worker.service destinedfx-mt5.service destinedfx-xvfb.service >/dev/null 2>&1 || true
 for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx-management-api.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service; do
