@@ -1,44 +1,82 @@
-# Linux MT5 host runtime
+# DestinedFX-owned Linux execution host
 
-The legacy owner-managed systemd `linux-worker.py` path is a single-terminal service and is not multi-user isolation. The Codespaces path uses the separate `linux-slot-worker.py` plus `linux_isolation.py` to provision per-pairing identities and terminal trees, with root host-agent attestation. Neither path proves that MetaTrader 5 or the DestinedFX EA works on any free VM shape. These scripts do not create broker accounts or submit orders. All log examples in tests are synthetic fixtures and are labelled as such.
+This directory contains two distinct Linux paths:
 
-## Host health and journal evidence
+- **Self-hosted persistent host**: the production target for broker execution. It uses the repository's Bridge, root host-attestation agent, per-pairing Linux identities, isolated Wine prefixes, one MT5 terminal per authenticated pairing, encrypted systemd credentials, local Caddy HTTPS and persistent local storage. It runs on the operator-controlled Ubuntu machine; it does not use Azure, Oracle, Railway, Render, Cloudflare Workers, or another hosted execution vendor.
+- **Legacy single-terminal/Codespaces tooling**: retained for compatibility and tests. It is not the production multi-user runtime and must not be started beside the self-hosted slot worker.
 
-`host-agent.py` exposes sanitized JSON on `127.0.0.1:8787` at `/health` and `/health/ready`. It reports terminal-process liveness, memory, swap, disk, uptime, a bounded journal failure code, and a sanitized EA heartbeat identity. It never returns journal text, passwords, tokens, keys, or secrets. Journal parsing accepts BOM-marked UTF-16LE/UTF-16BE and UTF-8 fallback, recognizes the real `Network '<login>': authorization on <server> failed (<reason>)` shape, and uses only records newer than the active connect-attempt timestamp. With no active timestamp marker it reports `NO_ACTIVE_CONNECT_JOB`, so a previous login failure cannot be attributed to a new attempt.
+No installer creates broker accounts or submits orders. Every user supplies their own broker account through the authenticated app flow. DEMO and LIVE use the same isolated runtime; LIVE remains subject to explicit selection/confirmation, user authentication, account identity, broker validation, risk controls, and order reconciliation.
 
-`/health/ready` is healthy only when the terminal is alive, memory is above the configured floor, and the EA heartbeat is fresh and terminal-connected. The bridge uses this evidence in `BRIDGE_HOST_MODE=linux-host`; unhealthy or stale evidence refuses readiness and managed commands. The legacy `EA_HEARTBEAT_FILE` gate is not used by this Linux bridge mode.
+## Supported self-hosted baseline
 
-## Linux connect-job runner
+The installer currently validates Ubuntu 22.04 or 24.04 on x86-64 with systemd 250+, an x86-64 MT5 terminal, Wine, Xvfb, xauth, Caddy, SQLite tools, Python 3/venv, sudo, and Docker is **not required** for the Bridge runtime. The host must have persistent storage and a working system clock. ARM MT5 terminal/EA execution remains unverified and is rejected by the installer.
 
-`linux-worker.py` runs as a one-shot service under the non-root `destinedfx` user. Its systemd timer polls every 15 seconds. It claims at most one provisioning job, writes a mode-0600 startup INI and EA preset, restarts only `destinedfx-mt5.service`, and waits for the bridge job-status endpoint. The bridge promotes the job to `READY` only after a fresh authenticated EA heartbeat matches the pairing identity and account mode. A local process launch or an unverified heartbeat is not enough.
+For two concurrent isolated broker accounts, plan at least 8 GiB RAM and two CPU cores. The installer enforces a static reserve of 2 GiB for the host plus 3 GiB per configured terminal and does not permit a configured slot count above the host's CPU/RAM capacity. The worker also checks *currently available* RAM before claiming work. This is a fail-closed capacity estimate, not a promise that every machine meeting the minimum will sustain continuous MT5 execution. SSD capacity should allow separate terminal copies, Wine prefixes, logs, database growth and backups.
 
-The runner loads its bearer token from systemd's encrypted credential named `worker-token`, not from `worker.env`. The encrypted source path is `/etc/credstore.encrypted/destinedfx-worker-token.cred`; `/etc/destinedfx/worker.env` is for non-secret settings such as the bridge URL and stable worker ID. Generate the encrypted credential on the VM with `systemd-creds` and the host key. Never put the bearer token in a command argument, repository file, ordinary environment file, log, or Terraform variable.
+The host needs a DNS name controlled by the operator for the Bridge, inbound TCP 80/443 for Caddy's TLS issuance/renewal, and outbound HTTPS for software/security updates and the news provider. Keep SSH restricted. Do not expose the host agent, Bridge loopback port, database, Wine display or MT5 terminal ports to the public Internet. Caddy is the only public ingress process.
 
-The MT5 unit calls `launch-mt5.sh`, which passes a path to the private startup INI and never passes a password in process arguments. After the bridge reports identity-matched `READY`, or after the terminal is confirmed stopped on failure, the runner best-effort overwrites and removes the startup INI and short-lived EA preset. Its one-shot process then exits and releases its in-memory references. Python cannot promise cryptographic zeroization of immutable strings, and overwriting a file cannot guarantee erasure from SSD flash translation layers. These are residual limits, not claims of secure physical erasure. If the terminal cannot be stopped, the private configuration is preserved for operator review and the worker does not claim cleanup succeeded.
+## First installation
 
-The worker service uses a sudoers rule restricted to start, stop, and restart of `destinedfx-mt5.service`. Install the sudoers drop-in with mode `0440` and validate it with `visudo`. The worker service must not receive general sudo rights.
+1. Check out the repository on the Ubuntu host and review the source at the exact commit you intend to deploy. Do not run an unreviewed branch or an installer copied from an untrusted location.
+2. Install the Ubuntu runtime packages: Python 3 with its matching `python3-venv`, `sudo`, `xvfb`, `xauth`, Wine with the supported version reported by `wine-guard.sh`, Caddy, `curl`, `sqlite3`, `procps`, `ca-certificates`, and `visudo`/sudo. Verify `/run` is tmpfs. The script does not silently add external repositories or open firewall ports.
+3. Run `sudo bash scripts/linux-host/bootstrap-self-hosted-host.sh`. It creates the non-login `destinedfx` service identity, persistent directories, non-secret environment templates, and host-bound encrypted systemd credentials. Plaintext bootstrap material is created only under `/run` and is not printed. Existing configuration/credentials are preserved.
+4. Install a genuine MT5 terminal and MetaEditor into a **clean, unpaired** Wine template prefix as the `destinedfx` service identity. First review the official Linux wrapper's SHA-256 with `install-mt5.sh --print-script-sha256`, then pass the reviewed value:
+   
+   ```sh
+   sudo -u destinedfx -H bash scripts/linux-host/install-mt5.sh \
+     --expected-sha256 REVIEWED_64_HEX_SHA256 \
+     --wineprefix /var/lib/destinedfx/terminal-template-prefix \
+     --headless
+   ```
 
-## Host maintenance
+   The template must contain `drive_c/Program Files/MetaTrader 5/terminal64.exe`, `metaeditor64.exe`, and `MQL5/Include/Trade/Trade.mqh`. The host.env template points to that exact directory. Do not log into a broker in this shared template; each actual user session is created inside a separate per-pairing terminal tree and Wine prefix.
+5. Edit `/etc/destinedfx/bridge.env` and set the exact HTTPS Bridge origin, matching `BRIDGE_HOST` and `EXPECTED_FORWARDED_HOST`, the operator-controlled public hostname for Caddy and a real Caddy contact email. Replace the example domain in every value. Point the hostname's DNS A/AAAA record to this machine and allow inbound TCP 80/443. The Bridge and management API (when enabled) may use separate hostnames on the same machine. Do not place tokens, passwords, private keys or database credentials in either env file.
+6. The bootstrap creates the Ed25519 signing key for management LIVE step-up and writes only the corresponding public key to `/etc/destinedfx/management-step-up-public.pem`. The private key remains in a host-bound encrypted systemd credential. Back up the encrypted credential and the machine's systemd credential host key separately and securely; losing them prevents the Bridge from verifying new step-up assertions.
+7. Run `sudo bash scripts/linux-host/rebuild.sh self-hosted --check` for static/source/unit validation. Once the MT5 template and DNS/configuration are ready, run `sudo bash scripts/linux-host/rebuild.sh self-hosted install`. Installation refuses to proceed if the old shared MT5 service is active, if encrypted credentials fail decryption, if the public management key is absent, or if the configured slots exceed CPU/RAM capacity. It does not stop a running trading process to force migration.
+8. Verify the local and public endpoints: `https://BRIDGE_HOST/health/live`, `https://BRIDGE_HOST/health/ready`, and the systemd service states. Readiness proves the host runtime is ready to accept authenticated work; it does not prove any user's broker login or an executed trade.
 
-`backup.sh [DATABASE] [BACKUP_DIR]` creates an atomic SQLite backup and a SHA-256 sidecar. Defaults are `/var/lib/destinedfx/bridge.sqlite3` and `/var/lib/destinedfx/backups`. The backup contains only the database. It does not copy environment files, encrypted credential files, host keys, or other secrets. The database may contain ciphertext that still depends on a separately retained encryption key. Backups stored on the same VM do not survive loss of that VM.
+## Runtime and service boundaries
 
-`restore-test.sh BACKUP.sqlite3` verifies the sidecar, restores into a private temporary directory, runs SQLite integrity checking, then deletes the test copy. It never replaces the live database. `rebuild.sh [all|terminal|bridge]` installs the packaged runtime and units without deleting application data or owner credentials. `rebuild.sh --check` performs non-root syntax and package checks only.
+| Component | Runtime identity | Purpose |
+|---|---|---|
+| `destinedfx-host-agent.service` | root | Sanitized health, root-attested slot reservation and terminal-process identity |
+| `destinedfx-bridge.service` | `destinedfx` | FastAPI pairing/session control, encrypted broker credential store, health and order-control APIs |
+| `destinedfx-provision-linux-worker.service` | root, oneshot | Uses the owner-only bootstrap credential to issue/rotate the named worker token and encrypt it |
+| `destinedfx-linux-slot-worker.service` | root | Claims work and provisions isolated Unix identities, Xvfb displays, Wine prefixes and MT5 trees |
+| `destinedfx-caddy.service` | `caddy` | Local TLS termination and reverse proxy; only binds the public web ports |
 
-`setup-unattended-upgrades.sh` installs Ubuntu unattended-upgrades and configures security-origin updates. Automatic reboot is disabled. This does not upgrade every application or remove the provider's idle-reclamation risk.
+The worker runs as root only because it must create and attest separate locked Unix identities. The MT5 terminal itself is launched under each pairing's dedicated non-login UID, never under the shared Bridge identity. Root-agent validation independently checks the reservation, UID, Wine prefix, display, Xauthority and actual terminal process. The Bridge cannot promote a terminal to READY merely because a local process exists.
 
-`download-ea-release.sh URL SHA256 DESTINATION.ex5` accepts only a direct HTTPS GitHub release asset URL and requires an owner-reviewed 64-character SHA-256. It refuses mismatches before installing the compiled EA. No release is created by this repository task; supply a real published asset URL and checksum when one exists.
+Systemd encrypted credentials are used for the host-agent token, Bridge Fernet key, worker bootstrap credential, per-host worker credential, and management signing key. Each service receives its own read-only credential file for its lifetime. Secret values are not written to ordinary environment files or command-line arguments. See the upstream [systemd-creds manual](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html) and [systemd.exec credential documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html).
 
-## Isolated-slot resource gate
+## Two-user acceptance and trading acceptance
 
-The per-pairing Linux slot worker requires **at least 3 GiB of currently available RAM per MT5 terminal**, in addition to CPU and configured-slot limits. If available memory is below that floor, the worker reports zero capacity and refuses to claim/provision a broker account. It must not silently force a one-terminal capacity on a smaller VM. This is a conservative launch gate, not a promise that every 3 GiB machine will sustain MT5; the owner must measure terminal stability and choose an even lower slot count when required.
+After two different authenticated DEMO pairings have been added through the app and fresh terminal heartbeats are present, run:
 
-## Services and platform boundary
+```sh
+sudo /opt/destinedfx/venv/bin/python \
+  /opt/destinedfx/scripts/linux-host/accept_two_user_runtime.py \
+  --expected-users 2
+```
 
-The existing units run Xvfb, MT5, the host agent, and the loopback-only FastAPI bridge under `destinedfx`. The additional worker service and timer perform connect jobs. `ensure-swap.sh` provisions the configured swap file idempotently, and `logrotate.d/destinedfx` bounds logs. No trading port is opened to the public Internet.
+The acceptance must prove distinct Unix UIDs, separate slot homes, terminal copies, Wine prefixes, Xvfb displays and process ownership. It must fail rather than count the same terminal twice. Capture the sanitized result and retain it with the host release evidence. This is a real-host acceptance command; a CI fixture is not a substitute.
 
-`install-mt5.sh --print-script-sha256` downloads the current Linux script from the official MetaTrader 5 help page and prints its SHA-256. Review the hash, then run `install-mt5.sh --expected-sha256 REVIEWED_HASH`. The official page says the platform runs on Linux through Wine. ARM is **UNVERIFIED** for MT5 with an EA; the installer never runs the x86 script on ARM.
+Actual DEMO acceptance additionally requires two genuine broker DEMO profiles, successful authorization heartbeats, symbol/account identity matches, market-data availability, one approved DEMO market order, broker-reported fill, order reconciliation and safe close. LIVE acceptance is separate and must only occur after the user explicitly authorizes a specific LIVE test under their own authenticated broker profile. No source-code build, EA compile, readiness endpoint or simulated fixture proves a broker fill.
 
-Official MetaTrader sources:
+## Maintenance and recovery
 
-- https://www.metatrader5.com/en/terminal/help/start_advanced/install_linux
-- https://download.terminal.free/cdn/web/metaquotes.software.corp/mt5/mt5linux.sh
+- `backup.sh [DATABASE] [BACKUP_DIR]` creates an atomic SQLite backup and SHA-256 sidecar. Keep encrypted off-host copies of the database, the encrypted systemd credentials, and the systemd credential host key. A backup on the same disk does not survive host loss.
+- `restore-test.sh BACKUP.sqlite3` checks the sidecar and SQLite integrity in a temporary directory. It never overwrites the live database.
+- `setup-unattended-upgrades.sh` enables security-origin updates and leaves automatic reboot disabled.
+- `host-doctor.sh` and the host-agent health endpoints provide diagnostics; health output must remain sanitized.
+- `rebuild.sh self-hosted --check` validates source and units without touching services. Reinstall only after reviewing host-service changes and confirming the active sessions will not be interrupted.
+
+The host-agent never returns account passwords, broker login credentials, tokens, signing keys or raw journal content. It only exposes sanitized health and terminal identity evidence. Preserve database backups, credential recovery, restore drills, disk monitoring, and security patching as ongoing operations.
+
+## Legacy tooling
+
+The legacy `linux-worker.py`, `destinedfx-linux-worker.timer`, `destinedfx-mt5.service`, and `destinedfx-xvfb.service` path is a **single-terminal** compatibility path. The self-hosted installer refuses to migrate while those legacy services or an unowned MT5 process is active, then disables the inactive shared-terminal units. Do not start the legacy worker on a host running the isolated slot worker. The Codespaces two-user scripts remain useful for isolated CI/sandbox tests, but Codespaces state is not production persistence.
+
+## Official MetaTrader reference
+
+MetaQuotes documents installing the desktop terminal on Linux using Wine: [MetaTrader 5 for Linux](https://www.metatrader5.com/en/terminal/help/start_advanced/install_linux). ARM is not accepted for managed MT5+EA execution until terminal, MetaEditor, EA heartbeat and broker DEMO acceptance are verified.
