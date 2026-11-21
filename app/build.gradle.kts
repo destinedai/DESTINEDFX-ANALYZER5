@@ -36,6 +36,36 @@ val managementApiOrigin = providers.gradleProperty("managementApiOrigin").orNull
     ?.takeIf { it.isNotBlank() }
   ?: "__CONFIGURATION_REQUIRED__"
 val managementApiOriginBuildValue = managementApiOrigin.replace("\\", "\\\\").replace("\"", "\\\"")
+val endpointLockRaw = providers.gradleProperty("destinedfxEndpointsLocked").orNull?.trim()
+  ?: System.getenv("DESTINEDFX_ENDPOINTS_LOCKED")?.trim().orEmpty()
+val destinedFxEndpointsLocked = when (endpointLockRaw.lowercase()) {
+  "", "false" -> false
+  "true" -> true
+  else -> error("destinedfxEndpointsLocked must be true or false.")
+}
+if (destinedFxEndpointsLocked) {
+  fun requirePublicHttpsOrigin(raw: String, name: String) {
+    val uri = runCatching { URI(raw) }.getOrNull()
+      ?: error("$name must be a valid HTTPS origin.")
+    val host = uri.host?.lowercase().orEmpty()
+    require(uri.scheme.equals("https", true) && host.isNotBlank() && uri.userInfo == null &&
+      uri.query == null && uri.fragment == null && uri.path.orEmpty().trimEnd('/').isBlank() &&
+      uri.port != 0 && uri.port in -1..65535) {
+      "$name must be a bare HTTPS origin without credentials, path, query or fragment."
+    }
+    require(host !in setOf("localhost", "example.com", "example.org", "example.net", "127.0.0.1", "0.0.0.0", "::1") &&
+      !host.endsWith(".example") && !host.endsWith(".example.com") && !host.endsWith(".localhost") &&
+      !host.endsWith(".test") && !host.endsWith(".invalid") && !host.contains("placeholder") &&
+      !host.matches(Regex("^[0-9.]+$")) && !host.contains(":")) {
+      "$name cannot use a placeholder, private literal or localhost address."
+    }
+  }
+  requirePublicHttpsOrigin(mt5ManagedServiceUrl, "MT5_MANAGED_SERVICE_URL")
+  requirePublicHttpsOrigin(managementApiOrigin, "MANAGEMENT_API_ORIGIN")
+  require(URI(mt5ManagedServiceUrl).host.lowercase() != URI(managementApiOrigin).host.lowercase()) {
+    "Bridge and management API must use the two distinct hostnames configured by the self-hosted host."
+  }
+}
 val codespacesGithubClientIdRaw = providers.gradleProperty("codespacesGithubClientId").orNull?.trim()
   ?: System.getenv("CODESPACES_GITHUB_CLIENT_ID")?.trim()
   ?: rootProject.file(".env").takeIf { it.isFile }?.readLines()
@@ -65,6 +95,7 @@ android {
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
     buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
     buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
+    buildConfigField("boolean", "DESTINEDFX_ENDPOINTS_LOCKED", destinedFxEndpointsLocked.toString())
     ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
@@ -97,6 +128,9 @@ android {
 
   gradle.taskGraph.whenReady {
     if (allTasks.any { it.name.contains("Release", ignoreCase = true) }) {
+      require(destinedFxEndpointsLocked) {
+        "Release APKs must embed the verified self-hosted Bridge and management API origins; build with -PdestinedfxEndpointsLocked=true."
+      }
       val uri = runCatching { URI(mt5ManagedServiceUrl) }.getOrNull()
       val host = uri?.host?.lowercase().orEmpty()
       val port = runCatching { uri?.port ?: -2 }.getOrNull() ?: -2

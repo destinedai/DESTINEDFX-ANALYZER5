@@ -194,7 +194,9 @@ class MT5RemoteBridgeClient(
     )
 
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
-        secrets.getManagedMT5ServiceUrl(), com.example.BuildConfig.MT5_MANAGED_SERVICE_URL
+        secrets.getManagedMT5ServiceUrl(),
+        com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
+        com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
     )
     fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
     fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
@@ -1222,12 +1224,14 @@ class MT5RemoteBridgeClient(
             }
         }
 
-        internal fun resolveServiceOrigin(override: String, buildValue: String): String =
-            validServiceOrigin(override).takeIf { override.isNotBlank() }
+        internal fun resolveServiceOrigin(override: String, buildValue: String, locked: Boolean = false): String =
+            if (locked) validServiceOrigin(buildValue).orEmpty()
+            else validServiceOrigin(override).takeIf { override.isNotBlank() }
                 ?: validServiceOrigin(buildValue).orEmpty()
 
-        internal fun initialServiceUrl(savedValue: String, buildValue: String): String =
-            savedValue.ifBlank { buildValue.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty() }
+        internal fun initialServiceUrl(savedValue: String, buildValue: String, locked: Boolean = false): String =
+            if (locked) validServiceOrigin(buildValue).orEmpty()
+            else savedValue.ifBlank { buildValue.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty() }
 
         internal fun validServiceOrigin(raw: String): String? {
             return try {
