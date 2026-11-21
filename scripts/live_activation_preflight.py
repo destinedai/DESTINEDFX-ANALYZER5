@@ -119,13 +119,20 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
         checks.append({"name":"persistent_host","status":"PASS" if persistent else "BLOCKED","code":"PERSISTENT_HOST" if persistent else "HOST_NOT_PERSISTENT"})
         durable = config.get("database") == "ok" and config.get("managed_execution") == "configured"
         checks.append({"name":"durable_storage","status":"PASS" if durable else "BLOCKED","code":"DURABLE_CONFIGURED" if durable else "DURABLE_CONFIG_NOT_READY"})
+        news_ready = config.get("news_provider_configured") is True
+        checks.append({"name":"news_calendar_provider","status":"PASS" if news_ready else "BLOCKED","code":"NEWS_PROVIDER_CONFIGURED" if news_ready else "NEWS_PROVIDER_NOT_CONFIGURED","provider_kind":config.get("news_provider_kind","unconfigured")})
+        linux_mode = config.get("linux_host_mode") is True
+        checks.append({"name":"persistent_live_host_type","status":"BLOCKED" if linux_mode else "PASS","code":"LINUX_HOST_MODE_DEMO_ONLY" if linux_mode else "WINDOWS_OR_MANAGED_HOST"})
+        isolation_status = config.get("multi_user_terminal_isolation")
+        isolation_ready = isolation_status == "VERIFIED"
+        checks.append({"name":"multi_user_terminal_isolation","status":"PASS" if isolation_ready else "BLOCKED","code":"PER_USER_ISOLATION_VERIFIED" if isolation_ready else "MULTI_USER_OS_ISOLATION_NOT_VERIFIED"})
         bridge_fp = config.get("management_step_up_key_fingerprint_sha256")
         trust = bool(remote_fp and bridge_fp == remote_fp)
         checks.append({"name":"management_bridge_trust","status":"PASS" if trust else "BLOCKED","code":"PUBLIC_KEY_FINGERPRINT_MATCH" if trust else "BRIDGE_KEY_MISSING_OR_MISMATCHED","bridge_fingerprint_sha256":bridge_fp if isinstance(bridge_fp, str) else ""})
         issuer_match = bool(issuer and audience and config.get("management_step_up_issuer") == issuer and config.get("management_step_up_audience") == audience)
         checks.append({"name":"management_bridge_issuer_audience","status":"PASS" if issuer_match else "BLOCKED","code":"ISSUER_AUDIENCE_MATCH" if issuer_match else "ISSUER_AUDIENCE_MISMATCH"})
     except PreflightError as e:
-        for name in ("bridge_config", "persistent_host", "durable_storage", "management_bridge_trust", "management_bridge_issuer_audience"):
+        for name in ("bridge_config", "persistent_host", "durable_storage", "news_calendar_provider", "persistent_live_host_type", "multi_user_terminal_isolation", "management_bridge_trust", "management_bridge_issuer_audience"):
             checks.append({"name":name,"status":"BLOCKED","code":str(e) if name == "bridge_config" else "BRIDGE_CONFIG_UNAVAILABLE"})
     try:
         code, data = get_json(bridge + "/health/ready")
