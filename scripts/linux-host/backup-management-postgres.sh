@@ -34,7 +34,7 @@ docker exec "$CONTAINER" pg_dump --no-password --format=custom --no-owner --no-a
 [[ -s "$tmp_dump" ]] || { echo "BLOCKED: PostgreSQL produced an empty backup." >&2; exit 4; }
 chmod 0600 "$tmp_dump"
 digest="$(sha256sum "$tmp_dump" | cut -d ' ' -f1)"
-printf '%s  %s\\n' "$digest" "$name.dump" > "$tmp_sha"
+printf '%s  %s\n' "$digest" "$name.dump" > "$tmp_sha"
 chmod 0600 "$tmp_sha"
 mv -- "$tmp_dump" "$final_dump"
 mv -- "$tmp_sha" "$final_sha"
