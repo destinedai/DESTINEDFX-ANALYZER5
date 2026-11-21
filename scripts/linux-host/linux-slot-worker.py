@@ -40,18 +40,24 @@ from linux_isolation import (  # noqa: E402
 from host_lifecycle import inspect_shutdown_safety  # noqa: E402
 
 STATE = Path(os.environ.get(
-    "DESTINEDFX_CODESPACES_STATE_DIR",
-    str(Path.home() / ".local/share/destinedfx-codespaces"),
+    "DESTINEDFX_HOST_STATE_DIR",
+    os.environ.get(
+        "DESTINEDFX_CODESPACES_STATE_DIR",
+        str(Path.home() / ".local/share/destinedfx-codespaces"),
+    ),
 )).resolve()
 RUNTIME = STATE / "runtime"
 MANIFEST_DIR = STATE / "isolated-slots"
 SLOT_ROOT = Path(os.environ.get("DESTINEDFX_SLOT_ROOT", "/home/destinedfx-slots")).resolve()
-SLOT_RUNTIME = RUNTIME / "slot-runtime"
+SLOT_RUNTIME = Path(os.environ.get("DESTINEDFX_SLOT_RUNTIME", str(RUNTIME / "slot-runtime"))).resolve()
 CONTROL_URL = os.environ.get("DESTINEDFX_CONTROL_PLANE_URL", "http://127.0.0.1:8000").rstrip("/")
 WORKER_TOKEN = ""
 WORKER_TOKEN_FILE = os.environ.get("DESTINEDFX_WORKER_TOKEN_FILE", "")
 WORKER_ID = os.environ.get("DESTINEDFX_WORKER_ID", "codespaces-host-01")
 HOST_AGENT_TOKEN = os.environ.get("HOST_AGENT_TOKEN", "")
+HOST_AGENT_TOKEN_FILE = os.environ.get("HOST_AGENT_TOKEN_FILE", "")
+HOST_OWNER_UID = int(os.environ.get("DESTINEDFX_HOST_OWNER_UID", str(os.getuid())))
+HOST_OWNER_GID = int(os.environ.get("DESTINEDFX_HOST_OWNER_GID", str(os.getgid())))
 HOST_AGENT_URL = os.environ.get("HOST_AGENT_URL", "http://127.0.0.1:8787").rstrip("/")
 HOST_GENERATION = os.environ.get("HOST_GENERATION", "")
 TERMINAL_EXE = Path(os.environ.get("MT5_TERMINAL_EXE", ""))
@@ -95,6 +101,51 @@ def _load_worker_token() -> str:
     return value
 
 
+def _load_host_agent_token() -> str:
+    """Load the root-agent shared secret from this unit's protected systemd credential."""
+    if HOST_AGENT_TOKEN:
+        value = HOST_AGENT_TOKEN.strip()
+    elif HOST_AGENT_TOKEN_FILE:
+        path = Path(HOST_AGENT_TOKEN_FILE)
+        try:
+            info = path.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+                or info.st_nlink != 1
+            ):
+                raise SlotWorkerError("HOST_AGENT_TOKEN_FILE_PERMISSIONS_INVALID")
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            raise SlotWorkerError("HOST_AGENT_TOKEN_FILE_UNAVAILABLE") from None
+    else:
+        value = ""
+    if not value or len(value) < 32 or len(value) > 512 or any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise SlotWorkerError("HOST_AGENT_TOKEN_UNAVAILABLE")
+    return value
+
+
+def _ensure_owner_directory(path: Path) -> None:
+    """Create a private state directory readable by the non-root host owner and root worker."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise SlotWorkerError("HOST_STATE_DIRECTORY_INVALID")
+    if os.geteuid() == 0:
+        os.chown(path, HOST_OWNER_UID, HOST_OWNER_GID)
+    elif info.st_uid != os.geteuid():
+        raise SlotWorkerError("HOST_STATE_DIRECTORY_OWNER_INVALID")
+    os.chmod(path, 0o700)
+
+
+def _prepare_state_directories() -> None:
+    if HOST_OWNER_UID <= 0 or HOST_OWNER_GID <= 0:
+        raise SlotWorkerError("HOST_OWNER_IDENTITY_INVALID")
+    for directory in (STATE, RUNTIME, MANIFEST_DIR, SLOT_RUNTIME):
+        _ensure_owner_directory(directory)
+
+
 def _require_stop_config() -> None:
     if not Path(os.environ.get("BRIDGE_DB_PATH", str(STATE / "bridge.sqlite3"))).is_file():
         raise SlotWorkerError("BRIDGE_DATABASE_UNAVAILABLE")
@@ -108,12 +159,12 @@ def _require_stop_config() -> None:
 
 
 def _require_config() -> None:
-    global WORKER_TOKEN
+    global WORKER_TOKEN, HOST_AGENT_TOKEN
     if CONTROL_URL != "http://127.0.0.1:8000":
         raise SlotWorkerError("CONTROL_PLANE_MUST_BE_LOOPBACK")
     WORKER_TOKEN = _load_worker_token()
-    if not HOST_AGENT_TOKEN or len(HOST_AGENT_TOKEN) < 32:
-        raise SlotWorkerError("HOST_AGENT_TOKEN_UNAVAILABLE")
+    HOST_AGENT_TOKEN = _load_host_agent_token()
+    _prepare_state_directories()
     if not HOST_GENERATION or len(HOST_GENERATION) > 128:
         raise SlotWorkerError("HOST_GENERATION_UNAVAILABLE")
     if not WORKER_ID or len(WORKER_ID) > 128:
@@ -204,8 +255,7 @@ def _manifest_path(job_id: str) -> Path:
 
 
 def _write_manifest(value: dict[str, Any]) -> None:
-    MANIFEST_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(MANIFEST_DIR, 0o700)
+    _ensure_owner_directory(MANIFEST_DIR)
     path = _manifest_path(str(value.get("job_id", "")))
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -216,14 +266,22 @@ def _write_manifest(value: dict[str, Any]) -> None:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         os.chmod(path, 0o600)
+        if os.geteuid() == 0:
+            os.chown(path, HOST_OWNER_UID, HOST_OWNER_GID)
     finally:
         temporary.unlink(missing_ok=True)
 
 
 def _read_manifest(path: Path) -> dict[str, Any] | None:
     try:
-        mode = path.stat().st_mode & 0o777
-        if mode & 0o077:
+        info = path.lstat()
+        mode = stat.S_IMODE(info.st_mode)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_uid != HOST_OWNER_UID
+            or mode & 0o077
+        ):
             return None
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
@@ -712,8 +770,7 @@ def _run_once_unlocked() -> str:
 def run_once() -> str:
     """Serialize all slot claims/reservations on this host with an OS file lock."""
     _require_config()
-    RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(RUNTIME, 0o700)
+    _prepare_state_directories()
     lock_path = RUNTIME / "linux-slot-worker.lock"
     flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
