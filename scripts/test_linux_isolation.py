@@ -140,7 +140,7 @@ def test_unreadable_existing_pairing_marker_blocks_reprovisioning(monkeypatch, t
         raise AssertionError("An unreadable process-ownership marker must fail closed")
 
 
-def test_linux_worker_demo_only_gate_rejects_live_before_terminal_launch(monkeypatch, tmp_path):
+def test_linux_worker_keeps_ephemeral_codespaces_demo_only(monkeypatch, tmp_path):
     module_path = ROOT / "scripts" / "linux-host" / "linux-slot-worker.py"
     import importlib.util
 
@@ -155,17 +155,43 @@ def test_linux_worker_demo_only_gate_rejects_live_before_terminal_launch(monkeyp
     fake_reservation = SimpleNamespace()
     monkeypatch.setattr(slot_worker.worker, "validate_job", lambda job: job)
     monkeypatch.setattr(slot_worker, "_copy_clean_terminal", lambda *_: (_ for _ in ()).throw(AssertionError("must not copy terminal")))
-    live_job = {
-        "account": {
-            "account_mode": "LIVE",
-            "login": "123456",
-            "server": "Broker-Live",
-            "password": "fixture",
-        }
-    }
+    monkeypatch.setenv("BRIDGE_HOST_PROFILE", "EPHEMERAL")
+    monkeypatch.setenv("BRIDGE_HOST_MODE", "linux-host")
+    live_job = {"account": {"account_mode": "LIVE", "login": "123456", "server": "Broker-Live", "password": "fixture"}}
     try:
         slot_worker._prepare_and_launch(live_job, fake_reservation)
     except slot_worker.SlotWorkerError as exc:
-        assert exc.code == "LINUX_LIVE_PROVISIONING_DISABLED"
+        assert exc.code == "EPHEMERAL_HOST_LIVE_BLOCKED"
     else:
-        raise AssertionError("Linux Codespaces worker must not accept LIVE account provisioning")
+        raise AssertionError("Ephemeral Codespaces worker must reject LIVE provisioning")
+
+
+def test_linux_worker_allows_live_only_on_explicit_persistent_linux_host(monkeypatch):
+    module_path = ROOT / "scripts" / "linux-host" / "linux-slot-worker.py"
+    import importlib.util
+
+    sys.path.insert(0, str(ROOT / "managed-worker"))
+    import worker  # noqa: F401
+
+    spec = importlib.util.spec_from_file_location("linux_slot_worker_persistent_acceptance", module_path)
+    slot_worker = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(slot_worker)
+
+    fake_reservation = SimpleNamespace()
+    monkeypatch.setattr(slot_worker.worker, "validate_job", lambda job: job)
+    reached = []
+    def mark_terminal_copy(*_args):
+        reached.append(True)
+        raise RuntimeError("PERSISTENT_LIVE_GATE_PASSED")
+    monkeypatch.setattr(slot_worker, "_copy_clean_terminal", mark_terminal_copy)
+    monkeypatch.setenv("BRIDGE_HOST_PROFILE", "PERSISTENT")
+    monkeypatch.setenv("BRIDGE_HOST_MODE", "linux-host")
+    live_job = {"account": {"account_mode": "LIVE", "login": "123456", "server": "Broker-Live", "password": "fixture"}}
+    try:
+        slot_worker._prepare_and_launch(live_job, fake_reservation)
+    except RuntimeError as exc:
+        assert str(exc) == "PERSISTENT_LIVE_GATE_PASSED"
+    else:
+        raise AssertionError("The fixture should stop at the first filesystem step")
+    assert reached == [True]
