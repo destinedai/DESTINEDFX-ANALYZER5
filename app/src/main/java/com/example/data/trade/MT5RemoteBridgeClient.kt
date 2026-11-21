@@ -576,6 +576,14 @@ class MT5RemoteBridgeClient(
         return CloseAllConfirmation(token, reply.optString("expires_at"), ticketIds)
     }
 
+    private fun positionRows(snapshot: Snapshot): List<JSONObject>? {
+        val parsed = snapshot.positions
+        if (!parsed.isNullOrEmpty()) return parsed
+        val array = snapshot.raw.optJSONArray("open_positions") ?: snapshot.raw.optJSONArray("positions")
+            ?: return parsed
+        return (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    }
+
     private fun tradeActionFailure(snapshot: Snapshot, action: String, config: JSONObject): String? {
         val profileFailure = gateFailure(snapshot, requireLiveAuthorization = action in (OPENING_ACTIONS + POSITION_MANAGEMENT_ACTIONS) && accountMode == "LIVE")
         if (profileFailure != null) return profileFailure
@@ -1062,7 +1070,11 @@ class MT5RemoteBridgeClient(
             require(ticket.matches(Regex("[1-9][0-9]{0,19}")) && newStopLoss.isFinite() && newStopLoss > 0.0) {
                 "A canonical position ticket and finite positive stop price are required."
             }
-            val position = snapshot.positions?.singleOrNull { exactIdentifier(it, "ticket") == ticket }
+            val rawPositions = snapshot.raw.optJSONArray("open_positions") ?: snapshot.raw.optJSONArray("positions")
+            val positions = if (rawPositions != null) {
+                (0 until rawPositions.length()).mapNotNull { rawPositions.optJSONObject(it) }
+            } else snapshot.positions.orEmpty()
+            val position = positions.singleOrNull { exactIdentifier(it, "ticket") == ticket }
                 ?: throw IllegalStateException("The exact MT5 position ticket is no longer present.")
             val symbol = position.optString("symbol")
             val direction = position.optString("direction").uppercase()
