@@ -11,6 +11,60 @@ def test_self_hosted_installer_shell_syntax():
         assert result.returncode == 0, f"{path.name}: {result.stderr}"
 
 
+
+def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path):
+    import json
+    import sys
+
+    source = tmp_path / "bridge.env"
+    output = tmp_path / "public-endpoints.json"
+    source.write_text(
+        "BRIDGE_BASE_URL=https://bridge.destinedfx.example.org\\n"
+        "BRIDGE_HOST=bridge.destinedfx.example.org\\n"
+        "EXPECTED_FORWARDED_HOST=bridge.destinedfx.example.org\\n"
+        "APP_DOMAIN=api.destinedfx.example.org\\n"
+        "ADMIN_EMAILS=owner@example.org\\n"
+        "WORKER_TOKEN=must-not-be-copied\\n",
+        encoding="utf-8",
+    )
+    helper = LINUX_HOST / "public-endpoints.py"
+    result = subprocess.run([sys.executable, str(helper), "--source", str(source), "--output", str(output)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert document == {
+        "schema_version": 1,
+        "bridge_url": "https://bridge.destinedfx.example.org",
+        "management_api_origin": "https://api.destinedfx.example.org",
+    }
+    assert "WORKER_TOKEN" not in output.read_text(encoding="utf-8")
+    assert output.stat().st_mode & 0o777 == 0o644
+
+    source.write_text(
+        "BRIDGE_BASE_URL=https://bridge.example.com\\n"
+        "BRIDGE_HOST=bridge.example.com\\n"
+        "EXPECTED_FORWARDED_HOST=bridge.example.com\\n"
+        "APP_DOMAIN=api.destinedfx.example.org\\n",
+        encoding="utf-8",
+    )
+    blocked = subprocess.run([sys.executable, str(helper), "--source", str(source), "--output", str(output)],
+                             capture_output=True, text=True)
+    assert blocked.returncode != 0
+    assert "placeholder" in blocked.stderr.lower() or "reserved" in blocked.stderr.lower()
+
+
+def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints():
+    builder = (LINUX_HOST / "build-self-hosted-apk.sh").read_text()
+    assert "/etc/destinedfx/public-endpoints.json" in builder
+    assert "/health/ready" in builder
+    assert "/api/v1/auth/bridge-verification-key" in builder
+    assert "-Pmt5ManagedServiceUrl=" in builder
+    assert "-PmanagementApiOrigin=" in builder
+    assert "-PdestinedfxEndpointsLocked=true" in builder
+    assert "assembleDebug" in builder and "testDebugUnitTest" in builder
+    assert "apksigner" in builder and "sha256sum" in builder
+
+
 def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
     installer = (LINUX_HOST / "install-self-hosted.sh").read_text()
     assert "destinedfx-postgres.service" in installer
@@ -27,6 +81,9 @@ def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
     assert "systemctl enable --now destinedfx-management-postgres-backup.timer" in installer
     assert "destinedfx-bridge-backup.timer" in installer
     assert "systemctl enable --now destinedfx-bridge-backup.timer" in installer
+    assert "public-endpoints.py" in installer
+    assert "public-endpoints.json" in installer
+    assert "build-self-hosted-apk.sh" in installer
 
 
 def test_public_ingress_is_only_caddy_and_backend_services_are_loopback():
