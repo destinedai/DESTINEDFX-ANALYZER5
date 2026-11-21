@@ -115,6 +115,7 @@ make_credential worker-bootstrap-token "$CRED_DIR/destinedfx-worker-bootstrap-to
 make_credential host-agent-token "$CRED_DIR/destinedfx-host-agent-token.cred" token
 make_credential postgres-password "$CRED_DIR/destinedfx-postgres-password.cred" token
 make_credential postgres-app-password "$CRED_DIR/destinedfx-postgres-app-password.cred" token
+make_credential owner-setup-token "$CRED_DIR/destinedfx-owner-setup-token.cred" token
 
 if [[ ! -f "$CRED_DIR/destinedfx-management-step-up-private-key-pem.cred" ]]; then
   openssl genpkey -algorithm ED25519 -out "$TMP_DIR/step-up-private-key-pem"
@@ -137,7 +138,7 @@ echo "DESTINEDFX_HOST_BOOTSTRAP_FILES_READY"
 echo "Bridge service identity: $SERVICE_USER (uid=$OWNER_UID gid=$OWNER_GID)"
 echo "Management API service identity: $API_USER (uid=$API_UID gid=$API_GID)"
 echo "Created non-secret configuration: $CONFIG_DIR/host.env and $CONFIG_DIR/bridge.env (existing files were preserved)."
-echo "Created/retained encrypted Bridge, worker, PostgreSQL and management-signing credentials under $CRED_DIR; plaintext values were not printed."
+echo "Created/retained encrypted Bridge, worker, PostgreSQL, owner-setup and management-signing credentials under $CRED_DIR; plaintext values were not printed."
 echo "The management API Ed25519 public key was derived locally; its private key remains host-bound and encrypted."
 echo "Next: install genuine MT5/MetaEditor with --wineprefix /var/lib/destinedfx/terminal-template-prefix, then review the template paths in host.env."
 echo "Then configure both HTTPS hostnames, Caddy contact and initial admin email in bridge.env; the management public key is generated automatically."

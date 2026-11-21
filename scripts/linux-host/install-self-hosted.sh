@@ -25,7 +25,7 @@ for rel in \
   scripts/linux-host/host-agent.py scripts/linux-host/linux-slot-worker.py scripts/linux-host/linux_isolation.py \
   scripts/linux-host/host_lifecycle.py scripts/linux-host/provision-worker-token.sh scripts/linux-host/provision-postgres-app-role.sh \
   scripts/linux-host/accept_two_user_runtime.py scripts/linux-host/backup.sh scripts/linux-host/restore-test.sh \
-  scripts/linux-host/backup-management-postgres.sh \
+  scripts/linux-host/backup-management-postgres.sh scripts/linux-host/show-owner-setup-token.sh \
   scripts/linux-host/host-doctor.sh scripts/linux-host/setup-unattended-upgrades.sh scripts/linux-host/wine-guard.sh \
   scripts/linux-host/Caddyfile \
   scripts/linux-host/systemd/destinedfx-host-agent.service scripts/linux-host/systemd/destinedfx-bridge.service \
@@ -130,7 +130,7 @@ private_root_file() {
 }
 private_root_file "$HOST_ENV"
 private_root_file "$BRIDGE_ENV"
-for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password postgres-app-password management-step-up-private-key-pem; do
+for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password postgres-app-password owner-setup-token management-step-up-private-key-pem; do
   private_root_file "$CREDENTIAL_DIR/destinedfx-$name.cred"
 done
 set -a
@@ -200,7 +200,7 @@ if not isinstance(key, Ed25519PublicKey):
     raise SystemExit("BLOCKED: management public key must be Ed25519.")
 print("SELF_HOSTED_DOMAIN_AND_MANAGEMENT_KEY_OK")
 PY
-for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password postgres-app-password; do
+for name in credentials-fernet-key worker-bootstrap-token host-agent-token postgres-password postgres-app-password owner-setup-token; do
   systemd-creds decrypt --name="$name" "$CREDENTIAL_DIR/destinedfx-$name.cred" /dev/null >/dev/null || block "encrypted credential invalid: $name"
 done
 systemd-creds decrypt --name=step-up-private-key-pem "$CREDENTIAL_DIR/destinedfx-management-step-up-private-key-pem.cred" /dev/null >/dev/null || block "encrypted management signing credential is invalid."
@@ -262,7 +262,7 @@ chmod -R a+rX,go-w "$DEST_ROOT/management"
 for rel in host-agent.py linux-slot-worker.py linux_isolation.py host_lifecycle.py accept_two_user_runtime.py; do
   install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
 done
-for rel in backup.sh restore-test.sh host-doctor.sh setup-unattended-upgrades.sh wine-guard.sh; do
+for rel in backup.sh restore-test.sh show-owner-setup-token.sh host-doctor.sh setup-unattended-upgrades.sh wine-guard.sh; do
   install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
 done
 install -o root -g root -m 0755 "$SCRIPT_DIR/provision-worker-token.sh" "$DEST_ROOT/scripts/linux-host/provision-worker-token.sh"

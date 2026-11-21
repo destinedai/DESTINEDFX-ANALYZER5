@@ -16,10 +16,12 @@ Environment=POSTGRES_HOST=127.0.0.1
 Environment=POSTGRES_PORT=5433
 Environment=POSTGRES_PASSWORD_FILE=%d/postgres-app-password
 Environment=STEP_UP_PRIVATE_KEY_PEM_FILE=%d/step-up-private-key-pem
+Environment=OWNER_SETUP_TOKEN_FILE=%d/owner-setup-token
 Environment=STEP_UP_ISSUER=destinedfx-management
 Environment=STEP_UP_AUDIENCE=destinedfx-bridge
 LoadCredentialEncrypted=postgres-app-password:/etc/credstore.encrypted/destinedfx-postgres-app-password.cred
 LoadCredentialEncrypted=step-up-private-key-pem:/etc/credstore.encrypted/destinedfx-management-step-up-private-key-pem.cred
+LoadCredentialEncrypted=owner-setup-token:/etc/credstore.encrypted/destinedfx-owner-setup-token.cred
 ExecStartPre=/opt/destinedfx/management/venv/bin/alembic upgrade head
 ExecStart=/opt/destinedfx/management/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --proxy-headers --forwarded-allow-ips=127.0.0.1 --timeout-keep-alive 5 --limit-concurrency 100
 Restart=always

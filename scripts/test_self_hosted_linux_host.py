@@ -51,6 +51,7 @@ def test_host_bootstrap_provisions_encrypted_credentials_without_printing_them()
     assert "destinedfx-postgres-app-password.cred" in bootstrap
     assert "install -d -o 999 -g 999 -m 0700 /var/lib/destinedfx-management/postgres" in bootstrap
     assert "destinedfx-management-step-up-private-key-pem.cred" in bootstrap
+    assert "destinedfx-owner-setup-token.cred" in bootstrap
     assert 'systemd-creds encrypt --name=step-up-private-key-pem' in bootstrap
     assert 'systemd-creds decrypt --name=step-up-private-key-pem' in bootstrap
     assert 'openssl pkey -in' in bootstrap
@@ -84,6 +85,21 @@ def test_caddy_host_template_does_not_embed_vendor_hosts_or_secrets():
     assert "RAILWAY" not in caddy
     assert "POSTGRES_PASSWORD=" not in env
     assert "WORKER_BOOTSTRAP_TOKEN=" not in env
+
+
+def test_management_api_owner_setup_token_is_host_encrypted_and_interactive_only():
+    bootstrap = (LINUX_HOST / "bootstrap-self-hosted-host.sh").read_text()
+    service = (LINUX_HOST / "systemd" / "destinedfx-management-api.service").read_text()
+    installer = (LINUX_HOST / "install-self-hosted.sh").read_text()
+    reveal = (LINUX_HOST / "show-owner-setup-token.sh").read_text()
+    assert "destinedfx-owner-setup-token.cred" in bootstrap
+    assert "make_credential owner-setup-token" in bootstrap
+    assert "LoadCredentialEncrypted=owner-setup-token:" in service
+    assert "OWNER_SETUP_TOKEN_FILE=%d/owner-setup-token" in service
+    assert "owner-setup-token" in installer
+    assert "show-owner-setup-token.sh" in installer
+    assert "systemd-creds decrypt --name=owner-setup-token" in reveal
+    assert "[[ -t 1" in reveal and "/dev/tty" in reveal
 
 def test_two_user_acceptance_defaults_to_persistent_host_state():
     acceptance = (LINUX_HOST / "accept_two_user_runtime.py").read_text()
