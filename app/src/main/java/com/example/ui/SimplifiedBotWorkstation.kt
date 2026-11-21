@@ -288,9 +288,13 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         busy = false
     }
     LaunchedEffect(secrets) {
-        serviceUrl = secrets.getManagedMT5ServiceUrl()
-        cloudflareClientId = secrets.getCloudflareAccessClientId()
-        cloudflareClientSecret = secrets.getCloudflareAccessClientSecret()
+        serviceUrl = MT5RemoteBridgeClient.initialServiceUrl(
+            secrets.getManagedMT5ServiceUrl(),
+            com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
+            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
+        )
+        cloudflareClientId = if (com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) "" else secrets.getCloudflareAccessClientId()
+        cloudflareClientSecret = if (com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) "" else secrets.getCloudflareAccessClientSecret()
         derivMode = secrets.getDerivAccountMode()
         derivToken = secrets.getDerivApiToken(derivMode)
         derivAppId = secrets.getDerivAppId()
@@ -1609,10 +1613,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             }
         }
 
-        OutlinedButton(onClick = { showAdvancedConnection = !showAdvancedConnection }, modifier = Modifier.fillMaxWidth()) {
+        if (!com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) OutlinedButton(onClick = { showAdvancedConnection = !showAdvancedConnection }, modifier = Modifier.fillMaxWidth()) {
             Text(if (showAdvancedConnection) "HIDE ADVANCED CONNECTION SETTINGS" else "ADVANCED CONNECTION SETTINGS")
         }
-        if (showAdvancedConnection) Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, CardBorder)) {
+        if (!com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED && showAdvancedConnection) Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, CardBorder)) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("MANAGED HTTPS BRIDGE", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 OutlinedTextField(value = serviceUrl, onValueChange = { serviceUrl = it }, label = { Text("Owner-managed HTTPS origin") }, placeholder = { Text("https://your-host.example") }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))

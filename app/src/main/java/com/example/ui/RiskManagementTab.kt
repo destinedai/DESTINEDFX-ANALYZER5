@@ -54,11 +54,15 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
         )
     }?.takeIf { it.isDisplayable() }
 
-    // Read-only telemetry monitor. It never starts a Codespace, provisions a terminal,
-    // registers credentials, sends broker commands or arms LIVE execution.
-    LaunchedEffect(managedProfile, secrets.getManagedMT5ServiceUrl()) {
+    // Read-only telemetry monitor. Use the immutable host origin in production builds.
+    val configuredManagedBridgeOrigin = MT5RemoteBridgeClient.initialServiceUrl(
+        secrets.getManagedMT5ServiceUrl(),
+        com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
+        com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
+    )
+    LaunchedEffect(managedProfile, configuredManagedBridgeOrigin) {
         if (secrets.isSecureStorageAvailable &&
-            secrets.getManagedMT5ServiceUrl().isNotBlank() &&
+            configuredManagedBridgeOrigin.isNotBlank() &&
             secrets.getMT5BridgeAccountAppToken(managedProfile).isNotBlank() &&
             secrets.getManagedMT5AccountLogin(managedProfile).isNotBlank()
         ) {

@@ -394,6 +394,19 @@ class MT5RemoteBridgeClientTest {
         assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin("", "__CONFIGURATION_REQUIRED__"))
     }
 
+
+    @Test fun lockedBuildAlwaysUsesEmbeddedBridgeOriginAndIgnoresRuntimeOverrides() {
+        assertEquals("https://embedded.realcop.com", MT5RemoteBridgeClient.resolveServiceOrigin(
+            "https://attacker.realcop.com", "https://embedded.realcop.com", locked = true
+        ))
+        assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin(
+            "https://old.realcop.com", "__CONFIGURATION_REQUIRED__", locked = true
+        ))
+        assertEquals("https://embedded.realcop.com", MT5RemoteBridgeClient.initialServiceUrl(
+            "https://old.realcop.com", "https://embedded.realcop.com", locked = true
+        ))
+    }
+
     @Test fun serviceOriginValidationRejectsUnsafeOrigins() {
         listOf(
             "https://bridge.realcop.com:0",

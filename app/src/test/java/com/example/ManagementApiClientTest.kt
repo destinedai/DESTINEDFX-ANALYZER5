@@ -25,10 +25,10 @@ class ManagementApiClientTest {
 
     @Test fun lockedBuildAlwaysUsesEmbeddedManagementOriginAndIgnoresRuntimeOverrides() {
         assertEquals(
-            "https://api.destinedfx.example",
+            "https://api.destinedfx.example.org",
             ManagementApiClient.resolveConfiguredOrigin(
-                "https://attacker-controlled.example",
-                "https://api.destinedfx.example",
+                "https://attacker-controlled.example.org",
+                "https://api.destinedfx.example.org",
                 locked = true
             )
         )
@@ -41,10 +41,10 @@ class ManagementApiClientTest {
             )
         )
         assertEquals(
-            "https://developer-bridge.example",
+            "https://developer-bridge.example.org",
             ManagementApiClient.resolveConfiguredOrigin(
-                "https://developer-bridge.example",
-                "https://build-default.example",
+                "https://developer-bridge.example.org",
+                "https://build-default.example.org",
                 locked = false
             )
         )
