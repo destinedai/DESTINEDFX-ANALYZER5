@@ -431,3 +431,7 @@ def test_phone_position_stop_edit_only_tightens_sl_and_preserves_tp():
     assert "SYMBOL_TRADE_FREEZE_LEVEL" in source
     assert 'g_lastSignal="TIGHTEN-"+requestId' in source
     assert 'g_sigExecutionState="POSITION_SL_TIGHTENED"' in source
+    assert 'g_sigCommandId=commandId' in source
+    assert 'g_sigCommandId=ArraySize(p)>=18?p[17]:""' in source
+    assert 'Ack(g_sigCommandId,finalOutcome,g_sigRationale)' in source
+    assert 'g_sigOrder=commandId' not in source
