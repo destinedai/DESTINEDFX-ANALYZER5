@@ -3057,6 +3057,18 @@ def test_phone_market_order_is_idempotent_and_blocks_second_unresolved_request(m
     assert second.status_code==409
     assert second.json()['detail']['code']=='MARKET_ORDER_ALREADY_PENDING'
 
+    # A broker APPLIED acknowledgement can arrive before the next heartbeat
+    # publishes the position/order. Keep the 20-second lock during that gap.
+    with app.tx(True) as c:
+        c.execute('UPDATE commands SET ack=? WHERE id=?',(
+            app.json.dumps({'outcome':'APPLIED','state':'RUNNING','message':'broker accepted'},separators=(',',':')),
+            first.json()['id']))
+    third=client.post('/v1/app/commands',headers=headers,json={
+        **body,'request_id':str(uuid.uuid4()),
+    })
+    assert third.status_code==409
+    assert third.json()['detail']['code']=='MARKET_ORDER_ALREADY_PENDING'
+
 
 def test_phone_position_stop_edit_is_idempotent_and_blocks_conflicting_pending_edit(monkeypatch):
     pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
