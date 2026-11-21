@@ -1,0 +1,44 @@
+[Unit]
+Description=DestinedFX isolated per-pairing Linux MT5 slot worker
+After=network-online.target destinedfx-host-agent.service destinedfx-bridge.service
+Requires=destinedfx-host-agent.service destinedfx-bridge.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/destinedfx
+EnvironmentFile=-/etc/destinedfx/host.env
+Environment=BRIDGE_HOST_PROFILE=PERSISTENT
+Environment=BRIDGE_HOST_MODE=linux-host
+Environment=BRIDGE_DB_PATH=/var/lib/destinedfx/bridge.sqlite3
+Environment=DESTINEDFX_HOST_STATE_DIR=/var/lib/destinedfx/host-runtime
+Environment=DESTINEDFX_SLOT_ROOT=/home/destinedfx-slots
+Environment=DESTINEDFX_SLOT_RUNTIME=/var/lib/destinedfx/host-runtime/runtime/slot-runtime
+Environment=DESTINEDFX_CONTROL_PLANE_URL=http://127.0.0.1:8000
+Environment=HOST_AGENT_URL=http://127.0.0.1:8787/health/ready
+Environment=HOST_AGENT_TOKEN_FILE=%d/host-agent-token
+Environment=DESTINEDFX_WORKER_TOKEN_FILE=%d/worker-token
+Environment=DESTINEDFX_EA_SOURCE=/opt/destinedfx/mt5-ea/DestinedFXTraderEA.mq5
+Environment=PYTHONPATH=/opt/destinedfx/bridge:/opt/destinedfx/managed-worker:/opt/destinedfx/scripts/linux-host
+LoadCredentialEncrypted=host-agent-token:/etc/credstore.encrypted/destinedfx-host-agent-token.cred
+LoadCredentialEncrypted=worker-token:/etc/credstore.encrypted/destinedfx-worker-token.cred
+ExecStart=/opt/destinedfx/venv/bin/python /opt/destinedfx/scripts/linux-host/linux-slot-worker.py --loop --interval 3
+Restart=on-failure
+RestartSec=5
+KillMode=process
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+ReadWritePaths=/var/lib/destinedfx/host-runtime /home/destinedfx-slots
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
