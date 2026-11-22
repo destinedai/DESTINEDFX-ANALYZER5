@@ -143,3 +143,86 @@ def test_bridge_verification_key_endpoint_fails_closed_without_signing_key(monke
     )
     response = client.get("/api/v1/auth/bridge-verification-key")
     assert response.status_code == 503
+
+
+def test_codespaces_owner_token_is_released_only_to_the_github_codespace_owner(client, monkeypatch):
+    import json
+    from app import main
+    from pydantic import SecretStr
+
+    owner_token = "owner-setup-" + "x" * 64
+    monkeypatch.setattr(main.settings, "owner_setup_token", SecretStr(owner_token))
+    monkeypatch.setattr(main.settings, "admin_emails", "")
+    monkeypatch.setenv("CODESPACES", "true")
+    monkeypatch.setenv("DESTINEDFX_CODESPACES_OWNER_BOOTSTRAP", "true")
+    monkeypatch.setenv("GITHUB_USER", "destinedai")
+
+    class GitHubResponse:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def geturl(self):
+            return "https://api.github.com/user"
+        def read(self, _size):
+            return json.dumps({"login": "destinedai"}).encode()
+
+    calls = []
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, request.get_header("Authorization"), timeout))
+        return GitHubResponse()
+    monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
+
+    response = client.get(
+        "/api/v1/auth/owner-setup-token",
+        headers={"X-GitHub-Owner-Authorization": "Bearer ghu_" + "a" * 48},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"owner_setup_token": owner_token}
+    assert calls == [("https://api.github.com/user", "Bearer ghu_" + "a" * 48, 8)]
+
+    # The fetched one-time token can register the first owner even when the
+    # Codespaces host does not know the owner's email address in advance.
+    registered = register(client, "phone-owner@example.com", owner_token)
+    assert registered.status_code == 201
+    assert registered.json()["is_admin"] is True
+    assert client.get(
+        "/api/v1/auth/owner-setup-token",
+        headers={"X-GitHub-Owner-Authorization": "Bearer ghu_" + "a" * 48},
+    ).status_code == 409
+
+
+def test_codespaces_owner_token_rejects_other_github_accounts_and_non_codespaces_hosts(client, monkeypatch):
+    import json
+    from app import main
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(main.settings, "owner_setup_token", SecretStr("owner-setup-" + "x" * 64))
+    monkeypatch.setenv("CODESPACES", "true")
+    monkeypatch.setenv("DESTINEDFX_CODESPACES_OWNER_BOOTSTRAP", "true")
+    monkeypatch.setenv("GITHUB_USER", "destinedai")
+
+    class GitHubResponse:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def geturl(self):
+            return "https://api.github.com/user"
+        def read(self, _size):
+            return json.dumps({"login": "somebody-else"}).encode()
+
+    monkeypatch.setattr(main.urllib.request, "urlopen", lambda *_args, **_kwargs: GitHubResponse())
+    response = client.get(
+        "/api/v1/auth/owner-setup-token",
+        headers={"X-GitHub-Owner-Authorization": "Bearer ghu_" + "b" * 48},
+    )
+    assert response.status_code == 403
+
+    monkeypatch.setenv("DESTINEDFX_CODESPACES_OWNER_BOOTSTRAP", "false")
+    assert client.get(
+        "/api/v1/auth/owner-setup-token",
+        headers={"X-GitHub-Owner-Authorization": "Bearer ghu_" + "b" * 48},
+    ).status_code == 404
