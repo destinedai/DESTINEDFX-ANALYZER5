@@ -13,7 +13,12 @@ if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
     throw 'RUNNER_TEMP is required; this script is intended for a disposable Windows CI runner.'
 }
 
-$installerUrl = 'https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe'
+$installerUrls = @(
+    # MetaQuotes Support publishes this official client-terminal download endpoint.
+    'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe',
+    # MetaQuotes also publishes this alternate official CDN endpoint.
+    'https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe'
+)
 $installerPath = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 $installPath = Join-Path $env:RUNNER_TEMP 'MetaTrader5'
 $sourcePath = Join-Path $env:GITHUB_WORKSPACE 'mt5-ea\DestinedFXTraderEA.mq5'
@@ -22,18 +27,48 @@ if (!(Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
     throw "EA source not found: $sourcePath"
 }
 
-Write-Host "Downloading official MetaTrader 5 installer from $installerUrl"
-Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+$installerVerified = $false
+$signer = ''
+foreach ($installerUrl in $installerUrls) {
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+        try {
+            Write-Host "Downloading official MetaTrader 5 installer from $installerUrl (attempt $attempt/3)"
+            Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -TimeoutSec 180 -MaximumRedirection 10 -ErrorAction Stop
+            if (!(Test-Path -LiteralPath $installerPath -PathType Leaf) -or
+                (Get-Item -LiteralPath $installerPath).Length -lt 100KB) {
+                throw 'Downloaded MetaTrader installer is missing or unexpectedly small.'
+            }
 
-$signature = Get-AuthenticodeSignature -LiteralPath $installerPath
-if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-    throw "MetaTrader installer Authenticode signature is not valid: $($signature.Status)"
+            $signature = Get-AuthenticodeSignature -LiteralPath $installerPath
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+                throw "MetaTrader installer Authenticode signature is not valid: $($signature.Status)"
+            }
+            $candidateSigner = $signature.SignerCertificate.Subject
+            if ($candidateSigner -notmatch 'MetaQuotes') {
+                throw "Unexpected MetaTrader installer signer: $candidateSigner"
+            }
+
+            $signer = $candidateSigner
+            $installerVerified = $true
+            Write-Host "Verified installer signer: $signer"
+            break
+        }
+        catch {
+            $downloadFailure = $_.Exception.Message
+            Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+            Write-Warning "MetaTrader installer download/verification failed from $installerUrl on attempt $attempt/3: $downloadFailure"
+            if ($attempt -lt 3) {
+                Start-Sleep -Seconds (10 * $attempt)
+            }
+        }
+    }
+    if ($installerVerified) { break }
 }
-$signer = $signature.SignerCertificate.Subject
-if ($signer -notmatch 'MetaQuotes') {
-    throw "Unexpected MetaTrader installer signer: $signer"
+
+if (!$installerVerified) {
+    throw 'Could not download and Authenticode-verify the official MetaQuotes MetaTrader 5 installer from either published endpoint after bounded retries.'
 }
-Write-Host "Verified installer signer: $signer"
 
 function Find-MetaEditor {
     $roots = @($installPath, (Join-Path $env:ProgramFiles 'MetaTrader 5'))
