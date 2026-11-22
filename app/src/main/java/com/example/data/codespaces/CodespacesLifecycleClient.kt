@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
  * The returned scope field is intentionally empty for GitHub App user tokens.
  */
 internal const val CODESPACES_OAUTH_SCOPES = "offline_access"
-internal const val DESTINEDFX_CODESPACES_BRANCH = "free/phone-only-v1"
+internal const val DESTINEDFX_CODESPACES_BRANCH = "feat/self-hosted-linux-host-runtime"
 
 internal fun isCodespaceStoppedState(state: String): Boolean =
     state.equals("Shutdown", ignoreCase = true) ||
