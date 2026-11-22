@@ -209,12 +209,12 @@ class ManagementApiClient(
             locked: Boolean,
             allowCodespacesDiscovery: Boolean = false
         ): String = if (locked) {
-            if (allowCodespacesDiscovery) {
-                validatedOrigin(savedOrigin)?.takeIf(::isCodespacesForwardedManagementApiOrigin)
-                    ?: validatedOrigin(buildOrigin).orEmpty()
-            } else {
-                validatedOrigin(buildOrigin).orEmpty()
-            }
+            validatedOrigin(buildOrigin)?.takeIf { it.isNotBlank() }
+                ?: if (allowCodespacesDiscovery) {
+                    validatedOrigin(savedOrigin)?.takeIf(::isCodespacesForwardedManagementApiOrigin).orEmpty()
+                } else {
+                    ""
+                }
         } else {
             validatedOrigin(savedOrigin).takeIf { savedOrigin.isNotBlank() }
                 ?: validatedOrigin(buildOrigin).orEmpty()
