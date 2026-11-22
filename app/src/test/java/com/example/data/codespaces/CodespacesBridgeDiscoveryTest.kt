@@ -97,6 +97,33 @@ class CodespacesBridgeDiscoveryTest {
     }
 
     @Test
+    fun supportsTheGithubPreviewForwardingHostAndBuildsAllKnownCandidates() {
+        assertEquals(
+            "https://steady-lizard-abc123-8000.githubpreview.dev",
+            codespacesBridgeOrigin("steady-lizard-abc123", "githubpreview.dev")
+        )
+        assertEquals(
+            listOf(
+                "https://steady-lizard-abc123-8000.app.github.dev",
+                "https://steady-lizard-abc123-8000.preview.app.github.dev",
+                "https://steady-lizard-abc123-8000.githubpreview.dev"
+            ),
+            codespacesBridgeOriginCandidates("steady-lizard-abc123")
+        )
+    }
+
+    @Test
+    fun onlyAcceptsBareHttpsCodespacesPort8000Origins() {
+        assertTrue(isCodespacesForwardedBridgeOrigin("https://steady-lizard-abc123-8000.app.github.dev"))
+        assertTrue(isCodespacesForwardedBridgeOrigin("https://steady-lizard-abc123-8000.preview.app.github.dev"))
+        assertTrue(isCodespacesForwardedBridgeOrigin("https://steady-lizard-abc123-8000.githubpreview.dev"))
+        assertFalse(isCodespacesForwardedBridgeOrigin("https://attacker.github.com"))
+        assertFalse(isCodespacesForwardedBridgeOrigin("https://steady-lizard-abc123-8010.app.github.dev"))
+        assertFalse(isCodespacesForwardedBridgeOrigin("http://steady-lizard-abc123-8000.app.github.dev"))
+        assertFalse(isCodespacesForwardedBridgeOrigin("https://steady-lizard-abc123-8000.app.github.dev/path"))
+    }
+
+    @Test
     fun rejectsPathInjectionAndArbitraryForwardingDomains() {
         assertThrows(IllegalArgumentException::class.java) {
             codespacesBridgeOrigin("codespace.example/path")
