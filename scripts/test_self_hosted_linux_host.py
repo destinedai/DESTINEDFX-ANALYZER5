@@ -136,6 +136,8 @@ def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints
     assert 'DESTINEDFX_CODESPACES_HOST_BUILD=true' in builder
     assert 'DESTINEDFX_CODESPACES_HOST_DISCOVERY=true' in builder
     assert 'https://$CODESPACE_NAME-8010.$CODESPACE_DOMAIN' in builder
+    assert 'MANAGEMENT_API_ORIGIN does not match the automatically derived Codespaces port-8010 host.' in builder
+    assert 'MANAGEMENT_API_ORIGIN="$CODESPACE_MANAGEMENT_API_ORIGIN"' in builder
     assert '-PdestinedfxCodespacesHostDiscovery="$CODESPACES_BUILD"' in builder
     assert '/health/live' in builder and '/health/config' in builder
     assert 'DEX_STRINGS' in builder
