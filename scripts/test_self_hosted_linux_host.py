@@ -149,7 +149,7 @@ def test_codespaces_bootstrap_apk_has_independent_ci_job():
     workflow = (ROOT / ".github" / "workflows" / "build-apk.yml").read_text()
     assert "  codespaces-bootstrap-apk:" in workflow
     job_start = workflow.index("  codespaces-bootstrap-apk:")
-    job_end = workflow.find("\\n  android-emulator-instrumentation:", job_start)
+    job_end = workflow.find("\n  android-emulator-instrumentation:", job_start)
     assert job_end > job_start
     job = workflow[job_start:job_end]
     assert "assembleDebug" in job
