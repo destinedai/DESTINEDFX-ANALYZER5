@@ -461,12 +461,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Text("Managed service: ${if (bridgeClient.managedConfigured()) "configured" else "CONFIGURATION_REQUIRED"}", color = TextSecondary, fontSize = 10.sp)
                     if (com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) {
                         Text(
-                            "Managed MT5 Bridge (embedded): ${MT5RemoteBridgeClient.initialServiceUrl("", com.example.BuildConfig.MT5_MANAGED_SERVICE_URL, locked = true).ifBlank { "NOT CONFIGURED IN THIS BUILD" }}",
+                            "Managed MT5 Bridge (verified): ${bridgeClient.baseUrl().ifBlank { "NOT CONFIGURED IN THIS BUILD" }}",
                             color = if (bridgeClient.managedConfigured()) TextSecondary else WarningAmber,
                             fontSize = 10.sp,
                             modifier = Modifier.fillMaxWidth().testTag("managed_bridge_url")
                         )
-                        Text("This endpoint is compiled from the self-hosted host manifest and cannot be changed from the phone.",
+                        Text("No manual URL entry is available. Self-hosted deployments use the APK's embedded origin; GitHub Codespaces hosts are discovered through GitHub authorization and accepted only after Bridge health and forwarded-host checks.",
                             color = TextMuted, fontSize = 9.sp)
                     } else {
                         OutlinedTextField(
