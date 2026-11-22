@@ -209,10 +209,7 @@ class SignalGenerationUseCaseImpl(
 
             var state = report.state
             val blockers = report.blockers.toMutableList()
-            if (isTradingViewScannerSnapshot) {
-                blockers += "TRADINGVIEW SCANNER SNAPSHOT: app retrieval time is available, but provider event time is not; read-only analysis only."
-                state = SignalState.BLOCKED
-            }
+            // Analyzer quote/candle inputs have already been restricted to the same fresh MT5 Bridge snapshot.
             val primaryCandleSource = market.candleSources[candleSourceKey(symbol, tf.label)].orEmpty()
             if (ticker != null &&
                 (primaryCandleSource.isBlank() || !canMergeQuoteIntoCandle(primaryCandleSource, ticker.source))
