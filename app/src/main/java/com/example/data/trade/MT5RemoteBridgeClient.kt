@@ -1225,24 +1225,38 @@ class MT5RemoteBridgeClient(
             }
         }
 
-        internal fun resolveServiceOrigin(override: String, buildValue: String, locked: Boolean = false): String =
-            if (locked) {
-                validServiceOrigin(override)
-                    ?.takeIf(::isCodespacesForwardedBridgeOrigin)
+        internal fun resolveServiceOrigin(
+            override: String,
+            buildValue: String,
+            locked: Boolean = false,
+            allowCodespacesDiscovery: Boolean = false
+        ): String = if (locked) {
+            if (allowCodespacesDiscovery) {
+                validServiceOrigin(override)?.takeIf(::isCodespacesForwardedBridgeOrigin)
                     ?: validServiceOrigin(buildValue).orEmpty()
             } else {
-                validServiceOrigin(override).takeIf { override.isNotBlank() }
-                    ?: validServiceOrigin(buildValue).orEmpty()
+                validServiceOrigin(buildValue).orEmpty()
             }
+        } else {
+            validServiceOrigin(override).takeIf { override.isNotBlank() }
+                ?: validServiceOrigin(buildValue).orEmpty()
+        }
 
-        internal fun initialServiceUrl(savedValue: String, buildValue: String, locked: Boolean = false): String =
-            if (locked) {
-                validServiceOrigin(savedValue)
-                    ?.takeIf(::isCodespacesForwardedBridgeOrigin)
+        internal fun initialServiceUrl(
+            savedValue: String,
+            buildValue: String,
+            locked: Boolean = false,
+            allowCodespacesDiscovery: Boolean = false
+        ): String = if (locked) {
+            if (allowCodespacesDiscovery) {
+                validServiceOrigin(savedValue)?.takeIf(::isCodespacesForwardedBridgeOrigin)
                     ?: validServiceOrigin(buildValue).orEmpty()
             } else {
-                savedValue.ifBlank { buildValue.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty() }
+                validServiceOrigin(buildValue).orEmpty()
             }
+        } else {
+            savedValue.ifBlank { buildValue.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty() }
+        }
 
         internal fun validServiceOrigin(raw: String): String? {
             return try {
