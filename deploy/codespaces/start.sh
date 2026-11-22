@@ -66,6 +66,7 @@ if "$ROOT/deploy/codespaces/verify-public-ready.sh" --check 2>/dev/null \
 fi
 FORWARD_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
 PUBLIC_HOST="${CODESPACE_NAME}-8000.${FORWARD_DOMAIN}"
+MANAGEMENT_HOST="${CODESPACE_NAME}-8010.${FORWARD_DOMAIN}"
 printf 'PASS: bridge binding remains restricted to 127.0.0.1.\n'
 
 # ---- Per-user terminal template and isolated Linux slot prerequisites. ----
@@ -196,6 +197,30 @@ chmod 600 "$RUNTIME/pids"
 cleanup() { "$ROOT/deploy/codespaces/stop.sh" >/dev/null 2>&1 || true; }
 trap cleanup EXIT INT TERM
 
+# Start the existing PostgreSQL-backed Management API beside the Bridge.
+(
+  exec bash "$ROOT/deploy/codespaces/start-management-api.sh"
+) >>"$RUNTIME/management-api.log" 2>&1 &
+MANAGEMENT_API_PID="$!"
+for _ in $(seq 1 60); do
+  if curl -fs --max-time 2 http://127.0.0.1:8010/ready >/dev/null 2>&1 \
+     && curl -fs --max-time 2 http://127.0.0.1:8010/api/v1/auth/bridge-verification-key >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if ! curl -fs --max-time 2 http://127.0.0.1:8010/ready >/dev/null 2>&1; then
+  fail "Management API/PostgreSQL failed loopback readiness. Bridge and MT5 provisioning will not start."
+  exit 1
+fi
+if ! curl -fs --max-time 2 http://127.0.0.1:8010/api/v1/auth/bridge-verification-key >/dev/null 2>&1; then
+  fail "Management API did not publish its EdDSA Bridge verification key."
+  exit 1
+fi
+track_pid "$MANAGEMENT_API_PID" "uvicorn app.main:app"
+export MANAGEMENT_STEP_UP_PUBLIC_KEY_FILE="$STATE/management/step-up-public.pem"
+pass "Management API and PostgreSQL are ready on loopback port 8010."
+
 # vnc-up.sh is the single owner of Xvfb creation/adoption and PID tracking.
 export DISPLAY=:99
 bash "$ROOT/deploy/codespaces/vnc-up.sh"
@@ -271,6 +296,9 @@ expose_publicly() {
   # Leave the port protocol as HTTP: switching a public port to HTTPS makes it private again.
   gh codespace ports visibility 8000:public -c "$CODESPACE_NAME" >/dev/null 2>&1
 }
+expose_management_publicly() {
+  gh codespace ports visibility 8010:public -c "$CODESPACE_NAME" >/dev/null 2>&1
+}
 http_code() {  # $1 = path, rest = extra curl args
   local path="$1"; shift
   curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H 'Accept: application/json' \
@@ -278,22 +306,36 @@ http_code() {  # $1 = path, rest = extra curl args
 }
 for _ in $(seq 1 30); do curl -fs --max-time 2 http://127.0.0.1:8000/health/live >/dev/null 2>&1 && break; sleep 1; done
 if [[ "$PUBLIC_READY" == true ]]; then
-  if expose_publicly; then
-    # A random, never-valid credential built at runtime: it must be refused with 401.
+  if expose_publicly && expose_management_publicly; then
+    # A random, never-valid Bridge credential must be refused with 401.
     BAD_AUTH="Authorization: Bearer $(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
     live="$(http_code /health/live)"; bad="$(http_code /v1/app/state -H "$BAD_AUTH")"; none="$(http_code /v1/app/state)"
-    if [[ "$live" == 200 && "$bad" == 401 && "$none" == 401 ]]; then
-      pass "Public port reachable (health 200, bad token 401, no token 401): https://${PUBLIC_HOST}"
+    api_health="$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://${MANAGEMENT_HOST}/health" || true)"
+    api_ready="$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://${MANAGEMENT_HOST}/ready" || true)"
+    api_key="$(curl -fs --max-time 12 -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://${MANAGEMENT_HOST}/api/v1/auth/bridge-verification-key" 2>/dev/null || true)"
+    api_key_valid="$(python3 - "${api_key}" <<'PY'
+import json,sys
+try: d=json.loads(sys.argv[1])
+except Exception: raise SystemExit(1)
+raise SystemExit(0 if d.get("algorithm")=="EdDSA" and d.get("issuer")=="destinedfx-management" and d.get("audience")=="destinedfx-bridge" and str(d.get("public_key_pem","")).startswith("-----BEGIN PUBLIC KEY-----") else 1)
+PY
+)"
+    if [[ "$live" == 200 && "$bad" == 401 && "$none" == 401 && "$api_health" == 200 && "$api_ready" == 200 && "$api_key_valid" == 0 ]]; then
+      pass "Public Bridge and Management API passed forwarded HTTPS, authentication, PostgreSQL readiness and EdDSA key checks."
+      printf 'MANAGEMENT API: https://%s\n' "$MANAGEMENT_HOST"
       owner_code="$(cd "$ROOT/bridge" && "$STATE/venv/bin/python" owner_ctl.py issue-code)"
       printf 'BRIDGE URL:   https://%s\n' "$PUBLIC_HOST"
       printf 'PAIRING CODE: %s\n' "$owner_code"
-      printf 'Enter both in the app under Settings > Connection. The code works once and expires in 10 minutes.\n'
+      printf 'The phone app discovers the Bridge URL automatically after GitHub host authorization; do not paste a URL into locked APK settings.\n'
     else
       gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-      fail "Public self-check failed (health=$live bad-token=$bad no-token=$none); port set back to private. If health is not 200, open the URL once in a browser and tap Continue, then rerun."
+      gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+      fail "Public self-check failed (Bridge health=$live bad-token=$bad no-token=$none; Management health=$api_health ready=$api_ready EdDSA=$api_key_valid). Both ports were returned to private."
     fi
   else
-    fail 'Could not set port 8000 public with gh. OWNER STEP: open the Ports tab, right-click port 8000, set Port Visibility to Public, then rerun start.sh.'
+    gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+    gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+    fail 'Could not set both Bridge port 8000 and Management API port 8010 public through GitHub CLI. Both ports remain private.'
   fi
 else
   fail 'Public exposure disabled: K3 hardening tests did not pass. Port stays private.'
