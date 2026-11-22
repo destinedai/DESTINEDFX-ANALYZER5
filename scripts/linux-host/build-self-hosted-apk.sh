@@ -107,9 +107,14 @@ b,bh = origin(d.get("bridge_url",""), "Bridge URL")
 m,mh = origin(d.get("management_api_origin",""), "Management API origin")
 if bh == mh: raise SystemExit("Blocked: Bridge and management API must use separate hostnames.")
 def get(url, label):
-    req = urllib.request.Request(url, headers={"Accept":"application/json"})
+    req = urllib.request.Request(url, headers={
+        "Accept":"application/json",
+        "X-Tunnel-Skip-AntiPhishing-Page":"true",
+    })
     try:
         with urllib.request.urlopen(req, timeout=12) as r:
+            if r.geturl().rstrip("/") != url.rstrip("/"):
+                raise SystemExit(f"Blocked: {label} redirected to an unverified origin.")
             body = r.read(65537)
             if r.status != 200: raise SystemExit(f"Blocked: {label} returned non-200.")
     except SystemExit: raise
