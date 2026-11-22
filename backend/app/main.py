@@ -1,6 +1,10 @@
 import hashlib
 import hmac
 import uuid
+import json
+import os
+import urllib.request
+import urllib.error
 import jwt
 import logging
 import re
@@ -116,6 +120,66 @@ def admin_user(user: models.User = Depends(current_user)):
     return user
 
 
+@app.get("/api/v1/auth/owner-setup-token")
+def codespaces_owner_setup_token(
+    x_github_owner_authorization: str | None = Header(default=None, alias="X-GitHub-Owner-Authorization"),
+    db: Session = Depends(get_db),
+):
+    """Release the one-time Codespaces owner token only to the GitHub account that owns this Codespace.
+
+    This route is disabled outside the explicit Codespaces host profile. The phone
+    sends its short-lived GitHub App user token in a dedicated header; the API
+    validates it against GitHub /user and compares the login with CODESPACE_OWNER_LOGIN.
+    The GitHub token is never written to application logs or database storage.
+    """
+    enabled = (
+        os.environ.get("CODESPACES", "").strip().lower() == "true"
+        and os.environ.get("DESTINEDFX_CODESPACES_OWNER_BOOTSTRAP", "").strip().lower() == "true"
+    )
+    if not enabled:
+        raise HTTPException(404, "Codespaces owner bootstrap is not enabled on this host.")
+    if not x_github_owner_authorization or not x_github_owner_authorization.startswith("Bearer "):
+        raise HTTPException(401, "GitHub owner authorization is required.")
+    github_token = x_github_owner_authorization[7:].strip()
+    if (
+        not github_token.startswith("ghu_")
+        or not 40 <= len(github_token) <= 512
+        or any(ord(ch) < 33 or ord(ch) > 126 for ch in github_token)
+    ):
+        raise HTTPException(401, "GitHub owner authorization is invalid.")
+    expected_login = os.environ.get("GITHUB_USER", "").strip().lower()
+    if not expected_login or len(expected_login) > 128:
+        raise HTTPException(503, "Codespaces owner identity is not configured.")
+    request = urllib.request.Request(
+        "https://api.github.com/user",
+        headers={
+            "Authorization": "Bearer " + github_token,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "DestinedFX-Codespaces-Owner-Bootstrap",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            if response.status != 200 or response.geturl() != "https://api.github.com/user":
+                raise HTTPException(401, "GitHub owner authorization could not be verified.")
+            payload = json.loads(response.read(16385).decode("utf-8"))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(401, "GitHub owner authorization could not be verified.") from None
+    actual_login = str(payload.get("login", "")).strip().lower() if isinstance(payload, dict) else ""
+    if not actual_login or not hmac.compare_digest(actual_login, expected_login):
+        raise HTTPException(403, "This GitHub account does not own the running Codespace.")
+    if db.scalar(select(models.User.id).where(models.User.is_admin.is_(True)).limit(1)) is not None:
+        raise HTTPException(409, "The initial administrator has already been registered.")
+    token = settings.owner_setup_token.get_secret_value().strip()
+    if not token:
+        raise HTTPException(503, "The Codespaces owner setup credential is not configured.")
+    return {"owner_setup_token": token}
+
+
 @app.post("/api/v1/auth/register", response_model=UserOut, status_code=201)
 def register(body: RegisterCredentials, request: Request, db: Session = Depends(get_db)):
     email = str(body.email).lower()
@@ -126,10 +190,14 @@ def register(body: RegisterCredentials, request: Request, db: Session = Depends(
     # first administrator must also possess a host-generated secret stored
     # in systemd's encrypted credential store. The database's partial unique
     # index prevents concurrent bootstrap requests from creating two owners.
+    codespaces_owner_bootstrap = (
+        os.environ.get("CODESPACES", "").strip().lower() == "true"
+        and os.environ.get("DESTINEDFX_CODESPACES_OWNER_BOOTSTRAP", "").strip().lower() == "true"
+    )
     if email in settings.admins or supplied_owner_token:
         expected_owner_token = settings.owner_setup_token.get_secret_value().strip()
         if (
-            email not in settings.admins
+            (email not in settings.admins and not codespaces_owner_bootstrap)
             or not expected_owner_token
             or not supplied_owner_token
             or not hmac.compare_digest(supplied_owner_token, expected_owner_token)
