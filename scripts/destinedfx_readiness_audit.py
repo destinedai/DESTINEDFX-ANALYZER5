@@ -65,6 +65,12 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     broker_specs = read_text(root, "app/src/main/java/com/example/data/broker/BrokerLoginSpec.kt")
     linux_slots = read_text(root, "scripts/linux-host/linux-slot-worker.py")
     codespaces_start = read_text(root, "deploy/codespaces/start.sh")
+    codespaces_management = read_text(root, "deploy/codespaces/start-management-api.sh")
+    codespaces_builder = read_text(root, "scripts/linux-host/build-self-hosted-apk.sh")
+    management_api = read_text(root, "backend/app/main.py")
+    management_vm = read_text(root, "app/src/main/java/com/example/ui/DestinedFXViewModel.kt")
+    management_settings = read_text(root, "app/src/main/java/com/example/ui/SettingsTab.kt")
+    android_gradle = read_text(root, "app/build.gradle.kts")
     windows_installer = read_text(root, "managed-worker/windows/install-owner-stack.ps1")
     windows_owner_setup = read_text(root, "managed-worker/windows/OWNER-SETUP.md")
     azure_bootstrap = read_text(root, "deploy/azure-students/cloud-init.yaml")
@@ -214,6 +220,28 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "automatic Codespaces Bridge discovery",
         bridge_discovery_ok,
         "The phone tries the allow-listed GitHub forwarding domains, verifies Bridge liveness/configuration and exact public host, then saves only the validated HTTPS Codespaces origin.",
+    )
+    add_check(
+        checks,
+        "automatic Codespaces Management API discovery and owner bootstrap",
+        (
+            "discoverAndSaveManagementApi" in codespaces
+            and "codespacesManagementApiOriginCandidates" in codespaces
+            and "isCodespacesForwardedManagementApiOrigin(candidate)" in codespaces
+            and "api/v1/auth/bridge-verification-key" in codespaces
+            and "fetchCodespacesOwnerSetupToken" in codespaces
+            and "DESTINEDFX_CODESPACES_HOST_DISCOVERY" in management_vm
+            and "DISCOVER MANAGEMENT API" in management_settings
+            and "8010" in codespaces_management
+            and "pg_ctlcluster" in codespaces_management
+            and "start-management-api.sh" in codespaces_start
+            and "OWNER_SETUP_TOKEN_FILE" in codespaces_management
+            and "api.github.com/user" in management_api
+            and 'response.headers["Cache-Control"] = "no-store, private"' in management_api
+            and "DESTINEDFX_CODESPACES_HOST_DISCOVERY" in android_gradle
+            and "https://$CODESPACE_NAME-8010.$CODESPACE_DOMAIN" in codespaces_builder
+        ),
+        "START HOST starts the real PostgreSQL-backed Management API on loopback port 8010; the phone discovers the forwarded URL, verifies readiness/EdDSA, and retrieves the one-time owner token only after GitHub confirms the Codespace owner.",
     )
 
     linux_health_ok = (
