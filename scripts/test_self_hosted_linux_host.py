@@ -176,7 +176,9 @@ def test_codespaces_starts_existing_management_api_and_forwards_port_8010():
     assert devcontainer["portsAttributes"]["8010"]["visibility"] == "private"
 
     starter = (ROOT / "deploy" / "codespaces" / "start-management-api.sh").read_text()
-    assert "postgresql-16" in (ROOT / ".devcontainer" / "Dockerfile").read_text()
+    dockerfile = (ROOT / ".devcontainer" / "Dockerfile").read_text()
+    assert "postgresql-16" in dockerfile
+    assert '"platforms;android-36-ext1"' in dockerfile
     assert "pg_lsclusters" in starter and "pg_ctlcluster" in starter
     assert "pg_isready -h 127.0.0.1 -p 5432" in starter
     assert "destinedfx_api" in starter and "destinedfx_management" in starter
