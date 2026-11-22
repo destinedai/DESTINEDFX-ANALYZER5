@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "note": "Only the four MT5 broker profiles currently configured in BrokerLoginSpec.kt. DNS hostnames are included only where provider-published MT5 cluster evidence exists; server labels are not converted into guessed hosts.",
+  "brokers": [
+    {
+      "spec_id": "FBS_MT5",
+      "brand_id": "FBS",
+      "demo": {
+        "server_names": [
+          "FBS-Demo"
+        ],
+        "dns_hosts": [],
+        "network_note": "FBS server is account-assigned. Exact value is in FBS Account info; no reusable server FQDN is recorded in this repository."
+      },
+      "real": {
+        "server_names": [
+          "FBS-Real (example label; owner must confirm exact assigned server)"
+        ],
+        "dns_hosts": [],
+        "network_note": "FBS-Real is an example label, not the owner's verified server. No reusable server FQDN is recorded in this repository."
+      }
+    },
+    {
+      "spec_id": "EXNESS_MT5",
+      "brand_id": "EXNESS",
+      "demo": {
+        "server_names": [
+          "ACCOUNT-SPECIFIC Exness MT5 DEMO server"
+        ],
+        "dns_hosts": [],
+        "network_note": "Exness assigns servers per account; exact server is in the owner's Personal Area. No account FQDN is recorded in this repository."
+      },
+      "real": {
+        "server_names": [
+          "ACCOUNT-SPECIFIC Exness MT5 REAL server"
+        ],
+        "dns_hosts": [],
+        "network_note": "Exness server is account-specific. No account FQDN is recorded in this repository."
+      }
+    },
+    {
+      "spec_id": "HFM_MT5",
+      "brand_id": "HFM",
+      "demo": {
+        "server_names": [
+          "HFMarketsGlobal-Demo"
+        ],
+        "dns_hosts": [
+          "mt5-europe1.dcglobalfarm.com"
+        ],
+        "network_note": "Provider-published HFM MT5 cluster hostname; TCP 443 is tested as requested, not the documented MT5 trade port."
+      },
+      "real": {
+        "server_names": [
+          "ACCOUNT-SPECIFIC HFM MT5 REAL server"
+        ],
+        "dns_hosts": [
+          "mt5-europe1.dcglobalfarm.com"
+        ],
+        "network_note": "Published HFM cluster hostname tested for DNS/TCP 443 only; not proof the owner's REAL account uses this cluster."
+      }
+    },
+    {
+      "spec_id": "DERIV_MT5",
+      "brand_id": "DERIV",
+      "demo": {
+        "server_names": [
+          "Deriv-Demo"
+        ],
+        "dns_hosts": [],
+        "network_note": "Published demo MT5 server label; a label is not a DNS hostname. No reusable server FQDN is configured."
+      },
+      "real": {
+        "server_names": [
+          "ACCOUNT-SPECIFIC Deriv MT5 REAL server"
+        ],
+        "dns_hosts": [],
+        "network_note": "Deriv REAL server varies by account/company entity. Read from the owner's MT5 dashboard; no DNS host is inferred."
+      }
+    }
+  ]
+}
