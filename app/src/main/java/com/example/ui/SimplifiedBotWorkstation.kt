@@ -292,7 +292,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         serviceUrl = MT5RemoteBridgeClient.initialServiceUrl(
             secrets.getManagedMT5ServiceUrl(),
             com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
-            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
+            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED,
+            com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY
         )
         cloudflareClientId = if (com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) "" else secrets.getCloudflareAccessClientId()
         cloudflareClientSecret = if (com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED) "" else secrets.getCloudflareAccessClientSecret()
