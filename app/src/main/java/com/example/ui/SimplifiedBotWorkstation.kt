@@ -1436,8 +1436,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     // HTTPS hostname before the locked Bridge client can use it.
                                     val discoveredBridgeOrigin = codespacesLifecycleClient.discoverAndSaveBridge()
                                     serviceUrl = discoveredBridgeOrigin
+                                    val discoveredManagementOrigin = codespacesLifecycleClient.discoverAndSaveManagementApi()
                                     githubHostOperationState = "ACTIVE"
-                                    githubHostMessage = "Codespace is Available and its forwarded Bridge origin passed liveness, exact-host, EPHEMERAL-profile, public-exposure and configuration checks: $discoveredBridgeOrigin. A fresh MT5 terminal heartbeat and broker DEMO acceptance are still separate checks."
+                                    githubHostMessage = "Codespace is Available. Bridge and Management API both passed forwarded HTTPS, host-identity, PostgreSQL and EdDSA checks. Bridge: $discoveredBridgeOrigin · Management API: $discoveredManagementOrigin. A fresh MT5 terminal heartbeat and broker DEMO acceptance are still separate checks."
                                 } catch (error: Exception) {
                                     githubHostOperationState = "ERROR"
                                     githubHostMessage = error.message?.take(220) ?: "Codespace start failed."
