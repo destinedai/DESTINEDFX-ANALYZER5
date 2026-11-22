@@ -142,6 +142,7 @@ class MT5BridgeConnectBackend(private val client: MT5ManagedAccountGateway) : Co
             failureCode = code.takeUnless { modeMismatchEvidence }
                 ?: if (balanceUnavailable) "ACCOUNT_BALANCE_UNAVAILABLE" else null,
             accountMode = s.actualAccountMode.takeIf { verified },
+            failureMessage = managed?.optString("error_message")?.takeIf { !it.isNullOrBlank() && code != null },
             account = account,
         )
     }

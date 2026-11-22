@@ -190,6 +190,7 @@ object ServerOptions {
 object ConnectFailures {
     private val sentences = mapOf(
         "WRONG_CREDENTIALS" to "The broker rejected the login or password.",
+        "INVALID_ACCOUNT" to "The broker rejected the account number. Check the exact account login from the broker.",
         "ACCOUNT_OR_SERVER_MISMATCH" to "The terminal logged in to a different account or server than the one entered.",
         "NO_CONNECTION" to "The test host could not reach the broker. Check the server name and try again.",
         "SERVER_NOT_FOUND" to "That server name was not found. Enter it exactly as your broker issued it.",
@@ -235,6 +236,7 @@ data class ConnectObservation(
     val accountMode: String? = null,
     val accountChoices: List<LoginAccountChoice>? = null,
     val account: VerifiedAccountDetails? = null,
+    val failureMessage: String? = null,
 )
 
 data class VerifiedAccountDetails(
@@ -328,12 +330,12 @@ class ConnectUseCase(
             val deadline = clock() + timeoutMs
             while (true) {
                 val seen = backend.observe()
-                seen.failureCode?.let { return failed(it) }
+                seen.failureCode?.let { return failed(it, seen.failureMessage, spec) }
                 seen.accountChoices?.takeIf { it.isNotEmpty() }?.let { return ConnectOutcome.SelectAccount(it) }
                 seen.stage?.takeIf { it.ordinal > reached.ordinal }?.let { reached = it; onStage(it) }
                 if (reached == ConnectStage.VERIFIED) {
                     val actual = seen.accountMode?.uppercase().orEmpty()
-                    if (actual != "DEMO" && actual != "LIVE") return failed("LOGIN_FAILED_UNCLASSIFIED")
+                    if (actual != "DEMO" && actual != "LIVE") return failed("LOGIN_FAILED_UNCLASSIFIED", spec = spec)
                     return ConnectOutcome.Verified(
                         actual,
                         modeMismatch = actual != form.mode.name,
@@ -341,22 +343,36 @@ class ConnectUseCase(
                     )
                 }
                 if (clock() >= deadline) {
-                    return failed(if (reached == ConnectStage.HOST_QUEUED) "HOST_CAPACITY_TIMEOUT" else "CONNECT_TIMEOUT")
+                    return failed(if (reached == ConnectStage.HOST_QUEUED) "HOST_CAPACITY_TIMEOUT" else "CONNECT_TIMEOUT", spec = spec)
                 }
                 pause(pollIntervalMs)
             }
         } catch (e: BridgeGatewayException) {
-            return failed(e.failure.name)
+            return failed(e.failure.name, spec = spec)
         } catch (e: ConnectSubmissionFailure) {
-            return failed(e.code)
+            return failed(e.code, spec = spec)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {
-            return failed("LOGIN_FAILED_UNCLASSIFIED")
+            return failed("LOGIN_FAILED_UNCLASSIFIED", spec = spec)
         }
     }
 
-    private fun failed(code: String) = ConnectOutcome.Failed(code, ConnectFailures.sentence(code))
+    private fun failed(
+        code: String,
+        brokerReason: String? = null,
+        spec: BrokerLoginSpec? = null,
+    ): ConnectOutcome.Failed {
+        val reason = brokerReason?.trim()?.takeIf { it.isNotBlank() && it.length <= 160 }
+            ?: ConnectFailures.sentence(code)
+        val brokerHint = when {
+            code == "SERVER_NOT_FOUND" && spec?.id == "FBS_MT5" -> "Check Exact Server from FBS Personal Area."
+            code == "SERVER_NOT_FOUND" && spec?.id == "DERIV_MT5" -> "Check Exact Server from Deriv Dashboard."
+            code == "SERVER_NOT_FOUND" -> "Check the exact MT5 server supplied by your broker."
+            else -> ""
+        }
+        return ConnectOutcome.Failed(code, "$code - $reason" + brokerHint.takeIf { it.isNotBlank() }?.let { " - $it" }.orEmpty())
+    }
 
     companion object {
         /** Linux/Windows MT5 provisioning and EA authentication may outlast a short phone HTTP timeout. */

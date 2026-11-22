@@ -831,6 +831,36 @@ def test_app_login_alias_attempts_owner_supplied_fbs_and_deriv_servers(monkeypat
     assert invalid.status_code == 422
 
 
+def test_mt5_journal_reason_and_exact_failure_code_are_returned_to_owner(monkeypatch):
+    managed_env(monkeypatch)
+    p, ah = managed_pair(subject='journal-owner', tenant='journal-tenant')
+    registered = client.post('/v1/app/login', headers=ah, json={
+        'login':'123456', 'server':'FBS-Private-Demo-27', 'password':'fixture-secret',
+        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS', 'consent':True,
+    })
+    assert registered.status_code == 202
+    wh = {'Authorization':'Bearer operator-secret-test-fixture-2026-very-long'}
+    claimed = client.post('/v1/worker/jobs/claim', headers=wh, json={'worker_id':'journal-worker'})
+    assert claimed.status_code == 200
+    job_id = claimed.json()['job_id']
+    updated = client.patch(f'/v1/worker/jobs/{job_id}', headers=wh, json={
+        'worker_id':'journal-worker', 'status':'FAILED',
+        'error_code':'WRONG_CREDENTIALS', 'error_message':'Invalid password',
+    })
+    assert updated.status_code == 200
+    # The Linux isolated-slot worker may attach the per-slot journal reason
+    # after the control plane has already marked this same leased job FAILED.
+    refined = client.patch(f'/v1/worker/jobs/{job_id}', headers=wh, json={
+        'worker_id':'journal-worker', 'status':'FAILED',
+        'error_code':'WRONG_CREDENTIALS', 'error_message':'Invalid password',
+    })
+    assert refined.status_code == 200
+    state = client.get('/v1/app/state', headers=ah)
+    assert state.status_code == 200
+    managed = state.json()['managed_execution']
+    assert managed['error_code'] == 'WRONG_CREDENTIALS'
+    assert managed['error_message'] == 'Invalid password'
+
 def test_worker_account_mode_unverified_failure_is_reported_safely(monkeypatch):
     managed_env(monkeypatch)
     p, ah = managed_pair()

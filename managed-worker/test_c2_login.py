@@ -11,7 +11,7 @@ spec.loader.exec_module(worker)
 
 def test_journal_failure_classes_are_bounded_and_secret_free():
     cases = {
-        "2026.11.08 07:00:00.000 Network '00000000': authorization on Fixture-Demo failed (Invalid account)": "WRONG_CREDENTIALS",
+        "2026.11.08 07:00:00.000 Network '00000000': authorization on Fixture-Demo failed (Invalid account)": "INVALID_ACCOUNT",
         "2026.11.08 07:01:00.000 Network '00000000': authorization on Fixture-Demo failed (Invalid password)": "WRONG_CREDENTIALS",
         "2026.11.08 07:02:00.000 Network '00000000': authorization on Fixture-Demo failed (No connection)": "NO_CONNECTION",
         "2026.11.08 07:03:00.000 Network '00000000': authorization on Fixture-Demo failed (Server not found)": "SERVER_NOT_FOUND",

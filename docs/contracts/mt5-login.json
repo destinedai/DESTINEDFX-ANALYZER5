@@ -33,6 +33,7 @@
     }
   ],
   "failures": [
+    "INVALID_ACCOUNT",
     "WRONG_CREDENTIALS",
     "ACCOUNT_OR_SERVER_MISMATCH",
     "NO_CONNECTION",
@@ -68,6 +69,7 @@
     "TERMINAL_IDENTITY_MISMATCH"
   ],
   "linux_journal_failures": [
+    "INVALID_ACCOUNT",
     "WRONG_CREDENTIALS",
     "NO_CONNECTION",
     "SERVER_NOT_FOUND",
@@ -76,6 +78,11 @@
     "LOGIN_FAILED_UNCLASSIFIED"
   ],
   "scenarios": [
+    {
+      "name": "invalid_account",
+      "journal_reason": "Invalid account",
+      "failure_code": "INVALID_ACCOUNT"
+    },
     {
       "name": "wrong_password",
       "journal_reason": "Invalid password",

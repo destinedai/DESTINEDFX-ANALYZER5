@@ -451,6 +451,30 @@ class BrokerLoginModelTest {
         assertEquals(listOf(ConnectStage.SENT, ConnectStage.HEARTBEAT, ConnectStage.VERIFIED), stages)
     }
 
+    @Test fun exactMt5JournalErrorCodeAndBrokerWordingReachLoginOutcome() = runBlocking {
+        val passwordFailure = FakeBackend(listOf(
+            ConnectObservation(
+                stage = null,
+                failureCode = "WRONG_CREDENTIALS",
+                failureMessage = "Invalid password",
+            ),
+        ))
+        val passwordOutcome = useCase(passwordFailure).connect(mt5, goodForm) as ConnectOutcome.Failed
+        assertEquals("WRONG_CREDENTIALS", passwordOutcome.code)
+        assertEquals("WRONG_CREDENTIALS - Invalid password", passwordOutcome.sentence)
+
+        val serverFailure = FakeBackend(listOf(
+            ConnectObservation(
+                stage = null,
+                failureCode = "SERVER_NOT_FOUND",
+                failureMessage = "Server not found",
+            ),
+        ))
+        val serverOutcome = useCase(serverFailure).connect(mt5, goodForm) as ConnectOutcome.Failed
+        assertTrue(serverOutcome.sentence.startsWith("SERVER_NOT_FOUND - Server not found"))
+        assertTrue(serverOutcome.sentence.contains("Check Exact Server from FBS Personal Area"))
+    }
+
     @Test fun hostFailureCodeBecomesOnePlainSentence() = runBlocking {
         val backend = FakeBackend(listOf(ConnectObservation(ConnectStage.TERMINAL_LOGGING_IN), ConnectObservation(null, failureCode = "WRONG_CREDENTIALS")))
         val outcome = useCase(backend).connect(mt5, goodForm) as ConnectOutcome.Failed

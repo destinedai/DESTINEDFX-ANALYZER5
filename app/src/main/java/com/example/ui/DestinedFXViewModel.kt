@@ -371,9 +371,17 @@ open class DestinedFXViewModel(
     /** Refreshes the authenticated broker/mode terminal state; stale metrics are cleared on failure. */
     suspend fun refreshManagedMt5Bridge(client: MT5RemoteBridgeClient): MT5RemoteBridgeClient.Snapshot {
         return try {
-            withContext(Dispatchers.IO) { client.state() }.also { _managedMt5BridgeSnapshot.value = it }
+            withContext(Dispatchers.IO) { client.state() }.also { snapshot ->
+                _managedMt5BridgeSnapshot.value = snapshot
+                marketDataStatus.value = if (snapshot.connected) {
+                    "MT5 Bridge account verified · ${snapshot.actualLogin} @ ${snapshot.actualServer}"
+                } else {
+                    snapshot.connectionWarning
+                }
+            }
         } catch (error: Exception) {
             _managedMt5BridgeSnapshot.value = null
+            marketDataStatus.value = "NOT CONNECTED - Stale / Zero Balance, Check Server"
             throw error
         }
     }

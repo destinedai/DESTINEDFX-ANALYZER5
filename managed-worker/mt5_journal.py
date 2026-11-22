@@ -52,39 +52,59 @@ def _line_epoch(line: str) -> float | None:
         return None
 
 
-def classify_mt5_journal(text: str, since_epoch: float | None = None) -> str:
-    """Classify the newest real-format authorization failure after a cutoff."""
+def classify_mt5_journal_failure(text: str, since_epoch: float | None = None) -> tuple[str, str]:
+    """Return a bounded MT5 failure code and the exact printable broker reason."""
     events: list[tuple[float, str]] = []
     for line in (text or "").splitlines():
         match = _AUTH_FAILURE.search(line)
         if not match:
             continue
         stamp = _line_epoch(line)
-        if since_epoch is not None:
-            if stamp is None or stamp < since_epoch:
-                continue
+        if since_epoch is not None and (stamp is None or stamp < since_epoch):
+            continue
         events.append((stamp if stamp is not None else 0.0, match.group("reason").strip()))
     if not events:
-        return "LOGIN_FAILED_UNCLASSIFIED"
+        return "LOGIN_FAILED_UNCLASSIFIED", ""
 
-    reason = events[-1][1].casefold()
-    compact = re.sub(r"[^a-z0-9]+", " ", reason).strip()
+    reason = events[-1][1]
+    compact = re.sub(r"[^a-z0-9]+", " ", reason.casefold()).strip()
     if any(term in compact for term in (
-        "invalid account", "invalid password", "wrong password", "incorrect password",
+        "invalid account", "account not found", "unknown account", "account does not exist",
+    )):
+        code = "INVALID_ACCOUNT"
+    elif any(term in compact for term in (
+        "invalid password", "wrong password", "incorrect password",
         "password incorrect", "invalid credentials",
     )):
-        return "WRONG_CREDENTIALS"
-    if any(term in compact for term in ("no connection", "connection failed", "connection lost")):
-        return "NO_CONNECTION"
-    if any(term in compact for term in ("server not found", "unknown server")):
-        return "SERVER_NOT_FOUND"
-    if any(term in compact for term in ("account disabled", "account is disabled", "account blocked")):
-        return "ACCOUNT_DISABLED"
-    if any(term in compact for term in ("old version", "client version too old")):
-        return "TERMINAL_VERSION_UNSUPPORTED"
-    # In particular, do not infer meaning from the broad words "network",
-    # "authorization failed", or "not allowed".
-    return "LOGIN_FAILED_UNCLASSIFIED"
+        code = "WRONG_CREDENTIALS"
+    elif any(term in compact for term in (
+        "no connection", "connection failed", "connection lost",
+    )):
+        code = "NO_CONNECTION"
+    elif any(term in compact for term in (
+        "server not found", "unknown server", "invalid server",
+    )):
+        code = "SERVER_NOT_FOUND"
+    elif any(term in compact for term in (
+        "account disabled", "account is disabled", "account blocked",
+    )):
+        code = "ACCOUNT_DISABLED"
+    elif any(term in compact for term in (
+        "old version", "client version too old",
+    )):
+        code = "TERMINAL_VERSION_UNSUPPORTED"
+    else:
+        code = "LOGIN_FAILED_UNCLASSIFIED"
+
+    # The journal regex extracts only the parenthesized broker reason, never
+    # the login number or server. Preserve the broker wording without controls.
+    wording = re.sub(r"\\s+", " ", "".join(ch if ch.isprintable() else " " for ch in reason)).strip()
+    return code, wording[:160]
+
+
+def classify_mt5_journal(text: str, since_epoch: float | None = None) -> str:
+    """Compatibility wrapper returning only the bounded reason code."""
+    return classify_mt5_journal_failure(text, since_epoch)[0]
 
 
 def read_recent_mt5_journal(path: str | Path, max_bytes: int = MAX_JOURNAL_BYTES) -> str:

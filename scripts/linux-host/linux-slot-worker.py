@@ -727,6 +727,7 @@ def _run_once_unlocked() -> str:
         job = worker.validate_job(job)
         if job["pairing_id"] != reservation.pairing_id:
             raise SlotWorkerError("SLOT_PAIRING_MISMATCH")
+        attempt_started_at = time.time()
         worker.post_state(CONTROL_URL, WORKER_TOKEN, job["job_id"], WORKER_ID, "PROVISIONING")
         worker.post_state(CONTROL_URL, WORKER_TOKEN, job["job_id"], WORKER_ID, "AUTHENTICATING")
         identity = _prepare_and_launch(job, reservation)
@@ -734,6 +735,19 @@ def _run_once_unlocked() -> str:
             CONTROL_URL, WORKER_TOKEN, job["job_id"], WORKER_ID,
             int(os.environ.get("DESTINEDFX_AUTH_TIMEOUT_SECONDS", "270")),
         )
+        if status in {"FAILED", "TIMEOUT"}:
+            # The isolated terminal has its own portable Logs directory. Decode only
+            # the current login attempt, never another slot's journal or private IDs.
+            failure_code, broker_reason = worker.journal_failure_details(
+                {"journal_path": str(reservation.terminal_home / "Logs")},
+                attempt_started_at,
+            )
+            if broker_reason:
+                worker.post_state(
+                    CONTROL_URL, WORKER_TOKEN, job["job_id"], WORKER_ID,
+                    "FAILED", failure_code, broker_reason,
+                )
+                status = "FAILED"
         if status == "READY":
             _remove_startup_credentials(reservation)
             _update_terminal_marker(

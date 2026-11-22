@@ -299,12 +299,22 @@ class MT5RemoteBridgeClientTest {
         managedState = "READY", accessType = "MASTER", profileMode = "DEMO", connected = true, terminalOnline = true,
         heartbeatFresh = true, state = "READY", account = "123 @ Broker-Demo", actualLogin = "123", actualServer = "Broker-Demo",
         actualAccountMode = "DEMO", liveAuthorized = false, tradeAllowed = true, terminalConnected = true, accountVerified = true, brokerIdentityVerified = true,
-        currency = "USD", balance = null, equity = null, margin = null, freeMargin = null, marginLevel = null, leverage = null,
+        currency = "USD", balance = 1_000.0, equity = 1_000.0, margin = 0.0, freeMargin = 1_000.0, marginLevel = null, leverage = 100,
         positions = emptyList(), activeOrders = orders, closedDeals = emptyList(), snapshotsValid = true,
-        lastSignal = null, newsVerdict = null, raw = JSONObject()
+        lastSignal = null, newsVerdict = null, raw = JSONObject(), actualCompany = "FBS Markets Inc.", connectionWarning = ""
     )
 
 
+
+    @Test fun managedPositionActionsRejectZeroBalanceAndIdentityMismatchSnapshots() {
+        val valid = snapshot(emptyList())
+        assertTrue(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Broker-Demo", valid))
+        assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Broker-Demo", valid.copy(balance = 0.0, equity = 0.0)))
+        assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "999", "Broker-Demo", valid))
+        assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Other-Server", valid))
+        assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Broker-Demo", valid.copy(actualCompany = "")))
+        assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Broker-Demo", valid.copy(brokerIdentityVerified = false)))
+    }
 
     @Test fun phoneMarketOrderConfigIsBrokerQuoteBoundAndIncludesRequestedVolume() {
         val snapshot = phoneMarketOrderSnapshot()

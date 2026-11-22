@@ -113,7 +113,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         )
     }
     val bridgeIdentityFresh = bridgeSnapshot?.let {
-        bridgeMode && it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected && it.accountVerified &&
+        bridgeMode && it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected &&
+            it.accountVerified && it.brokerIdentityVerified && it.actualCompany.isNotBlank() &&
+            it.balance != null && it.balance > 0.0 && it.equity != null && it.equity > 0.0 &&
             it.actualAccountMode == selectedAccountMode &&
             it.actualLogin == bridgeSecrets.getManagedMT5AccountLogin(bridgeProfileKey) &&
             it.actualServer == bridgeSecrets.getManagedMT5AccountServer(bridgeProfileKey)
@@ -149,6 +151,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         !bridgeMode -> "REMOTE CONTROL DISABLED"
         bridgeCommandPending && bridgePendingAction in setOf("START", "RESUME") -> "STARTING / AWAITING ACK"
         bridgeCommandPending && bridgePendingAction in setOf("STOP", "EMERGENCY_STOP") -> "STOPPING / AWAITING ACK"
+        bridgeSnapshot != null && !bridgeSnapshot.connected -> bridgeSnapshot.connectionWarning
         verifiedRemoteSnapshotForBot != null -> bridgeSnapshot?.state ?: "UNKNOWN"
         bridgeIdentityFresh -> bridgeSnapshot?.managedState?.ifBlank { "PROVISIONING" } ?: "PROVISIONING"
         bridgeSnapshot != null -> "STALE / UNVERIFIED"
@@ -158,7 +161,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         bridgeDisplayState == "RUNNING" -> ProfitGreen
         bridgeDisplayState == "READY" -> ElectricCyan
         bridgeDisplayState == "PAUSED" -> OrangeAccent
-        bridgeDisplayState.contains("STALE") || bridgeDisplayState == "ERROR" || bridgeDisplayState == "FAILED" || bridgeDisplayState == "OFFLINE" -> LossRed
+        bridgeDisplayState.startsWith("NOT CONNECTED") || bridgeDisplayState.contains("STALE") ||
+            bridgeDisplayState == "ERROR" || bridgeDisplayState == "FAILED" || bridgeDisplayState == "OFFLINE" -> LossRed
         else -> WarningAmber
     }
     val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
@@ -437,6 +441,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
                     Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && bridgeSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) bridgeSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    if (bridgeSnapshot != null && !bridgeSnapshot.connected) {
+                        Text(bridgeSnapshot.connectionWarning, color = LossRed, fontSize = 11.sp,
+                            fontWeight = FontWeight.Black, modifier = Modifier.testTag("mt5_not_connected_warning"))
+                    }
                     val observedHostProfile = bridgeSnapshot?.hostProfile?.name ?: "UNKNOWN"
                     Text(
                         "HOST PROFILE: $observedHostProfile · LIVE GATE: " +
@@ -3209,7 +3217,9 @@ private fun isUsableMt5Snapshot(
     expectedServer: String
 ): Boolean = snapshot?.let {
     it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected &&
-        it.accountVerified && it.snapshotsValid && it.managedState == "READY" &&
+        it.accountVerified && it.brokerIdentityVerified && it.actualCompany.isNotBlank() &&
+        it.balance != null && it.balance > 0.0 && it.equity != null && it.equity > 0.0 &&
+        it.snapshotsValid && it.tradeAllowed && it.managedState == "READY" &&
         profile in setOf("DEMO", "LIVE") && it.profileMode == profile &&
         it.actualAccountMode == profile && expectedLogin.isNotBlank() && it.actualLogin == expectedLogin &&
         expectedServer.isNotBlank() && it.actualServer == expectedServer
@@ -3224,7 +3234,11 @@ private fun BridgeTelemetry(
 ) {
     val verified = isUsableMt5Snapshot(snapshot, selectedProfile, expectedLogin, expectedServer)
     val current = snapshot.takeIf { verified }
-    val unavailable = if (snapshot == null) "Unavailable" else "STALE / UNVERIFIED"
+    val unavailable = when {
+        snapshot == null -> "Unavailable"
+        !snapshot.connected -> snapshot.connectionWarning
+        else -> "STALE / UNVERIFIED"
+    }
     val currency = current?.currency?.ifBlank { unavailable } ?: unavailable
     Text("ACTUAL TERMINAL ACCOUNT · $currency", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
     Text(
@@ -3369,10 +3383,12 @@ private suspend fun sendBridgeCommand(
 private fun ManagedMt5AccountMetrics(snapshot: MT5RemoteBridgeClient.Snapshot?, surface: String) {
     val metrics = snapshot?.takeIf {
         it.connected && it.heartbeatFresh && it.accountVerified && it.brokerIdentityVerified &&
-            it.balance != null && it.balance > 0.0 && it.equity != null && it.margin != null && it.freeMargin != null
+            it.balance != null && it.balance > 0.0 && it.equity != null && it.equity > 0.0 && it.margin != null && it.freeMargin != null
     }
     if (metrics == null) {
-        Text("DISCONNECTED", color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Black,
+        val warning = snapshot?.connectionWarning?.takeIf { it.isNotBlank() }
+            ?: "NOT CONNECTED - Stale / Zero Balance, Check Server"
+        Text(warning, color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Black,
             modifier = Modifier.fillMaxWidth().testTag("mt5_${surface}_metrics_disconnected"))
         return
     }

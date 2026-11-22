@@ -29,7 +29,7 @@ import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Any
-from mt5_journal import classify_mt5_journal, latest_journal_file, read_recent_mt5_journal
+from mt5_journal import classify_mt5_journal, classify_mt5_journal_failure, latest_journal_file, read_recent_mt5_journal
 
 LOG = logging.getLogger("destinedfx.worker")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -507,19 +507,23 @@ def validate_job(job: Any) -> dict[str, Any]:
     result["bridge_url"] = normalized
     return result
 
-def journal_failure_code(settings: dict, connect_started_at: float | None = None) -> str:
+def journal_failure_details(settings: dict, connect_started_at: float | None = None) -> tuple[str, str]:
     path = settings.get("journal_path")
     if not isinstance(path, str) or not path:
-        return "LOGIN_FAILED_UNCLASSIFIED"
+        return "LOGIN_FAILED_UNCLASSIFIED", ""
     try:
         journal = Path(path)
         if journal.is_dir():
             journal = latest_journal_file(journal)
         if journal is None or not journal.is_file():
-            return "LOGIN_FAILED_UNCLASSIFIED"
-        return classify_terminal_journal(read_recent_mt5_journal(journal), connect_started_at)
+            return "LOGIN_FAILED_UNCLASSIFIED", ""
+        return classify_mt5_journal_failure(read_recent_mt5_journal(journal), connect_started_at)
     except OSError:
-        return "LOGIN_FAILED_UNCLASSIFIED"
+        return "LOGIN_FAILED_UNCLASSIFIED", ""
+
+
+def journal_failure_code(settings: dict, connect_started_at: float | None = None) -> str:
+    return journal_failure_details(settings, connect_started_at)[0]
 
 
 def request_json(url: str, token: str, method: str, payload: dict | None = None, timeout: int = 20) -> dict:
@@ -1022,15 +1026,18 @@ def run_once(settings: dict, operator_token: str, worker_id: str) -> None:
             remove_terminal_configs(safe_child(Path(settings["data_root"]), job_id))
             LOG.info("Terminal authenticated and fresh for job %s", job_id)
         elif terminal_status == "FAILED":
-            code = journal_failure_code(settings, attempt_started_at)
+            code, broker_reason = journal_failure_details(settings, attempt_started_at)
             try:
-                post_state(base, operator_token, job_id, worker_id, "FAILED", code, "Terminal authentication failed")
+                post_state(base, operator_token, job_id, worker_id, "FAILED", code,
+                           broker_reason or "Terminal authentication failed")
             except ProvisionError:
                 pass
             quarantine_terminal(settings, job_id)
             LOG.error("Terminal authentication failed for job %s", job_id)
         elif terminal_status == "TIMEOUT":
-            post_state(base, operator_token, job_id, worker_id, "FAILED", journal_failure_code(settings, attempt_started_at), "Terminal did not authenticate in time")
+            code, broker_reason = journal_failure_details(settings, attempt_started_at)
+            post_state(base, operator_token, job_id, worker_id, "FAILED", code,
+                       broker_reason or "Terminal did not authenticate in time")
             stop_terminal_for_timeout(settings, job_id)
             LOG.error("Terminal authentication timed out for job %s", job_id)
     except ProvisionError as exc:

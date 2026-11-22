@@ -36,6 +36,7 @@ def test_bridge_and_linux_failure_codes_are_present_in_the_shared_fixture():
 def test_linux_journal_runner_emits_each_contract_failure_code():
     payload = json.loads(CONTRACT.read_text())
     reasons = {
+        "INVALID_ACCOUNT": "Invalid account",
         "WRONG_CREDENTIALS": "Invalid password",
         "NO_CONNECTION": "No connection",
         "SERVER_NOT_FOUND": "Server not found",

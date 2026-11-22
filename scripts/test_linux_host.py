@@ -72,6 +72,9 @@ def test_worker_journal_failure_code_reads_utf16_and_applies_cutoff(tmp_path):
     path = tmp_path / "journal.log"
     path.write_bytes(b"\xff\xfe" + "\n".join(lines).encode("utf-16-le"))
     assert worker.journal_failure_code({"journal_path": str(path)}, epoch("2026.11.08 07:01:30")) == "NO_CONNECTION"
+    assert worker.journal_failure_details({"journal_path": str(path)}, epoch("2026.11.08 07:01:30")) == (
+        "NO_CONNECTION", "No connection"
+    )
 
 
 def test_host_agent_journal_classification_requires_current_attempt_marker(tmp_path, monkeypatch):

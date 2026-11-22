@@ -61,28 +61,6 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Returns true only for the cross-origin TradingView chart document itself.
- * Resource failures for this iframe are actionable for chart fallback; failures for unrelated
- * images, fonts, or external resources must not change the chart loading state.
- */
-internal fun isTradingViewChartDocumentUrl(url: String?): Boolean {
-    if (url.isNullOrBlank()) return false
-    val parsed = runCatching { Uri.parse(url) }.getOrNull() ?: return false
-    val host = parsed.host?.lowercase(Locale.ROOT) ?: return false
-    val path = parsed.path.orEmpty().lowercase(Locale.ROOT)
-    val trustedTradingViewHost = isSupportedTradingViewHost(host)
-    val chartDocumentPath = path == "/widgetembed" || path.startsWith("/widgetembed/") ||
-        path.startsWith("/embed-widget/advanced-chart") || path.startsWith("/widget/advanced-chart")
-    return trustedTradingViewHost && chartDocumentPath
-}
-
-internal fun isSupportedTradingViewHost(host: String?): Boolean {
-    val normalized = host?.trim()?.lowercase(Locale.ROOT)?.trimEnd('.') ?: return false
-    return normalized == "tradingview.com" || normalized.endsWith(".tradingview.com") ||
-        normalized == "tradingview-widget.com" || normalized.endsWith(".tradingview-widget.com")
-}
-
-/**
  * Unified Trading Chart Container supporting:
  * 1. Live TradingView Chart (with non-blank direct widget embed and WebView lifecycle protection)
  * 2. High-FPS Algorithmic Canvas Chart mapping structures as the market flows (BOS, CHoCH, OB, FVG, TP/SL targets)
@@ -223,9 +201,9 @@ fun LiveStructureHud(
 }
 
 /**
- * TradingView's official Advanced Chart script embed, matching the HTML/React snippet used
- * on the DestinedFX site. The wrapper lives inside Android WebView; the surrounding app remains
- * native Compose. Pair/timeframe changes rebuild the widget config without allowing symbol drift.
+ * TradingView Lightweight Charts is a renderer only. It receives closed OHLC candles
+ * from the selected account's authenticated MT5 Bridge and the same live midpoint as Quotes.
+ * The last verified snapshot is frozen when the Bridge disconnects; no external price feed is used.
  */
 @Composable
 fun TradingViewWebView(
@@ -259,23 +237,6 @@ fun TradingViewWebView(
     val brokerName = bridgeSource?.substringBefore(" MT5 Bridge")?.ifBlank { "broker" } ?: "broker"
     val ready = bridgeSource != null && liveMid != null && validCandles.isNotEmpty()
 
-    if (!ready) {
-        Column(
-            modifier = modifier.fillMaxSize().background(Color(0xFF171B27)).padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(Icons.Default.Warning, contentDescription = null, tint = LossRed, modifier = Modifier.size(30.dp))
-            Text("DISCONNECTED", color = LossRed, fontWeight = FontWeight.Black, fontSize = 13.sp)
-            Text(
-                "MT5 Bridge candles and the current broker quote are required. No external or sample prices are used.",
-                color = TextSecondary, fontSize = 10.sp,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-        }
-        return
-    }
-
     val barsJson = remember(validCandles) {
         org.json.JSONArray().apply {
             validCandles.forEach { candle ->
@@ -288,8 +249,41 @@ fun TradingViewWebView(
             }
         }.toString()
     }
-    val html = remember(symbol, timeframe, barsJson, liveMid) {
-        val midText = liveMid.toString()
+
+    // Cache only fully validated MT5 Bridge snapshots. On disconnect these values do not move,
+    // so the chart freezes on the last broker observation and receives a red DISCONNECTED overlay.
+    var lastGoodBarsJson by remember(symbol, timeframe) { mutableStateOf<String?>(null) }
+    var lastGoodMid by remember(symbol, timeframe) { mutableStateOf<Double?>(null) }
+    var lastGoodBroker by remember(symbol, timeframe) { mutableStateOf<String?>(null) }
+    LaunchedEffect(ready, barsJson, liveMid, brokerName) {
+        if (ready && liveMid != null) {
+            lastGoodBarsJson = barsJson
+            lastGoodMid = liveMid
+            lastGoodBroker = brokerName
+        }
+    }
+    val displayBarsJson = if (ready) barsJson else lastGoodBarsJson
+    val displayMid = if (ready) liveMid else lastGoodMid
+    val displayBroker = if (ready) brokerName else lastGoodBroker
+    if (displayBarsJson == null || displayMid == null) {
+        Column(
+            modifier = modifier.fillMaxSize().background(Color(0xFF171B27)).padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(Icons.Default.Warning, contentDescription = null, tint = LossRed, modifier = Modifier.size(30.dp))
+            Text("DISCONNECTED", color = LossRed, fontWeight = FontWeight.Black, fontSize = 13.sp)
+            Text(
+                "Waiting for authenticated MT5 Bridge candles and the live broker quote. No other price feed is used.",
+                color = TextSecondary, fontSize = 10.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
+        return
+    }
+
+    val html = remember(symbol, timeframe, displayBarsJson, displayMid) {
+        val midText = displayMid.toString()
         """
         <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
         <style>
@@ -298,7 +292,7 @@ fun TradingViewWebView(
           #status{position:absolute;left:8px;top:7px;z-index:2;color:#9aabbf;font:10px sans-serif;background:#121722dd;padding:4px 6px}
         </style>
         <script src="https://unpkg.com/lightweight-charts@5.3.0/dist/lightweight-charts.standalone.production.js"></script>
-        </head><body><div id="chart"></div><div id="status">MT5 BRIDGE · LIVE QUOTE</div>
+        </head><body><div id="chart"></div><div id="status">MT5 BRIDGE · LAST VERIFIED QUOTE</div>
         <script>
           (function(){
             const bars = __BARS__;
@@ -334,47 +328,63 @@ fun TradingViewWebView(
             }).observe(root);
           })();
         </script></body></html>
-        """.replace("__BARS__", barsJson).replace("__MID__", midText)
+        """.replace("__BARS__", displayBarsJson).replace("__MID__", midText)
     }
     Column(modifier = modifier.fillMaxSize().background(Color(0xFF171B27))) {
         Text(
-            "Chart: TradingView style | Price: Live from " + brokerName + " via MT5 Bridge",
-            color = ProfitGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+            if (ready) "Chart: TradingView style | Price: Live from ${displayBroker} via MT5 Bridge"
+            else "Chart: TradingView style | Price: Frozen last snapshot from ${displayBroker} via MT5 Bridge",
+            color = if (ready) ProfitGreen else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp)
         )
-        AndroidView(
-            factory = { context ->
-                WebView(context).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = false
-                    settings.allowFileAccess = false
-                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                    setBackgroundColor(android.graphics.Color.rgb(23, 27, 39))
-                    overScrollMode = View.OVER_SCROLL_NEVER
-                    isVerticalScrollBarEnabled = false
-                    isHorizontalScrollBarEnabled = false
-                    webViewClient = WebViewClient()
-                    tag = html
-                    loadDataWithBaseURL("https://unpkg.com/", html, "text/html", "UTF-8", null)
-                }
-            },
-            update = { view ->
-                if (view.tag != html) {
-                    view.tag = html
-                    view.loadDataWithBaseURL("https://unpkg.com/", html, "text/html", "UTF-8", null)
-                }
-            },
-            onRelease = { view ->
-                view.stopLoading()
-                view.webViewClient = WebViewClient()
-                view.removeAllViews()
-                view.destroy()
-            },
-            modifier = Modifier.fillMaxWidth().weight(1f)
-        )
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            AndroidView(
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = false
+                        settings.allowFileAccess = false
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        setBackgroundColor(android.graphics.Color.rgb(23, 27, 39))
+                        overScrollMode = View.OVER_SCROLL_NEVER
+                        isVerticalScrollBarEnabled = false
+                        isHorizontalScrollBarEnabled = false
+                        webViewClient = WebViewClient()
+                        tag = html
+                        loadDataWithBaseURL("https://unpkg.com/", html, "text/html", "UTF-8", null)
+                    }
+                },
+                update = { view ->
+                    if (view.tag != html) {
+                        view.tag = html
+                        view.loadDataWithBaseURL("https://unpkg.com/", html, "text/html", "UTF-8", null)
+                    }
+                },
+                onRelease = { view ->
+                    view.stopLoading()
+                    view.webViewClient = WebViewClient()
+                    view.removeAllViews()
+                    view.destroy()
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+            if (!ready) {
+                Text(
+                    "DISCONNECTED",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                        .background(LossRed, RoundedCornerShape(4.dp)).padding(horizontal = 9.dp, vertical = 5.dp)
+                        .testTag("mt5_chart_disconnected")
+                )
+            }
+        }
         Text(
-            "Chart data: authenticated MT5 Bridge closed candles and the same bid/ask midpoint shown in Quotes. Lightweight Charts by TradingView.",
-            color = TextSecondary, fontSize = 9.sp, modifier = Modifier.fillMaxWidth().padding(6.dp)
+            if (ready) "Chart data: authenticated MT5 Bridge closed candles and the same bid/ask midpoint shown in Quotes."
+            else "Chart frozen at the last authenticated MT5 Bridge candles and quote. Reconnect to resume updates.",
+            color = if (ready) TextSecondary else LossRed, fontSize = 9.sp,
+            modifier = Modifier.fillMaxWidth().padding(6.dp)
         )
     }
 }
@@ -389,11 +399,11 @@ fun TradingViewPreviewPlaceholder(
         Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Icon(Icons.Default.QueryStats, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(34.dp))
-            Text("TRADINGVIEW RUNTIME CHART", fontSize = 11.sp, color = ElectricCyan,
+            Text("TRADINGVIEW-STYLE LIGHTWEIGHT CHART", fontSize = 11.sp, color = ElectricCyan,
                 fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
             Text("$symbol • $timeframe", fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace)
-            Text("DESIGN PREVIEW ONLY — Compose previews cannot display the embedded TradingView WebView.",
+            Text("DESIGN PREVIEW ONLY — Compose previews cannot render the Lightweight Charts WebView.",
                 fontSize = 10.sp, color = TextSecondary, lineHeight = 15.sp,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             Text("Run the Android app to verify chart loading.", fontSize = 9.sp, color = WarningAmber,
@@ -653,193 +663,4 @@ private fun calculateEma(candles: List<Candle>, period: Int): List<Double> {
         values += current
     }
     return values
-}
-
-private const val TRADING_VIEW_LOG_TAG = "DestinedFX.TradingView"
-
-private fun chartUrlHost(url: String?): String = runCatching {
-    url?.let { android.net.Uri.parse(it).host }?.takeIf { it.isNotBlank() } ?: "inline-document"
-}.getOrDefault("unknown-host")
-
-private fun redactChartDiagnostic(message: String): String = message
-    .replace(Regex("(?i)(access[_-]?token|authorization|api[_-]?key|token)(\\s*[:=]\\s*)[^\\s,;]+"), "$1$2[redacted]")
-    .replace(Regex("(?i)([?&](?:access[_-]?token|authorization|api[_-]?key|token)=)[^&\\s]+"), "$1[redacted]")
-
-internal object TradingViewMapper {
-    fun mapSymbol(symbol: String): String? {
-        val raw = symbol.trim().uppercase()
-        if (raw.startsWith("OANDA:") || raw.startsWith("FOREXCOM:") || raw.startsWith("CAPITALCOM:") || raw.startsWith("TVC:") || raw.startsWith("BINANCE:") || raw.startsWith("NASDAQ:") || raw.startsWith("BITSTAMP:") || raw.startsWith("COINBASE:") || raw.startsWith("NYMEX:") || raw.startsWith("CBOT:") || raw.startsWith("ICEUS:")) {
-            return raw
-        }
-        val clean = raw.replace(" ", "").replace("-", "")
-        // Reject Deriv synthetic indices which TradingView does not support
-        if (clean.startsWith("R_") || clean.startsWith("1HZ") || clean.startsWith("CRASH") ||
-            clean.startsWith("BOOM") || clean.startsWith("JUMP") || clean.startsWith("STEP") ||
-            clean.startsWith("STP_") || clean.contains("VOLATILITY") || clean.contains("DEX")) {
-            return null
-        }
-        return when (clean) {
-            "EUR/USD", "EURUSD" -> "OANDA:EURUSD"
-            "GBP/USD", "GBPUSD" -> "OANDA:GBPUSD"
-            "USD/JPY", "USDJPY" -> "OANDA:USDJPY"
-            "USD/CHF", "USDCHF" -> "OANDA:USDCHF"
-            "AUD/USD", "AUDUSD" -> "OANDA:AUDUSD"
-            "USD/CAD", "USDCAD" -> "OANDA:USDCAD"
-            "NZD/USD", "NZDUSD" -> "OANDA:NZDUSD"
-            "EUR/GBP", "EURGBP" -> "OANDA:EURGBP"
-            "EUR/JPY", "EURJPY" -> "OANDA:EURJPY"
-            "GBP/JPY", "GBPJPY" -> "OANDA:GBPJPY"
-            "AUD/JPY", "AUDJPY" -> "OANDA:AUDJPY"
-            "EUR/AUD", "EURAUD" -> "OANDA:EURAUD"
-            "EUR/CAD", "EURCAD" -> "OANDA:EURCAD"
-            "EUR/CHF", "EURCHF" -> "OANDA:EURCHF"
-            "GBP/CHF", "GBPCHF" -> "OANDA:GBPCHF"
-            "CAD/JPY", "CADJPY" -> "OANDA:CADJPY"
-            "CHF/JPY", "CHFJPY" -> "OANDA:CHFJPY"
-            "USD/TRY", "USDTRY" -> "OANDA:USDTRY"
-            "USD/ZAR", "USDZAR" -> "OANDA:USDZAR"
-            "USD/MXN", "USDMXN" -> "OANDA:USDMXN"
-            "USD/SGD", "USDSGD" -> "OANDA:USDSGD"
-            "EUR/TRY", "EURTRY" -> "OANDA:EURTRY"
-            "GBP/NZD", "GBPNZD" -> "OANDA:GBPNZD"
-            "GBP/AUD", "GBPAUD" -> "OANDA:GBPAUD"
-            "GBP/CAD", "GBPCAD" -> "OANDA:GBPCAD"
-            "AUD/CAD", "AUDCAD" -> "OANDA:AUDCAD"
-            "AUD/CHF", "AUDCHF" -> "OANDA:AUDCHF"
-            "AUD/NZD", "AUDNZD" -> "OANDA:AUDNZD"
-            "CAD/CHF", "CADCHF" -> "OANDA:CADCHF"
-            "EUR/NOK", "EURNOK" -> "OANDA:EURNOK"
-            "EUR/NZD", "EURNZD" -> "OANDA:EURNZD"
-            "EUR/SEK", "EURSEK" -> "OANDA:EURSEK"
-            "NZD/CAD", "NZDCAD" -> "OANDA:NZDCAD"
-            "NZD/CHF", "NZDCHF" -> "OANDA:NZDCHF"
-            "NZD/JPY", "NZDJPY" -> "OANDA:NZDJPY"
-            "XAU/USD", "XAUUSD", "GOLD" -> "OANDA:XAUUSD"
-            "XAG/USD", "XAGUSD", "SILVER" -> "OANDA:XAGUSD"
-            "XPT/USD", "XPTUSD" -> "OANDA:XPTUSD"
-            "XPD/USD", "XPDUSD" -> "OANDA:XPDUSD"
-            "BTC/USD", "BTCUSD", "BTCUSDT" -> "BINANCE:BTCUSDT"
-            "ETH/USD", "ETHUSD", "ETHUSDT" -> "BINANCE:ETHUSDT"
-            "SOL/USD", "SOLUSD", "SOLUSDT" -> "BINANCE:SOLUSDT"
-            "XRP/USD", "XRPUSD", "XRPUSDT" -> "BINANCE:XRPUSDT"
-            "BNB/USD", "BNBUSD", "BNBUSDT" -> "BINANCE:BNBUSDT"
-            "USOIL", "WTI" -> "TVC:USOIL"
-            "UKOIL", "BRENT" -> "TVC:UKOIL"
-            "NATGAS", "NATURALGAS", "NATURAL GAS" -> "NYMEX:NG1!"
-            "WHEAT" -> "CBOT:ZW1!"
-            "CORN" -> "CBOT:ZC1!"
-            "SOYBEANS", "SOY BEANS" -> "CBOT:ZS1!"
-            "COFFEE" -> "ICEUS:KC1!"
-            "FTSE100", "UK100" -> "OANDA:UK100GBP"
-            "SPX500", "US500", "SPX" -> "OANDA:SPX500USD"
-            "NAS100", "US100", "NDX" -> "OANDA:NAS100USD"
-            "DJ30", "US30", "DJI" -> "CAPITALCOM:US30"
-            "GER30", "GER40", "DAX", "DAX40" -> "OANDA:DE30EUR"
-            else -> null
-        }
-    }
-
-    fun mapInterval(timeframe: String): String? {
-        return when (timeframe.trim().uppercase()) {
-            "M1", "1" -> "1"
-            "M5", "5" -> "5"
-            "M15", "15" -> "15"
-            "M30", "30" -> "30"
-            "H1", "60", "1H" -> "60"
-            "H4", "240", "4H" -> "240"
-            "D1", "D", "1D" -> "D"
-            "W1", "W", "1W" -> "W"
-            else -> null
-        }
-    }
-
-    /** Build the supported TradingView embed URL used by the browser fallback. */
-    fun buildWidgetUrl(symbol: String, timeframe: String): String? {
-        val mappedSymbol = mapSymbol(symbol) ?: return null
-        val mappedInterval = mapInterval(timeframe) ?: return null
-        return "https://s.tradingview.com/widgetembed/?" +
-            "symbol=${android.net.Uri.encode(mappedSymbol)}" +
-            "&interval=$mappedInterval&hidesidetoolbar=0&symboledit=0&saveimage=0" +
-            "&toolbarbg=171B27&theme=dark&style=1&timezone=Etc%2FUTC" +
-            "&withdateranges=1&locale=en&hideideas=1&calendar=1&hotlist=0&news=0"
-    }
-
-    /**
-     * Full-size Advanced Chart widget document using official TradingView embed API.
-     */
-    fun buildWidgetHtml(symbol: String, timeframe: String): String? {
-        val mappedSymbol = mapSymbol(symbol) ?: return null
-        val mappedInterval = mapInterval(timeframe) ?: return null
-        val config = org.json.JSONObject().apply {
-            put("autosize", true)
-            put("symbol", mappedSymbol)
-            put("interval", mappedInterval)
-            put("timezone", "Etc/UTC")
-            put("theme", "dark")
-            put("style", "1")
-            put("locale", "en")
-            put("enable_publishing", false)
-            put("withdateranges", true)
-            put("hide_side_toolbar", false)
-            put("allow_symbol_change", false)
-            put("save_image", false)
-            put("details", true)
-            put("hotlist", false)
-            put("calendar", true)
-            put("studies", org.json.JSONArray().apply {
-                put("STD;EMA")
-                put("STD;RSI")
-            })
-            put("container_id", "destinedfx-tv-chart")
-        }.toString()
-
-        return """
-            <!doctype html>
-            <html lang="en">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-              <style>
-                html, body { margin:0; padding:0; width:100%; height:100%; min-height:0; overflow:hidden; background:#0F0F0F; }
-                .tradingview-widget-container { width:100%; height:100%; min-height:0; background:#0F0F0F; }
-                .tradingview-widget-container__widget { width:100%; height:100%; min-height:0; }
-                #destinedfx-tv-chart { width:100%; height:100%; min-height:0; }
-              </style>
-              <script>
-                function isTradingViewChartUrl(url) {
-                  return typeof url === 'string' && (url.indexOf('tradingview.com') !== -1 || url.indexOf('tradingview-widget.com') !== -1);
-                }
-                // TradingView postMessage data is display-only and is deliberately
-                // not promoted to an app quote. Execution uses an independently
-                // validated broker/provider feed.
-                window.addEventListener('load', function() {
-                  document.body.setAttribute('data-tv-frame-loaded-at', Date.now());
-                });
-              </script>
-            </head>
-            <body>
-              <div class="tradingview-widget-container">
-                <div id="destinedfx-tv-chart" class="tradingview-widget-container__widget"></div>
-                <script type="text/javascript" id="tvScript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-                $config
-                </script>
-                <script>
-                  var tvScript = document.getElementById('tvScript');
-                  if (tvScript) {
-                    tvScript.onload = function() {
-                      document.body.setAttribute('data-tv-script-loaded', 'true');
-                      document.body.setAttribute('data-destinedfx-tv-loaded-at', Date.now());
-                    };
-                    tvScript.onerror = function() {
-                      if (window.DestinedFXBridge && window.DestinedFXBridge.onChartFailed) {
-                        window.DestinedFXBridge.onChartFailed('script_error');
-                      }
-                    };
-                  }
-                </script>
-              </div>
-            </body>
-            </html>
-        """.trimIndent()
-    }
 }

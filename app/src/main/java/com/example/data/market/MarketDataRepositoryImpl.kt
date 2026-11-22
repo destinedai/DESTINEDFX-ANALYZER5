@@ -311,7 +311,8 @@ class MarketDataRepositoryImpl(
                 }.getOrNull()
                 val verified = snapshot?.takeIf {
                     it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected &&
-                        it.accountVerified && it.brokerIdentityVerified &&
+                        it.accountVerified && it.brokerIdentityVerified && it.actualCompany.isNotBlank() &&
+                        it.balance != null && it.balance > 0.0 && it.equity != null && it.equity > 0.0 &&
                         it.actualAccountMode == mode && it.actualLogin == login && it.actualServer == server
                 }
                 bridgeSnapshotCache = verified

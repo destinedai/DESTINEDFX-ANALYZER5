@@ -240,7 +240,9 @@ class MT5RemoteBridgeClient(
         val positions: List<JSONObject>?, val activeOrders: List<JSONObject>?, val closedDeals: List<JSONObject>?,
         val snapshotsValid: Boolean, val lastSignal: JSONObject?, val newsVerdict: JSONObject?, val raw: JSONObject,
         val brokerQuotes: List<VerifiedBrokerQuote>? = null,
-        val brokerCandles: List<VerifiedBrokerCandle>? = null
+        val brokerCandles: List<VerifiedBrokerCandle>? = null,
+        val actualCompany: String = "",
+        val connectionWarning: String = "NOT CONNECTED - Stale / Zero Balance, Check Server"
     )
 
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
@@ -438,15 +440,39 @@ class MT5RemoteBridgeClient(
         val terminalConnected = obj.optBoolean("terminal_connected", false)
         val actualLogin = account?.optString("login").orEmpty()
         val actualServer = account?.optString("server").orEmpty()
+        val actualCompany = account?.optString("company").orEmpty()
         val actualMode = account?.optString("account_mode").orEmpty().uppercase()
         val balance = account?.let { finite(it, "balance") }
         val equity = account?.let { finite(it, "equity") }
         val margin = account?.let { finite(it, "margin") }
         val freeMargin = account?.let { finite(it, "free_margin") }
-        val financialSnapshotValid = balance != null && balance > 0.0 && equity != null &&
+        val financialSnapshotValid = balance != null && balance > 0.0 && equity != null && equity > 0.0 &&
             margin != null && freeMargin != null
-        val verified = obj.optBoolean("account_identity_verified", false) && actualLogin.isNotBlank() &&
-            actualServer.isNotBlank() && actualMode in setOf("DEMO", "LIVE") && actualMode == accountMode
+        val expectedLogin = secrets.getManagedMT5AccountLogin(profile)
+        val expectedServer = secrets.getManagedMT5AccountServer(profile)
+        val managedBrand = managed?.optString("broker_brand").orEmpty().uppercase()
+        val managedLogin = managed?.optString("requested_login").orEmpty()
+        val managedServer = managed?.optString("requested_server").orEmpty()
+        val managedMode = managed?.optString("account_mode").orEmpty().uppercase()
+        val localIdentityMatches = expectedLogin.isNotBlank() && actualLogin == expectedLogin &&
+            expectedServer.isNotBlank() && actualServer == expectedServer &&
+            managedLogin == expectedLogin && managedServer == expectedServer &&
+            managedBrand == brokerBrand && managedMode == accountMode && actualCompany.isNotBlank()
+        val brokerIdentityVerified = managed?.optBoolean(
+            "broker_identity_verified", obj.optBoolean("broker_identity_verified", false)
+        ) == true
+        val verified = obj.optBoolean("account_identity_verified", false) && localIdentityMatches &&
+            actualMode in setOf("DEMO", "LIVE") && actualMode == accountMode
+        val zeroBalanceAndStale = age > 60L && balance == 0.0 && equity == 0.0
+        val connectionWarning = when {
+            !localIdentityMatches || !brokerIdentityVerified ->
+                "NOT CONNECTED - Login/Company/Server mismatch, Check Server"
+            zeroBalanceAndStale ->
+                "NOT CONNECTED - Stale / Zero Balance, Check Server"
+            !freshness || !terminalConnected || !verified || !financialSnapshotValid ->
+                "NOT CONNECTED - Stale / Zero Balance, Check Server"
+            else -> ""
+        }
         fun array(key: String): List<JSONObject>? {
             val a = obj.optJSONArray(key) ?: return null
             val out = mutableListOf<JSONObject>()
@@ -474,18 +500,23 @@ class MT5RemoteBridgeClient(
         }
         return Snapshot(
             hostProfile, managedState, workerStatus, access, mode,
-            online && freshness && terminalConnected && verified && actualMode == accountMode && financialSnapshotValid,
+            online && freshness && terminalConnected && verified && brokerIdentityVerified &&
+                localIdentityMatches && actualMode == accountMode && financialSnapshotValid,
             online, freshness,
             when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
-            actualMode, managed?.optBoolean("live_authorized", false) == true,
-            obj.optBoolean("trade_allowed", false), terminalConnected, verified,
-            managed?.optBoolean("broker_identity_verified", obj.optBoolean("broker_identity_verified", false)) == true,
+            actualMode, managed?.optBoolean("live_authorized", false) == true &&
+                online && freshness && terminalConnected && verified && brokerIdentityVerified &&
+                localIdentityMatches && financialSnapshotValid,
+            obj.optBoolean("trade_allowed", false) && online && freshness && terminalConnected &&
+                verified && brokerIdentityVerified && localIdentityMatches && financialSnapshotValid,
+            terminalConnected, verified, brokerIdentityVerified,
             account?.optString("currency").orEmpty(), balance, equity,
             margin, freeMargin, account?.let { finite(it, "margin_level") },
             account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
-            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes, brokerCandles
+            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes, brokerCandles,
+            actualCompany, connectionWarning
         )
     }
 
