@@ -303,10 +303,11 @@ class MT5RemoteBridgeClientTest {
 
 
 
-    @Test fun phoneMarketOrderConfigIsBrokerQuoteBoundAndSerializedWithoutLotSize() {
+    @Test fun phoneMarketOrderConfigIsBrokerQuoteBoundAndIncludesRequestedVolume() {
         val snapshot = phoneMarketOrderSnapshot()
         val config = MT5RemoteBridgeClient.marketOrderConfig(
-            snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.25
+            snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.25,
+            requestedVolume = 0.01
         )
         assertEquals("123", config.getString("account_login"))
         assertEquals("Broker-Demo", config.getString("account_server"))
@@ -315,6 +316,7 @@ class MT5RemoteBridgeClientTest {
         assertEquals("BUY", config.getString("side"))
         assertEquals(1.10000, config.getDouble("expected_bid"), 0.0000001)
         assertEquals(1.10020, config.getDouble("expected_ask"), 0.0000001)
+        assertEquals(0.01, config.getDouble("requested_volume"), 0.0000001)
         assertFalse(config.has("volume"))
 
         val requestId = "2e5bd51d-34a5-46e6-bffb-0fa5b3a4df18"
@@ -329,18 +331,33 @@ class MT5RemoteBridgeClientTest {
         val snapshot = phoneMarketOrderSnapshot()
         assertThrows(IllegalArgumentException::class.java) {
             MT5RemoteBridgeClient.marketOrderConfig(
-                snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.30
+                snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.30,
+                requestedVolume = 0.01
             )
         }
         assertThrows(IllegalArgumentException::class.java) {
             MT5RemoteBridgeClient.marketOrderConfig(
-                snapshot, side = "BUY", stopLoss = 1.10100, takeProfit = 1.12000, riskPercent = 0.20
+                snapshot, side = "BUY", stopLoss = 1.10100, takeProfit = 1.12000, riskPercent = 0.20,
+                requestedVolume = 0.01
             )
         }
         assertThrows(IllegalArgumentException::class.java) {
             MT5RemoteBridgeClient.marketOrderConfig(
                 snapshot.copy(hostProfile = com.example.data.broker.HostProfile.EPHEMERAL),
-                side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.20
+                side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.20,
+                requestedVolume = 0.01
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.marketOrderConfig(
+                snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.20,
+                requestedVolume = 0.03
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MT5RemoteBridgeClient.marketOrderConfig(
+                snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.20,
+                requestedVolume = 0.009
             )
         }
     }
@@ -349,7 +366,9 @@ class MT5RemoteBridgeClientTest {
         val base = snapshot(emptyList())
         val now = System.currentTimeMillis()
         val raw = JSONObject()
-            .put("configuration", JSONObject().put("symbols", JSONArray().put("EURUSD")))
+            .put("configuration", JSONObject()
+                .put("symbols", JSONArray().put("EURUSD"))
+                .put("effective_max_volume", 0.02))
             .put("risk_controls", JSONObject()
                 .put("risk_percent", 0.25)
                 .put("max_concurrent_positions", 2)

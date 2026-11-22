@@ -299,6 +299,8 @@ dependencies {
   testImplementation("org.json:json:20231013")
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  // Pin the Robolectric native runtime module that was intermittently rate-limited by Maven Central.
+  testImplementation("org.robolectric:nativeruntime-dist-compat:1.0.18")
   testImplementation("com.squareup.okhttp3:mockwebserver:4.10.0")
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)

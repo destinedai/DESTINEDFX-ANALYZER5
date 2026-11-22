@@ -1166,7 +1166,8 @@ class MT5RemoteBridgeClient(
             side: String,
             stopLoss: Double,
             takeProfit: Double,
-            riskPercent: Double
+            riskPercent: Double,
+            requestedVolume: Double
         ): JSONObject {
             require(snapshot.snapshotsValid && snapshot.heartbeatFresh && snapshot.terminalConnected &&
                 snapshot.accountVerified && snapshot.brokerIdentityVerified && snapshot.tradeAllowed &&
@@ -1183,6 +1184,15 @@ class MT5RemoteBridgeClient(
             require(normalizedSide in setOf("BUY", "SELL"))
             require(riskPercent.isFinite() && riskPercent > 0.0 && riskPercent <= 1.0)
             require(stopLoss.isFinite() && takeProfit.isFinite() && stopLoss > 0.0 && takeProfit > 0.0)
+            val effectiveMaxVolume = snapshot.raw.optJSONObject("configuration")
+                ?.optDouble("effective_max_volume", Double.NaN) ?: Double.NaN
+            require(requestedVolume.isFinite() && requestedVolume >= 0.01) {
+                "Requested order volume must be at least 0.01 lots."
+            }
+            require(effectiveMaxVolume.isFinite() && effectiveMaxVolume >= 0.01 &&
+                requestedVolume <= effectiveMaxVolume + 1e-9) {
+                "Requested volume exceeds the current EA effective volume ceiling or its telemetry is unavailable."
+            }
             val symbols = snapshot.raw.optJSONObject("configuration")?.optJSONArray("symbols")
             val symbol = symbols?.takeIf { it.length() > 0 }?.optString(0).orEmpty()
             require(symbol.isNotBlank()) { "The EA has no configured broker symbol." }
@@ -1213,6 +1223,7 @@ class MT5RemoteBridgeClient(
                 .put("symbol", symbol)
                 .put("side", normalizedSide)
                 .put("risk_percent", riskPercent)
+                .put("requested_volume", requestedVolume)
                 .put("stop_loss", stopLoss)
                 .put("take_profit", takeProfit)
                 .put("expected_bid", quote.bid)

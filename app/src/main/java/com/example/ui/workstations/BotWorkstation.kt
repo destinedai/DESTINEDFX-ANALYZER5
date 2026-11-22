@@ -206,6 +206,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var manualOrderStopLoss by remember(bridgeProfileKey) { mutableStateOf("") }
     var manualOrderTakeProfit by remember(bridgeProfileKey) { mutableStateOf("") }
     var manualOrderRiskPercent by remember(bridgeProfileKey) { mutableStateOf("0.25") }
+    var manualOrderVolume by remember(bridgeProfileKey) { mutableStateOf("0.01") }
     var showManualOrderConfirm by remember(bridgeProfileKey) { mutableStateOf(false) }
     var positionStopTicket by remember(bridgeProfileKey) { mutableStateOf("") }
     var positionStopDraft by remember(bridgeProfileKey) { mutableStateOf("") }
@@ -620,7 +621,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         terminalQuotes.forEach { quote ->
                             val priceFormat = "%.${quote.digits}f"
                             Row(
-                                modifier = Modifier.fillMaxWidth().testTag("mt5_broker_quote_${quote.symbol}"),
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable {
+                                        viewModel.selectBotTicker(quote.symbol)
+                                        viewModel.selectScreen(com.example.ui.DestinedFXScreen.Bot)
+                                    }
+                                    .testTag("mt5_broker_quote_${quote.symbol}"),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -665,6 +671,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         val phoneOrderSymbol = configuredSymbols?.takeIf { it.length() > 0 }?.optString(0).orEmpty()
                         val phoneOrderQuote = currentBrokerSnapshot?.brokerQuotes?.singleOrNull { it.symbol == phoneOrderSymbol }
                         val phoneRiskCap = currentBrokerSnapshot?.raw?.optJSONObject("risk_controls")?.optDouble("risk_percent", Double.NaN) ?: Double.NaN
+                        val phoneVolumeMax = currentBrokerSnapshot?.raw?.optJSONObject("configuration")
+                            ?.optDouble("effective_max_volume", Double.NaN) ?: Double.NaN
                         Card(
                             modifier = Modifier.fillMaxWidth().testTag("mt5_phone_market_order_card"),
                             colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
@@ -682,7 +690,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     fontFamily = FontFamily.Monospace
                                 )
                                 Text(
-                                    "The Windows MT5 EA calculates volume from broker contract data. You enter SL/TP prices; the EA enforces its configured risk cap, verified costs, margin and minimum net 1:2 reward/risk. Only this first configured symbol has a current EA news verdict.",
+                                    "Choose volume (lots) up to the live EA volume ceiling. Before sending, the EA recalculates the exact safe size from this quote, stop distance, verified costs, margin and risk budget; a request above that risk-safe size is rejected. Only this first configured symbol has a current EA news verdict.",
                                     color = TextSecondary, fontSize = 9.sp
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -723,10 +731,24 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                                 )
+                                OutlinedTextField(
+                                    value = manualOrderVolume,
+                                    onValueChange = { manualOrderVolume = it },
+                                    modifier = Modifier.fillMaxWidth().testTag("mt5_phone_order_volume"),
+                                    label = {
+                                        Text("Volume (lots) · min 0.01 · EA max ${if (phoneVolumeMax.isFinite()) String.format(java.util.Locale.US, "%.4f", phoneVolumeMax) else "unknown"}")
+                                    },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                                )
+                                val requestedVolume = manualOrderVolume.toDoubleOrNull()
                                 val requestedRisk = manualOrderRiskPercent.toDoubleOrNull()
                                 val requestedSl = manualOrderStopLoss.toDoubleOrNull()
                                 val requestedTp = manualOrderTakeProfit.toDoubleOrNull()
                                 val orderInputValid = phoneOrderQuote != null &&
+                                    requestedVolume != null && requestedVolume.isFinite() && requestedVolume >= 0.01 &&
+                                    phoneVolumeMax.isFinite() && phoneVolumeMax >= 0.01 &&
+                                    requestedVolume <= phoneVolumeMax + 1e-9 &&
                                     requestedRisk != null && requestedRisk.isFinite() && requestedRisk > 0.0 &&
                                     requestedSl != null && requestedSl.isFinite() && requestedSl > 0.0 &&
                                     requestedTp != null && requestedTp.isFinite() && requestedTp > 0.0 &&
@@ -882,9 +904,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     "${selectedBrokerBrand} ${selectedAccountMode} · ${currentBrokerSnapshot?.actualLogin} @ ${currentBrokerSnapshot?.actualServer}\n" +
                                     "${phoneOrderSymbol} · " +
                                     "${if (manualOrderSide == "BUY") "ASK ${phoneOrderQuote?.ask}" else "BID ${phoneOrderQuote?.bid}"}\n" +
-                                    "SL ${manualOrderStopLoss} · TP ${manualOrderTakeProfit} · risk ${manualOrderRiskPercent}%\n\n" +
+                                    "Volume ${manualOrderVolume} lots · SL ${manualOrderStopLoss} · TP ${manualOrderTakeProfit} · risk ${manualOrderRiskPercent}%\n\n" +
                                     (if (selectedAccountMode == "LIVE") "WARNING: This order can use real money and cause a financial loss. LIVE lease and final account/price/risk checks are required. " else "DEMO only: this order is sent to the selected demo account. ") +
-                                    "The Windows MT5 EA determines lot size from broker contract data and enforces its risk cap, stop distance, margin, news and other safety controls. A queued request is not a fill."
+                                    "The Windows MT5 EA rechecks the requested volume against its live risk-, cost-, margin- and broker-step limits. An unsafe size is rejected; a queued request is not a fill."
                                 )
                             },
                             confirmButton = {
@@ -898,12 +920,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                             bridgeSnapshot = fresh
                                             val risk = manualOrderRiskPercent.toDoubleOrNull()
                                                 ?: error("Risk percentage is invalid.")
+                                            val volume = manualOrderVolume.toDoubleOrNull()
+                                                ?: error("Volume is invalid.")
                                             val sl = manualOrderStopLoss.toDoubleOrNull()
                                                 ?: error("Stop-loss price is invalid.")
                                             val tp = manualOrderTakeProfit.toDoubleOrNull()
                                                 ?: error("Take-profit price is invalid.")
                                             val config = MT5RemoteBridgeClient.marketOrderConfig(
-                                                fresh, manualOrderSide, sl, tp, risk
+                                                fresh, manualOrderSide, sl, tp, risk, volume
                                             )
                                             sendBridgeTradeCommand(
                                                 bridgeClient, "PLACE_MARKET_ORDER", config, emptyList(),

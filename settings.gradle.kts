@@ -8,6 +8,10 @@ pluginManagement {
       }
     }
     maven {
+      name = "GoogleMavenCentralMirror"
+      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+    }
+    maven {
       name = "MavenCentralApacheMirror"
       url = uri("https://repo.maven.apache.org/maven2")
     }
@@ -25,6 +29,10 @@ dependencyResolutionManagement {
   repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
   repositories {
     google()
+    maven {
+      name = "GoogleMavenCentralMirror"
+      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+    }
     maven {
       name = "MavenCentralApacheMirror"
       url = uri("https://repo.maven.apache.org/maven2")

@@ -3223,9 +3223,9 @@ def issue_destructive_command(x,p):
 def issue_market_order_command(x,p):
     """Queue one account-bound phone market order after fresh broker-side checks.
 
-    Volume is deliberately not accepted from the phone. The EA computes it from
-    broker contract metadata, stop distance, verified costs, margin, and its
-    configured per-trade volume cap immediately before submission.
+    The phone supplies a requested size bounded by the fresh EA effective lot
+    ceiling. The EA recalculates the exact risk/cost-safe size at execution and
+    rejects a request that exceeds that live calculation.
     """
     try:
         raw_config=json.dumps(x.config,sort_keys=True,separators=(',',':'),allow_nan=False)
@@ -3278,6 +3278,17 @@ def issue_market_order_command(x,p):
         raise HTTPException(422,'A canonical MT5 quote timestamp is required')
 
     config=beat.get('configuration') if isinstance(beat.get('configuration'),dict) else {}
+    requested_volume=cfg.get('requested_volume')
+    effective_max_volume=config.get('effective_max_volume')
+    if not finite_positive(requested_volume) or float(requested_volume)<0.01:
+        raise HTTPException(422,detail={'code':'MARKET_ORDER_VOLUME_INVALID',
+            'message':'Requested volume must be finite and at least 0.01 lots'})
+    if not finite_positive(effective_max_volume) or float(effective_max_volume)<0.01:
+        raise HTTPException(409,detail={'code':'MARKET_ORDER_EA_VOLUME_LIMIT_UNAVAILABLE',
+            'message':'A fresh EA effective volume ceiling is required before requesting a market order'})
+    if float(requested_volume)>float(effective_max_volume)+1e-9:
+        raise HTTPException(422,detail={'code':'MARKET_ORDER_VOLUME_CAP_EXCEEDED',
+            'message':'Requested volume exceeds the current effective volume ceiling reported by the MT5 EA'})
     configured_symbols=config.get('symbols')
     # The current EA heartbeat publishes one news verdict at a time, for the
     # first configured symbol. Do not trade a different symbol against that
@@ -3314,6 +3325,7 @@ def issue_market_order_command(x,p):
     queued_config={
         'account_login':account['login'],'account_server':account['server'],'account_mode':managed['account_mode'],
         'symbol':symbol,'side':side,'risk_percent':float(risk_percent),
+        'requested_volume':float(requested_volume),
         'stop_loss':float(stop_loss),'take_profit':float(take_profit),
         'expected_bid':quote['bid'],'expected_ask':quote['ask'],
         'quote_timestamp_ms':quote['timestamp_ms'],'expires_at_epoch':int(expiry),

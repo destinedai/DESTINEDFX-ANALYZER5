@@ -2972,7 +2972,8 @@ def _publish_market_order_quote(terminal_headers, actual, *,
         configuration={
             'strategy':'ict-silver-bullet', 'symbols':[symbol],
             'risk_percent':risk_percent, 'max_daily_loss_percent':2.0,
-            'max_concurrent_positions':2, 'daily_risk_status':'NORMAL',
+            'max_concurrent_positions':2, 'initial_volume':0.01, 'max_volume':0.05,
+            'effective_max_volume':0.02, 'scaling_enabled':False, 'daily_risk_status':'NORMAL',
             'daily_loss_used_percent':10.0,
         },
         broker_quotes=[{
@@ -2982,7 +2983,7 @@ def _publish_market_order_quote(terminal_headers, actual, *,
     )
     response = client.post('/v1/terminal/heartbeat', headers=terminal_headers, json=beat)
     assert response.status_code == 200, response.text
-    return {'symbol':symbol,'side':'BUY','risk_percent':0.25,
+    return {'symbol':symbol,'side':'BUY','risk_percent':0.25,'requested_volume':0.01,
             'stop_loss':bid-0.01000,'take_profit':ask+0.02000,
             'expected_bid':bid,'expected_ask':ask,'quote_timestamp_ms':now_ms-age_ms,
             'account_login':actual['login'],'account_server':actual['server'],
@@ -3003,6 +3004,7 @@ def test_demo_phone_market_order_is_validated_queued_and_idempotent(monkeypatch)
     assert result['config']['account_mode'] == 'DEMO'
     assert result['config']['symbol'] == 'EURUSD'
     assert result['config']['side'] == 'BUY'
+    assert result['config']['requested_volume'] == 0.01
     assert 'volume' not in result['config']
     assert result['config']['expires_at_epoch'] <= int(time.time()) + 21
 
@@ -3013,6 +3015,17 @@ def test_demo_phone_market_order_is_validated_queued_and_idempotent(monkeypatch)
     assert commands.status_code == 200
     queued = [row for row in commands.json()['commands'] if row['request_id'] == request_id]
     assert len(queued) == 1 and queued[0]['action'] == 'PLACE_MARKET_ORDER'
+
+
+def test_phone_market_order_rejects_volume_above_fresh_ea_ceiling(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
+    config = _publish_market_order_quote(terminal_headers, actual)
+    config['requested_volume'] = 0.03
+    response = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config,
+    })
+    assert response.status_code == 422, response.text
+    assert response.json()['detail']['code'] == 'MARKET_ORDER_VOLUME_CAP_EXCEEDED'
 
 
 def test_live_phone_market_order_requires_current_account_bound_live_lease(monkeypatch):
