@@ -84,6 +84,37 @@ internal fun codespacesBridgeOrigin(
 internal fun codespacesBridgeOriginCandidates(codespaceName: String): List<String> =
     DESTINEDFX_CODESPACES_FORWARDING_DOMAINS.map { codespacesBridgeOrigin(codespaceName, it) }
 
+internal fun codespacesManagementApiOrigin(
+    codespaceName: String,
+    forwardingDomain: String = "app.github.dev"
+): String {
+    val bridgeHost = URI(codespacesBridgeOrigin(codespaceName, forwardingDomain)).host.orEmpty()
+    val suffix = "-8000.$forwardingDomain"
+    require(bridgeHost.endsWith(suffix)) { "Invalid GitHub Codespaces host identity." }
+    return "https://" + bridgeHost.removeSuffix(suffix) + "-8010.$forwardingDomain"
+}
+
+internal fun codespacesManagementApiOriginCandidates(codespaceName: String): List<String> =
+    DESTINEDFX_CODESPACES_FORWARDING_DOMAINS.map { codespacesManagementApiOrigin(codespaceName, it) }
+
+internal fun isCodespacesForwardedManagementApiOrigin(raw: String): Boolean {
+    return try {
+        val uri = URI(raw.trim()).normalize()
+        val host = uri.host?.lowercase()?.trimEnd('.') ?: return false
+        if (!uri.scheme.equals("https", true) || uri.userInfo != null ||
+            uri.query != null || uri.fragment != null ||
+            uri.path.orEmpty().trimEnd('/').isNotEmpty() ||
+            uri.port !in setOf(-1, 443)) return false
+        val suffix = DESTINEDFX_CODESPACES_FORWARDING_DOMAINS
+            .map { "-8010.$it" }
+            .firstOrNull { host.endsWith(it) } ?: return false
+        val name = host.removeSuffix(suffix)
+        name.matches(Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"))
+    } catch (_: Exception) {
+        false
+    }
+}
+
 /**
  * A locked APK accepts a saved Codespaces URL only when it has the strict
  * forwarded Bridge port shape. The lifecycle flow separately verifies the
@@ -310,6 +341,24 @@ class CodespacesLifecycleClient(
         throw IOException("Automatic Bridge URL discovery did not complete: $lastFailure")
     }
 
+    private fun serviceJson(origin: String, path: String): Pair<Int, JSONObject> {
+        val request = Request.Builder()
+            .url(origin + path)
+            .header("Accept", "application/json")
+            .header("X-Tunnel-Skip-AntiPhishing-Page", "true")
+            .get()
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (response.priorResponse != null || response.request.url.host != URI(origin).host) {
+                throw IOException("Management API probe was redirected; refusing an unverified host.")
+            }
+            val body = response.body?.string().orEmpty()
+            val json = runCatching { JSONObject(body) }
+                .getOrElse { throw IOException("Management API did not return the expected JSON.") }
+            return response.code to json
+        }
+    }
+
     private fun bridgeJson(origin: String, path: String): Pair<Int, JSONObject> {
         val request = Request.Builder()
             .url(origin + path)
@@ -325,6 +374,119 @@ class CodespacesLifecycleClient(
             return response.code to json
         }
     }
+
+    /**
+     * Discover and verify the separately forwarded Management API at port 8010.
+     * No endpoint is accepted until health, PostgreSQL readiness and the EdDSA
+     * Bridge verification-key contract all pass without redirects.
+     */
+    suspend fun discoverAndSaveManagementApi(timeoutMs: Long = 180_000L): String = withContext(Dispatchers.IO) {
+        require(timeoutMs in 5_000L..300_000L) { "Management API discovery timeout is outside the allowed range." }
+        val accessToken = validAccessToken()
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var lastFailure = "GitHub Codespace has not reached Available state."
+        var codespaceName = ""
+        var codespaceState = "UNKNOWN"
+        var nextStateRefreshAt = 0L
+        while (System.currentTimeMillis() < deadline) {
+            val now = System.currentTimeMillis()
+            if (codespaceName.isBlank() || now >= nextStateRefreshAt) {
+                val codespace = findOwnedCodespace(accessToken)
+                codespaceName = codespace.optString("name")
+                codespaceState = codespace.optString("state")
+                nextStateRefreshAt = now + 15_000L
+            }
+            if (codespaceState.equals("Available", ignoreCase = true)) {
+                for (candidate in codespacesManagementApiOriginCandidates(codespaceName)) {
+                    try {
+                        check(isCodespacesForwardedManagementApiOrigin(candidate)) {
+                            "Management API candidate is not a valid GitHub Codespaces forwarded port-8010 origin."
+                        }
+                        val health = serviceJson(candidate, "/health")
+                        check(health.first == 200 && health.second.optString("status") == "ok") {
+                            "Management API process health did not pass."
+                        }
+                        val ready = serviceJson(candidate, "/ready")
+                        check(ready.first == 200 && ready.second.optString("status") == "ready") {
+                            "Management API/PostgreSQL readiness did not pass."
+                        }
+                        val key = serviceJson(candidate, "/api/v1/auth/bridge-verification-key")
+                        val document = key.second
+                        val pem = document.optString("public_key_pem").trim()
+                        check(key.first == 200 && document.optString("algorithm") == "EdDSA" &&
+                            document.optString("issuer") == "destinedfx-management" &&
+                            document.optString("audience") == "destinedfx-bridge" &&
+                            pem.startsWith("-----BEGIN PUBLIC KEY-----") &&
+                            pem.endsWith("-----END PUBLIC KEY-----") && pem.length in 80..4096) {
+                            "Management API EdDSA Bridge verification key contract is invalid."
+                        }
+                        val previous = secrets.getManagementApiOrigin()
+                        if (previous != candidate) {
+                            check(secrets.clearManagementAccessToken()) {
+                                "Could not clear a management session bound to the previous host."
+                            }
+                        }
+                        check(secrets.saveManagementApiOrigin(candidate)) {
+                            "Verified Management API origin could not be saved in encrypted app storage."
+                        }
+                        return@withContext candidate
+                    } catch (error: Exception) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        lastFailure = error.message ?: "Management API forwarding check failed."
+                    }
+                }
+            } else {
+                lastFailure = "GitHub Codespace state is $codespaceState; waiting for Available."
+            }
+            delay(4_000L)
+        }
+        throw IOException("Automatic Management API discovery did not complete: $lastFailure")
+    }
+
+    /**
+     * Request the one-time first-owner registration token from the Management API.
+     * The GitHub App user token travels only to the API's owner-only bootstrap route;
+     * that route independently verifies /user and matches the GitHub account that owns
+     * the Codespace. The token is returned to the app only over verified HTTPS.
+     */
+    suspend fun fetchCodespacesOwnerSetupToken(managementOrigin: String = secrets.getManagementApiOrigin()): String =
+        withContext(Dispatchers.IO) {
+            val origin = managementOrigin.trim().trimEnd('/')
+            require(isCodespacesForwardedManagementApiOrigin(origin)) {
+                "A verified GitHub Codespaces Management API origin is required."
+            }
+            val accessToken = validAccessToken()
+            val request = Request.Builder()
+                .url("$origin/api/v1/auth/owner-setup-token")
+                .header("Accept", "application/json")
+                .header("X-Tunnel-Skip-AntiPhishing-Page", "true")
+                .header("X-GitHub-Owner-Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (response.priorResponse != null || response.request.url.host != URI(origin).host) {
+                    throw IOException("Owner setup token response was redirected; refusing an unverified host.")
+                }
+                val body = runCatching { JSONObject(response.body?.string().orEmpty()) }
+                    .getOrElse { throw IOException("Management API returned an invalid owner-bootstrap response.") }
+                if (!response.isSuccessful) {
+                    val detail = body.optString("detail")
+                    throw IOException(
+                        when (response.code) {
+                            403 -> "This GitHub account does not own the running Codespace."
+                            409 -> "The first administrator has already been registered."
+                            404 -> "Codespaces owner bootstrap is not enabled on this host."
+                            else -> if (detail.isNotBlank()) detail else "Owner setup token request failed (" + response.code + ")."
+                        }
+                    )
+                }
+                val token = body.optString("owner_setup_token").trim()
+                require(token.length in 40..512 && token.all { it.code in 33..126 }) {
+                    "Management API returned an invalid owner setup token."
+                }
+                token
+            }
+        }
 
     suspend fun stopRepositoryCodespace(timeoutMs: Long = 300_000L): LifecycleResult = withContext(Dispatchers.IO) {
         require(timeoutMs in 5_000L..600_000L) {
