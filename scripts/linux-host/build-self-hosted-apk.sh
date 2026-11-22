@@ -9,7 +9,43 @@ APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
 block(){ printf 'BLOCKED: %s\n' "$*" >&2; exit 2; }
 [[ "$EUID" -ne 0 ]] || block "Run the APK build as a non-root Android build user."
 [[ -f "$ROOT/gradlew" && -f "$ROOT/app/build.gradle.kts" ]] || block "Run from a checked-out DestinedFX repository."
-[[ -f "$MANIFEST" && ! -L "$MANIFEST" && -r "$MANIFEST" ]] || block "The verified host endpoint manifest is missing."
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+CODESPACES_BUILD=false
+CODESPACES_VALUE="$(printenv CODESPACES 2>/dev/null || true)"
+
+# Derive the Bridge host from GitHub's Codespaces environment. The Management API
+# remains a separate service and is deliberately not invented or replaced here.
+if [[ ! -f "$MANIFEST" && "$CODESPACES_VALUE" == "true" ]]; then
+  CODESPACE_NAME="$(printenv CODESPACE_NAME 2>/dev/null || true)"
+  CODESPACE_DOMAIN="$(printenv GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN 2>/dev/null || printf 'app.github.dev')"
+  MANAGEMENT_API_ORIGIN="$(printenv MANAGEMENT_API_ORIGIN 2>/dev/null || true)"
+  [[ "$CODESPACE_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || block "GitHub Codespaces reported an invalid or missing CODESPACE_NAME."
+  case "$CODESPACE_DOMAIN" in
+    app.github.dev|preview.app.github.dev|githubpreview.dev) ;;
+    *) block "Unsupported GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN. Update the strict Codespaces host allowlist before building." ;;
+  esac
+  [[ -n "$MANAGEMENT_API_ORIGIN" ]] || block "Management API is missing: this Codespaces devcontainer starts Bridge on 8000 and private noVNC on 6080 only; it does not start or forward the Management API on 8010/8080/8001. A separately reachable Management API with its EdDSA Bridge verification key is required; no locked APK will be built without it."
+  CODESPACE_BRIDGE_URL="https://$CODESPACE_NAME-8000.$CODESPACE_DOMAIN"
+  MANIFEST="$TEMP_DIR/codespaces-public-endpoints.json"
+  python3 - "$MANIFEST" "$CODESPACE_BRIDGE_URL" "$MANAGEMENT_API_ORIGIN" <<'PY'
+import json, os, sys
+from pathlib import Path
+target = Path(sys.argv[1])
+document = {
+    "schema_version": 1,
+    "bridge_url": sys.argv[2],
+    "management_api_origin": sys.argv[3],
+}
+with target.open("x", encoding="utf-8") as stream:
+    json.dump(document, stream, sort_keys=True, separators=(",", ":"))
+    stream.write("\n")
+os.chmod(target, 0o600)
+PY
+  export DESTINEDFX_CODESPACES_HOST_BUILD=true
+  CODESPACES_BUILD=true
+fi
+[[ -f "$MANIFEST" && ! -L "$MANIFEST" && -r "$MANIFEST" ]] || block "A verified endpoint manifest is missing. On the persistent host, complete install-self-hosted.sh first; inside Codespaces, provide a real Management API origin before invoking the Codespaces-aware build path."
 command -v python3 >/dev/null || block "Python 3 is required."
 command -v java >/dev/null || block "JDK 21 is required."
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
@@ -81,9 +117,23 @@ def get(url, label):
     if len(body) > 65536: raise SystemExit(f"Blocked: {label} response too large.")
     try: return json.loads(body)
     except Exception: raise SystemExit(f"Blocked: {label} returned invalid JSON.")
-br = get(b + "/health/ready", "Bridge")
-if br.get("status") != "ready" or br.get("database") != "ok" or br.get("managed_execution") != "configured":
-    raise SystemExit("Blocked: Bridge durable readiness is not ready.")
+if os.environ.get("DESTINEDFX_CODESPACES_HOST_BUILD") == "true":
+    live = get(b + "/health/live", "Codespaces Bridge liveness")
+    health = get(b + "/health", "Codespaces Bridge forwarded-host health")
+    config = get(b + "/health/config", "Codespaces Bridge configuration")
+    if live.get("status") != "ok":
+        raise SystemExit("Blocked: Codespaces Bridge liveness did not pass.")
+    if (health.get("status") != "ok" or health.get("host_profile") != "EPHEMERAL"
+            or health.get("public_exposure") is not True or health.get("expected_forwarded_host") != bh):
+        raise SystemExit("Blocked: Codespaces Bridge public-forwarded-host/EPHEMERAL check did not pass.")
+    if (config.get("status") != "configured" or config.get("database") != "ok"
+            or config.get("managed_execution") != "configured"
+            or config.get("per_user_terminal_isolation") not in {"VERIFIED", "WORKER_ATTESTATION_REQUIRED"}):
+        raise SystemExit("Blocked: Codespaces Bridge configuration or per-user isolation is not ready.")
+else:
+    br = get(b + "/health/ready", "Bridge")
+    if br.get("status") != "ready" or br.get("database") != "ok" or br.get("managed_execution") != "configured":
+        raise SystemExit("Blocked: Bridge durable readiness is not ready.")
 mr = get(m + "/ready", "Management API")
 if mr.get("status") != "ready": raise SystemExit("Blocked: management API/PostgreSQL is not ready.")
 key = get(m + "/api/v1/auth/bridge-verification-key", "EdDSA key")
@@ -107,8 +157,8 @@ grep -Fq "package: name='com.aistudio.destinedfx.qwvzxp'" <<<"$metadata" || bloc
 grep -Fq "arm64-v8a" <<<"$metadata" && grep -Fq "x86_64" <<<"$metadata" || block "Required Android ABIs are missing."
 # Verify the compiled endpoint constants in the APK itself, not only the
 # intermediate BuildConfig source generated by Gradle.
-DEX_DIR="$(mktemp -d)"
-trap 'rm -rf "$DEX_DIR"' EXIT
+DEX_DIR="$TEMP_DIR/dex"
+mkdir -p "$DEX_DIR"
 "$UNZIP" -oq "$APK" 'classes*.dex' -d "$DEX_DIR" || block "APK DEX bytecode could not be extracted."
 mapfile -t DEX_FILES < <(find "$DEX_DIR" -maxdepth 1 -type f -name 'classes*.dex' -print | sort)
 [[ "${#DEX_FILES[@]}" -gt 0 ]] || block "APK contains no DEX bytecode."
