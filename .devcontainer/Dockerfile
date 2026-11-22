@@ -33,7 +33,7 @@ RUN install -d -m 0755 /opt/android-sdk/cmdline-tools \
     && cp -a /tmp/android-sdk-tools/cmdline-tools/. /opt/android-sdk/cmdline-tools/latest/ \
     && yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/opt/android-sdk --licenses >/dev/null \
     && /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/opt/android-sdk \
-       "platform-tools" "platforms;android-36" "build-tools;36.0.0" \
+       "platform-tools" "platforms;android-36" "platforms;android-36-ext1" "build-tools;36.0.0" \
     && chmod -R a+rX /opt/android-sdk \
     && chown -R vscode:vscode /opt/android-sdk \
     && rm -rf /tmp/android-commandline-tools.zip /tmp/android-sdk-tools
