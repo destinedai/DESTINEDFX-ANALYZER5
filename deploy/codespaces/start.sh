@@ -183,9 +183,38 @@ if [[ -f "$RUNTIME/pids" && -s "$RUNTIME/pids" ]]; then
     sudo -n python3 "$PROCESS_IDENTITY" verify --record "$RUNTIME/$identity_file" >/dev/null 2>&1 || all_running=false
   done < "$RUNTIME/pids"
   if [[ "$all_running" == true ]]; then
-    pass 'Existing managed Codespaces processes match their saved PID/start-time/UID/executable/argv identities.'
-    python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
-    exit 0
+    # An older Bridge-only Codespaces launch predates the port-8010 Management API.
+    # Do not take the fast path unless both services and the EdDSA key contract
+    # are still available on loopback.
+    management_ready="$(curl -fsS --max-time 3 http://127.0.0.1:8010/ready 2>/dev/null || true)"
+    management_key="$(curl -fsS --max-time 3 http://127.0.0.1:8010/api/v1/auth/bridge-verification-key 2>/dev/null || true)"
+    management_key_valid="$(python3 - "$management_ready" "$management_key" <<'PY'
+import json,sys
+try:
+    ready=json.loads(sys.argv[1])
+    key=json.loads(sys.argv[2])
+except Exception:
+    print("1")
+else:
+    pem=str(key.get("public_key_pem","")).strip()
+    valid=(
+        ready.get("status")=="ready"
+        and ready.get("database")=="ok"
+        and key.get("algorithm")=="EdDSA"
+        and key.get("issuer")=="destinedfx-management"
+        and key.get("audience")=="destinedfx-bridge"
+        and pem.startswith("-----BEGIN PUBLIC KEY-----")
+        and pem.endswith("-----END PUBLIC KEY-----")
+    )
+    print("0" if valid else "1")
+PY
+)"
+    if [[ "$management_key_valid" == "0" ]]; then
+      pass 'Existing managed Codespaces processes and the PostgreSQL-backed Management API/EdDSA key are healthy.'
+      python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
+      exit 0
+    fi
+    pass 'Existing Bridge-only Codespaces runtime detected; safely upgrading its tracked processes to the two-API host.'
   fi
   "$ROOT/deploy/codespaces/stop.sh" || {
     fail 'Existing Codespaces process identities could not be safely stopped; refusing to replace their records.'
