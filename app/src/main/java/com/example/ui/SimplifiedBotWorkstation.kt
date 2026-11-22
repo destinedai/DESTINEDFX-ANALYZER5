@@ -62,6 +62,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.data.codespaces.GitHubCodespacesClient
+import com.example.data.codespaces.CodespacesLifecycleClient
 import com.example.data.codespaces.isSafeHostStopPreflight
 import com.example.data.broker.BrokerType
 import com.example.data.broker.LoginConnector
@@ -371,6 +372,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         } else null
     }
     val githubCodespacesClient = remember(secrets) { GitHubCodespacesClient(secrets) }
+    // Shares the same Keystore-backed GitHub App token pair, but performs
+    // verified forwarded Bridge discovery after GitHub reports the Codespace Available.
+    val codespacesLifecycleClient = remember(secrets) { CodespacesLifecycleClient(secrets) }
     var githubCodespacesClientId by remember {
         mutableStateOf(secrets.getCodespacesGitHubClientId().ifBlank { BuildConfig.CODESPACES_GITHUB_CLIENT_ID })
     }
@@ -1371,6 +1375,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 }
                 Text("Host controls are separate from Bot START / STOP. STOP HOST never closes trades.", color = WarningAmber, fontSize = 9.sp)
                 Text("GitHub: ${if (githubSignedIn) "AUTHORIZED" else "NOT CONNECTED"} · Codespace: ${selectedGithubCodespace?.name ?: "discover from GitHub"}", color = TextSecondary, fontSize = 10.sp)
+                if (serviceUrl.isNotBlank()) {
+                    Text("Verified Bridge: $serviceUrl", color = ProfitGreen, fontSize = 9.sp)
+                } else {
+                    Text("Verified Bridge: NOT DISCOVERED", color = WarningAmber, fontSize = 9.sp)
+                }
                 Text("EA heartbeat: $latestHostHeartbeat", color = TextSecondary, fontSize = 9.sp)
                 if (freshHostBalance != null) Text("Balance: $freshHostBalance ${mt5Snapshot?.currency.orEmpty()} · fresh quote", color = ProfitGreen, fontSize = 10.sp)
                 else Text("Balance: STALE · no fresh account-bound quote within 15 seconds", color = WarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -1417,8 +1426,17 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     }
                                     val active = githubCodespacesClient.getCodespace(target.name)
                                     selectedGithubCodespace = active
+                                    check(active.state.equals("Available", true)) {
+                                        "GitHub did not confirm that the DestinedFX Codespace is Available."
+                                    }
+                                    githubHostOperationState = "STARTING"
+                                    // Do not call the host ACTIVE merely because GitHub says Available.
+                                    // Discover and health-check the port-8000 Bridge on its forwarded
+                                    // HTTPS hostname before the locked Bridge client can use it.
+                                    val discoveredBridgeOrigin = codespacesLifecycleClient.discoverAndSaveBridge()
+                                    serviceUrl = discoveredBridgeOrigin
                                     githubHostOperationState = "ACTIVE"
-                                    githubHostMessage = "GitHub reports Available. Bridge, host-agent and MT5 readiness remain separate checks."
+                                    githubHostMessage = "Codespace is Available and its forwarded Bridge origin passed liveness, exact-host, EPHEMERAL-profile, public-exposure and configuration checks: $discoveredBridgeOrigin. A fresh MT5 terminal heartbeat and broker DEMO acceptance are still separate checks."
                                 } catch (error: Exception) {
                                     githubHostOperationState = "ERROR"
                                     githubHostMessage = error.message?.take(220) ?: "Codespace start failed."
