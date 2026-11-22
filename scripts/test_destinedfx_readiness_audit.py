@@ -57,6 +57,7 @@ class ReadinessAuditTests(unittest.TestCase):
         self.assertIn("fail-closed persistent-host Live policy", names)
         self.assertIn("Analyzer provider diagnostics", names)
         self.assertIn("automatic Codespaces Bridge discovery", names)
+        self.assertIn("automatic Codespaces Management API discovery and owner bootstrap", names)
         self.assertIn("Linux Bridge configuration reflects root slot attestation", names)
         self.assertIn("four broker-specific MT5 DEMO paths", names)
         self.assertIn("isolated MT5 host memory floor", names)
