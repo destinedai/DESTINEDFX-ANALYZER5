@@ -200,11 +200,12 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
 
     bridge_discovery_ok = (
         "discoverAndSaveBridge" in codespaces
-        and "codespacesBridgeOrigin" in codespaces
+        and "codespacesBridgeOriginCandidates" in codespaces
+        and "isCodespacesForwardedBridgeOrigin(candidate)" in codespaces
         and '"/health/live"' in codespaces
         and '"/health/config"' in codespaces
         and "expected_forwarded_host" in codespaces
-        and "saveManagedMT5ServiceUrl(origin)" in codespaces
+        and "saveManagedMT5ServiceUrl(candidate)" in codespaces
         and "DISCOVER BRIDGE URL" in codespaces_ui
         and "expected_forwarded_host" in bridge
     )
@@ -212,7 +213,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         checks,
         "automatic Codespaces Bridge discovery",
         bridge_discovery_ok,
-        "The phone derives the port-8000 origin, probes liveness/configuration and exact public host, then saves only the verified HTTPS origin.",
+        "The phone tries the allow-listed GitHub forwarding domains, verifies Bridge liveness/configuration and exact public host, then saves only the validated HTTPS Codespaces origin.",
     )
 
     linux_health_ok = (
