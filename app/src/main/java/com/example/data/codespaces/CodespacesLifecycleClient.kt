@@ -60,6 +60,12 @@ internal fun hasUsableExpiringGitHubAppToken(
 ): Boolean = accessToken.isNotBlank() && refreshToken.isNotBlank() &&
     accessExpiresInSeconds > 0L && refreshExpiresInSeconds > 0L
 
+private val DESTINEDFX_CODESPACES_FORWARDING_DOMAINS = listOf(
+    "app.github.dev",
+    "preview.app.github.dev",
+    "githubpreview.dev"
+)
+
 internal fun codespacesBridgeOrigin(
     codespaceName: String,
     forwardingDomain: String = "app.github.dev"
@@ -69,11 +75,37 @@ internal fun codespacesBridgeOrigin(
         "GitHub returned an invalid Codespace name."
     }
     val domain = forwardingDomain.trim().lowercase().trimEnd('.')
-    require(domain.matches(Regex("(?:[a-z0-9-]+\\.)*app\\.github\\.dev")) &&
-        !domain.startsWith(".") && !domain.contains("..")) {
+    require(domain in DESTINEDFX_CODESPACES_FORWARDING_DOMAINS) {
         "Unsupported GitHub Codespaces forwarding domain."
     }
     return "https://$name-8000.$domain"
+}
+
+internal fun codespacesBridgeOriginCandidates(codespaceName: String): List<String> =
+    DESTINEDFX_CODESPACES_FORWARDING_DOMAINS.map { codespacesBridgeOrigin(codespaceName, it) }
+
+/**
+ * A locked APK accepts a saved Codespaces URL only when it has the strict
+ * forwarded Bridge port shape. The lifecycle flow separately verifies the
+ * exact forwarded Host, EPHEMERAL profile, public exposure and Bridge config
+ * before it saves this URL in encrypted app storage.
+ */
+internal fun isCodespacesForwardedBridgeOrigin(raw: String): Boolean {
+    return try {
+        val uri = URI(raw.trim()).normalize()
+        val host = uri.host?.lowercase()?.trimEnd('.') ?: return false
+        if (!uri.scheme.equals("https", true) || uri.userInfo != null ||
+            uri.query != null || uri.fragment != null ||
+            uri.path.orEmpty().trimEnd('/').isNotEmpty() ||
+            uri.port !in -1..65535 || uri.port == 0) return false
+        val suffix = DESTINEDFX_CODESPACES_FORWARDING_DOMAINS
+            .map { "-8000.$it" }
+            .firstOrNull { host.endsWith(it) } ?: return false
+        val name = host.removeSuffix(suffix)
+        name.matches(Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"))
+    } catch (_: Exception) {
+        false
+    }
 }
 
 /**
@@ -229,40 +261,46 @@ class CodespacesLifecycleClient(
                 nextStateRefreshAt = now + 15_000L
             }
             if (codespaceState.equals("Available", ignoreCase = true)) {
-                val origin = codespacesBridgeOrigin(codespaceName, forwardingDomain)
-                try {
-                    val live = bridgeJson(origin, "/health/live")
-                    check(live.first == 200 && live.second.optString("status") == "ok") {
-                        "Bridge liveness check did not pass."
-                    }
-                    val health = bridgeJson(origin, "/health")
-                    val healthBody = health.second
-                    check(health.first == 200 &&
-                        healthBody.optString("status") == "ok" &&
-                        healthBody.optString("host_profile") == "EPHEMERAL" &&
-                        healthBody.optBoolean("public_exposure", false) &&
-                        healthBody.optString("expected_forwarded_host").equals(
-                            URI(origin).host.orEmpty(), ignoreCase = true
+                for (origin in (listOf(forwardingDomain) + DESTINEDFX_CODESPACES_FORWARDING_DOMAINS).distinct()) {
+                    if (origin !in DESTINEDFX_CODESPACES_FORWARDING_DOMAINS) continue
+                    val candidate = codespacesBridgeOrigin(codespaceName, origin)
+                    try {
+                        val live = bridgeJson(candidate, "/health/live")
+                        check(live.first == 200 && live.second.optString("status") == "ok") {
+                            "Bridge liveness check did not pass."
+                        }
+                        val health = bridgeJson(candidate, "/health")
+                        val healthBody = health.second
+                        check(health.first == 200 &&
+                            healthBody.optString("status") == "ok" &&
+                            healthBody.optString("host_profile") == "EPHEMERAL" &&
+                            healthBody.optBoolean("public_exposure", false) &&
+                            healthBody.optString("expected_forwarded_host").equals(
+                                URI(candidate).host.orEmpty(), ignoreCase = true
+                            )) {
+                            "Forwarded Bridge host did not pass the exact-host/public-exposure safety check."
+                        }
+                        val config = bridgeJson(candidate, "/health/config")
+                        val configBody = config.second
+                        check(config.first == 200 && codespacesBridgeConfigurationAllowsOriginSave(
+                            status = configBody.optString("status"),
+                            database = configBody.optString("database"),
+                            managedExecution = configBody.optString("managed_execution"),
+                            isolationStatus = configBody.optString("per_user_terminal_isolation")
                         )) {
-                        "Forwarded Bridge host did not pass the exact-host/public-exposure safety check."
+                            "Bridge durable configuration is unavailable or its terminal-isolation status is unknown."
+                        }
+                        check(isCodespacesForwardedBridgeOrigin(candidate)) {
+                            "Verified Bridge origin is not an approved GitHub Codespaces forwarded-host pattern."
+                        }
+                        check(secrets.saveManagedMT5ServiceUrl(candidate)) {
+                            "The verified Bridge URL could not be saved in secure app storage."
+                        }
+                        return@withContext candidate
+                    } catch (error: Exception) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        lastFailure = error.message ?: "Forwarded Bridge health check failed for this GitHub domain."
                     }
-                    val config = bridgeJson(origin, "/health/config")
-                    val configBody = config.second
-                    check(config.first == 200 && codespacesBridgeConfigurationAllowsOriginSave(
-                        status = configBody.optString("status"),
-                        database = configBody.optString("database"),
-                        managedExecution = configBody.optString("managed_execution"),
-                        isolationStatus = configBody.optString("per_user_terminal_isolation")
-                    )) {
-                        "Bridge durable configuration is unavailable or its terminal-isolation status is unknown."
-                    }
-                    check(secrets.saveManagedMT5ServiceUrl(origin)) {
-                        "The verified Bridge URL could not be saved in secure app storage."
-                    }
-                    return@withContext origin
-                } catch (error: Exception) {
-                    if (error is kotlinx.coroutines.CancellationException) throw error
-                    lastFailure = error.message ?: "Forwarded Bridge health check failed."
                 }
             } else {
                 lastFailure = "GitHub Codespace state is $codespaceState; waiting for Available."
