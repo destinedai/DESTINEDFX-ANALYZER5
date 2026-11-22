@@ -138,6 +138,8 @@ def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints
     assert 'https://$CODESPACE_NAME-8010.$CODESPACE_DOMAIN' in builder
     assert 'MANAGEMENT_API_ORIGIN does not match the automatically derived Codespaces port-8010 host.' in builder
     assert 'MANAGEMENT_API_ORIGIN="$CODESPACE_MANAGEMENT_API_ORIGIN"' in builder
+    assert 'CODESPACES_GITHUB_CLIENT_ID is missing or invalid' in builder
+    assert 'APK is missing the configured GitHub Device Flow public Client ID.' in builder
     assert '-PdestinedfxCodespacesHostDiscovery="$CODESPACES_BUILD"' in builder
     assert '/health/live' in builder and '/health/config' in builder
     assert 'DEX_STRINGS' in builder
