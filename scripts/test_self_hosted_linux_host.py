@@ -103,6 +103,11 @@ def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints
     assert '"$AAPT2" dump badging "$APK"' in builder
     assert 'grep -Fq -- "$BRIDGE_URL" <<<"$DEX_STRINGS"' in builder
     assert 'grep -Fq -- "$MANAGEMENT_URL" <<<"$DEX_STRINGS"' in builder
+    assert 'printenv CODESPACE_NAME' in builder
+    assert 'GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN' in builder
+    assert 'DESTINEDFX_CODESPACES_HOST_BUILD=true' in builder
+    assert 'Management API is missing' in builder
+    assert '/health/live' in builder and '/health/config' in builder
 
 
 def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
