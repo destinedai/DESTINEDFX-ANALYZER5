@@ -77,10 +77,16 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("/etc/destinedfx/public-endpoints.json"))
     args = parser.parse_args()
     try:
-        doc = make_manifest(args.source)
         args.output.parent.mkdir(parents=True, exist_ok=True)
+        # Invalidate any previous manifest before reading new configuration.
+        # A failed regeneration must never leave an old host URL buildable.
         if args.output.is_symlink():
             raise ValueError("Manifest output cannot be a symlink.")
+        if args.output.exists():
+            if not args.output.is_file():
+                raise ValueError("Manifest output must be a regular file.")
+            args.output.unlink()
+        doc = make_manifest(args.source)
         fd, temp = tempfile.mkstemp(prefix=".public-endpoints.", dir=args.output.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
