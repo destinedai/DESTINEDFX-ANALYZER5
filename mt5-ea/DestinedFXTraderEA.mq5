@@ -828,7 +828,76 @@ string BrokerQuotesJson(){
    }
    return output+"]";
 }
-void Heartbeat(){if(g_terminalToken=="")return;string cfg=StringFormat("{\"ea_instance_id\":\"%s\",\"ea_started_at_ms\":%I64d,\"strategy\":\"%s\",\"symbols\":%s,\"timeframes\":%s,\"risk_percent\":%.4f,\"max_daily_loss_percent\":%.4f,\"max_concurrent_positions\":%d,\"initial_volume\":%.4f,\"max_volume\":%.4f,\"scaling_enabled\":%s,\"scaling_min_closed_trades\":%d,\"daily_risk_status\":\"%s\",\"daily_loss_used_percent\":%.4f,\"cost_model\":\"%s\",\"commission_per_lot\":%.8f}",Esc(g_eaInstanceId),g_eaStartedAtMs,Esc(g_strategy),JsonArray(g_symbols),JsonArray(g_tfs),g_riskPercent,g_dailyLossPercent,g_maxConcurrent,g_initialVolume,g_maxVolume,g_scalingEnabled?"true":"false",g_scalingMinClosedTrades,Esc(g_dailyRiskStatus),g_dailyRiskUsedPct,Esc(InpCostModel),InpCommissionPerLot);double bal=AccountInfoDouble(ACCOUNT_BALANCE),eq=AccountInfoDouble(ACCOUNT_EQUITY),mar=AccountInfoDouble(ACCOUNT_MARGIN),free=AccountInfoDouble(ACCOUNT_MARGIN_FREE),ml=AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);string b=StringFormat("{\"state\":\"%s\",\"timestamp\":\"%s\",\"terminal_connected\":%s,\"trade_allowed\":%s,\"news_verdict\":%s,\"account\":{\"login\":\"%I64d\",\"server\":\"%s\",\"company\":\"%s\",\"currency\":\"%s\",\"account_mode\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"margin_level\":%.2f,\"leverage\":%d},\"configuration\":%s,\"last_signal\":%s,\"last_error\":\"%s\",\"open_positions\":%s,\"active_orders\":%s,\"closed_deals\":%s,\"broker_quotes\":%s}",StateJson(),IsoUtc(TimeGMT()),TerminalInfoInteger(TERMINAL_CONNECTED)?"true":"false",(MQLInfoInteger(MQL_TRADE_ALLOWED)&&AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))?"true":"false",NewsJson(),AccountInfoInteger(ACCOUNT_LOGIN),Esc(AccountInfoString(ACCOUNT_SERVER)),Esc(AccountInfoString(ACCOUNT_COMPANY)),Esc(AccountInfoString(ACCOUNT_CURRENCY)),BrokerAccountMode(),bal,eq,mar,free,ml,AccountInfoInteger(ACCOUNT_LEVERAGE),cfg,LastSignalJson(),Esc(g_lastError),PositionsJson(),OrdersJson(),DealsJson(),BrokerQuotesJson());string response=Api("POST","/v1/terminal/heartbeat",b);if(response!=""){g_liveAuthorizedUntil=(datetime)JNum(response,"live_authorized_until",0);g_lastHeartbeatAcceptedUtc=TimeGMT();}}
+ENUM_TIMEFRAMES AnalyzerChartTimeframe(int index){
+   switch(index){
+      case 0:return PERIOD_M1;
+      case 1:return PERIOD_M5;
+      case 2:return PERIOD_M15;
+      case 3:return PERIOD_H1;
+      case 4:return PERIOD_H4;
+      case 5:return PERIOD_D1;
+   }
+   return PERIOD_CURRENT;
+}
+string AnalyzerChartTimeframeLabel(int index){
+   switch(index){
+      case 0:return "M1";
+      case 1:return "M5";
+      case 2:return "M15";
+      case 3:return "H1";
+      case 4:return "H4";
+      case 5:return "D1";
+   }
+   return "";
+}
+string BrokerCandlesJson(){
+   string output="[";
+   int emitted=0;
+   datetime utcNow=TimeGMT();
+   datetime serverNow=TimeTradeServer();
+   long serverUtcOffsetSeconds=(long)(serverNow-utcNow);
+   long nowMs=(long)utcNow*1000;
+   // Chart history is independent of the strategy scan timeframes.
+   // 2 symbols x 6 chart timeframes x 80 closed bars = at most 960 bars.
+   // Quotes may cover up to 32 symbols; OHLC is bounded to the first two configured symbols.
+   int symbolLimit=MathMin(ArraySize(g_symbols),2);
+   for(int si=0;si<symbolLimit;si++){
+      string sym=Trim(g_symbols[si]);
+      if(sym=="")continue;
+      for(int ti=0;ti<6;ti++){
+         ENUM_TIMEFRAMES tf=AnalyzerChartTimeframe(ti);
+         string label=AnalyzerChartTimeframeLabel(ti);
+         if(tf==PERIOD_CURRENT||label=="")continue;
+         MqlRates rates[];
+         ArraySetAsSeries(rates,true);
+         int got=CopyRates(sym,tf,1,80,rates); // shift 1 excludes the still-forming bar
+         if(got<1)continue;
+         for(int ri=got-1;ri>=0;ri--){
+            MqlRates bar=rates[ri];
+            double o=bar.open,h=bar.high,l=bar.low,c=bar.close,v=(double)bar.tick_volume;
+            long stamp=((long)bar.time-serverUtcOffsetSeconds)*1000;
+            if(stamp<=0||stamp>nowMs||!Finite(o)||!Finite(h)||!Finite(l)||!Finite(c)||
+               o<=0||h<MathMax(o,c)||l>MathMin(o,c)||h<l||!Finite(v)||v<0)continue;
+            if(emitted>0)output+=",";
+            output+=StringFormat("{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"timestamp_ms\":%I64d,\"open\":%.10f,\"high\":%.10f,\"low\":%.10f,\"close\":%.10f,\"volume\":%.0f,\"complete\":true}",
+                                 Esc(sym),label,stamp,o,h,l,c,v);
+            emitted++;
+         }
+      }
+   }
+   return output+"]";
+}
+void Heartbeat(){
+   if(g_terminalToken=="")return;
+   string cfg=StringFormat("{\"ea_instance_id\":\"%s\",\"ea_started_at_ms\":%I64d,\"strategy\":\"%s\",\"symbols\":%s,\"timeframes\":%s,\"risk_percent\":%.4f,\"max_daily_loss_percent\":%.4f,\"max_concurrent_positions\":%d,\"initial_volume\":%.4f,\"max_volume\":%.4f,\"scaling_enabled\":%s,\"scaling_min_closed_trades\":%d,\"daily_risk_status\":\"%s\",\"daily_loss_used_percent\":%.4f,\"cost_model\":\"%s\",\"commission_per_lot\":%.8f}",Esc(g_eaInstanceId),g_eaStartedAtMs,Esc(g_strategy),JsonArray(g_symbols),JsonArray(g_tfs),g_riskPercent,g_dailyLossPercent,g_maxConcurrent,g_initialVolume,g_maxVolume,g_scalingEnabled?"true":"false",g_scalingMinClosedTrades,Esc(g_dailyRiskStatus),g_dailyRiskUsedPct,Esc(InpCostModel),InpCommissionPerLot);
+   double bal=AccountInfoDouble(ACCOUNT_BALANCE),eq=AccountInfoDouble(ACCOUNT_EQUITY),mar=AccountInfoDouble(ACCOUNT_MARGIN),free=AccountInfoDouble(ACCOUNT_MARGIN_FREE),ml=AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+   string b=StringFormat("{\"state\":\"%s\",\"timestamp\":\"%s\",\"terminal_connected\":%s,\"trade_allowed\":%s,\"news_verdict\":%s,\"account\":{\"login\":\"%I64d\",\"server\":\"%s\",\"company\":\"%s\",\"currency\":\"%s\",\"account_mode\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"margin_level\":%.2f,\"leverage\":%d},\"configuration\":%s,\"last_signal\":%s,\"last_error\":\"%s\",\"open_positions\":%s,\"active_orders\":%s,\"closed_deals\":%s,\"broker_quotes\":%s,\"broker_candles\":%s}",StateJson(),IsoUtc(TimeGMT()),TerminalInfoInteger(TERMINAL_CONNECTED)?"true":"false",(MQLInfoInteger(MQL_TRADE_ALLOWED)&&AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))?"true":"false",NewsJson(),AccountInfoInteger(ACCOUNT_LOGIN),Esc(AccountInfoString(ACCOUNT_SERVER)),Esc(AccountInfoString(ACCOUNT_COMPANY)),Esc(AccountInfoString(ACCOUNT_CURRENCY)),BrokerAccountMode(),bal,eq,mar,free,ml,AccountInfoInteger(ACCOUNT_LEVERAGE),cfg,LastSignalJson(),Esc(g_lastError),PositionsJson(),OrdersJson(),DealsJson(),BrokerQuotesJson(),BrokerCandlesJson());
+   string response=Api("POST","/v1/terminal/heartbeat",b);
+   if(response!=""){
+      g_liveAuthorizedUntil=(datetime)JNum(response,"live_authorized_until",0);
+      g_lastHeartbeatAcceptedUtc=TimeGMT();
+   }
+}
 int OnInit(){g_eaStartedAtMs=(long)TimeGMT()*1000;g_eaInstanceId=StringFormat("%I64d-%I64d-%d",(long)AccountInfoInteger(ACCOUNT_LOGIN),(long)GetMicrosecondCount(),(int)MathRand());if(StringFind(InpBridgeBaseURL,"https://")!=0||StringFind(InpBridgeBaseURL,".example")>=0||StringFind(InpBridgeBaseURL,"example.com")>=0||StringGetCharacter(InpBridgeBaseURL,StringLen(InpBridgeBaseURL)-1)=='/'){Print("Bridge URL must be a real HTTPS origin without a placeholder host or trailing slash");return INIT_PARAMETERS_INCORRECT;}if(InpStrategy!="smc-confluence-1.0.0"&&InpStrategy!="ict-silver-bullet"&&InpStrategy!="wyckoff-schematics"&&InpStrategy!="supply-and-demand"&&InpStrategy!="breakout-momentum"&&InpStrategy!="mean-reversion"&&InpStrategy!="trend-following"&&InpStrategy!="liquidity-stop-hunts"){Print("Unsupported strategy identifier");return INIT_PARAMETERS_INCORRECT;}g_strategy=InpStrategy;if(InpNewsFreshnessSeconds<1||InpNewsFreshnessSeconds>120||InpQuoteFreshnessSeconds<1||InpQuoteFreshnessSeconds>120||InpSlippageAllowancePoints<1||InpSlippageAllowancePoints>1000||!Finite(InpInitialVolume)||!Finite(InpMaxVolume)||InpInitialVolume<=0||InpMaxVolume<InpInitialVolume||InpScalingMinClosedTrades<20)return INIT_PARAMETERS_INCORRECT;g_initialVolume=InpInitialVolume;g_maxVolume=InpMaxVolume;g_scalingEnabled=InpScalingEnabled;g_scalingMinClosedTrades=InpScalingMinClosedTrades;if(!CostConfigurationValid()){Print("Cost model requires representative observed history or positive operator-verified cost plus evidence");return INIT_PARAMETERS_INCORRECT;}if(!Finite(InpRiskPercent)||InpRiskPercent<=0||InpRiskPercent>1||!Finite(InpMaxDailyLossPercent)||InpMaxDailyLossPercent<=0||InpMaxDailyLossPercent>2.0||InpMaxConcurrentPositions<1)return INIT_PARAMETERS_INCORRECT;SplitCsv(InpSymbols,g_symbols);SplitCsv(InpTimeframes,g_tfs);g_riskPercent=InpRiskPercent;g_dailyLossPercent=InpMaxDailyLossPercent;g_maxConcurrent=InpMaxConcurrentPositions;LoadState();if(g_terminalToken=="")Claim();EventSetTimer(MathMax(1,InpPollSeconds));g_lastReason="Initialized; broker synchronization and persisted-journal reconciliation required before START/RESUME or new orders";return INIT_SUCCEEDED;}
 void OnDeinit(const int reason){EventKillTimer();}
 bool StartupBrokerSnapshotReady(){

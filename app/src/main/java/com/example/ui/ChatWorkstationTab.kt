@@ -100,7 +100,7 @@ fun ChatWorkstationTab(viewModel: DestinedFXViewModel) {
             listOf("price", "cmp", "quote", "cost", "current market price", "ticker").any(q::contains) -> {
                 if (freshPrice != null) {
                     val bias = ticker?.bias ?: "NEUTRAL"
-                    val change = ticker?.changePercent?.takeIf { it.isFinite() }?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "not supplied"
+                    val change = ticker?.takeIf { it.hasVerifiedChange }?.changePercent?.takeIf { it.isFinite() }?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "not supplied"
                     "Latest available price for $symbol is $priceStr (daily change: $change). Source: ${ticker?.source?.ifBlank { "unavailable" } ?: "unavailable"}; status: ${if (ticker?.isLive == true) "reported live by feed" else "not verified live"}. Feed bias: $bias. Check Analyzer's quote timestamp/status before relying on it."
                 } else {
                     "A current verified quote for $symbol is unavailable. Switch to the Analyzer tab or tap REFRESH to request the selected market feed; do not treat the embedded TradingView chart as an OHLC API."

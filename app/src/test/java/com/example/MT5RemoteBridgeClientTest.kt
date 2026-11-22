@@ -3,6 +3,7 @@ package com.example
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.data.codespaces.isCodespacesForwardedBridgeOrigin
 import com.example.data.trade.parseVerifiedBrokerQuotes
+import com.example.data.trade.parseVerifiedBrokerCandles
 import com.example.security.SecretsManager
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
@@ -22,6 +23,32 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MT5RemoteBridgeClientTest {
+    @Test fun brokerCandleParserAcceptsOnlyClosedFreshFiniteUniqueTerminalBars() {
+        val now = 1_800_000_000_000L
+        val rows = JSONArray()
+            .put(JSONObject().put("symbol","EURUSD.a").put("timeframe","M1").put("timestamp_ms",now-60_000L)
+                .put("open",1.1).put("high",1.2).put("low",1.0).put("close",1.15).put("volume",10.0).put("complete",true))
+            .put(JSONObject().put("symbol","GBPUSD").put("timeframe","H2").put("timestamp_ms",now-60_000L)
+                .put("open",1.1).put("high",1.2).put("low",1.0).put("close",1.15).put("volume",10.0).put("complete",true))
+            .put(JSONObject().put("symbol","USDJPY").put("timeframe","M1").put("timestamp_ms",now-60_000L)
+                .put("open",150.0).put("high",149.0).put("low",148.0).put("close",150.0).put("volume",10.0).put("complete",true))
+            .put(JSONObject().put("symbol","AUDUSD").put("timeframe","M1").put("timestamp_ms",now+5_000L)
+                .put("open",0.6).put("high",0.61).put("low",0.59).put("close",0.605).put("volume",10.0).put("complete",true))
+            .put(JSONObject().put("symbol","NZDUSD").put("timeframe","M1").put("timestamp_ms",now-60_000L)
+                .put("open",0.6).put("high",0.61).put("low",0.59).put("close",0.605).put("volume",10.0).put("complete",false))
+            .put(JSONObject().put("symbol","EURUSD.A").put("timeframe","M1").put("timestamp_ms",now-60_000L)
+                .put("open",1.1).put("high",1.2).put("low",1.0).put("close",1.15).put("volume",10.0).put("complete",true))
+        val accepted = parseVerifiedBrokerCandles(rows, now)
+        assertEquals(1, accepted?.size)
+        val candle = accepted!!.single()
+        assertEquals("EURUSD.a", candle.symbol)
+        assertEquals("M1", candle.timeframe)
+        assertEquals(1.1, candle.open, 0.0000001)
+        assertTrue(candle.complete)
+        assertEquals("MT5_TERMINAL", candle.source)
+        assertEquals(null, parseVerifiedBrokerCandles(null, now))
+    }
+
     @Test fun brokerQuoteParserAcceptsOnlyFreshFiniteTwoSidedUniqueTerminalPrices() {
         val now = 1_800_000_000_000L
         val rows = JSONArray()

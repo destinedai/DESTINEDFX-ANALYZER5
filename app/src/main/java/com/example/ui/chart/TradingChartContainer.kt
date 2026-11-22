@@ -20,6 +20,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -46,6 +47,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -612,8 +614,15 @@ fun AlgorithmicCanvasChart(
         return
     }
 
+    var crosshair by remember(activeSymbol) { mutableStateOf<Offset?>(null) }
+    var showEma20 by remember(activeSymbol) { mutableStateOf(false) }
+    val ema20 = remember(chartCandles) { calculateEma(chartCandles, 20) }
     Box(modifier = modifier.background(Color(0xFF171B27))) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
+        Canvas(
+            modifier = Modifier.fillMaxSize().pointerInput(activeSymbol, chartCandles) {
+                detectTapGestures { point -> crosshair = point }
+            }
+        ) {
             val w = size.width
             val h = size.height
 
@@ -706,6 +715,31 @@ fun AlgorithmicCanvasChart(
                 )
             }
 
+            if (showEma20 && ema20.size == totalCandles) {
+                for (i in 1 until totalCandles) {
+                    val yPrevious = priceToY(ema20[i - 1])
+                    val yCurrent = priceToY(ema20[i])
+                    if (yPrevious.isFinite() && yCurrent.isFinite()) {
+                        val xPrevious = (i - 1) * candleSpacing + candleSpacing / 2f
+                        val xCurrent = i * candleSpacing + candleSpacing / 2f
+                        drawLine(ElectricCyan, Offset(xPrevious, yPrevious), Offset(xCurrent, yCurrent), 2f)
+                    }
+                }
+            }
+
+            crosshair?.let { point ->
+                if (point.x in 0f..w && point.y in 0f..h) {
+                    drawLine(
+                        TextSecondary.copy(alpha = 0.8f), Offset(point.x, 0f), Offset(point.x, h),
+                        1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                    )
+                    drawLine(
+                        TextSecondary.copy(alpha = 0.8f), Offset(0f, point.y), Offset(w, point.y),
+                        1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                    )
+                }
+            }
+
             // Trade levels are annotations only. They never affect the candle axis and are
             // shown only for a symbol-matched actionable engine plan with valid coordinates.
             val levels = validNativeChartTradeLevels(
@@ -771,7 +805,34 @@ fun AlgorithmicCanvasChart(
             )
             }
         }
+        Row(
+            modifier = Modifier.align(Alignment.TopStart).padding(6.dp)
+                .background(Color(0xCC101720), RoundedCornerShape(6.dp))
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            TextButton(onClick = { showEma20 = !showEma20 }) {
+                Text(if (showEma20) "EMA 20 ON" else "INDICATORS · EMA 20", color = ElectricCyan, fontSize = 9.sp)
+            }
+            TextButton(onClick = { crosshair = null }) {
+                Text(if (crosshair == null) "CROSSHAIR" else "CLEAR CROSSHAIR", color = TextPrimary, fontSize = 9.sp)
+            }
+        }
     }
+}
+
+private fun calculateEma(candles: List<Candle>, period: Int): List<Double> {
+    if (candles.isEmpty() || period < 1) return emptyList()
+    val alpha = 2.0 / (period + 1.0)
+    val values = ArrayList<Double>(candles.size)
+    var current = candles.first().close
+    values += current
+    candles.drop(1).forEach { candle ->
+        current = candle.close * alpha + current * (1.0 - alpha)
+        values += current
+    }
+    return values
 }
 
 private const val TRADING_VIEW_LOG_TAG = "DestinedFX.TradingView"

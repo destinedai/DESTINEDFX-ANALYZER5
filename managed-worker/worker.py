@@ -75,7 +75,7 @@ def validate_origin(raw: str) -> str | None:
                 or parsed.path not in ("", "/") or port is None or not (1 <= port <= 65535)):
             return None
         return f"http://{host}:{port}"
-    placeholder = (host in {"example.com", "example.org", "example.net", "testserver", "bridge.example", "localhost"}
+    placeholder = (host in {"example.com", "example.net", "testserver", "bridge.example", "localhost"}
                    or host.endswith(".example") or host.startswith("your-")
                    or host.startswith("placeholder") or host.endswith((".localhost", ".test", ".invalid")) or "example" in host)
     if (not host or parsed.scheme != "https" or parsed.username or parsed.password

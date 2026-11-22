@@ -62,6 +62,9 @@ class MyApplication : Application() {
 
     private var _newsRepository: ForexNewsRepository? = null
     val newsRepository: ForexNewsRepository get() = _newsRepository ?: throw IllegalStateException("ForexNewsRepository not initialized")
+    private var _analyzerNewsRepository: com.example.data.news.MT5BridgeNewsRepository? = null
+    val analyzerNewsRepository: com.example.data.news.MT5BridgeNewsRepository
+        get() = _analyzerNewsRepository ?: throw IllegalStateException("MT5BridgeNewsRepository not initialized")
 
     private var _riskRepository: RiskRepositoryImpl? = null
     val riskRepository: RiskRepositoryImpl get() = _riskRepository ?: throw IllegalStateException("RiskRepository not initialized")
@@ -155,6 +158,7 @@ class MyApplication : Application() {
             _marketDataRepository = MarketDataRepositoryImpl(secrets, derivMarketDataGateway)
             _mt5GatewayRepository = MT5GatewayRepository(secrets)
             _newsRepository = ForexNewsRepository()
+            _analyzerNewsRepository = com.example.data.news.MT5BridgeNewsRepository(secrets)
             _tradeRepository = TradeRepository(dbInstance.tradeDao())
             _analysisRepository = com.example.data.AnalysisRepository(dbInstance.analysisDao())
             _cloudSyncManager = com.example.data.cloud.RealtimeCloudSyncManager(secrets)
@@ -173,7 +177,7 @@ class MyApplication : Application() {
             _authUseCase = AuthUseCaseImpl(dbInstance, secrets)
             _marketDataUseCase = GetMarketDataUseCaseImpl(marketDataRepository)
             _signalGenerationUseCase = SignalGenerationUseCaseImpl(
-                marketDataRepository, newsRepository,
+                marketDataRepository, analyzerNewsRepository,
                 pythonAnalyzer = ChaquopyPythonAnalyzer(this@MyApplication)
             )
             
@@ -216,15 +220,8 @@ class MyApplication : Application() {
             
             initStatus.value = InitState.Ready
             
-            // Asynchronous connection
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    derivMarketDataGateway.connect()
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("MyApplication", "Deriv gateway connect failed: ${e.message}", e)
-                }
-            }
+            // No public Deriv market-data socket is started at app launch.
+            // The Analyzer is bound to the selected authenticated MT5 Bridge profile.
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             // The repository starts polling workers from its constructor. Stop those workers if

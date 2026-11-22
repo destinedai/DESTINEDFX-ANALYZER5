@@ -68,10 +68,10 @@ if (destinedFxEndpointsLocked && !codespacesBootstrapBuild) {
       "$name must be a bare HTTPS origin without credentials, path, query or fragment."
     }
     val reservedHostSuffixes = listOf(
-      ".example", ".example.com", ".example.net", ".example.org", ".localhost",
+      ".example", ".example.com", ".example.net", ".localhost",
       ".test", ".invalid", ".local", ".internal", ".onion"
     )
-    require(host !in setOf("localhost", "example.com", "example.org", "example.net", "127.0.0.1", "0.0.0.0", "::1") &&
+    require(host !in setOf("localhost", "example.com", "example.net", "127.0.0.1", "0.0.0.0", "::1") && !host.contains("example") &&
       reservedHostSuffixes.none { host.endsWith(it) } && !host.contains("placeholder") &&
       !host.matches(Regex("^[0-9.]+$")) && !host.contains(":")) {
       "$name cannot use a placeholder, private literal or localhost address."
@@ -186,7 +186,7 @@ android {
         managementPort != 0 && managementPort in -1..65535) {
         "Release builds require MANAGEMENT_API_ORIGIN to be a public HTTPS origin (no path, credentials, query, or fragment)."
       }
-      require(managementHost !in setOf("example.com", "example.org", "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]") &&
+      require(managementHost !in setOf("example.com", "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]") && !managementHost.contains("example") &&
         !(managementIp == null && (managementHost.contains(":") || managementHost.matches(Regex("^[0-9.]+$")))) &&
         !managementSpecialIpv4 &&
         managementIp?.let { !it.isAnyLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isSiteLocalAddress && !it.isMulticastAddress } != false &&

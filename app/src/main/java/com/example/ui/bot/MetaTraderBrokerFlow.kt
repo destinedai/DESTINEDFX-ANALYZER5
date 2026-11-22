@@ -98,6 +98,7 @@ fun MetaTraderBrokerFlow(
     var page by remember { mutableStateOf(FlowPage.ACCOUNTS) }
     var selected by remember { mutableStateOf<BrokerLoginSpec?>(null) }
     var query by remember { mutableStateOf("") }
+    var serverSearch by remember { mutableStateOf("") }
     var manualDialog by remember { mutableStateOf(false) }
     var manualName by remember { mutableStateOf("") }
     var form by remember { mutableStateOf(LoginForm()) }
@@ -373,48 +374,52 @@ fun MetaTraderBrokerFlow(
                     Modifier.weight(1f).fillMaxWidth().imePadding().verticalScroll(loginScrollState),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = { openUrl(spec.demoSignupUrl) },
-                        modifier = Modifier.weight(1f).height(48.dp).testTag("open_demo"),
-                        colors = ButtonDefaults.buttonColors(containerColor = LoginBlue),
-                    ) { Text("Open a demo account") }
-                    Button(
-                        onClick = { openUrl(spec.realAccountUrl) },
-                        modifier = Modifier.weight(1f).height(48.dp).testTag("open_real"),
-                        colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant),
-                    ) { Text("Open a real account", color = TextPrimary) }
-                }
                 Text(
-                    if (spec.connector == LoginConnector.MT5_TERMINAL) "Test and verify an existing MT5 broker login" else "Login to an existing account",
-                    color = TextPrimary, fontSize = 18.sp
+                    "DESTINEDFX",
+                    color = ElectricCyan,
+                    fontSize = 18.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Black,
+                    letterSpacing = 1.4.sp
+                )
+                Text(
+                    if (spec.connector == LoginConnector.MT5_TERMINAL) "MT5 account sign-in" else "Broker account sign-in",
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                 )
                 if (spec.connector == LoginConnector.MT5_TERMINAL) {
                     Text(
-                        "Unverified connection hint only. The terminal determines the account mode after login.",
+                        "Choose the account type. The terminal verifies DEMO or REAL after login.",
                         color = WarningAmber,
                         fontSize = 12.sp,
                         modifier = Modifier.testTag("mt5_mode_hint_notice"),
                     )
                     Text(
-                        "MT5 uses the broker account Login number, Password and exact Server. A Client ID is not part of standard MT5 sign-in.",
+                        "Enter your MT5 account number, password and exact broker server.",
                         color = TextSecondary,
                         fontSize = 11.sp,
                         modifier = Modifier.testTag("mt5_login_fields_help"),
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         LoginMode.values().forEach { mode ->
-                            val label = mode.name
+                            val isReal = mode == LoginMode.LIVE
+                            val label = if (isReal) "REAL" else "DEMO"
+                            val selectedMode = modeHintChosen && form.mode == mode
                             Text(
                                 label,
-                                color = if (modeHintChosen && form.mode == mode) Color.White else TextSecondary,
-                                modifier = Modifier.weight(1f).height(48.dp)
-                                    .background(if (modeHintChosen && form.mode == mode) LoginBlue else BrokerSurfaceVariant, RoundedCornerShape(4.dp))
+                                color = if (selectedMode) Color.White else TextSecondary,
+                                fontSize = 15.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Black,
+                                modifier = Modifier.weight(1f).height(54.dp)
+                                    .background(
+                                        if (selectedMode) (if (isReal) LossRed else LoginBlue) else BrokerSurfaceVariant,
+                                        RoundedCornerShape(8.dp)
+                                    )
                                     .clickable {
                                         form = LoginRules.withMode(form, mode)
                                         modeHintChosen = true
                                     }
-                                    .testTag("login_mode_${label.lowercase()}"),
+                                    .testTag("login_mode_${if (isReal) "real" else "demo"}"),
                             )
                         }
                     }
@@ -434,7 +439,7 @@ fun MetaTraderBrokerFlow(
                         value = form.server,
                         onValueChange = { server -> form = form.copy(server = server) },
                         modifier = Modifier.fillMaxWidth().testTag("server_field"),
-                        trailingIcon = { TextButton(onClick = { serverMenu = true }) { Text("LIST") } },
+                        trailingIcon = { TextButton(onClick = { serverSearch = ""; serverMenu = true }) { Text("SEARCH") } },
                         label = { Text("Exact MT5 Server") },
                         placeholder = { Text("Copy the server from your broker's MT5 account details") },
                         singleLine = true,
@@ -443,28 +448,58 @@ fun MetaTraderBrokerFlow(
                         keyboardActions = loginKeyboardActions(),
                     )
                     Text(
-                        "Type the exact Server shown in your broker's Personal Area or MT5 dashboard. Do not guess. When you submit, the server is saved in this device's encrypted ${form.mode.name} profile and sent with this login request; the owner host/terminal must still verify the account identity and actual mode.",
+                        "Use the exact server issued by your broker. It is saved in this device's encrypted ${form.mode.name} profile; the terminal verifies the actual account identity.",
                         color = TextSecondary,
                         fontSize = 10.sp,
                         lineHeight = 14.sp,
                         modifier = Modifier.testTag("mt5_server_field_help"),
                     )
+                    if (spec.id == "HFM_MT5") {
+                        Text(
+                            if (form.mode == LoginMode.DEMO)
+                                "HFM Europe1 reference: DEMO service port 1950. Enter the exact server name issued to this account; do not append the port."
+                            else
+                                "HFM Europe1 reference: Live1 service port 1951. Enter the exact server name issued to this account; do not append the port.",
+                            color = ElectricCyan,
+                            fontSize = 10.sp,
+                            lineHeight = 14.sp,
+                            modifier = Modifier.testTag("hfm_mt5_port_reference")
+                        )
+                    }
                     Text(
-                        "This test sends your broker login through the authenticated HTTPS Bridge to your owner-authorized host. The MT5 terminal performs the actual broker login; the EA then verifies the exact account identity and fresh heartbeat. No trade is submitted by this test.",
+                        "Login is verified by the paired MT5 terminal. No order is sent during sign-in.",
                         color = TextSecondary,
                         fontSize = 10.sp,
                         modifier = Modifier.testTag("mt5_login_verification_path")
                     )
-                    DropdownMenu(serverMenu, { serverMenu = false }) {
-                        ServerOptions.build(spec, emptyList(), emptyList()).forEach { option ->
-                            if (option is ServerOption.Suggested) DropdownMenuItem(
-                                text = { Text(option.value) },
+                    val serverOptions = ServerOptions.build(spec, emptyList(), emptyList())
+                        .filter { option -> option !is ServerOption.Suggested || option.value.contains(serverSearch.trim(), ignoreCase = true) }
+                    DropdownMenu(serverMenu, { serverMenu = false; serverSearch = "" }) {
+                        OutlinedTextField(
+                            value = serverSearch,
+                            onValueChange = { serverSearch = it },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("server_search"),
+                            label = { Text("Search saved servers") },
+                            singleLine = true,
+                        )
+                        val suggestions = serverOptions.filterIsInstance<ServerOption.Suggested>()
+                        if (suggestions.isEmpty()) {
+                            Text("No saved server suggestions. Enter the exact name above.", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(12.dp))
+                        }
+                        suggestions.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Column { Text(option.value); Text(option.origin, color = TextSecondary, fontSize = 9.sp) } },
                                 onClick = {
                                     form = form.copy(server = option.value)
                                     serverMenu = false
+                                    serverSearch = ""
                                 },
-                            ) else DropdownMenuItem(text = { Text("Type server name") }, onClick = { serverMenu = false })
+                            )
                         }
+                        DropdownMenuItem(
+                            text = { Text("Type exact server name") },
+                            onClick = { serverMenu = false; serverSearch = "" }
+                        )
                     }
                 } else if (spec.connector == LoginConnector.DERIV_OPTIONS) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -526,7 +561,7 @@ fun MetaTraderBrokerFlow(
                     }
                     if (!securePolicy.enabled) Text(securePolicy.reason.orEmpty(), color = WarningAmber, fontSize = 11.sp)
                 }
-                Text("Forgot password?", color = ElectricCyan, modifier = Modifier.fillMaxWidth().height(48.dp).clickable { openUrl(spec.passwordRecoveryUrl) })
+                Text("Forgot password? Use your broker app", color = ElectricCyan, modifier = Modifier.fillMaxWidth().height(40.dp).clickable { openUrl(spec.passwordRecoveryUrl) }.testTag("forgot_password"))
                 stage?.let { Text("${it.label}...", color = ElectricCyan, modifier = Modifier.testTag("connect_progress")) }
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
                 Button(
@@ -534,9 +569,9 @@ fun MetaTraderBrokerFlow(
                     onClick = { connect(spec, form) },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White)
-                    else Text(if (spec.connector == LoginConnector.MT5_TERMINAL) "TEST LOGIN & VERIFY" else "LOGIN")
+                    else Text("LOGIN")
                 }
-                if (busy) TextButton(onClick = { busy = false }, modifier = Modifier.height(48.dp)) { Text("CANCEL") }
+
                 }
             }
             FlowPage.PICK_ACCOUNT -> {

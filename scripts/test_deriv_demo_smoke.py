@@ -182,8 +182,9 @@ def test_demo_verification_does_not_mutate_the_analyzer_market_source():
     assert "marketDataRepository.refreshSymbol" not in verification_region
     assert "selectedApiSource" not in verification_region
 
-    # Public market data is a distinct read-only feed; verifying a DEMO broker login
-    # must not switch it or couple analyzer data to an execution account.
-    assert 'override val selectedApiSource = MutableStateFlow("DERIV_PUBLIC")' in market
+    # Analyzer market data is bound to the exact selected authenticated MT5 profile.
+    assert 'override val selectedApiSource = MutableStateFlow("MT5_BRIDGE")' in market
+    assert "verifiedMt5Snapshot" in market
+    assert "brokerCandles" in market
     assert "PublicRestMarketFeed" not in market
     assert "BinanceProvider" not in market

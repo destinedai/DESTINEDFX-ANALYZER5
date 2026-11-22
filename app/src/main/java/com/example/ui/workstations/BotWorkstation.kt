@@ -198,6 +198,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var showPostLoginPairSelectorModal by remember { mutableStateOf(false) }
     val tickers by viewModel.tickers.collectAsStateWithLifecycle()
     var instantLotSize by remember { mutableStateOf(0.01) }
+    var brokerQuoteSearch by remember(bridgeProfileKey) { mutableStateOf("") }
     var instantSlPips by remember { mutableStateOf("20") }
     var instantTpPips by remember { mutableStateOf("50") }
     var instantExecutionStatus by remember { mutableStateOf<String?>(null) }
@@ -592,12 +593,30 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val actionsReady = bridgeMode && bridgeCanManagePositions && actionSnapshotVerified && !bridgeBusy && !bridgeCommandPending
                     Text("SNAPSHOT-BOUND MANAGEMENT · $selectedAccountMode", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_snapshot_management_header"))
                     val currentBrokerSnapshot = bridgeSnapshot
-                    val terminalQuotes = currentBrokerSnapshot?.brokerQuotes.orEmpty()
+                    val allTerminalQuotes = currentBrokerSnapshot?.brokerQuotes.orEmpty()
+                    val terminalQuotes = allTerminalQuotes.filter { it.symbol.contains(brokerQuoteSearch.trim(), ignoreCase = true) }
                     val brokerQuotesReady = currentBrokerSnapshot?.let {
                         it.connected && it.heartbeatFresh && it.brokerIdentityVerified
-                    } == true && terminalQuotes.isNotEmpty()
-                    Text("SELECTED BROKER · MT5 TERMINAL PRICES", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_broker_quotes_header"))
-                    if (brokerQuotesReady) {
+                    } == true && allTerminalQuotes.isNotEmpty()
+                    Text("QUOTES · SELECTED MT5 BROKER", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_broker_quotes_header"))
+                    Text(
+                        if (selectedAccountMode == "DEMO") "DEMO ACCOUNT · CONFIRM EACH ORDER BEFORE SEND"
+                        else "LIVE ACCOUNT · REAL-MONEY WARNING · CONFIRM EACH ORDER",
+                        color = if (selectedAccountMode == "DEMO") ElectricCyan else LossRed,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.testTag("mt5_account_mode_warning")
+                    )
+                    OutlinedTextField(
+                        value = brokerQuoteSearch,
+                        onValueChange = { brokerQuoteSearch = it },
+                        modifier = Modifier.fillMaxWidth().testTag("mt5_broker_quote_search"),
+                        label = { Text("Search broker symbols") },
+                        singleLine = true
+                    )
+                    if (brokerQuotesReady && terminalQuotes.isEmpty()) {
+                        Text("No configured MT5 symbol matches this search.", color = TextSecondary, fontSize = 9.sp)
+                    } else if (brokerQuotesReady) {
                         terminalQuotes.forEach { quote ->
                             val priceFormat = "%.${quote.digits}f"
                             Row(
@@ -609,6 +628,17 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     Text(quote.symbol, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                                     Text("BID ${String.format(java.util.Locale.US, priceFormat, quote.bid)}  ·  ASK ${String.format(java.util.Locale.US, priceFormat, quote.ask)}",
                                         color = ProfitGreen, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                    val dailyClose = currentBrokerSnapshot?.brokerCandles.orEmpty()
+                                        .filter { it.symbol.equals(quote.symbol, ignoreCase = true) && it.timeframe == "D1" && it.complete }
+                                        .maxByOrNull { it.timestampMs }?.close
+                                    val spread = quote.ask - quote.bid
+                                    val change = dailyClose?.takeIf { it.isFinite() && it > 0.0 }
+                                        ?.let { ((quote.bid + quote.ask) / 2.0 - it) / it * 100.0 }
+                                        ?.takeIf { it.isFinite() }
+                                    Text(
+                                        "SPREAD ${String.format(java.util.Locale.US, priceFormat, spread)}  ·  CHANGE ${change?.let { String.format(java.util.Locale.US, "%+.2f%%", it) } ?: "—"}",
+                                        color = TextSecondary, fontSize = 9.sp, fontFamily = FontFamily.Monospace
+                                    )
                                 }
                                 Text("${quote.ageMs} ms · ${quote.source}", color = TextSecondary, fontSize = 8.sp)
                             }
@@ -627,7 +657,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             modifier = Modifier.testTag("mt5_broker_quotes_status")
                         )
                     }
-                    Text("These are quotes from this account's authenticated MT5 terminal. Analyzer/provider prices remain a separate feed and are not substituted for these broker prices.",
+                    Text("These bid/ask and OHLC values come from the same authenticated MT5 terminal snapshot used by Analyzer. Change is shown only when a broker D1 reference close is available.",
                         color = TextSecondary, fontSize = 9.sp)
 
                     if (bridgeMode) {
@@ -659,13 +689,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     OutlinedButton(
                                         enabled = !bridgeBusy && !bridgeCommandPending,
                                         onClick = { manualOrderSide = "BUY" },
-                                        modifier = Modifier.weight(1f).testTag("mt5_phone_order_buy_side")
-                                    ) { Text(if (manualOrderSide == "BUY") "BUY · SELECTED" else "BUY", fontSize = 9.sp) }
+                                        modifier = Modifier.weight(1f).height(52.dp).testTag("mt5_phone_order_buy_side")
+                                    ) { Text(if (manualOrderSide == "BUY") "BUY · SELECTED" else "BUY", fontSize = 14.sp, fontWeight = FontWeight.Bold) }
                                     OutlinedButton(
                                         enabled = !bridgeBusy && !bridgeCommandPending,
                                         onClick = { manualOrderSide = "SELL" },
-                                        modifier = Modifier.weight(1f).testTag("mt5_phone_order_sell_side")
-                                    ) { Text(if (manualOrderSide == "SELL") "SELL · SELECTED" else "SELL", fontSize = 9.sp) }
+                                        modifier = Modifier.weight(1f).height(52.dp).testTag("mt5_phone_order_sell_side")
+                                    ) { Text(if (manualOrderSide == "SELL") "SELL · SELECTED" else "SELL", fontSize = 14.sp, fontWeight = FontWeight.Bold) }
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedTextField(
@@ -846,14 +876,15 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
 
                         if (showManualOrderConfirm) AlertDialog(
                             onDismissRequest = { if (!bridgeBusy) showManualOrderConfirm = false },
-                            title = { Text("Confirm ${manualOrderSide} market order?") },
+                            title = { Text(if (selectedAccountMode == "DEMO") "Confirm DEMO Order?" else "REAL MONEY ORDER — CONFIRM?") },
                             text = {
                                 Text(
                                     "${selectedBrokerBrand} ${selectedAccountMode} · ${currentBrokerSnapshot?.actualLogin} @ ${currentBrokerSnapshot?.actualServer}\n" +
                                     "${phoneOrderSymbol} · " +
                                     "${if (manualOrderSide == "BUY") "ASK ${phoneOrderQuote?.ask}" else "BID ${phoneOrderQuote?.bid}"}\n" +
                                     "SL ${manualOrderStopLoss} · TP ${manualOrderTakeProfit} · risk ${manualOrderRiskPercent}%\n\n" +
-                                    "This sends a new order to the paired Windows MT5 terminal. The EA determines lot size and may reject it if broker min-lot, verified costs, stop distance, margin, news or risk controls fail. A queued request is not a fill."
+                                    (if (selectedAccountMode == "LIVE") "WARNING: This order can use real money and cause a financial loss. LIVE lease and final account/price/risk checks are required. " else "DEMO only: this order is sent to the selected demo account. ") +
+                                    "The Windows MT5 EA determines lot size from broker contract data and enforces its risk cap, stop distance, margin, news and other safety controls. A queued request is not a fill."
                                 )
                             },
                             confirmButton = {

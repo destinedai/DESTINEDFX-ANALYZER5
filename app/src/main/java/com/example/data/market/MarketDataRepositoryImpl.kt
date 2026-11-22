@@ -4,6 +4,11 @@ import android.util.Log
 import com.example.domain.model.Candle
 import com.example.domain.model.MarketTicker
 import com.example.domain.model.Tick
+import com.example.data.trade.MT5RemoteBridgeClient
+import com.example.data.trade.VerifiedBrokerQuote
+import com.example.data.trade.VerifiedBrokerCandle
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.destinedfx.core.marketdata.ExponentialBackoff
 import com.destinedfx.core.marketdata.MarketQuote
 import com.destinedfx.core.marketdata.OandaPricingStream
@@ -114,7 +119,7 @@ class MarketDataRepositoryImpl(
     private val _quoteDiagnostics = MutableStateFlow<Map<String, String>>(emptyMap())
     override val quoteDiagnostics: StateFlow<Map<String, String>> = _quoteDiagnostics.asStateFlow()
 
-    override val selectedApiSource = MutableStateFlow("DERIV_PUBLIC")
+    override val selectedApiSource = MutableStateFlow("MT5_BRIDGE")
 
     private val activeSource = ConcurrentHashMap<String, String>()
     private val lastSourceLog = ConcurrentHashMap<String, Long>()
@@ -266,8 +271,130 @@ class MarketDataRepositoryImpl(
         return liveTickerIfFresh(gateway.latestQuotes.value[derivSymbol])
     }
 
+    private val bridgeSnapshotMutex = Mutex()
+    @Volatile private var bridgeSnapshotCache: MT5RemoteBridgeClient.Snapshot? = null
+    @Volatile private var bridgeSnapshotCacheAtMs: Long = 0L
+    @Volatile private var bridgeSnapshotCacheProfile: String = ""
+
+    /**
+     * Analyzer price data must be bound to the currently selected, encrypted broker profile.
+     * No Deriv, OANDA, MetaAPI, or chart-widget fallback is accepted on this path.
+     */
+    private suspend fun verifiedMt5Snapshot(forceRefresh: Boolean = false): MT5RemoteBridgeClient.Snapshot? =
+        withContext(Dispatchers.IO) {
+            bridgeSnapshotMutex.withLock {
+                val brand = secrets.getSelectedMT5BrokerBrand().trim().uppercase()
+                val mode = secrets.getManagedMT5SelectedProfile().trim().uppercase()
+                val profileKey = "${brand}_${mode}"
+                val login = secrets.getManagedMT5AccountLogin(profileKey).trim()
+                val server = secrets.getManagedMT5AccountServer(profileKey).trim()
+                if (brand.isBlank() || mode !in setOf("DEMO", "LIVE") ||
+                    login.isBlank() || server.isBlank() ||
+                    secrets.getMT5BridgeAccountAppToken(profileKey).isBlank()) {
+                    bridgeSnapshotCache = null
+                    bridgeSnapshotCacheProfile = profileKey
+                    bridgeSnapshotCacheAtMs = 0L
+                    return@withLock null
+                }
+                val now = clock()
+                if (!forceRefresh && bridgeSnapshotCacheProfile == profileKey &&
+                    now >= bridgeSnapshotCacheAtMs && now - bridgeSnapshotCacheAtMs < 1_000L) {
+                    return@withLock bridgeSnapshotCache
+                }
+                val snapshot = runCatching {
+                    MT5RemoteBridgeClient(
+                        secrets = secrets,
+                        profile = profileKey,
+                        accountMode = mode,
+                        brokerBrand = brand
+                    ).state()
+                }.getOrNull()
+                val verified = snapshot?.takeIf {
+                    it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected &&
+                        it.accountVerified && it.brokerIdentityVerified &&
+                        it.actualAccountMode == mode && it.actualLogin == login && it.actualServer == server
+                }
+                bridgeSnapshotCache = verified
+                bridgeSnapshotCacheProfile = profileKey
+                bridgeSnapshotCacheAtMs = now
+                verified
+            }
+        }
+
+    private fun markMt5QuoteUnavailable(symbol: String, reason: String) {
+        _tickers.update { current ->
+            current[symbol]?.let { current + (symbol to it.copy(kind = "STALE", isLive = false)) } ?: current
+        }
+        _quoteDiagnostics.update { current -> current + (symbol to reason) }
+    }
+
+    private fun resolveMt5TerminalQuote(
+        snapshot: MT5RemoteBridgeClient.Snapshot,
+        canonicalSymbol: String
+    ): VerifiedBrokerQuote? {
+        val quotes = snapshot.brokerQuotes.orEmpty()
+        val override = secrets.getBrokerSymbolOverrides()[canonicalSymbol]?.trim().orEmpty()
+        if (override.isNotBlank()) {
+            return quotes.singleOrNull { it.symbol.equals(override, ignoreCase = true) }
+        }
+        quotes.singleOrNull { it.symbol.equals(canonicalSymbol, ignoreCase = true) }?.let { return it }
+        fun canonical(value: String): String = value.uppercase()
+            .filter { it in 'A'..'Z' || it in '0'..'9' }
+        val key = canonical(canonicalSymbol)
+        if (key.isBlank()) return null
+        return quotes.filter { canonical(it.symbol) == key }.singleOrNull()
+    }
+
+    private fun mt5Ticker(snapshot: MT5RemoteBridgeClient.Snapshot, symbol: String): MarketTicker? {
+        val quote = resolveMt5TerminalQuote(snapshot, symbol) ?: return null
+        if (quote.ageMs !in 0L..15_000L || quote.bid <= 0.0 || quote.ask < quote.bid) return null
+        val mid = (quote.bid + quote.ask) / 2.0
+        val dailyReference = snapshot.brokerCandles.orEmpty()
+            .asSequence()
+            .filter { it.symbol.equals(quote.symbol, ignoreCase = true) &&
+                it.timeframe.equals("D1", ignoreCase = true) && it.complete }
+            .maxByOrNull { it.timestampMs }
+        val dailyReferenceClose = dailyReference?.close?.takeIf { it.isFinite() && it > 0.0 }
+        val verifiedChange = dailyReferenceClose?.let { ((mid - it) / it) * 100.0 }?.takeIf { it.isFinite() }
+        val brand = secrets.getSelectedMT5BrokerBrand().trim().uppercase()
+        val company = com.example.data.broker.BrokerDirectory.byBrandId(brand)?.name ?: brand
+        return MarketTicker(
+            symbol = symbol,
+            price = mid,
+            changePercent = verifiedChange ?: 0.0,
+            high = dailyReference?.high?.takeIf { it.isFinite() && it > 0.0 } ?: quote.ask,
+            low = dailyReference?.low?.takeIf { it.isFinite() && it > 0.0 } ?: quote.bid,
+            spread = quote.ask - quote.bid,
+            bias = "NEUTRAL",
+            confidence = 0,
+            lastUpdateMillis = quote.timestampMs,
+            isLive = true,
+            source = "${company} MT5 Bridge",
+            bid = quote.bid,
+            ask = quote.ask,
+            hasRealSpread = true,
+            kind = "STREAM",
+            hasVerifiedChange = verifiedChange != null
+        )
+    }
+
+    private suspend fun fetchMt5BridgeQuote(symbol: String): MarketTicker? {
+        val snapshot = verifiedMt5Snapshot()
+        if (snapshot == null) {
+            markMt5QuoteUnavailable(symbol, "DISCONNECTED - Price stale. Connect and verify the selected MT5 account.")
+            return null
+        }
+        val ticker = mt5Ticker(snapshot, symbol)
+        if (ticker == null || !isTimestampFresh(ticker.lastUpdateMillis, clock(), 15_000L)) {
+            markMt5QuoteUnavailable(symbol, "DISCONNECTED - Price stale. No fresh bid/ask for this symbol from the selected MT5 terminal.")
+            return null
+        }
+        return ticker
+    }
+
     private suspend fun fetchLiveQuoteForSymbol(sym: String): MarketTicker? {
         val preferred = selectedApiSource.value
+        if (preferred == "MT5_BRIDGE") return fetchMt5BridgeQuote(sym)
         if (isExplicitDerivPublicSource(preferred) && derivMarketDataGateway != null) {
             derivTickerForSymbol(sym, 15_000L, waitForFreshQuote = true)?.let { return it }
         }
@@ -279,6 +406,7 @@ class MarketDataRepositoryImpl(
 
     private suspend fun fetchBackgroundQuoteForSymbol(sym: String): MarketTicker? {
         val preferred = selectedApiSource.value
+        if (preferred == "MT5_BRIDGE") return fetchMt5BridgeQuote(sym)
         if (isExplicitDerivPublicSource(preferred) && derivMarketDataGateway != null) {
             derivTickerForSymbol(sym, 20_000L, waitForFreshQuote = false)?.let { return it }
         }
@@ -434,6 +562,15 @@ class MarketDataRepositoryImpl(
     }
 
     override suspend fun refreshSymbol(symbol: String): MarketTicker? {
+        if (selectedApiSource.value == "MT5_BRIDGE") {
+            val ticker = fetchMt5BridgeQuote(symbol)
+            if (ticker != null && shouldUpdateTicker(symbol, ticker)) {
+                _tickers.update { current -> current + (symbol to ticker) }
+                _quoteDiagnostics.update { current -> current - symbol }
+                return ticker
+            }
+            return null
+        }
         val ticker = fetchLiveQuoteForSymbol(symbol)
         val accepted = ticker != null && shouldUpdateTicker(symbol, ticker)
         if (accepted && ticker != null) {
@@ -496,6 +633,41 @@ class MarketDataRepositoryImpl(
     override suspend fun getCandles(symbol: String, timeframe: String, count: Int): List<Candle> = withContext(Dispatchers.IO) {
         val key = candleSourceKey(symbol, timeframe)
         val now = clock()
+        if (selectedApiSource.value == "MT5_BRIDGE") {
+            val snapshot = verifiedMt5Snapshot()
+            val quote = snapshot?.let { resolveMt5TerminalQuote(it, symbol) }
+            val terminalSymbol = quote?.symbol
+            val rows = if (terminalSymbol == null) emptyList() else snapshot?.brokerCandles.orEmpty()
+                .filter { it.symbol.equals(terminalSymbol, ignoreCase = true) &&
+                    it.timeframe.equals(timeframe.trim(), ignoreCase = true) && it.complete }
+                .sortedBy { it.timestampMs }
+            val bridgeCandles = rows.map {
+                Candle(it.timestampMs, it.open, it.high, it.low, it.close, it.volume, complete = true)
+            }.takeLast(count.coerceAtLeast(0))
+            if (snapshot != null && terminalSymbol != null && bridgeCandles.isNotEmpty()) {
+                val brand = secrets.getSelectedMT5BrokerBrand().trim().uppercase()
+                val brokerName = com.example.data.broker.BrokerDirectory.byBrandId(brand)?.name ?: brand
+                val source = "${brokerName} MT5 Bridge"
+                val retrievedAt = clock()
+                dataSourceMap[key] = source
+                _candleSources[key] = source
+                _candleRetrievedAtMs[key] = retrievedAt
+                candleCache[key] = CachedCandles(bridgeCandles, retrievedAt)
+                _candleFetchErrors.update { it - key }
+                return@withContext bridgeCandles
+            }
+            val detail = if (snapshot == null) {
+                "DISCONNECTED - Price stale. No verified MT5 terminal snapshot; no alternate feed will be used."
+            } else {
+                "MT5 Bridge has not supplied closed OHLC bars for ${symbol} ${timeframe}. No alternate feed will be used."
+            }
+            _candleFetchErrors.update { it + (key to detail) }
+            dataSourceMap.remove(key)
+            _candleSources.remove(key)
+            _candleRetrievedAtMs.remove(key)
+            candleCache.remove(key)
+            return@withContext emptyList()
+        }
         val cached = candleCache[key]
         val ttl = getTtlForTimeframe(timeframe)
 

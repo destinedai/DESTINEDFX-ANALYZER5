@@ -34,8 +34,9 @@ def validate_origin(raw: str, label: str) -> str:
         raise ValueError(f"{label}_URL_INVALID") from exc
     host = (parsed.hostname or "").lower().rstrip(".")
     placeholder = (
-        host in {"localhost", "example.com", "example.org", "example.net", "0.0.0.0",
+        host in {"localhost", "example.com", "example.net", "0.0.0.0",
                  "127.0.0.1", "::1", "testserver"}
+        or "example" in host
         or host.endswith((".example", ".invalid", ".test", ".localhost"))
         or host.startswith(("your-", "placeholder"))
     )

@@ -18,5 +18,7 @@ data class MarketTicker(
     /** true only when [spread] was computed as ask - bid from a real two-sided quote. */
     val hasRealSpread: Boolean = false,
     /** STREAM (true bid/ask), POLLED_LAST (REST last price), DAILY_REFERENCE (end-of-day rate, never live). */
-    val kind: String = "POLLED_LAST"
+    val kind: String = "POLLED_LAST",
+    /** true only when percent change has a verified prior broker close as its baseline. */
+    val hasVerifiedChange: Boolean = true
 )

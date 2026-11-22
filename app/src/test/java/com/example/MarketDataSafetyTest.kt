@@ -155,9 +155,10 @@ class MarketDataSafetyTest {
     }
 
     @Test
-    fun analyzerUsesPublicDerivMarketFeedAndVerifiesCryptoMappingsToo() {
+    fun DerivPublicFeedIsOnlyAnExplicitLegacySourceAndNotTheAnalyzerDefault() {
         assertTrue(isExplicitDerivPublicSource("DERIV_PUBLIC"))
         assertTrue(isExplicitDerivPublicSource("deriv_public"))
+        assertFalse(isExplicitDerivPublicSource("MT5_BRIDGE"))
         assertFalse(isExplicitDerivPublicSource("TRADINGVIEW"))
         assertFalse(isExplicitDerivPublicSource("BINANCE"))
         assertFalse(isExplicitDerivPublicSource("DERIV_MT5_DEMO"))

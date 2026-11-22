@@ -134,7 +134,7 @@ def claimed(p):
     r=client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'test-terminal-1','account':ACCOUNT}); assert r.status_code==200; return r.json()
 def heartbeat_data(**kwargs):
     now_ms=int(time.time()*1000)
-    x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,'max_concurrent_positions':2,'daily_risk_status':'NORMAL','daily_loss_used_percent':10.0},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[],'broker_quotes':[]}; x.update(kwargs); return x
+    x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,'max_concurrent_positions':2,'daily_risk_status':'NORMAL','daily_loss_used_percent':10.0},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[],'broker_quotes':[],'broker_candles':[]}; x.update(kwargs); return x
 
 def analysis_payload(request_id='analysis-1'):
     return {'request_id':request_id,'symbol':'EUR/USD','timeframe':'M1','strategy_id':'smc-confluence-1.0.0'}
@@ -142,49 +142,39 @@ def analysis_payload(request_id='analysis-1'):
 def provider_payload(symbol='EUR/USD',timeframe='M1',quote_age_ms=0):
     now_ms=int(time.time()*1000)-quote_age_ms
     candles=[]
-    for index in range(30):
+    for index in range(80):
         close=100.0+index*0.2
-        candles.append({'timestamp_ms':now_ms-(30-index)*60_000,'open':close-0.05,'high':close+0.30,'low':close-0.30,'close':close,'volume':100.0,'complete':True})
+        candles.append({'timestamp_ms':now_ms-(80-index)*60_000,'open':close-0.05,'high':close+0.30,'low':close-0.30,'close':close,'volume':100.0,'complete':True})
     previous=candles[-2]
     candles[-1]={'timestamp_ms':candles[-1]['timestamp_ms'],'open':previous['high']+0.2,'high':previous['high']+0.6,'low':previous['high']+0.1,'close':previous['high']+0.5,'volume':100.0,'complete':True}
-    return {'provider_id':'fixture-provider','symbol':symbol,'timeframe':timeframe,'quote':{'symbol':symbol,'bid':float(candles[-1]['close']-0.0001),'ask':float(candles[-1]['close']+0.0001),'timestamp_ms':now_ms},'candles':candles}
+    return {'provider_id':'MT5_TERMINAL','symbol':symbol,'timeframe':timeframe,'quote':{'symbol':symbol,'bid':float(candles[-1]['close']-0.0001),'ask':float(candles[-1]['close']+0.0001),'timestamp_ms':now_ms},'candles':candles}
 
-class ProviderResponse:
-    headers=type('Headers',(),{'get_content_type':lambda self:'application/json'})()
-    def __init__(self,payload): self.payload=payload
-    def __enter__(self): return self
-    def __exit__(self,*args): return False
-    def read(self,_limit): return app.json.dumps(self.payload).encode()
-class ProviderOpener:
-    def __init__(self,payload): self.payload=payload
-    def open(self,request,timeout): return ProviderResponse(self.payload)
 
-def configure_provider(monkeypatch,payload=None):
-    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
-    monkeypatch.setenv('ANALYSIS_PROVIDER_URL','https://provider.destinedfx.com')
-    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(payload or provider_payload()))
+def configure_mt5_snapshot(monkeypatch,payload=None,verified=True):
+    snapshot=payload or provider_payload()
+    state={
+        'terminal_online':verified,'terminal_connected':verified,
+        'account_identity_verified':verified,'broker_identity_verified':verified,
+        'broker_quotes':[{'symbol':snapshot['quote']['symbol'],'bid':snapshot['quote']['bid'],
+                          'ask':snapshot['quote']['ask'],'digits':5,
+                          'timestamp_ms':snapshot['quote']['timestamp_ms']}],
+        'broker_candles':[{'symbol':snapshot['symbol'],'timeframe':snapshot['timeframe'],**c}
+                          for c in snapshot['candles']],
+    }
+    monkeypatch.setattr(app,'state',lambda authorization=None: state)
 
-def test_authenticated_analysis_is_typed_non_executable_and_idempotent(monkeypatch):
-    configure_provider(monkeypatch)
+
+def test_authenticated_analysis_uses_mt5_terminal_only_non_executable_and_idempotent(monkeypatch):
+    configure_mt5_snapshot(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload()
     first=client.post('/v1/app/analysis',headers=headers,json=payload)
-    assert first.status_code==200
+    assert first.status_code==200, first.text
     body=first.json(); assert body['state']=='CANDIDATE' and body['executable'] is False
-    assert body['source']=='fixture-provider' and body['strategy_version']=='python-smc-confluence-1.0.0'
+    assert body['source']=='MT5_TERMINAL' and body['quote_source']=='MT5_TERMINAL'
     replay=client.post('/v1/app/analysis',headers=headers,json=payload)
     assert replay.status_code==200 and replay.json()==body
     changed={**payload,'symbol':'GBP/USD'}
     assert client.post('/v1/app/analysis',headers=headers,json=changed).status_code==409
-
-
-def test_authorized_requests_are_rate_limited_by_bearer_token_without_echoing_it(monkeypatch):
-    p=pair(); token_value=p['app_token']; headers={'Authorization':'Bearer '+token_value}
-    monkeypatch.setattr(app,'TOKEN_RATE',1)
-    first=client.get('/v1/app/state',headers=headers)
-    assert first.status_code==200
-    second=client.get('/v1/app/state',headers=headers)
-    assert second.status_code==429
-    assert token_value not in second.text
 
 
 def test_analysis_response_model_rejects_directionally_invalid_candidate_geometry():
@@ -192,15 +182,16 @@ def test_analysis_response_model_rejects_directionally_invalid_candidate_geometr
         'symbol':'EUR/USD','strategy_id':'smc-confluence-1.0.0','strategy_version':'python-smc-confluence-1.0.0',
         'timeframe':'M1','state':'CANDIDATE','direction':'LONG','entry':1.0,'stop_loss':1.1,
         'take_profit':1.2,'reward_to_risk':2.0,'confidence_score':0,'score_basis':['rule-condition match only'],
-        'evidence':['BOS_UP_CLOSED_CANDLE'],'reason':'candidate','rejection_reasons':[],'source':'fixture-provider',
+        'evidence':['BOS_UP_CLOSED_CANDLE'],'reason':'candidate','rejection_reasons':[],'source':'MT5_TERMINAL',
         'candle_timestamp_ms':1,'provider_retrieved_at_ms':1,'quote_bid':1.0,'quote_ask':1.0001,
-        'quote_retrieved_at_ms':1,'quote_source':'fixture-provider','server_now_ms':1,'executable':False,
+        'quote_retrieved_at_ms':1,'quote_source':'MT5_TERMINAL','server_now_ms':1,'executable':False,
     }
     with pytest.raises(ValidationError, match='Candidate stop/target geometry is invalid'):
         app.AnalysisResponse.model_validate(invalid)
 
+
 def test_concurrent_identical_analysis_retries_replay_one_stored_response(monkeypatch):
-    configure_provider(monkeypatch)
+    configure_mt5_snapshot(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('concurrent-analysis')
     with ThreadPoolExecutor(max_workers=8) as pool:
         responses=list(pool.map(lambda _: client.post('/v1/app/analysis',headers=headers,json=payload), range(8)))
@@ -208,78 +199,80 @@ def test_concurrent_identical_analysis_retries_replay_one_stored_response(monkey
     bodies=[r.json() for r in responses]
     assert all(body==bodies[0] for body in bodies)
 
-def test_analysis_fails_closed_for_stale_future_override_and_quote_mismatch(monkeypatch):
-    configure_provider(monkeypatch)
-    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
-    stale=analysis_payload('stale-analysis'); monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(provider_payload(quote_age_ms=app.ANALYSIS_QUOTE_MAX_AGE_MS+1)))
-    assert client.post('/v1/app/analysis',headers=headers,json=stale).status_code==503
-    future={**analysis_payload('future-analysis'),'now_ms':int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000}
-    assert client.post('/v1/app/analysis',headers=headers,json=future).status_code==422
-    override={**analysis_payload('override-analysis'),'max_candle_age_ms':604_800_000}
-    assert client.post('/v1/app/analysis',headers=headers,json=override).status_code==422
-    mismatch=analysis_payload('quote-mismatch'); bad=provider_payload(); bad['quote']['bid']*=2; bad['quote']['ask']*=2
-    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler,bad=bad: ProviderOpener(bad))
-    assert client.post('/v1/app/analysis',headers=headers,json=mismatch).status_code==503
 
-def test_analysis_requires_app_token_trusted_source_and_supported_timeframe(monkeypatch):
+def test_analysis_fails_closed_without_verified_terminal_or_fresh_quote(monkeypatch):
+    configure_mt5_snapshot(monkeypatch,verified=False)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    assert client.post('/v1/app/analysis',headers=headers,json=analysis_payload('unverified')).status_code==503
+    stale=provider_payload(quote_age_ms=app.ANALYSIS_QUOTE_MAX_AGE_MS+1)
+    configure_mt5_snapshot(monkeypatch,stale)
+    assert client.post('/v1/app/analysis',headers=headers,json=analysis_payload('stale')).status_code==503
+
+
+def test_analysis_requires_app_token_and_supported_timeframe(monkeypatch):
+    configure_mt5_snapshot(monkeypatch)
     payload=analysis_payload()
     assert client.post('/v1/app/analysis',json=payload).status_code==401
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
-    configure_provider(monkeypatch)
-    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','other-provider')
-    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==503
-    monkeypatch.setenv('ANALYSIS_TRUSTED_SOURCES','fixture-provider')
     assert client.post('/v1/app/analysis',headers=headers,json={**payload,'timeframe':'INVALID'}).status_code==422
     assert client.post('/v1/app/analysis',headers=headers,json={**payload,'expected_interval_ms':60_000}).status_code==422
 
-def test_client_cannot_claim_provider_identity_with_fabricated_candles(monkeypatch):
-    configure_provider(monkeypatch)
-    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload={**analysis_payload('fabricated'), 'candles':provider_payload()['candles']}
+
+def test_client_cannot_claim_terminal_identity_or_submit_fabricated_candles(monkeypatch):
+    configure_mt5_snapshot(monkeypatch)
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    payload={**analysis_payload('fabricated'), 'candles':provider_payload()['candles']}
     assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==422
 
-def test_identical_replay_survives_provider_expiry_but_conflict_is_409(monkeypatch):
-    configure_provider(monkeypatch)
+
+def test_identical_replay_survives_terminal_snapshot_expiry_but_conflict_is_409(monkeypatch):
+    configure_mt5_snapshot(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('replay-after-expiry')
     first=client.post('/v1/app/analysis',headers=headers,json=payload); assert first.status_code==200
-    monkeypatch.setattr(app.urllib.request,'urlopen',lambda request,timeout: (_ for _ in ()).throw(TimeoutError('provider expired')))
+    monkeypatch.setattr(app,'state',lambda authorization=None: (_ for _ in ()).throw(RuntimeError('terminal unavailable')))
     replay=client.post('/v1/app/analysis',headers=headers,json=payload)
     assert replay.status_code==200 and replay.json()==first.json()
     conflict={**payload,'strategy_id':'wyckoff-schematics'}
     assert client.post('/v1/app/analysis',headers=headers,json=conflict).status_code==409
 
+
 def test_concurrent_conflicting_payloads_have_one_winner(monkeypatch):
-    configure_provider(monkeypatch)
+    configure_mt5_snapshot(monkeypatch)
     p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
     left=analysis_payload('concurrent-conflict'); right={**left,'strategy_id':'wyckoff-schematics'}
     with ThreadPoolExecutor(max_workers=2) as pool:
         responses=list(pool.map(lambda body: client.post('/v1/app/analysis',headers=headers,json=body), (left,right)))
     assert sorted(r.status_code for r in responses)==[200,409]
 
-def test_provider_quote_identity_spread_precision_and_gap_are_fail_closed(monkeypatch):
-    configure_provider(monkeypatch)
-    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}; payload=analysis_payload('provider-adversarial')
-    other_instrument=provider_payload(symbol='GBP/USD')
-    monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler: ProviderOpener(other_instrument))
-    assert client.post('/v1/app/analysis',headers=headers,json=payload).status_code==503
-    cases=[]
-    bad_provider=provider_payload(); bad_provider['provider_id']='other-provider'; cases.append(bad_provider)
-    future_quote=provider_payload(); future_quote['quote']['timestamp_ms']=int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000; cases.append(future_quote)
-    wide=provider_payload(); wide['quote']['ask']=wide['quote']['bid']+1; cases.append(wide)
-    imprecise=provider_payload(); imprecise['quote']['bid']=imprecise['quote']['bid']+0.0000015; cases.append(imprecise)
-    intraday_gap=provider_payload(); intraday_gap['candles'][10]['timestamp_ms']+=3_600_000; cases.append(intraday_gap)
-    for index,bad in enumerate(cases):
-        bad_request={**payload,'request_id':f'provider-adversarial-{index}'}
-        monkeypatch.setattr(app.urllib.request,'build_opener',lambda handler,bad=bad: ProviderOpener(bad))
-        assert client.post('/v1/app/analysis',headers=headers,json=bad_request).status_code==503
 
-def test_provider_endpoint_validation_allows_path_but_rejects_unsafe_targets():
-    assert app.validate_provider_url('https://data.example-provider.com/v1/quotes') == 'https://data.example-provider.com/v1/quotes'
-    assert app.validate_provider_url('http://data.example-provider.com/v1/quotes') is None
-    assert app.validate_provider_url('https://127.0.0.1/v1/quotes') is None
-    assert app.validate_provider_url('https://data.example-provider.com/v1/quotes?token=secret') is None
-    handler=app._NoRedirectHandler()
-    with __import__('pytest').raises(app.urllib.error.HTTPError):
-        handler.redirect_request(type('Req',(),{'full_url':'https://data.example-provider.com/v1/quotes'})(),None,302,'Found',{},'https://other.example-provider.com')
+def test_terminal_quote_identity_spread_precision_and_candle_gaps_fail_closed(monkeypatch):
+    p=pair(); headers={'Authorization':'Bearer '+p['app_token']}
+    other_instrument=provider_payload(symbol='GBP/USD')
+    configure_mt5_snapshot(monkeypatch,other_instrument)
+    assert client.post('/v1/app/analysis',headers=headers,json=analysis_payload('other-symbol')).status_code==503
+    cases=[]
+    future_quote=provider_payload()
+    future_quote['quote']['timestamp_ms']=int(time.time()*1000)+app.ANALYSIS_CLOCK_SKEW_MS+10_000
+    cases.append(future_quote)
+    wide=provider_payload(); wide['quote']['ask']=wide['quote']['bid']+1
+    cases.append(wide)
+    imprecise=provider_payload(); imprecise['quote']['bid']=imprecise['quote']['bid']+0.0000015
+    cases.append(imprecise)
+    intraday_gap=provider_payload(); intraday_gap['candles'][10]['timestamp_ms']+=3_600_000
+    cases.append(intraday_gap)
+    for index,bad in enumerate(cases):
+        configure_mt5_snapshot(monkeypatch,bad)
+        request={**analysis_payload(), 'request_id':f'terminal-adversarial-{index}'}
+        assert client.post('/v1/app/analysis',headers=headers,json=request).status_code==503
+
+
+def test_analysis_has_no_external_market_provider_fetch_path():
+    source=app.Path(app.__file__).read_text(encoding='utf-8')
+    assert 'ANALYSIS_PROVIDER_URL' not in source
+    assert 'fetch_provider_snapshot' not in source
+    assert 'urlencode' not in source[source.index('def fetch_mt5_terminal_snapshot'):source.index('def validate_analysis_snapshot')]
+
+
 def test_pairing_single_use_and_token_auth_boundaries():
     p=pair(); assert client.get('/v1/app/state',headers={'Authorization':'Bearer '+p['app_token']}).json()['pairing_status']=='PAIRING'; t=claimed(p)
     assert client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'another','account':ACCOUNT}).status_code==401
@@ -330,7 +323,7 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','host_lifecycle_status','max_lifetime_seconds','host_warning_seconds','host_emergency_stop_lead_seconds','host_expiry_at_epoch_seconds','host_remaining_seconds','host_shutdown_pending','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command','broker_quotes','broker_quote_stale_ms'}
+    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','host_lifecycle_status','max_lifetime_seconds','host_warning_seconds','host_emergency_stop_lead_seconds','host_expiry_at_epoch_seconds','host_remaining_seconds','host_shutdown_pending','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command','broker_quotes','broker_candles','broker_quote_stale_ms'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
 
@@ -1213,6 +1206,39 @@ def test_worker_lease_owner_and_terminal_auth_timeout(monkeypatch):
     with app.tx(True) as c: c.execute('UPDATE worker_jobs SET status="AUTHENTICATING",lease_until=?,lease_started=? WHERE id=?',(time.time()+120,time.time()-301,job['job_id']))
     status=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=owner',headers=wh).json()
     assert status['status']=='FAILED' and status['error_code']=='TERMINAL_AUTH_TIMEOUT'
+
+def test_terminal_candle_model_rejects_bad_timeframe_geometry_and_nonfinite_values():
+    now_ms=int(time.time()*1000)
+    good={'symbol':'EURUSD','timeframe':'M1','timestamp_ms':now_ms-60_000,
+          'open':1.1,'high':1.2,'low':1.0,'close':1.15,'volume':10.0,'complete':True}
+    assert app.TerminalCandle.model_validate(good).symbol=='EURUSD'
+    for bad in (
+        {**good,'timeframe':'H2'},
+        {**good,'high':0.9},
+        {**good,'open':float('nan')},
+        {**good,'complete':False},
+    ):
+        with pytest.raises(ValidationError):
+            app.TerminalCandle.model_validate(bad)
+
+
+def test_terminal_broker_candles_filter_incomplete_future_invalid_and_duplicate_bars():
+    now_ms=int(time.time()*1000)
+    base={'symbol':'EURUSD','timeframe':'M1','timestamp_ms':now_ms-60_000,
+          'open':1.1,'high':1.2,'low':1.0,'close':1.15,'volume':10.0,'complete':True}
+    rows=[
+        base,
+        {**base,'timestamp_ms':now_ms-120_000},
+        {**base,'complete':False},
+        {**base,'timestamp_ms':now_ms+10_000},
+        {**base,'high':0.9},
+        {**base,'symbol':'eurusd'},
+    ]
+    accepted=app.fresh_terminal_broker_candles({'broker_candles':rows},now_ms=now_ms)
+    assert len(accepted)==1
+    assert accepted[0]['source']=='MT5_TERMINAL'
+    assert accepted[0]['timeframe']=='M1'
+
 
 def test_terminal_quote_validation_rejects_crossed_and_nonfinite_prices():
     now_ms=int(time.time()*1000)

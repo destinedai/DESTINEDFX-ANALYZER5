@@ -362,7 +362,7 @@ open class DestinedFXViewModel(
     // Keep legacy symbol history plus an exact symbol/timeframe series for chart correctness.
     val candlestickHistory = androidx.compose.runtime.mutableStateMapOf<String, List<Candle>>()
     val candlestickHistoryByTimeframe = androidx.compose.runtime.mutableStateMapOf<String, List<Candle>>()
-    val marketDataStatus = MutableStateFlow("Connecting to public market feeds…")
+    val marketDataStatus = MutableStateFlow("Waiting for an authenticated MT5 Bridge account…")
 
     // Real-time market candle fetch errors exposed to UI
     val candleFetchErrors: StateFlow<Map<String, String>> =
@@ -400,21 +400,18 @@ open class DestinedFXViewModel(
         viewModelScope.launch {
             marketDataStatus.value = "REFRESHING • " + symbol + " • " + timeframe
             try {
-                // Deriv active-symbol discovery can require a WebSocket handshake plus a response.
-                // Its provider budget is 30s; do not cancel it after the old 4s UI wrapper.
-                withTimeoutOrNull(36_000L) { app.marketDataRepository.refreshSymbol(symbol) }
-                // OHLC loading can include active-symbol discovery followed by candle history;
-                // the repository now permits both provider stages to finish (up to ~62s).
-                val candles = withTimeoutOrNull(65_000L) {
+                // Quotes and OHLC must come from the exact selected account's MT5 Bridge snapshot.
+                val quote = withTimeoutOrNull(8_000L) { app.marketDataRepository.refreshSymbol(symbol) }
+                val candles = withTimeoutOrNull(8_000L) {
                     app.marketDataRepository.getCandles(symbol, timeframe, 150)
                 } ?: emptyList()
                 if (candles.isNotEmpty()) {
                     candlestickHistory[symbol] = candles
                     candlestickHistoryByTimeframe[symbol + "-" + timeframe] = candles
-                    marketDataStatus.value = "LIVE DATA • " + candles.size + " candles"
+                    marketDataStatus.value = "MT5 BRIDGE • " + candles.size + " closed broker candles"
                 } else {
                     val detail = app.marketDataRepository.getCandleError(symbol, timeframe)
-                    marketDataStatus.value = "NO VERIFIED LIVE DATA • " + symbol + " " + timeframe +
+                    marketDataStatus.value = "NO VERIFIED MT5 DATA • " + symbol + " " + timeframe +
                         (detail?.takeIf { it.isNotBlank() }?.let { " • " + it.take(220) } ?: "")
                 }
                 runSignalScan(symbol, timeframe)
@@ -1025,7 +1022,7 @@ open class DestinedFXViewModel(
                 // Report the real operation being performed rather than simulating five
                 // timed stages while no analysis has yet run.
                 scanProgressStage.value =
-                    "Loading provider quote and validated closed OHLC candles; calculating strategy and MTF checks…"
+                    "Loading authenticated MT5 Bridge bid/ask and closed broker OHLC; calculating strategy and MTF checks…"
                 val sig = app.signalGenerationUseCase.generateSignal(
                     symbol, timeframe, selectedStrategyId.value, mtfTimeframes
                 )
@@ -1101,7 +1098,7 @@ open class DestinedFXViewModel(
         }
 
         val newsVerdict = com.destinedfx.core.news.NewsFilter.evaluate(
-            app.newsRepository.calendar(),
+            app.analyzerNewsRepository.calendar(),
             com.destinedfx.core.instrument.AssetClassifier.newsCurrencies(symbol),
             now
         )

@@ -111,7 +111,7 @@ def host_lifecycle_state(now_epoch=None):
         'host_shutdown_pending':pending,
     }
 ALLOW_LOOPBACK=os.getenv('ALLOW_LOOPBACK_HTTP','false').lower()=='true'
-MAX_BODY=int(os.getenv('MAX_BODY_BYTES','65536'))
+MAX_BODY=int(os.getenv('MAX_BODY_BYTES','524288'))
 PAIR_RATE=int(os.getenv('PAIR_RATE_LIMIT','10'))
 OWNER_BOOTSTRAP_RATE=int(os.getenv('OWNER_BOOTSTRAP_RATE_LIMIT','10'))
 TOKEN_RATE=int(os.getenv('TOKEN_RATE_LIMIT','180'))
@@ -973,9 +973,33 @@ class TerminalQuote(BaseModel):
             raise ValueError('Terminal quote symbol contains control characters')
         return self
 
+class TerminalCandle(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    symbol:StrictStr=Field(min_length=1,max_length=64)
+    timeframe:StrictStr=Field(min_length=2,max_length=3)
+    timestamp_ms:StrictInt=Field(gt=0)
+    open:float=Field(gt=0,allow_inf_nan=False)
+    high:float=Field(gt=0,allow_inf_nan=False)
+    low:float=Field(gt=0,allow_inf_nan=False)
+    close:float=Field(gt=0,allow_inf_nan=False)
+    volume:float=Field(ge=0,allow_inf_nan=False)
+    complete:StrictBool=True
+
+    @model_validator(mode='after')
+    def validate_terminal_ohlc(self):
+        if self.timeframe not in {'M1','M5','M15','M30','H1','H4','D1','W1'}:
+            raise ValueError('Unsupported terminal candle timeframe')
+        if self.high < max(self.open,self.close,self.low) or self.low > min(self.open,self.close,self.high):
+            raise ValueError('Terminal OHLC values are inconsistent')
+        if any(ord(ch)<32 or ord(ch)==127 for ch in self.symbol):
+            raise ValueError('Terminal candle symbol contains control characters')
+        if not self.complete:
+            raise ValueError('Only completed terminal candles are accepted')
+        return self
+
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict); cancelled_order_tickets:list[str]=Field(default_factory=list); broker_quotes:list[TerminalQuote]=Field(default_factory=list,max_length=32)
+    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict); cancelled_order_tickets:list[str]=Field(default_factory=list); broker_quotes:list[TerminalQuote]=Field(default_factory=list,max_length=32); broker_candles:list[TerminalCandle]=Field(default_factory=list,max_length=1000)
 
 def relevant_news_currencies(symbol):
     s=''.join(ch for ch in (symbol or '').upper() if ch.isalnum())
@@ -1164,7 +1188,7 @@ def validate_origin(raw, allow_loopback=False):
     except (ValueError, UnicodeError):
         return None
     loopback=host in ('localhost','127.0.0.1','::1')
-    placeholder=(host in {'example.com','example.org','example.net','testserver','bridge.example','localhost'} or host.endswith(('.example','.localhost','.test','.invalid')) or host.startswith('your-') or host.startswith('placeholder') or 'example' in host)
+    placeholder=(host in {'example.com','example.net','testserver','bridge.example','localhost'} or host.endswith(('.example','.localhost','.test','.invalid')) or host.startswith('your-') or host.startswith('placeholder') or 'example' in host)
     if not host or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
         return None
     if parsed.scheme=='http':
@@ -1197,87 +1221,67 @@ def durable_execution_enabled():
     """Require explicit operator confirmation that execution storage survives restarts."""
     return os.getenv('EXECUTION_STORAGE_DURABLE','false').strip().lower() == 'true'
 
-def trusted_analysis_sources():
-    return {value.strip() for value in os.getenv('ANALYSIS_TRUSTED_SOURCES','').split(',') if value.strip()}
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise urllib.error.HTTPError(req.full_url, code, 'provider redirect rejected', headers, fp)
-
-def validate_provider_url(raw):
-    value=(raw or '').strip().rstrip('/')
-    try:
-        parsed=urlparse(value); host=(parsed.hostname or '').lower().rstrip('.'); port=parsed.port
-    except (ValueError,UnicodeError):
-        return None
-    if parsed.scheme!='https' or not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        return None
-    if host in {'localhost','testserver'} or host.endswith(('.local','.localhost','.internal','.invalid','.test')):
-        return None
-    if port is not None and not (1<=port<=65535): return None
-    try:
-        address=ipaddress.ip_address(host.strip('[]'))
-        if not address.is_global: return None
-    except ValueError:
-        if ':' in host or all(ch in '0123456789.' for ch in host): return None
-    serialized_host=f'[{host}]' if ':' in host else host
-    return f'https://{serialized_host}' + (f':{port}' if port else '') + (parsed.path or '')
-
-def fetch_provider_snapshot(symbol, timeframe):
-    provider_url=os.getenv('ANALYSIS_PROVIDER_URL','').strip()
-    safe_url=validate_provider_url(provider_url)
-    if not safe_url:
-        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_CONFIGURED','message':'No usable trusted analysis provider is configured'})
-    query=urlencode({'symbol':symbol,'timeframe':timeframe})
-    headers={'Accept':'application/json'}
-    provider_token=secret_value('ANALYSIS_PROVIDER_TOKEN')
-    if provider_token: headers['Authorization']='Bearer '+provider_token
-    try:
-        request=urllib.request.Request(safe_url+('?' if '?' not in safe_url else '&')+query,headers=headers)
-        opener=urllib.request.build_opener(_NoRedirectHandler())
-        with opener.open(request,timeout=5) as response:
-            if response.headers.get_content_type()!='application/json':
-                raise ValueError('NON_JSON_PROVIDER_RESPONSE')
-            raw=response.read(512*1024+1)
-        if len(raw)>512*1024: raise ValueError('PROVIDER_RESPONSE_TOO_LARGE')
-        snapshot=ProviderSnapshot.model_validate(json.loads(raw.decode('utf-8')))
-    except HTTPException: raise
-    except Exception as error:
-        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_UNAVAILABLE','message':'Trusted provider data is unavailable or malformed'}) from error
+def fetch_mt5_terminal_snapshot(symbol, timeframe, authorization):
+    """Build analysis input only from the current, identity-verified MT5 terminal snapshot."""
+    terminal = state(authorization)
+    if (not terminal.get('terminal_online') or not terminal.get('terminal_connected') or
+        not terminal.get('account_identity_verified') or not terminal.get('broker_identity_verified')):
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_NOT_VERIFIED','message':'The selected MT5 account and terminal heartbeat are not verified'})
     observed_ms=int(time.time()*1000)
-    if snapshot.provider_id not in trusted_analysis_sources():
-        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_NOT_TRUSTED','message':'Provider identity is not configured as trusted'})
-    if snapshot.symbol.strip().upper()!=symbol or snapshot.timeframe.strip().upper()!=timeframe:
-        raise HTTPException(503,detail={'code':'ANALYSIS_PROVIDER_MISMATCH','message':'Provider returned a different instrument or timeframe'})
-    quote=snapshot.quote
-    if quote.symbol.strip().upper()!=symbol:
-        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_MISMATCH','message':'Provider quote instrument does not match the request'})
-    if quote.ask<=quote.bid:
-        raise HTTPException(503,detail={'code':'ANALYSIS_INVALID_SPREAD','message':'Provider returned an invalid bid/ask spread'})
+    def canonical_symbol(value):
+        return ''.join(ch for ch in str(value or '').upper() if ch.isalnum())
+    requested_key=canonical_symbol(symbol)
+    matching_quotes=[q for q in terminal.get('broker_quotes',[])
+                     if str(q.get('symbol','')).strip().upper()==symbol or
+                        (requested_key and canonical_symbol(q.get('symbol'))==requested_key)]
+    if len(matching_quotes)!=1:
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_QUOTE_UNAVAILABLE','message':'No unique fresh bid/ask for this symbol was reported by the selected MT5 terminal; configure the exact broker symbol if it has a suffix'})
+    quote_row=matching_quotes[0]
+    terminal_symbol=str(quote_row.get('symbol','')).strip()
+    candle_rows=[c for c in terminal.get('broker_candles',[])
+                 if str(c.get('symbol','')).strip().upper()==terminal_symbol.upper() and
+                    str(c.get('timeframe','')).strip().upper()==timeframe and c.get('complete') is True]
+    candle_rows=sorted(candle_rows,key=lambda c:int(c.get('timestamp_ms',0)))[-250:]
+    if len(candle_rows)<60:
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_OHLC_UNAVAILABLE','message':'The selected MT5 terminal has not supplied at least 60 closed bars for this symbol and timeframe'})
+    try:
+        quote=ProviderQuote.model_validate({k:quote_row[k] for k in ('symbol','bid','ask','timestamp_ms')})
+        candles=[ProviderCandle.model_validate({k:c[k] for k in ('timestamp_ms','open','high','low','close','volume','complete')}) for c in candle_rows]
+    except Exception as error:
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_MARKET_DATA_INVALID','message':'MT5 terminal quote or OHLC data failed validation'}) from error
     asset_class,decimals,max_spread,max_deviation=ANALYSIS_SYMBOL_POLICY[symbol]
     precision=10**(-decimals)
     if any(abs(value-round(value,decimals))>precision/10 for value in (quote.bid,quote.ask)):
-        raise HTTPException(503,detail={'code':'ANALYSIS_INVALID_PRECISION','message':'Provider quote exceeds instrument precision'})
-    if quote.ask-quote.bid>max_spread:
-        raise HTTPException(503,detail={'code':'ANALYSIS_SPREAD_TOO_WIDE','message':'Provider spread exceeds the instrument policy'})
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_INVALID_PRECISION','message':'MT5 terminal quote exceeds the instrument precision policy'})
+    if quote.ask < quote.bid or quote.ask-quote.bid > max_spread:
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_INVALID_SPREAD','message':'MT5 terminal quote spread is invalid or exceeds policy'})
     if quote.timestamp_ms>observed_ms+ANALYSIS_CLOCK_SKEW_MS or observed_ms-quote.timestamp_ms>ANALYSIS_QUOTE_MAX_AGE_MS:
-        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_STALE','message':'Provider quote is stale or future-dated'})
-    if not snapshot.candles or any(not candle.complete for candle in snapshot.candles):
-        raise HTTPException(503,detail={'code':'ANALYSIS_CANDLES_INCOMPLETE','message':'Provider returned incomplete candles'})
-    if any(a.timestamp_ms>=b.timestamp_ms for a,b in zip(snapshot.candles,snapshot.candles[1:])):
-        raise HTTPException(503,detail={'code':'ANALYSIS_CANDLES_UNORDERED','message':'Provider returned unordered candles'})
-    interval_ms=ANALYSIS_TIMEFRAME_POLICY[timeframe][0]
-    for previous,current in zip(snapshot.candles,snapshot.candles[1:]):
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_QUOTE_STALE','message':'MT5 terminal quote is stale or future-dated'})
+    if any(a.timestamp_ms>=b.timestamp_ms for a,b in zip(candles,candles[1:])):
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_CANDLES_UNORDERED','message':'MT5 terminal OHLC bars are not strictly ordered'})
+    interval_ms,max_age_ms=ANALYSIS_TIMEFRAME_POLICY[timeframe]
+    latest=candles[-1]
+    if latest.timestamp_ms>observed_ms+ANALYSIS_CLOCK_SKEW_MS or observed_ms-latest.timestamp_ms>max_age_ms:
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_CANDLES_STALE','message':'Latest closed MT5 terminal bar is stale'})
+    for previous,current in zip(candles,candles[1:]):
         delta=current.timestamp_ms-previous.timestamp_ms
-        if delta==interval_ms: continue
+        if delta==interval_ms:
+            continue
         weekend_gap=asset_class in ('FOREX','METAL') and 2*86_400_000<=delta<=72*60*60*1000
         if not weekend_gap:
-            raise HTTPException(503,detail={'code':'ANALYSIS_CANDLE_GAP','message':'Provider returned an unexplained candle-session gap'})
-    latest=snapshot.candles[-1]
+            raise HTTPException(503,detail={'code':'MT5_TERMINAL_CANDLE_GAP','message':'MT5 terminal OHLC has an unexplained session gap'})
     if max(abs(quote.bid-latest.close),abs(quote.ask-latest.close))/latest.close>max_deviation:
-        raise HTTPException(503,detail={'code':'ANALYSIS_QUOTE_DEVIATION','message':'Provider quote is inconsistent with the candle snapshot'})
-    candles=[AnalysisCandle(timestamp_ms=c.timestamp_ms,open=c.open,high=c.high,low=c.low,close=c.close,volume=c.volume,complete=c.complete,source=snapshot.provider_id,retrieved_at_ms=observed_ms) for c in snapshot.candles]
-    return {'provider_id':snapshot.provider_id,'observed_ms':observed_ms,'quote':quote,'candles':candles,'asset_class':asset_class}
+        raise HTTPException(503,detail={'code':'MT5_TERMINAL_QUOTE_DEVIATION','message':'Live MT5 bid/ask differs materially from its latest closed broker candle'})
+    snapshot=ProviderSnapshot.model_validate({
+        'provider_id':'MT5_TERMINAL','symbol':terminal_symbol,'timeframe':timeframe,
+        'quote':quote.model_dump(mode='python'),
+        'candles':[c.model_dump(mode='python') for c in candles]
+    })
+    analysis_candles=[AnalysisCandle(timestamp_ms=c.timestamp_ms,open=c.open,high=c.high,low=c.low,
+                     close=c.close,volume=c.volume,complete=c.complete,source='MT5_TERMINAL',
+                     retrieved_at_ms=observed_ms) for c in snapshot.candles]
+    return {'provider_id':'MT5_TERMINAL','observed_ms':observed_ms,'quote':snapshot.quote,
+            'candles':analysis_candles,'asset_class':asset_class}
 
 def validate_analysis_snapshot(x, provider):
     server_now_ms=provider['observed_ms']
@@ -2418,6 +2422,45 @@ def fresh_terminal_broker_quotes(beat, now_ms=None):
                          'age_ms':max(0,age_ms),'source':'MT5_TERMINAL'})
     return accepted
 
+def fresh_terminal_broker_candles(beat, now_ms=None):
+    """Return bounded, structurally valid OHLC bars reported by the paired MT5 terminal."""
+    if not isinstance(beat,dict):
+        return []
+    now_ms = int(time.time()*1000) if now_ms is None else int(now_ms)
+    rows = beat.get('broker_candles')
+    if not isinstance(rows,list):
+        return []
+    accepted = []
+    seen = set()
+    supported = {'M1','M5','M15','M30','H1','H4','D1','W1'}
+    for row in rows[:1000]:
+        if not isinstance(row,dict):
+            continue
+        symbol = row.get('symbol')
+        timeframe = row.get('timeframe')
+        try:
+            stamp = int(row.get('timestamp_ms'))
+            o,h,l,c = (float(row.get(k)) for k in ('open','high','low','close'))
+            volume = float(row.get('volume',0.0))
+        except (TypeError,ValueError,OverflowError):
+            continue
+        if (not isinstance(symbol,str) or not symbol.strip() or
+            any(ord(ch)<32 or ord(ch)==127 for ch in symbol) or
+            timeframe not in supported or stamp<=0 or stamp>now_ms+BROKER_QUOTE_FUTURE_SKEW_MS or
+            not all(math.isfinite(v) and v>0 for v in (o,h,l,c)) or
+            not math.isfinite(volume) or volume<0 or
+            h<max(o,c,l) or l>min(o,c,h) or row.get('complete') is not True):
+            continue
+        key=(symbol.strip().upper(),timeframe,stamp)
+        if key in seen:
+            continue
+        seen.add(key)
+        accepted.append({'symbol':symbol.strip(),'timeframe':timeframe,'timestamp_ms':stamp,
+                         'open':o,'high':h,'low':l,'close':c,'volume':volume,
+                         'complete':True,'source':'MT5_TERMINAL'})
+    accepted.sort(key=lambda item:(item['symbol'].upper(),item['timeframe'],item['timestamp_ms']))
+    return accepted
+
 @app.get('/v1/app/state')
 def state(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app'); touch_activity(HOST_CONTROL_DIR); beat=json.loads(p['heartbeat']) if p['heartbeat'] else None
@@ -2452,12 +2495,11 @@ def state(authorization:str|None=Header(default=None)):
         if actual:
             with tx(True) as c: ingest_trade_ledger(c,p['id'],m['account_mode'],actual,time.time())
     risk_controls=live_risk_controls(actual)
-    broker_quotes = (
-        fresh_terminal_broker_quotes(beat)
-        if online and beat and beat.get('terminal_connected') is True and actual and
-           identity_verified and broker_identity_verified else []
-    )
-    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command,'broker_quotes':broker_quotes,'broker_quote_stale_ms':BROKER_QUOTE_MAX_AGE_MS}
+    terminal_data_verified = bool(online and beat and beat.get('terminal_connected') is True and actual and
+                                 identity_verified and broker_identity_verified)
+    broker_quotes = fresh_terminal_broker_quotes(beat) if terminal_data_verified else []
+    broker_candles = fresh_terminal_broker_candles(beat) if terminal_data_verified else []
+    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command,'broker_quotes':broker_quotes,'broker_candles':broker_candles,'broker_quote_stale_ms':BROKER_QUOTE_MAX_AGE_MS
     if managed is not None: result['managed_execution']=managed
     return result
 
@@ -2640,7 +2682,7 @@ def app_analysis(x:AnalysisRequest,authorization:str|None=Header(default=None)):
         raise HTTPException(422,'Unsupported symbol')
     if timeframe not in ANALYSIS_TIMEFRAME_POLICY:
         raise HTTPException(422,'Unsupported timeframe; expected one of M1, M5, M15, M30, H1, H4, D1, W1')
-    provider=fetch_provider_snapshot(symbol,timeframe)
+    provider=fetch_mt5_terminal_snapshot(symbol,timeframe,authorization)
     server_now_ms,timeframe,interval_ms,max_age_ms,allow_session_gaps=validate_analysis_snapshot(x,provider)
     quote=provider['quote']
     payload={

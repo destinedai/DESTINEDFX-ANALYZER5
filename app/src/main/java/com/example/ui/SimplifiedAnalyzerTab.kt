@@ -77,8 +77,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val candleFetchErrors by viewModel.candleFetchErrors.collectAsStateWithLifecycle()
     val strategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     var advancedOpen by remember { mutableStateOf(false) }
-    // TradingView is the primary visible chart. The native chart remains an implementation
-    // fallback when the widget itself cannot render; it is never used to validate analysis data.
+    // Analyzer charts use only closed OHLC bars received from the authenticated MT5 terminal.
 
     val activeTicker = ticker[symbol]
     val currentSignal = signal
@@ -129,15 +128,30 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                 Text(symbol, color = TextPrimary, fontSize = 25.sp, fontWeight = FontWeight.Black)
                 Text("· $timeframe", color = ElectricCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
-                val price = activeTicker?.price?.takeIf { it > 0.0 }
-                Text(price?.let { formatPrice(it, symbol) } ?: "Price unavailable", color = if (price != null) TextPrimary else WarningAmber, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                val price = activeTicker?.price?.takeIf { it > 0.0 && readiness.quoteLive }
+                Text(price?.let { formatPrice(it, symbol) } ?: "Price unavailable", color = if (readiness.quoteLive && price != null) TextPrimary else LossRed, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "BID ${activeTicker?.bid?.let { formatPrice(it, symbol) } ?: "—"}  ·  ASK ${activeTicker?.ask?.let { formatPrice(it, symbol) } ?: "—"}",
+                    if (readiness.quoteLive && activeTicker != null) {
+                        "Price: Live from ${activeTicker.source.substringBefore(" MT5 Bridge")} via MT5 Bridge"
+                    } else {
+                        "DISCONNECTED - Price stale"
+                    },
+                    color = if (readiness.quoteLive) ProfitGreen else LossRed,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "BID ${activeTicker?.takeIf { readiness.quoteLive }?.bid?.let { formatPrice(it, symbol) } ?: "—"}  ·  ASK ${activeTicker?.takeIf { readiness.quoteLive }?.ask?.let { formatPrice(it, symbol) } ?: "—"}",
                     color = TextSecondary,
                     fontSize = 10.sp
                 )
                 Text(
-                    "SOURCE: ${activeTicker?.source?.ifBlank { "UNAVAILABLE" } ?: "UNAVAILABLE"}  ·  UPDATED: ${quoteAgeSeconds?.let { if (it < 2) "just now" else "$it seconds ago" } ?: "—"}  ·  DATA: ${if (readiness.quoteLive) "LIVE" else "STALE / UNAVAILABLE"}",
+                    "SPREAD ${if (readiness.quoteLive && activeTicker?.bid != null && activeTicker.ask != null) formatPrice(activeTicker.ask - activeTicker.bid, symbol) else "—"}",
+                    color = if (readiness.quoteLive && activeTicker?.hasRealSpread == true) ProfitGreen else LossRed,
+                    fontSize = 10.sp
+                )
+                Text(
+                    "LAST UPDATE: ${quoteAgeSeconds?.let { if (it < 2) "just now" else "$it seconds ago" } ?: "—"}  ·  DATA: ${if (readiness.quoteLive) "LIVE" else "STALE / UNAVAILABLE"}",
                     color = if (readiness.quoteLive) ProfitGreen else WarningAmber,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold
@@ -187,7 +201,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             }
             if (!canAnalyze && !scanning) {
                 Text(
-                    candleDiagnostic?.takeIf { it.isNotBlank() }?.let { "Analysis is waiting for provider OHLC: " + plainTradingReason(it) }
+                    candleDiagnostic?.takeIf { it.isNotBlank() }?.let { "Analysis is waiting for MT5 terminal OHLC: " + plainTradingReason(it) }
                         ?: "Analysis is disabled until a fresh verified quote and validated candles are available.",
                     color = WarningAmber, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp)
                 )
@@ -202,7 +216,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                 Card(modifier = Modifier.fillMaxWidth().height(470.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = DarkBackground), border = BorderStroke(1.dp, CardBorder)) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("TRADINGVIEW", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text("MT5 LIVE CHART", color = ElectricCyan, fontSize = 10.sp, fontWeight = FontWeight.Black)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(onClick = { viewModel.refreshMarketData(symbol, timeframe) }) { Icon(Icons.Default.Refresh, contentDescription = "Refresh chart", tint = ElectricCyan) }
                         }
@@ -215,7 +229,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                         dynamicAnalysis = analysis ?: DynamicAnalysisInfo(symbol = symbol),
                         candles = candles,
                         candleSource = viewModel.marketDataSource(symbol, timeframe),
-                        isRealTradingViewEnabled = true,
+                        isRealTradingViewEnabled = false,
                         onToggleChartType = { /* widget failure may switch to the native fallback */ },
                         onPriceUpdate = { _, _ -> },
                         modifier = Modifier.fillMaxWidth().weight(1f)
@@ -243,7 +257,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
 @Composable
 private fun SelectionBar(viewModel: DestinedFXViewModel, symbol: String, timeframe: String, strategyId: String) {
     val symbols = listOf("EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "BTC/USD", "ETH/USD", "NAS100", "USOIL")
-    val timeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
+    val timeframes = listOf("M1", "M5", "M15", "H1", "H4", "D1")
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, CardBorder)) {
         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text("MARKET", color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Black)

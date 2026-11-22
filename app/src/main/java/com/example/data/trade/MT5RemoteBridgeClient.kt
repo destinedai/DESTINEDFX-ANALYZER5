@@ -67,6 +67,54 @@ internal fun parseVerifiedBrokerQuotes(
     return accepted
 }
 
+/** A closed broker-terminal OHLC bar; never constructed from an external chart feed. */
+data class VerifiedBrokerCandle(
+    val symbol: String,
+    val timeframe: String,
+    val timestampMs: Long,
+    val open: Double,
+    val high: Double,
+    val low: Double,
+    val close: Double,
+    val volume: Double,
+    val complete: Boolean = true,
+    val source: String = "MT5_TERMINAL"
+)
+
+internal fun parseVerifiedBrokerCandles(
+    rows: org.json.JSONArray?,
+    nowMs: Long
+): List<VerifiedBrokerCandle>? {
+    if (rows == null) return null
+    if (nowMs <= 0L) return emptyList()
+    val supported = setOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
+    val accepted = mutableListOf<VerifiedBrokerCandle>()
+    val seen = mutableSetOf<String>()
+    for (index in 0 until minOf(rows.length(), 1_000)) {
+        val row = rows.optJSONObject(index) ?: continue
+        val symbol = row.optString("symbol").trim()
+        val timeframe = row.optString("timeframe").trim().uppercase(Locale.ROOT)
+        val timestampMs = row.optLong("timestamp_ms", 0L)
+        val open = row.optDouble("open", Double.NaN)
+        val high = row.optDouble("high", Double.NaN)
+        val low = row.optDouble("low", Double.NaN)
+        val close = row.optDouble("close", Double.NaN)
+        val volume = row.optDouble("volume", Double.NaN)
+        val key = "$symbol|$timeframe|$timestampMs".uppercase(Locale.ROOT)
+        if (symbol.isBlank() || symbol.any { it.code < 32 || it.code == 127 } ||
+            timeframe !in supported || timestampMs <= 0L || timestampMs > nowMs + 3_000L ||
+            !open.isFinite() || !high.isFinite() || !low.isFinite() || !close.isFinite() ||
+            !volume.isFinite() || open <= 0.0 || high <= 0.0 || low <= 0.0 || close <= 0.0 ||
+            volume < 0.0 || high < maxOf(open, close, low) || low > minOf(open, close, high) ||
+            !row.optBoolean("complete", false) || !seen.add(key)) {
+            continue
+        }
+        accepted += VerifiedBrokerCandle(symbol, timeframe, timestampMs, open, high, low, close, volume)
+    }
+    return accepted.sortedWith(compareBy<VerifiedBrokerCandle> { it.symbol.uppercase(Locale.ROOT) }
+        .thenBy { it.timeframe }.thenBy { it.timestampMs })
+}
+
 /**
  * Missing or unknown isolation metadata must never be interpreted as a usable terminal host.
  * WORKER_ATTESTATION_REQUIRED is a known non-Linux worker path; BLOCKED and unknown values fail closed.
@@ -191,7 +239,8 @@ class MT5RemoteBridgeClient(
         val margin: Double?, val freeMargin: Double?, val marginLevel: Double?, val leverage: Int?,
         val positions: List<JSONObject>?, val activeOrders: List<JSONObject>?, val closedDeals: List<JSONObject>?,
         val snapshotsValid: Boolean, val lastSignal: JSONObject?, val newsVerdict: JSONObject?, val raw: JSONObject,
-        val brokerQuotes: List<VerifiedBrokerQuote>? = null
+        val brokerQuotes: List<VerifiedBrokerQuote>? = null,
+        val brokerCandles: List<VerifiedBrokerCandle>? = null
     )
 
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
@@ -403,6 +452,7 @@ class MT5RemoteBridgeClient(
             System.currentTimeMillis(),
             obj.optLong("broker_quote_stale_ms", 15_000L).coerceIn(1L, 15_000L)
         )
+        val brokerCandles = parseVerifiedBrokerCandles(obj.optJSONArray("broker_candles"), System.currentTimeMillis())
         val managedState = managed?.let { it.optString("status", it.optString("state", "")) }.orEmpty().uppercase()
         val workerStatus = managed?.optString("worker_status", "UNKNOWN").orEmpty().uppercase()
         val access = managed?.optString("access_type", "").orEmpty().uppercase()
@@ -423,7 +473,7 @@ class MT5RemoteBridgeClient(
             account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
             account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
-            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes
+            obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes, brokerCandles
         )
     }
 
@@ -1265,7 +1315,7 @@ class MT5RemoteBridgeClient(
                 val host = uri.host?.lowercase()?.trimEnd('.') ?: return null
                 val scheme = uri.scheme?.lowercase() ?: return null
                 val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
-                val placeholder = host in setOf("example.com", "example.org", "example.net", "testserver", "bridge.example", "localhost") || host.endsWith(".example") || host.endsWith(".localhost") || host.endsWith(".test") || host.endsWith(".invalid") || host.startsWith("your-") || host.startsWith("placeholder") || host.contains("example")
+                val placeholder = host in setOf("example.com", "example.net", "testserver", "bridge.example", "localhost") || host.endsWith(".example") || host.endsWith(".localhost") || host.endsWith(".test") || host.endsWith(".invalid") || host.startsWith("your-") || host.startsWith("placeholder") || host.contains("example")
                 val port = uri.port
                 if (uri.userInfo != null || uri.query != null || uri.fragment != null || uri.path.orEmpty().trimEnd('/').isNotEmpty()) return null
                 if (placeholder || scheme != "https" && !(scheme == "http" && loopback)) return null

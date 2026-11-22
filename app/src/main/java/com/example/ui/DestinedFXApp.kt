@@ -92,7 +92,7 @@ fun DestinedFXApp(viewModel: DestinedFXViewModel) {
     val hasFreshQuote = currentTicker?.let { it.isLive && it.price.isFinite() && it.price > 0.0 } == true &&
         viewModel.isDataFresh(activeSymbol)
     val headerPrice = currentTicker?.price?.takeIf { it.isFinite() && it > 0.0 && hasFreshQuote }
-    val priceChange = currentTicker?.changePercent
+    val priceChange = currentTicker?.takeIf { it.hasVerifiedChange }?.changePercent
     val candlesAvailable = marketDataStatus.startsWith("READY", ignoreCase = true)
     val feedStatusColor = when {
         hasFreshQuote -> ProfitGreen
@@ -1179,7 +1179,7 @@ private fun WatchlistTab(viewModel: DestinedFXViewModel) {
             }
         } else {
             items(rows, key = { it.symbol }) { ticker ->
-                val change = ticker.changePercent
+                val change = ticker.changePercent.takeIf { ticker.hasVerifiedChange }
                 val movementColor = if ((change ?: 0.0) >= 0.0) ProfitGreen else LossRed
                 val isFresh = com.example.data.market.classifyQuoteFreshness(
                     ticker, System.currentTimeMillis()

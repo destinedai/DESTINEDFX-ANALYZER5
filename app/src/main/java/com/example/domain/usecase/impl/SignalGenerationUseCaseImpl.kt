@@ -90,46 +90,31 @@ class SignalGenerationUseCaseImpl(
                 val refreshed = market.refreshSymbol(symbol)
                 if (refreshed != null) ticker = refreshed
             }
-            // A daily reference rate is not a market quote. Look for real timestamped OHLC instead.
+            // Analyzer prices are accepted only from the selected, verified MT5 Bridge quote.
+            // Historical OHLC close values are never substituted for a missing bid/ask.
             if (ticker?.kind == "DAILY_REFERENCE") ticker = null
-
             val cls = AssetClassifier.of(symbol)
-            var quote: MarketQuote? = ticker?.let { toQuote(it) }
+            val quote: MarketQuote? = ticker?.takeIf { it.isLive && it.kind == "STREAM" }?.let { toQuote(it) }
             if (quote == null) {
-                val referenceCandle = market.getCandles(symbol, timeframe, 2)
-                    .lastOrNull { it.close.isFinite() && it.close > 0.0 && it.timestamp > 0L }
-                if (referenceCandle != null) {
-                    val source = market.candleSources[com.example.data.market.candleSourceKey(symbol, timeframe)]
-                        ?: "Historical candles"
-                    // This timestamp is historical by construction. It can support analysis only.
-                    quote = MarketQuote.lastOnly(
-                        symbol = symbol,
-                        cls = cls,
-                        last = referenceCandle.close,
-                        tsMs = referenceCandle.timestamp,
-                        rxMs = referenceCandle.timestamp,
-                        source = source + " • historical reference (analysis only)"
-                    )
-                }
-            }
-            if (quote == null) {
-                return unavailable(symbol, timeframe, "NO QUOTE OR VALID HISTORICAL CANDLE for " + symbol + " " + timeframe, "DISCONNECTED")
+                return unavailable(
+                    symbol, timeframe,
+                    "DISCONNECTED - Price stale. No fresh two-sided MT5 Bridge quote is available for $symbol.",
+                    "DISCONNECTED"
+                )
             }
             // refreshSymbol() may return a quote captured after the scan began. Anchor health,
             // strategy analysis, news and session checks to the current clock after refresh so
             // a valid freshly-received quote is not falsely treated as future-dated.
             now = clock()
-            val hc = if (ticker?.kind == "STREAM") HealthConfig() else HealthConfig.polled(pollIntervalMs)
-            val isTradingViewScannerSnapshot =
-                ticker?.source?.contains("TradingView scanner snapshot", ignoreCase = true) == true
-            val health = when {
-                ticker == null -> MarketDataHealth.STALE
-                isTradingViewScannerSnapshot -> MarketDataHealth.DELAYED
-                else -> MarketDataHealthEvaluator.evaluate(quote, now, connected = true, cfg = hc)
-            }
-            // STALE is accepted for a historical research readout, but is never executable below.
-            if (health !in setOf(MarketDataHealth.LIVE, MarketDataHealth.DELAYED, MarketDataHealth.STALE)) {
-                return unavailable(symbol, timeframe, "Market data " + health.name, health.name)
+            val health = MarketDataHealthEvaluator.evaluate(
+                quote, now, connected = true, cfg = HealthConfig()
+            )
+            if (health != MarketDataHealth.LIVE) {
+                return unavailable(
+                    symbol, timeframe,
+                    "DISCONNECTED - Price stale. MT5 Bridge quote health is ${health.name}.",
+                    health.name
+                )
             }
             val startLoad = clock()
             suspend fun load(t: Timeframe, n: Int): List<CoreCandle> {
@@ -180,9 +165,8 @@ class SignalGenerationUseCaseImpl(
                     async {
                         try {
                             withTimeout(65_000) {
-                                // getCandles may first complete Deriv active-symbol discovery (up to 32s)
-                                // and then the historical candle request (up to 30s). Do not cancel
-                                // that nested provider work at the old 30-second MTF boundary.
+                                // MTF bars are retrieved only from the selected account's MT5 Bridge
+                                // snapshot. No provider discovery or alternate-feed fallback is allowed.
                                 t to load(t, if (t == Timeframe.W1) 80 else 150)
                             }
                         } catch (e: TimeoutCancellationException) {
