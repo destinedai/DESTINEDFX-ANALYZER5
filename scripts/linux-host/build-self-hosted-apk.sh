@@ -14,8 +14,9 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 CODESPACES_BUILD=false
 CODESPACES_VALUE="$(printenv CODESPACES 2>/dev/null || true)"
 
-# Derive the Bridge host from GitHub's Codespaces environment. The Management API
-# remains a separate service and is deliberately not invented or replaced here.
+# Derive both forwarded origins from the GitHub Codespaces identity.
+# start.sh launches the real PostgreSQL-backed Management API on 8010 alongside
+# the Bridge on 8000; this builder only accepts those origins after live checks.
 if [[ ! -f "$MANIFEST" && "$CODESPACES_VALUE" == "true" ]]; then
   CODESPACE_NAME="$(printenv CODESPACE_NAME 2>/dev/null || true)"
   CODESPACE_DOMAIN="$(printenv GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN 2>/dev/null || printf 'app.github.dev')"
