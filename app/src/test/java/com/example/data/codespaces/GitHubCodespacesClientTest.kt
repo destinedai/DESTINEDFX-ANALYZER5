@@ -145,12 +145,12 @@ class GitHubCodespacesClientTest {
               "name":"codespace-generated-name",
               "state":"Shutdown",
               "repository":{"full_name":"destinedai/DESTINEDFX-ANALYZER5"},
-              "git_status":{"ref":"refs/heads/free/phone-only-v1"},
+              "git_status":{"ref":"refs/heads/feat/self-hosted-linux-host-runtime"},
               "machine":{"cpus":2},
               "last_used_at":"2026-11-20T00:00:00Z"
             }
         """.trimIndent()
-        val wrongBranch = matching.replace("free/phone-only-v1", "main").replace("codespace-generated-name", "wrong-branch")
+        val wrongBranch = matching.replace("feat/self-hosted-linux-host-runtime", "main").replace("codespace-generated-name", "wrong-branch")
         mock.enqueue(MockResponse().setBody("""{"codespaces":[$matching,$wrongBranch]}"""))
         mock.enqueue(MockResponse().setBody(matching))
         mock.enqueue(MockResponse().setResponseCode(202).setBody("{}"))
@@ -179,14 +179,14 @@ class GitHubCodespacesClientTest {
                 .put("name", "codespace-$index")
                 .put("state", "Shutdown")
                 .put("repository", org.json.JSONObject().put("full_name", "destinedai/DESTINEDFX-ANALYZER5"))
-                .put("git_status", org.json.JSONObject().put("ref", "refs/heads/free/phone-only-v1"))
+                .put("git_status", org.json.JSONObject().put("ref", "refs/heads/feat/self-hosted-linux-host-runtime"))
                 .put("machine", org.json.JSONObject().put("cpus", 2)))
         }
         val secondPage = org.json.JSONArray().put(org.json.JSONObject()
             .put("name", "codespace-100")
             .put("state", "Available")
             .put("repository", org.json.JSONObject().put("full_name", "destinedai/DESTINEDFX-ANALYZER5"))
-            .put("git_status", org.json.JSONObject().put("ref", "refs/heads/free/phone-only-v1"))
+            .put("git_status", org.json.JSONObject().put("ref", "refs/heads/feat/self-hosted-linux-host-runtime"))
             .put("machine", org.json.JSONObject().put("cpus", 2)))
         mock.enqueue(MockResponse().setBody(org.json.JSONObject().put("codespaces", firstPage).toString()))
         mock.enqueue(MockResponse().setBody(org.json.JSONObject().put("codespaces", secondPage).toString()))
@@ -205,7 +205,7 @@ class GitHubCodespacesClientTest {
               "name":"owner-codespace-dynamic",
               "state":"Available",
               "repository":{"full_name":"destinedai/DESTINEDFX-ANALYZER5"},
-              "git_status":{"ref":"free/phone-only-v1"},
+              "git_status":{"ref":"feat/self-hosted-linux-host-runtime"},
               "machine":{"cpus":2}
             }
         """.trimIndent()
@@ -213,7 +213,7 @@ class GitHubCodespacesClientTest {
         mock.enqueue(MockResponse().setResponseCode(202).setBody("{}"))
         val target = GitHubCodespacesClient.Codespace(
             "owner-codespace-dynamic", "Available",
-            "destinedai/DESTINEDFX-ANALYZER5", "free/phone-only-v1", 2, ""
+            "destinedai/DESTINEDFX-ANALYZER5", "feat/self-hosted-linux-host-runtime", 2, ""
         )
         client(mock).stopCodespace(target)
         assertEquals("/user/codespaces/owner-codespace-dynamic", mock.takeRequest().path)
