@@ -1,6 +1,6 @@
 # Codespaces DEMO test host
 
-This runbook is for the owner-operated, ephemeral GitHub Codespaces host on branch `free/phone-only-v1`. It is a DEMO test host, not a 24/7 service and not evidence that a broker, terminal, EA, or order works. No account is created by this repository.
+This runbook is for the owner-operated, ephemeral GitHub Codespaces host on branch `feat/self-hosted-linux-host-runtime`. It is a DEMO test host, not a 24/7 service and not evidence that a broker, terminal, EA, or order works. No account is created by this repository.
 
 ## MT5 startup status: UNVERIFIED
 
@@ -24,7 +24,7 @@ The owner needs a GitHub account with Codespaces access, an Android phone signed
 ## Create and start
 
 1. On the phone, open `https://github.com/codespaces`.
-2. Tap **New codespace**, choose `destinedai/DESTINEDFX-ANALYZER5`, branch `free/phone-only-v1`, machine type with 2 cores, then **Create**.
+2. Tap **New codespace**, choose `destinedai/DESTINEDFX-ANALYZER5`, branch `feat/self-hosted-linux-host-runtime`, machine type with 2 cores, then **Create**.
 3. In GitHub Codespaces settings, set the default idle timeout to 240 minutes. This is the maximum requested timeout, not a promise of uninterrupted runtime.
 4. Wait for post-create to finish. It installs the pinned Linux wrapper, verifies `mt5setup.exe` with an Authenticode signer check for MetaQuotes Ltd, installs dependencies, and writes a private installer marker. The recorded setup hash warns on mutation; it is not the trust decision.
 5. In the terminal run:
