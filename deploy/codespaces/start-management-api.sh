@@ -107,8 +107,8 @@ else:
         os.chmod(public, 0o644)
 PY
 
-CODESPACE_OWNER="${GITHUB_USER:-}"
-[[ "$CODESPACE_OWNER" =~ ^[A-Za-z0-9-]{1,39}$ ]] || fail "GitHub did not provide a valid GITHUB_USER owner identity."
+CODESPACE_OWNER="$(gh api user --jq .login 2>/dev/null || true)"
+[[ "$CODESPACE_OWNER" =~ ^[A-Za-z0-9-]{1,39}$ ]] || fail "GitHub CLI could not verify the Codespace owner identity with gh api user."
 cat > "$ENV_FILE" <<EOF
 POSTGRES_PASSWORD_FILE=$PASS_FILE
 POSTGRES_USER=destinedfx_api
