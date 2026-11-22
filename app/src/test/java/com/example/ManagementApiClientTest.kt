@@ -17,18 +17,20 @@ import java.io.IOException
 
 class ManagementApiClientTest {
     @Test fun acceptsOnlyConfiguredBareHttpsOrigins() {
-        assertEquals("https://api.example.org", ManagementApiClient.validatedOrigin("https://api.example.org/"))
+        assertEquals("https://api.destinedfxhost.com", ManagementApiClient.validatedOrigin("https://api.destinedfxhost.com/"))
         listOf("", "__CONFIGURATION_REQUIRED__", "http://api.example.org", "https://u:p@api.example.org",
-            "https://api.example.org/path", "https://api.example.org?x=1", "https://localhost", "https://demo.invalid")
+            "https://api.destinedfxhost.com/path", "https://api.destinedfxhost.com?x=1", "https://localhost",
+            "https://demo.invalid", "https://api.example.org", "https://api.example.net",
+            "https://api.destinedfx.example.org")
             .forEach { assertNull("must reject $it", ManagementApiClient.validatedOrigin(it)) }
     }
 
     @Test fun lockedBuildAlwaysUsesEmbeddedManagementOriginAndIgnoresRuntimeOverrides() {
         assertEquals(
-            "https://api.destinedfx.example.org",
+            "https://api.destinedfxhost.com",
             ManagementApiClient.resolveConfiguredOrigin(
                 "https://attacker-controlled.example.org",
-                "https://api.destinedfx.example.org",
+                "https://api.destinedfxhost.com",
                 locked = true
             )
         )
@@ -41,10 +43,10 @@ class ManagementApiClientTest {
             )
         )
         assertEquals(
-            "https://developer-bridge.example.org",
+            "https://developer-bridge.destinedfxhost.com",
             ManagementApiClient.resolveConfiguredOrigin(
-                "https://developer-bridge.example.org",
-                "https://build-default.example.org",
+                "https://developer-bridge.destinedfxhost.com",
+                "https://build-default.destinedfxhost.com",
                 locked = false
             )
         )
@@ -69,7 +71,7 @@ class ManagementApiClientTest {
             response(request, 200, body)
         }).build()
 
-        assertEquals("https://api.example.org", ManagementApiClient.verifyOrigin("https://api.example.org/", http))
+        assertEquals("https://api.destinedfxhost.com", ManagementApiClient.verifyOrigin("https://api.destinedfxhost.com/", http))
         assertEquals(listOf("/ready", "/api/v1/auth/bridge-verification-key"), requests)
     }
 
@@ -81,13 +83,13 @@ class ManagementApiClientTest {
             response(request, 200, body)
         }).build()
         val error = runCatching {
-            ManagementApiClient.verifyOrigin("https://api.example.org", http)
+            ManagementApiClient.verifyOrigin("https://api.destinedfxhost.com", http)
         }.exceptionOrNull() as ManagementException
         assertEquals(ManagementFailure.INVALID_RESPONSE, error.failure)
     }
 
     @Test fun managementBearerRemainsBoundToTheOriginThatIssuedIt() {
-        var origin = "https://first.example.org"
+        var origin = "https://first.destinedfxhost.com"
         var savedOrigin = ""
         val requests = mutableListOf<Pair<String, String?>>()
         val store = object : FakeTokenStore(null) {
@@ -114,8 +116,8 @@ class ManagementApiClientTest {
         }).build()
         val client = ManagementApiClient({ origin }, store, http)
         client.login("a@example.org", "pw")
-        assertEquals("https://first.example.org", savedOrigin)
-        origin = "https://second.example.org"
+        assertEquals("https://first.destinedfxhost.com", savedOrigin)
+        origin = "https://second.destinedfxhost.com"
 
         val error = runCatching { client.currentUser() }.exceptionOrNull() as ManagementException
         assertEquals(ManagementFailure.AUTH_EXPIRED, error.failure)
@@ -133,7 +135,7 @@ class ManagementApiClientTest {
             networkCalled = true
             response(chain.request(), 200, "{}")
         }).build()
-        val client = ManagementApiClient("https://api.example.org", FakeTokenStore(null), http)
+        val client = ManagementApiClient("https://api.destinedfxhost.com", FakeTokenStore(null), http)
         val error = runCatching { client.currentUser() }.exceptionOrNull() as ManagementException
         assertEquals(ManagementFailure.AUTH_EXPIRED, error.failure)
         assertFalse(networkCalled)
@@ -145,7 +147,7 @@ class ManagementApiClientTest {
             networkCalled = true
             response(chain.request(), 200, "{}")
         }).build()
-        val client = ManagementApiClient("https://api.example.org", FakeTokenStore(null, isAvailable = false), http)
+        val client = ManagementApiClient("https://api.destinedfxhost.com", FakeTokenStore(null, isAvailable = false), http)
         listOf(
             runCatching { client.register("a@example.org", "long enough password") }.exceptionOrNull(),
             runCatching { client.login("a@example.org", "long enough password") }.exceptionOrNull()
@@ -160,7 +162,7 @@ class ManagementApiClientTest {
             if (getAttempts == 1) throw IOException("temporary network failure")
             response(chain.request(), 200, "{\"theme\":{}}")
         }).build()
-        val getClient = ManagementApiClient("https://api.example.org", FakeTokenStore("x".repeat(64)), getHttp)
+        val getClient = ManagementApiClient("https://api.destinedfxhost.com", FakeTokenStore("x".repeat(64)), getHttp)
         assertTrue(getClient.getPreferences().has("theme"))
         assertEquals(2, getAttempts)
 
@@ -169,7 +171,7 @@ class ManagementApiClientTest {
             postAttempts++
             throw IOException("temporary network failure")
         }).build()
-        val postClient = ManagementApiClient("https://api.example.org", FakeTokenStore(null), postHttp)
+        val postClient = ManagementApiClient("https://api.destinedfxhost.com", FakeTokenStore(null), postHttp)
         val error = runCatching { postClient.register("a@example.org", "long enough password") }
             .exceptionOrNull() as ManagementException
         assertEquals(ManagementFailure.OFFLINE, error.failure)
@@ -199,7 +201,7 @@ class ManagementApiClientTest {
                 else -> response(request, 404, "{}")
             }
         }).build()
-        val client = ManagementApiClient("https://api.example.org", FakeTokenStore(null), http)
+        val client = ManagementApiClient("https://api.destinedfxhost.com", FakeTokenStore(null), http)
         assertEquals("owner@example.org", client.register("owner@example.org", "long enough password", token).email)
         assertTrue(captured)
     }
@@ -224,7 +226,7 @@ class ManagementApiClientTest {
                 else -> response(request, 404, "{}")
             }
         }).build()
-        val client = ManagementApiClient("https://api.example.org", store, http)
+        val client = ManagementApiClient("https://api.destinedfxhost.com", store, http)
         assertEquals("a@example.org", client.login("a@example.org", "pw").email)
         assertEquals("${"x".repeat(64)}", store.token)
         assertEquals("2099-01-01T00:00:00Z", store.expiry)
@@ -236,7 +238,7 @@ class ManagementApiClientTest {
         val http = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
             response(chain.request(), 503, """{"error":{"code":"internal_error"}}""")
         }).build()
-        val error = runCatching { ManagementApiClient("https://api.example.org", FakeTokenStore(null), http).status() }
+        val error = runCatching { ManagementApiClient("https://api.destinedfxhost.com", FakeTokenStore(null), http).status() }
             .exceptionOrNull() as ManagementException
         assertEquals(ManagementFailure.SERVICE_UNAVAILABLE, error.failure)
     }
@@ -251,7 +253,7 @@ class ManagementApiClientTest {
             }
             response(chain.request(), 200, body)
         }).build()
-        val error = runCatching { ManagementApiClient("https://api.example.org", FakeTokenStore(null), http).status() }
+        val error = runCatching { ManagementApiClient("https://api.destinedfxhost.com", FakeTokenStore(null), http).status() }
             .exceptionOrNull() as ManagementException
         assertEquals(ManagementFailure.SERVICE_UNAVAILABLE, error.failure)
     }
