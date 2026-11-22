@@ -32,6 +32,22 @@ if [[ ! -f "$MANIFEST" && "$CODESPACES_VALUE" == "true" ]]; then
   fi
   MANAGEMENT_API_ORIGIN="$CODESPACE_MANAGEMENT_API_ORIGIN"
   CODESPACE_BRIDGE_URL="https://$CODESPACE_NAME-8000.$CODESPACE_DOMAIN"
+  CODESPACES_GITHUB_CLIENT_ID="${CODESPACES_GITHUB_CLIENT_ID:-}"
+  if [[ -z "$CODESPACES_GITHUB_CLIENT_ID" && -f "$ROOT/.env" ]]; then
+    CODESPACES_GITHUB_CLIENT_ID="$(python3 - "$ROOT/.env" <<'PY'
+import sys
+from pathlib import Path
+value = ""
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if line.strip().startswith("CODESPACES_GITHUB_CLIENT_ID="):
+        value = line.split("=", 1)[1].strip().strip('"').strip("'")
+        break
+print(value)
+PY
+)"
+  fi
+  [[ "$CODESPACES_GITHUB_CLIENT_ID" =~ ^[A-Za-z0-9._-]{8,128}$ ]] || block "CODESPACES_GITHUB_CLIENT_ID is missing or invalid. Set the public GitHub App Client ID with Device Flow enabled; do not use the App Client Secret."
+  export CODESPACES_GITHUB_CLIENT_ID
   MANIFEST="$TEMP_DIR/codespaces-public-endpoints.json"
   python3 - "$MANIFEST" "$CODESPACE_BRIDGE_URL" "$MANAGEMENT_API_ORIGIN" <<'PY'
 import json, os, sys
@@ -183,6 +199,9 @@ CONFIG="$(find "$ROOT/app/build/generated/source/buildConfig/debug" -type f -nam
 [[ -n "$CONFIG" ]] || block "Generated BuildConfig is missing."
 grep -Fq "DESTINEDFX_ENDPOINTS_LOCKED = true" "$CONFIG" || block "APK is not endpoint-locked."
 grep -Fq "DESTINEDFX_CODESPACES_HOST_DISCOVERY = $CODESPACES_BUILD" "$CONFIG" || block "APK Codespaces host-discovery capability does not match this build target."
+if [[ "$CODESPACES_BUILD" == "true" ]]; then
+  grep -Fq "CODESPACES_GITHUB_CLIENT_ID = \"$CODESPACES_GITHUB_CLIENT_ID\"" "$CONFIG" || block "APK is missing the configured GitHub Device Flow public Client ID."
+fi
 grep -Fq "MT5_MANAGED_SERVICE_URL = \"$BRIDGE_URL\"" "$CONFIG" || block "Bridge origin was not embedded."
 grep -Fq "MANAGEMENT_API_ORIGIN = \"$MANAGEMENT_URL\"" "$CONFIG" || block "Management API origin was not embedded."
 mkdir -p "$OUTPUT"
