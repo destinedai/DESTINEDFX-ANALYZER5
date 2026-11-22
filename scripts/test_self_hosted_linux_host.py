@@ -78,12 +78,12 @@ def test_endpoint_manifest_accepts_github_codespaces_forwarding_domains(tmp_path
     ):
         source = tmp_path / "bridge.env"
         output = tmp_path / "public-endpoints.json"
-        source.write_text("\\n".join([
+        source.write_text("\n".join([
             f"BRIDGE_BASE_URL=https://{host}",
             f"BRIDGE_HOST={host}",
             f"EXPECTED_FORWARDED_HOST={host}",
             "APP_DOMAIN=api.destinedfxhost.com",
-        ]) + "\\n", encoding="utf-8")
+        ]) + "\n", encoding="utf-8")
         result = subprocess.run(
             [sys.executable, str(helper), "--source", str(source), "--output", str(output)],
             capture_output=True, text=True,
