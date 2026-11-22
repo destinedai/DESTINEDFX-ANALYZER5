@@ -66,7 +66,7 @@ class GitHubCodespacesClient(
 
     companion object {
         const val EXPECTED_REPOSITORY = "destinedai/DESTINEDFX-ANALYZER5"
-        const val EXPECTED_REF = "free/phone-only-v1"
+        const val EXPECTED_REF = "feat/self-hosted-linux-host-runtime"
         const val MONTHLY_CORE_HOURS = 120.0
         const val DAILY_WALL_MINUTES = 90L
         const val LOW_BUDGET_WARNING_CORE_HOURS = 10.0
