@@ -446,9 +446,11 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
       - name: Build locked GitHub Codespaces bootstrap APK
+        if: vars.CODESPACES_GITHUB_CLIENT_ID != ''
         env:
           MT5_MANAGED_SERVICE_URL: ""
           MANAGEMENT_API_ORIGIN: ""
+          CODESPACES_GITHUB_CLIENT_ID: ${{ vars.CODESPACES_GITHUB_CLIENT_ID }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug \
@@ -456,6 +458,7 @@ jobs:
             -PdestinedfxCodespacesHostDiscovery=true \
             -Pmt5ManagedServiceUrl=__CONFIGURATION_REQUIRED__ \
             -PmanagementApiOrigin=__CONFIGURATION_REQUIRED__ \
+            -PcodespacesGithubClientId="$CODESPACES_GITHUB_CLIENT_ID" \
             --stacktrace
           apk="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$apk"
@@ -480,6 +483,11 @@ jobs:
             app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk
             app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk.sha256
           if-no-files-found: error
+      - name: Explain missing GitHub Device Flow client ID
+        if: vars.CODESPACES_GITHUB_CLIENT_ID == ''
+        run: |
+          echo "::warning title=Codespaces bootstrap APK not built::Set the public repository Actions variable CODESPACES_GITHUB_CLIENT_ID to the GitHub OAuth App Client ID with Device Flow enabled."
+          echo "The regular debug APK was still built. The Codespaces bootstrap APK was skipped because GitHub Device Flow cannot be used without the public Client ID." >> "$GITHUB_STEP_SUMMARY"
 
   android-emulator-instrumentation:
     name: Android emulator instrumentation (runtime acceptance)
