@@ -35,9 +35,13 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     val managementEmail by viewModel.managementEmail.collectAsStateWithLifecycle()
     val managementServiceState by viewModel.managementServiceState.collectAsStateWithLifecycle()
     val managementApiOrigin by viewModel.managementApiOrigin.collectAsStateWithLifecycle()
+    val managementOwnerSetupToken by viewModel.managementOwnerSetupToken.collectAsStateWithLifecycle()
     var accountEmail by remember { mutableStateOf("") }
     var accountPassword by remember { mutableStateOf("") }
     var ownerSetupToken by remember { mutableStateOf("") }
+    LaunchedEffect(managementOwnerSetupToken) {
+        if (managementOwnerSetupToken.isNotBlank()) ownerSetupToken = managementOwnerSetupToken
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(DarkBackground).padding(horizontal = 12.dp, vertical = 10.dp),
@@ -100,10 +104,26 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         modifier = Modifier.fillMaxWidth().testTag("management_api_origin")
                     )
                     Text(
-                        "The self-hosted host supplies this verified HTTPS endpoint at build time. " +
-                            "There is no phone-side URL field; changing hosts requires a new APK build from the host's endpoint manifest.",
+                        if (com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY)
+                            "This locked APK discovers both endpoints from the GitHub Codespace you authorize. No URL is entered or pasted."
+                        else
+                            "The self-hosted host supplies this verified HTTPS endpoint at build time. There is no phone-side URL field.",
                         fontSize = 9.sp, color = TextMuted
                     )
+                    if (com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = { viewModel.discoverCodespacesManagementApi() },
+                                enabled = !managementBusy,
+                                modifier = Modifier.weight(1f)
+                            ) { Text("DISCOVER MANAGEMENT API", fontSize = 9.sp) }
+                            OutlinedButton(
+                                onClick = { viewModel.fetchCodespacesOwnerSetupToken() },
+                                enabled = !managementBusy && managementApiOrigin.isNotBlank(),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("GET OWNER TOKEN", fontSize = 9.sp) }
+                        }
+                    }
                     if (managementEmail == "Saved session") Text("Encrypted session is saved; account identity has not been refreshed yet.", fontSize = 10.sp, color = TextSecondary)
                     else if (managementEmail.isNotBlank()) Text("Signed in as $managementEmail", fontSize = 10.sp, color = ProfitGreen)
                     OutlinedTextField(value = accountEmail, onValueChange = { accountEmail = it },
