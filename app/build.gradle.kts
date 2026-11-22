@@ -205,7 +205,25 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all {
+        // The CI job seeds this directory with the exact instrumented Android SDK jar
+        // so Robolectric does not perform one independent Maven download per test class.
+        val robolectricDependencyDir = System.getenv("ROBOLECTRIC_DEPENDENCY_DIR").orEmpty()
+        if (robolectricDependencyDir.isNotBlank()) {
+          systemProperty("robolectric.dependency.dir", robolectricDependencyDir)
+        }
+        val robolectricRepository = System.getenv("ROBOLECTRIC_DEPENDENCY_REPO_URL")
+          ?.trim()
+          ?.takeIf { it.startsWith("https://") }
+          ?: "https://repo.maven.apache.org/maven2"
+        systemProperty("robolectric.dependency.repo.url", robolectricRepository)
+        systemProperty("robolectric.dependency.repo.id", "maven-central")
+      }
+    }
+  }
   lint {
     abortOnError = false
     checkReleaseBuilds = false

@@ -7,7 +7,14 @@ pluginManagement {
         includeGroupByRegex("androidx.*")
       }
     }
-    mavenCentral()
+    maven {
+      name = "MavenCentralApacheMirror"
+      url = uri("https://repo.maven.apache.org/maven2")
+    }
+    maven {
+      name = "MavenCentralRepo1Fallback"
+      url = uri("https://repo1.maven.org/maven2")
+    }
     gradlePluginPortal()
   }
 }
@@ -18,7 +25,14 @@ dependencyResolutionManagement {
   repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
   repositories {
     google()
-    mavenCentral()
+    maven {
+      name = "MavenCentralApacheMirror"
+      url = uri("https://repo.maven.apache.org/maven2")
+    }
+    maven {
+      name = "MavenCentralRepo1Fallback"
+      url = uri("https://repo1.maven.org/maven2")
+    }
   }
 }
 

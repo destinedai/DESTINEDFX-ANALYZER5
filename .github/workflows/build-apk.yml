@@ -202,12 +202,63 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+        cache: gradle
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - name: Accept Android licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
+      - name: Cache Gradle, Maven local repository and Robolectric runtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.m2/repository
+            ~/.cache/robolectric
+          key: android-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties', 'settings.gradle.kts') }}-robolectric-4.16.1-android-all-instrumented-14-robolectric-10818077-i7
+          restore-keys: |
+            android-${{ runner.os }}-
+      - name: Restore Robolectric Android 14 instrumented runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          robolectric_version="4.16.1"
+          android_all_version="14-robolectric-10818077-i7"
+          cache_dir="$HOME/.cache/robolectric"
+          jar="$cache_dir/android-all-instrumented-$android_all_version.jar"
+          mkdir -p "$cache_dir"
+          if [[ -s "$jar" ]] && unzip -tq "$jar" >/dev/null 2>&1; then
+            echo "Cache restored: Robolectric $robolectric_version / android-all-instrumented $android_all_version"
+          else
+            rm -f "$jar"
+            temporary="$jar.part"
+            path="org/robolectric/android-all-instrumented/$android_all_version/android-all-instrumented-$android_all_version.jar"
+            downloaded=false
+            for base in \
+              "https://repo.maven.apache.org/maven2" \
+              "https://repo1.maven.org/maven2" \
+              "https://maven-central.storage-download.googleapis.com/maven2"; do
+              echo "Fetching Robolectric runtime from $base"
+              if curl --fail --location --silent --show-error \
+                  --connect-timeout 20 --max-time 240 \
+                  --retry 2 --retry-all-errors --retry-delay 5 \
+                  "$base/$path" --output "$temporary" \
+                  && unzip -tq "$temporary" >/dev/null 2>&1; then
+                mv "$temporary" "$jar"
+                echo "Download succeeded: android-all-instrumented-$android_all_version.jar"
+                downloaded=true
+                break
+              fi
+              rm -f "$temporary"
+            done
+            if [[ "$downloaded" != true ]]; then
+              echo "Could not seed the Robolectric runtime from Maven Apache, repo1, or Google's Maven Central mirror." >&2
+              exit 1
+            fi
+          fi
+          echo "ROBOLECTRIC_DEPENDENCY_DIR=$cache_dir" >> "$GITHUB_ENV"
       - name: Prepare stable debug keystore
         env:
           DESTINEDFX_DEBUG_KEYSTORE_B64: ${{ secrets.DESTINEDFX_DEBUG_KEYSTORE_B64 }}
@@ -335,10 +386,44 @@ jobs:
           print("Managed bridge /health/ready responded. This does not prove worker, news provider, or broker-terminal readiness.")
           PY
           echo "Managed bridge readiness endpoint responded successfully. This is only a deployment health check; provider, worker, MT5 compile, and DEMO fill acceptance remain separate." >> "$GITHUB_STEP_SUMMARY"
-      - name: Run Android JVM unit tests
+      - name: Run Android JVM unit tests (bounded retries for Maven HTTP 429)
+        shell: bash
         run: |
+          set -uo pipefail
           chmod +x gradlew
-          ./gradlew testDebugUnitTest --stacktrace
+          attempt=1
+          last_log=""
+          while [[ "$attempt" -le 3 ]]; do
+            case "$attempt" in
+              1) repository="https://repo.maven.apache.org/maven2" ;;
+              2) repository="https://repo1.maven.org/maven2" ;;
+              3) repository="https://maven-central.storage-download.googleapis.com/maven2" ;;
+            esac
+            export ROBOLECTRIC_DEPENDENCY_REPO_URL="$repository"
+            log="$RUNNER_TEMP/android-jvm-test-attempt-$attempt.log"
+            last_log="$log"
+            echo "Android JVM test attempt $attempt/3; Robolectric fallback repository: $repository"
+            set +e
+            ./gradlew testDebugUnitTest --max-workers=2 --stacktrace 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [[ "$status" -eq 0 ]]; then
+              echo "Android JVM tests succeeded on attempt $attempt."
+              exit 0
+            fi
+            if ! grep -Eqi 'HTTP response code: 429|HTTP[[:space:]]+429|status code:? 429|429 Too Many Requests' "$log"; then
+              echo "Android JVM tests failed for a reason other than Maven HTTP 429; refusing to retry." >&2
+              exit "$status"
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              echo "Maven HTTP 429 detected; waiting 60 seconds before retry."
+              sleep 60
+            fi
+            attempt=$((attempt + 1))
+          done
+          echo "Robolectric/Maven download remained rate-limited after three attempts; final attempt used Google's Maven Central mirror." >&2
+          tail -n 80 "$last_log" >&2
+          exit 1
       - name: Upload Android JVM test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -457,6 +542,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+        cache: gradle
       - name: Accept Android licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
@@ -545,6 +631,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+        cache: gradle
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
