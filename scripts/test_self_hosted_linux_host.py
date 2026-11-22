@@ -76,6 +76,11 @@ def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints
     assert "-PdestinedfxEndpointsLocked=true" in builder
     assert "assembleDebug" in builder and "testDebugUnitTest" in builder
     assert "apksigner" in builder and "sha256sum" in builder
+    assert "object_pairs_hook=unique_object" in builder
+    assert 'set(d) != expected_keys' in builder
+    assert '"aapt2" dump badging' in builder
+    assert 'grep -Fq -- "$BRIDGE_URL" <<<"$DEX_STRINGS"' in builder
+    assert 'grep -Fq -- "$MANAGEMENT_URL" <<<"$DEX_STRINGS"' in builder
 
 
 def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
