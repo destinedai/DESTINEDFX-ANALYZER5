@@ -197,7 +197,8 @@ class MT5RemoteBridgeClient(
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
         secrets.getManagedMT5ServiceUrl(),
         com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
-        com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
+        com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED,
+        com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY
     )
     fun baseUrl(): String = configuredServiceUrl().trimEnd('/')
     fun managedConfigured(): Boolean = validateBaseUrl(configuredServiceUrl()) != null
