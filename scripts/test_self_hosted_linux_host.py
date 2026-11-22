@@ -177,7 +177,7 @@ def test_codespaces_owner_bootstrap_is_github_owner_verified_and_non_cacheable()
     assert 'response.headers["Cache-Control"] = "no-store, private"' in backend
     assert 'response.headers["Pragma"] = "no-cache"' in backend
     assert 'rate_buckets["codespaces-owner:" + ip]' in backend
-    assert "owner-setup-" not in backend
+    assert 'settings.owner_setup_token.get_secret_value().strip()' in backend
 
 
 def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
