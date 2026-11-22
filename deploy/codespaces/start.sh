@@ -315,9 +315,19 @@ if [[ "$PUBLIC_READY" == true ]]; then
     api_key="$(curl -fs --max-time 12 -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://${MANAGEMENT_HOST}/api/v1/auth/bridge-verification-key" 2>/dev/null || true)"
     api_key_valid="$(python3 - "${api_key}" <<'PY'
 import json,sys
-try: d=json.loads(sys.argv[1])
-except Exception: raise SystemExit(1)
-raise SystemExit(0 if d.get("algorithm")=="EdDSA" and d.get("issuer")=="destinedfx-management" and d.get("audience")=="destinedfx-bridge" and str(d.get("public_key_pem","")).startswith("-----BEGIN PUBLIC KEY-----") else 1)
+try:
+    d=json.loads(sys.argv[1])
+except Exception:
+    print("1")
+else:
+    valid = (
+        d.get("algorithm") == "EdDSA"
+        and d.get("issuer") == "destinedfx-management"
+        and d.get("audience") == "destinedfx-bridge"
+        and str(d.get("public_key_pem","")).startswith("-----BEGIN PUBLIC KEY-----")
+        and str(d.get("public_key_pem","")).strip().endswith("-----END PUBLIC KEY-----")
+    )
+    print("0" if valid else "1")
 PY
 )"
     if [[ "$live" == 200 && "$bad" == 401 && "$none" == 401 && "$api_health" == 200 && "$api_ready" == 200 && "$api_key_valid" == 0 ]]; then
