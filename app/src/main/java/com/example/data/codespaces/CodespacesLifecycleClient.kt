@@ -97,7 +97,7 @@ internal fun isCodespacesForwardedBridgeOrigin(raw: String): Boolean {
         if (!uri.scheme.equals("https", true) || uri.userInfo != null ||
             uri.query != null || uri.fragment != null ||
             uri.path.orEmpty().trimEnd('/').isNotEmpty() ||
-            uri.port !in -1..65535 || uri.port == 0) return false
+            uri.port !in setOf(-1, 443)) return false
         val suffix = DESTINEDFX_CODESPACES_FORWARDING_DOMAINS
             .map { "-8000.$it" }
             .firstOrNull { host.endsWith(it) } ?: return false
