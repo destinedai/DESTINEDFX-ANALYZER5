@@ -2,7 +2,7 @@
 
 This is a standalone, broker-free FastAPI service for application accounts, sessions, user preferences, notification settings, minimal device registration, service health, and administrative audit reads. It does not connect to brokers, fetch brokerage balances, expose the MT5 bridge, or submit financial orders. The existing `bridge/` remains a separate owner-managed service and is not part of this stack.
 
-**Scope freeze:** this application-management stack is optional and unrelated to the broker gateway. Do not deploy or extend it as part of the Codespaces broker host. The Android app and broker bridge must remain fully functional when this directory is unconfigured.
+**Service boundary:** this broker-free application-management API remains a separate service from the MT5 Bridge and does not connect to brokers or submit orders. It is now integrated as a separate PostgreSQL-backed process in the GitHub Codespaces DEMO host on loopback port 8010. The Bridge continues to run on port 8000 and verifies signed identity assertions using only the Management API's public Ed25519 key. The persistent self-hosted Linux deployment continues to use the systemd/Compose deployment documented below; Codespaces does not replace that persistent host.
 
 ## Supported deployment shape
 
