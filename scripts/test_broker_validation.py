@@ -9,10 +9,14 @@ SPECS=ROOT/"app/src/main/java/com/example/data/broker/BrokerLoginSpec.kt"
 EXPECTED={"FBS_MT5","EXNESS_MT5","HFM_MT5","DERIV_MT5"}
 LABELS={"FBS_MT5":"FBS","EXNESS_MT5":"Exness","HFM_MT5":"HFM","DERIV_MT5":"Deriv MT5"}
 
-def validate(data):
+def read_mt5_specs():
     source=SPECS.read_text(encoding="utf-8")
-    pattern=re.compile(r'BrokerLoginSpec\(\s*id\s*=\s*"(?P<id>[^"]+)".*?connector\s*=\s*LoginConnector\.(?P<c>[A-Z_]+)',re.S)
-    actual={m["id"] for m in pattern.finditer(source) if m["c"]=="MT5_TERMINAL"}
+    # Connector enum includes the digit in MT5_TERMINAL.
+    pattern=re.compile(r'BrokerLoginSpec\(\s*id\s*=\s*"(?P<id>[^"]+)".*?connector\s*=\s*LoginConnector\.(?P<c>[A-Z0-9_]+)',re.S)
+    return {m["id"] for m in pattern.finditer(source) if m["c"]=="MT5_TERMINAL"}
+
+def validate(data):
+    actual=read_mt5_specs()
     found={b.get("spec_id","") for b in data["brokers"]}
     errors=[]
     if actual!=EXPECTED: errors.append(f"Repository MT5 catalog mismatch: {sorted(actual)}")
