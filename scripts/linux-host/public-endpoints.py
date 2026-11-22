@@ -10,7 +10,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 DNS = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
-RESERVED = (".example", ".example.com", ".test", ".invalid", ".localhost")
+RESERVED_HOSTS = {"example.com", "example.net", "example.org", "localhost"}
+RESERVED_SUFFIXES = (
+    ".example", ".test", ".invalid", ".localhost", ".local", ".internal",
+    ".example.com", ".example.net", ".example.org", ".onion",
+)
 
 
 def public_origin(raw, label):
@@ -29,7 +33,7 @@ def public_origin(raw, label):
     except ValueError as exc:
         if str(exc) == f"{label} cannot be an IP literal.":
             raise
-    if host in {"example.com", "localhost"} or host.endswith(RESERVED) or "placeholder" in host:
+    if host in RESERVED_HOSTS or host.endswith(RESERVED_SUFFIXES) or "placeholder" in host:
         raise ValueError(f"{label} cannot be a placeholder or reserved test domain.")
     return "https://" + host, host
 
