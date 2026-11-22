@@ -25,7 +25,9 @@ if [[ ! -f "$MANIFEST" && "$CODESPACES_VALUE" == "true" ]]; then
     app.github.dev|preview.app.github.dev|githubpreview.dev) ;;
     *) block "Unsupported GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN. Update the strict Codespaces host allowlist before building." ;;
   esac
-  [[ -n "$MANAGEMENT_API_ORIGIN" ]] || block "Management API is missing: this Codespaces devcontainer starts Bridge on 8000 and private noVNC on 6080 only; it does not start or forward the Management API on 8010/8080/8001. A separately reachable Management API with its EdDSA Bridge verification key is required; no locked APK will be built without it."
+  if [[ -z "$MANAGEMENT_API_ORIGIN" ]]; then
+    MANAGEMENT_API_ORIGIN="https://$CODESPACE_NAME-8010.$CODESPACE_DOMAIN"
+  fi
   CODESPACE_BRIDGE_URL="https://$CODESPACE_NAME-8000.$CODESPACE_DOMAIN"
   MANIFEST="$TEMP_DIR/codespaces-public-endpoints.json"
   python3 - "$MANIFEST" "$CODESPACE_BRIDGE_URL" "$MANAGEMENT_API_ORIGIN" <<'PY'
@@ -45,7 +47,7 @@ PY
   export DESTINEDFX_CODESPACES_HOST_BUILD=true
   CODESPACES_BUILD=true
 fi
-[[ -f "$MANIFEST" && ! -L "$MANIFEST" && -r "$MANIFEST" ]] || block "A verified endpoint manifest is missing. On the persistent host, complete install-self-hosted.sh first; inside Codespaces, provide a real Management API origin before invoking the Codespaces-aware build path."
+[[ -f "$MANIFEST" && ! -L "$MANIFEST" && -r "$MANIFEST" ]] || block "A verified endpoint manifest is missing. On the persistent host, complete install-self-hosted.sh first. In Codespaces, the builder derives both forwarded origins from CODESPACE_NAME and requires both APIs to pass HTTPS readiness and EdDSA-key checks."
 command -v python3 >/dev/null || block "Python 3 is required."
 command -v java >/dev/null || block "JDK 21 is required."
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
