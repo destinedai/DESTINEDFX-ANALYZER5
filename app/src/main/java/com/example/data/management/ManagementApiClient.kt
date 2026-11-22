@@ -264,7 +264,13 @@ class ManagementApiClient(
             val uri = runCatching { URI(value) }.getOrNull() ?: return null
             val host = uri.host?.lowercase().orEmpty()
             if (!uri.scheme.equals("https", true) || host.isBlank() || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null || uri.rawPath.orEmpty().trimEnd('/').isNotEmpty()) return null
-            if (uri.port == 0 || uri.port > 65535 || host in setOf("localhost", "example.com", "0.0.0.0", "127.0.0.1", "::1") || host.endsWith(".invalid") || host.endsWith(".test") || host.endsWith(".localhost") || host.endsWith(".example")) return null
+            val reservedHostSuffixes = listOf(
+                ".example", ".example.com", ".example.net", ".example.org", ".localhost",
+                ".test", ".invalid", ".local", ".internal", ".onion"
+            )
+            if (uri.port == 0 || uri.port > 65535 ||
+                host in setOf("localhost", "example.com", "example.net", "example.org", "0.0.0.0", "127.0.0.1", "::1") ||
+                reservedHostSuffixes.any { host.endsWith(it) }) return null
             return "https://${uri.rawAuthority}"
         }
     }
