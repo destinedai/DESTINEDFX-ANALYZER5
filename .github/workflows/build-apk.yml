@@ -490,8 +490,10 @@ jobs:
             -PmanagementApiOrigin=__CONFIGURATION_REQUIRED__ \
             -PcodespacesGithubClientId="$CODESPACES_GITHUB_CLIENT_ID" \
             --stacktrace
+          set -euxo pipefail
           apk="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$apk"
+          echo "APK_FILE_PRESENT"
           config="$(find app/build/generated/source/buildConfig/debug -type f -name BuildConfig.java -print -quit)"
           test -n "$config"
           grep -Fq 'DESTINEDFX_ENDPOINTS_LOCKED = true' "$config"
@@ -499,13 +501,19 @@ jobs:
           grep -Fq 'MT5_MANAGED_SERVICE_URL = "__CONFIGURATION_REQUIRED__"' "$config"
           grep -Fq 'MANAGEMENT_API_ORIGIN = "__CONFIGURATION_REQUIRED__"' "$config"
           grep -Fq "CODESPACES_GITHUB_CLIENT_ID = \"$CODESPACES_GITHUB_CLIENT_ID\"" "$config"
-          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort -V | tail -1)"
+          echo "BUILD_CONFIG_FLAGS_VERIFIED"
+          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
+          test -x "$ANDROID_HOME/build-tools/$tools/apksigner"
+          test -x "$ANDROID_HOME/build-tools/$tools/aapt2"
+          echo "ANDROID_BUILD_TOOLS=$tools"
           "$ANDROID_HOME/build-tools/$tools/apksigner" verify --verbose --print-certs "$apk" > /tmp/codespaces-apk-signature.txt
           grep -Eq 'certificate SHA-256 digest:[[:space:]]*[0-9a-fA-F]{64}' /tmp/codespaces-apk-signature.txt
+          echo "APK_SIGNATURE_VERIFIED"
           metadata="$("$ANDROID_HOME/build-tools/$tools/aapt2" dump badging "$apk")"
           grep -Fq "package: name='com.aistudio.destinedfx.qwvzxp'" <<<"$metadata"
           grep -Fq "arm64-v8a" <<<"$metadata"
           grep -Fq "x86_64" <<<"$metadata"
+          echo "APK_PACKAGE_AND_ABIS_VERIFIED"
           mkdir -p app/build/outputs/apk/codespaces
           cp "$apk" app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk
           sha256sum app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk | tee app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk.sha256
