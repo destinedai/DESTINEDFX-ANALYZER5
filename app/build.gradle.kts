@@ -53,9 +53,12 @@ if (destinedFxEndpointsLocked) {
       uri.port != 0 && uri.port in -1..65535) {
       "$name must be a bare HTTPS origin without credentials, path, query or fragment."
     }
+    val reservedHostSuffixes = listOf(
+      ".example", ".example.com", ".example.net", ".example.org", ".localhost",
+      ".test", ".invalid", ".local", ".internal", ".onion"
+    )
     require(host !in setOf("localhost", "example.com", "example.org", "example.net", "127.0.0.1", "0.0.0.0", "::1") &&
-      !host.endsWith(".example") && !host.endsWith(".example.com") && !host.endsWith(".localhost") &&
-      !host.endsWith(".test") && !host.endsWith(".invalid") && !host.contains("placeholder") &&
+      reservedHostSuffixes.none { host.endsWith(it) } && !host.contains("placeholder") &&
       !host.matches(Regex("^[0-9.]+$")) && !host.contains(":")) {
       "$name cannot use a placeholder, private literal or localhost address."
     }
