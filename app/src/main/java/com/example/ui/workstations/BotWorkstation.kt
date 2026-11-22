@@ -86,7 +86,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         mutableStateOf(MT5RemoteBridgeClient.initialServiceUrl(
             bridgeSecrets.getManagedMT5ServiceUrl(),
             com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
-            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
+            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED,
+            com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY
         ))
     }
     var bridgeBusy by remember { mutableStateOf(false) }
