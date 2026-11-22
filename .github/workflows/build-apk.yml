@@ -500,7 +500,10 @@ jobs:
           grep -Fq 'DESTINEDFX_CODESPACES_HOST_DISCOVERY = true' "$config"
           grep -Fq 'MT5_MANAGED_SERVICE_URL = "__CONFIGURATION_REQUIRED__"' "$config"
           grep -Fq 'MANAGEMENT_API_ORIGIN = "__CONFIGURATION_REQUIRED__"' "$config"
-          grep -Fq "CODESPACES_GITHUB_CLIENT_ID = \"$CODESPACES_GITHUB_CLIENT_ID\"" "$config"
+          grep -Fq "CODESPACES_GITHUB_CLIENT_ID" "$config"
+          if [[ -n "$CODESPACES_GITHUB_CLIENT_ID" ]]; then
+            grep -Fq "CODESPACES_GITHUB_CLIENT_ID = \"$CODESPACES_GITHUB_CLIENT_ID\"" "$config"
+          fi
           echo "BUILD_CONFIG_FLAGS_VERIFIED"
           tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
           test -x "$ANDROID_HOME/build-tools/$tools/apksigner"
