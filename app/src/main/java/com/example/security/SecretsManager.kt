@@ -1142,7 +1142,7 @@ class SecretsManager internal constructor(
         password: String, savePassword: Boolean = false
     ): Boolean {
         if (!isSecureStorageAvailable || !login.matches(Regex("[0-9]{1,20}")) ||
-            server.isBlank() || server.any { it.code < 32 || it.code == 127 } ||
+            server != server.trim() || !Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(server) ||
             accessType !in setOf("MASTER", "INVESTOR") || (savePassword && password.isBlank())
         ) return false
         val prefix = mt5AccountKey("profile", profileKey).removeSuffix("_profile")
@@ -1155,6 +1155,14 @@ class SecretsManager internal constructor(
         if (savePassword) edit.putString("${prefix}_password", password)
         else edit.remove("${prefix}_password")
         return edit.commit()
+    }
+
+    /** Saves an exact owner-entered server in its encrypted broker-and-mode profile. */
+    fun saveManagedMT5AccountServer(profileKey: String, server: String): Boolean {
+        val normalized = server.trim()
+        if (!isSecureStorageAvailable || server != normalized ||
+            !Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(normalized)) return false
+        return prefs.edit().putString(mt5AccountKey("server", profileKey), normalized).commit()
     }
 
     private fun mt5AccountValue(kind: String, profileKey: String): String =

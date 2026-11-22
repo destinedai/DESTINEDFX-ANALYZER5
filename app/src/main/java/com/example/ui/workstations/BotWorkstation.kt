@@ -97,6 +97,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var bridgePendingServerId by remember(bridgeProfileKey) { mutableStateOf("") }
     var bridgeTradePendingTickets by remember(bridgeProfileKey) { mutableStateOf(emptyList<String>()) }
     var reportStatus by remember(bridgeProfileKey) { mutableStateOf("Trade reports: waiting for authenticated broker ledger") }
+    var bridgeBalanceBeforeAction by remember(bridgeProfileKey) { mutableStateOf<Double?>(null) }
+    var bridgeBalanceAfterAction by remember(bridgeProfileKey) { mutableStateOf<Double?>(null) }
     var bridgeExpectedState by remember(bridgeProfileKey) { mutableStateOf(when (bridgePendingAction) { "START", "RESUME" -> "RUNNING"; "PAUSE" -> "PAUSED"; "STOP", "EMERGENCY_STOP" -> "STOPPED"; else -> "" }) }
     var showLiveAuthorizationDialog by remember(bridgeProfileKey) { mutableStateOf(false) }
     var showCloseAllDialog by remember(bridgeProfileKey) { mutableStateOf(false) }
@@ -227,8 +229,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             var lastProcessedSessionSnapshot = ""
             while (true) {
                 try {
-                    val fresh = AccountSessionRegistry.snapshots.value[bridgeProfileKey]
+                    val fresh = runCatching { viewModel.refreshManagedMt5Bridge(bridgeClient) }.getOrNull()
                     if (fresh == null) {
+                        bridgeSnapshot = null
                         delay(1_000)
                         continue
                     }
@@ -328,6 +331,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                         bridgeMessage = "$completedAction reconciled by the MT5 EA: no stop change was made; the existing broker SL and TP remain unchanged."
                                     } else if (fresh.heartbeatFresh && signalMatches && actionConfirmed) {
                                         val completedAction = bridgePendingAction
+                                        if (completedAction in setOf("PLACE_MARKET_ORDER", "CLOSE_POSITION_SELECTED", "CLOSE_ALL")) bridgeBalanceAfterAction = fresh.balance?.takeIf { fresh.connected && it > 0.0 }
                                         val order = signal?.optString("order").orEmpty()
                                         val deal = signal?.optString("deal").orEmpty()
                                         val executed = signal?.optString("executed_volume").orEmpty()
@@ -373,6 +377,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }.ifBlank { "Waiting for server per-ticket results" }
                             if (terminalResults && appliedGone && fresh.heartbeatFresh) {
                                 val action = bridgePendingAction
+                                if (action in setOf("CLOSE_POSITION_SELECTED", "CLOSE_ALL")) bridgeBalanceAfterAction = fresh.balance?.takeIf { fresh.connected && it > 0.0 }
                                 bridgeSecrets.clearMT5BridgeAccountPendingCommand(bridgeProfileKey)
                                 bridgeSecrets.clearMT5BridgeAccountSafetyStop(bridgeProfileKey)
                                 bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgePendingServerId = ""; bridgeTradePendingTickets = emptyList()
@@ -600,6 +605,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         it.connected && it.heartbeatFresh && it.brokerIdentityVerified
                     } == true && allTerminalQuotes.isNotEmpty()
                     Text("QUOTES · SELECTED MT5 BROKER", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_broker_quotes_header"))
+                    ManagedMt5AccountMetrics(currentBrokerSnapshot, "quotes")
                     Text(
                         if (selectedAccountMode == "DEMO") "DEMO ACCOUNT · CONFIRM EACH ORDER BEFORE SEND"
                         else "LIVE ACCOUNT · REAL-MONEY WARNING · CONFIRM EACH ORDER",
@@ -634,6 +640,9 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     Text(quote.symbol, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                                     Text("BID ${String.format(java.util.Locale.US, priceFormat, quote.bid)}  ·  ASK ${String.format(java.util.Locale.US, priceFormat, quote.ask)}",
                                         color = ProfitGreen, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                    val quoteMid = (quote.bid + quote.ask) / 2.0
+                                    Text("MID ${String.format(java.util.Locale.US, priceFormat, quoteMid)}  ·  same MT5 Bridge midpoint used by the chart",
+                                        color = ElectricCyan, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
                                     val dailyClose = currentBrokerSnapshot?.brokerCandles.orEmpty()
                                         .filter { it.symbol.equals(quote.symbol, ignoreCase = true) && it.timeframe == "D1" && it.complete }
                                         .maxByOrNull { it.timestampMs }?.close
@@ -935,7 +944,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                                 { bridgeBusy = it }, { bridgeCommandPending = it },
                                                 { bridgePendingId = it }, { bridgePendingAction = it },
                                                 { bridgePendingServerId = it }, { bridgeTradePendingTickets = it },
-                                                { bridgeMessage = it }
+                                                { bridgeMessage = it },
+                                                balanceBefore = { balance -> bridgeBalanceBeforeAction = balance; bridgeBalanceAfterAction = null }
                                             )
                                         } catch (e: Exception) {
                                             bridgeMessage = e.message ?: "MT5 market order was blocked; no broker execution is claimed."
@@ -1007,6 +1017,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             )
                         }
                         val verifiedPositions = verifiedActionSnapshot.positions.orEmpty()
+                        ManagedMt5AccountMetrics(currentBrokerSnapshot, "positions")
                         Text("OPEN POSITIONS (${verifiedPositions.size})", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mt5_open_positions_section"))
                         if (verifiedPositions.isEmpty()) Text("No open positions confirmed for this account.", color = TextSecondary, fontSize = 10.sp)
                         verifiedPositions.forEach { position ->
@@ -1150,6 +1161,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     Text(if (bridgeMode) "Account: ${bridgeSnapshot?.actualLogin?.takeIf { bridgeIdentityFresh } ?: "—"} · ${bridgeSnapshot?.actualServer?.takeIf { bridgeIdentityFresh } ?: "server unverified"}"
                         else "Connection: ${brokerConnStatus.name.replace('_', ' ')} · metrics appear when available",
                         fontSize = 9.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                    if (bridgeMode) ManagedMt5AccountMetrics(verifiedRemoteSnapshotForBot, "trade")
+                    if (bridgeMode) {
+                        val liveAccountSnapshot = bridgeSnapshot?.takeIf { bridgeIdentityFresh }
+                        val company = liveAccountSnapshot?.raw?.optJSONObject("account")?.optString("company").orEmpty()
+                        val leverage = liveAccountSnapshot?.leverage?.let { "1:$it" } ?: "—"
+                        Text(
+                            "Company: ${company.ifBlank { "—" }} · Currency: ${liveAccountSnapshot?.currency?.ifBlank { "—" } ?: "—"} · Leverage: $leverage · Mode: $selectedAccountMode",
+                            fontSize = 9.sp, color = TextSecondary, fontFamily = FontFamily.Monospace
+                        )
+                    }
                     val verifiedLocalMetrics = accountMetrics.takeIf { !bridgeMode && isConnected }
                     val verifiedBridgeMetrics = verifiedRemoteSnapshotForBot.takeIf { bridgeMode }
                     val currency = verifiedBridgeMetrics?.currency ?: verifiedLocalMetrics?.currency.orEmpty()
@@ -1157,11 +1178,18 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val equity = verifiedBridgeMetrics?.equity ?: verifiedLocalMetrics?.equity
                     val freeMargin = verifiedBridgeMetrics?.freeMargin ?: verifiedLocalMetrics?.freeMargin
                     val positionCount = if (bridgeMode) verifiedBridgeMetrics?.positions?.size else openPositions.size.takeIf { isConnected }
+                    if (bridgeMode && bridgeBalanceBeforeAction != null && bridgeBalanceAfterAction != null) {
+                        val before = bridgeBalanceBeforeAction!!
+                        val after = bridgeBalanceAfterAction!!
+                        Text("Balance before/after: $currency ${String.format(java.util.Locale.US, "%.2f", before)} → $currency ${String.format(java.util.Locale.US, "%.2f", after)} · MT5 Bridge",
+                            color = ElectricCyan, fontSize = 9.sp, modifier = Modifier.testTag("mt5_balance_before_after"))
+                    }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         StatChip("BALANCE", balance?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
                             Modifier.weight(1f), TextPrimary)
                         StatChip("EQUITY", equity?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
                             Modifier.weight(1f), TextPrimary)
+                        StatChip("MARGIN", verifiedBridgeMetrics?.margin?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—", Modifier.weight(1f), TextPrimary)
                         StatChip("FREE MARGIN", freeMargin?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
                             Modifier.weight(1f), TextPrimary)
                         StatChip("POSITIONS", positionCount?.toString() ?: "—",
@@ -3337,12 +3365,32 @@ private suspend fun sendBridgeCommand(
     }
 }
 
+@Composable
+private fun ManagedMt5AccountMetrics(snapshot: MT5RemoteBridgeClient.Snapshot?, surface: String) {
+    val metrics = snapshot?.takeIf {
+        it.connected && it.heartbeatFresh && it.accountVerified && it.brokerIdentityVerified &&
+            it.balance != null && it.balance > 0.0 && it.equity != null && it.margin != null && it.freeMargin != null
+    }
+    if (metrics == null) {
+        Text("DISCONNECTED", color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Black,
+            modifier = Modifier.fillMaxWidth().testTag("mt5_${surface}_metrics_disconnected"))
+        return
+    }
+    val currency = metrics.currency.ifBlank { "—" }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        StatChip("BALANCE", "$currency ${String.format(java.util.Locale.US, "%.2f", metrics.balance)}", Modifier.weight(1f), TextPrimary)
+        StatChip("EQUITY", "$currency ${String.format(java.util.Locale.US, "%.2f", metrics.equity)}", Modifier.weight(1f), TextPrimary)
+        StatChip("MARGIN", "$currency ${String.format(java.util.Locale.US, "%.2f", metrics.margin)}", Modifier.weight(1f), TextPrimary)
+        StatChip("FREE MARGIN", "$currency ${String.format(java.util.Locale.US, "%.2f", metrics.freeMargin)}", Modifier.weight(1f), TextPrimary)
+    }
+}
 private suspend fun sendBridgeTradeCommand(
     client: MT5RemoteBridgeClient, action: String, config: JSONObject, targetTickets: List<String>,
     secrets: com.example.security.SecretsManager, profile: String,
     busy: (Boolean) -> Unit, pending: (Boolean) -> Unit, requestId: (String) -> Unit,
     pendingAction: (String) -> Unit, serverId: (String) -> Unit, pendingTickets: (List<String>) -> Unit,
-    message: (String) -> Unit
+    message: (String) -> Unit,
+    balanceBefore: (Double?) -> Unit = {}
 ) {
     val unresolvedId = secrets.getMT5BridgeAccountPendingCommandId(profile)
     if (unresolvedId.isNotBlank()) {
@@ -3350,6 +3398,9 @@ private suspend fun sendBridgeTradeCommand(
         message("A bridge command is unresolved. Reconcile its request ID before sending any position/order action.")
         busy(false)
         return
+    }
+    if (action == "PLACE_MARKET_ORDER") {
+        balanceBefore(runCatching { client.state().takeIf { it.connected }?.balance?.takeIf { it > 0.0 } }.getOrNull())
     }
     val id = java.util.UUID.randomUUID().toString()
     if (!secrets.saveMT5BridgeAccountPendingCommand(id, action, profile)) {

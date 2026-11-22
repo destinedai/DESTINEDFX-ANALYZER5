@@ -102,6 +102,7 @@ fun MetaTraderBrokerFlow(
     var manualDialog by remember { mutableStateOf(false) }
     var manualName by remember { mutableStateOf("") }
     var form by remember { mutableStateOf(LoginForm()) }
+    var serverSaveStatus by remember(selected?.id, form.mode) { mutableStateOf("") }
     var modeHintChosen by remember { mutableStateOf(false) }
     var stage by remember { mutableStateOf<ConnectStage?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -128,6 +129,9 @@ fun MetaTraderBrokerFlow(
     val rows = remember { BrokerCatalog.rows() }
     val filtered = BrokerCatalog.search(rows, query)
     val securePolicy = LoginRules.savePasswordPolicy(secrets.isSecureStorageAvailable)
+    val activeMt5ProfileKey = "${selected?.id?.removeSuffix("_MT5")}_${form.mode.name}"
+    val activeMt5ServerValid = form.server == form.server.trim() && Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(form.server)
+    val activeMt5ServerSaved = activeMt5ServerValid && secrets.getManagedMT5AccountServer(activeMt5ProfileKey) == form.server
     val openUrl: (String) -> Unit = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     val connect: (BrokerLoginSpec, LoginForm) -> Unit = { spec, candidate ->
         busy = true
@@ -356,8 +360,16 @@ fun MetaTraderBrokerFlow(
                                     appId = secrets.getCTraderClientId(),
                                     token = "",
                                 )
-                                else -> LoginForm()
+                                else -> if (spec?.connector == LoginConnector.MT5_TERMINAL) {
+                                val brand = spec.id.removeSuffix("_MT5")
+                                val initialMode = LoginMode.DEMO
+                                LoginForm().copy(
+                                    mode = initialMode,
+                                    server = secrets.getManagedMT5AccountServer("${brand}_${initialMode.name}")
+                                )
+                            } else LoginForm()
                             }
+                            serverSaveStatus = ""
                             failure = null
                             page = FlowPage.LOGIN
                         }
@@ -416,7 +428,10 @@ fun MetaTraderBrokerFlow(
                                         RoundedCornerShape(8.dp)
                                     )
                                     .clickable {
-                                        form = LoginRules.withMode(form, mode)
+                                        val brand = spec.id.removeSuffix("_MT5")
+                                        val savedServer = secrets.getManagedMT5AccountServer("${brand}_${mode.name}")
+                                        form = LoginRules.withMode(form, mode).copy(server = savedServer)
+                                        serverSaveStatus = ""
                                         modeHintChosen = true
                                     }
                                     .testTag("login_mode_${if (isReal) "real" else "demo"}"),
@@ -437,7 +452,7 @@ fun MetaTraderBrokerFlow(
                     var serverMenu by remember { mutableStateOf(false) }
                     OutlinedTextField(
                         value = form.server,
-                        onValueChange = { server -> form = form.copy(server = server) },
+                        onValueChange = { server -> form = form.copy(server = server); serverSaveStatus = "" },
                         modifier = Modifier.fillMaxWidth().testTag("server_field"),
                         trailingIcon = { TextButton(onClick = { serverSearch = ""; serverMenu = true }) { Text("SEARCH") } },
                         label = { Text("Exact MT5 Server") },
@@ -447,12 +462,32 @@ fun MetaTraderBrokerFlow(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
                         keyboardActions = loginKeyboardActions(),
                     )
-                    Text(
-                        "Use the exact server issued by your broker. It is saved in this device's encrypted ${form.mode.name} profile; the terminal verifies the actual account identity.",
-                        color = TextSecondary,
+                    val mt5Brand = spec.id.removeSuffix("_MT5")
+                    val serverHint = when (mt5Brand) {
+                        "FBS" -> "Copy from FBS Personal Area > MT5 account > Server (e.g. FBS-Real / FBS-Demo). Exact account value only; do NOT add :port."
+                        "DERIV" -> "Copy from Deriv Dashboard > MT5 > Server (e.g. Deriv-Demo / Deriv-Server). Exact account value only; do NOT add :port."
+                        else -> "Copy the exact server name issued for this MT5 account. Do NOT add :port."
+                    }
+                    Text(serverHint, color = TextSecondary, fontSize = 10.sp, lineHeight = 14.sp,
+                        modifier = Modifier.testTag("mt5_server_field_help"))
+                    Button(
+                        onClick = {
+                            val candidate = form.server
+                            serverSaveStatus = when {
+                                candidate.isBlank() -> "Enter the exact MT5 server first."
+                                candidate != candidate.trim() || !Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(candidate) -> "Server must contain letters/numbers plus . _ - only; spaces and ports are not allowed."
+                                secrets.saveManagedMT5AccountServer(activeMt5ProfileKey, candidate) -> "Server saved"
+                                else -> "Server could not be saved to encrypted storage."
+                            }
+                        },
+                        enabled = !busy && activeMt5ServerValid,
+                        modifier = Modifier.fillMaxWidth().testTag("save_mt5_server")
+                    ) { Text("SAVE SERVER") }
+                    if (serverSaveStatus.isNotBlank()) Text(
+                        serverSaveStatus,
+                        color = if (serverSaveStatus == "Server saved") ElectricCyan else LossRed,
                         fontSize = 10.sp,
-                        lineHeight = 14.sp,
-                        modifier = Modifier.testTag("mt5_server_field_help"),
+                        modifier = Modifier.testTag("mt5_server_save_status")
                     )
                     if (spec.id == "HFM_MT5") {
                         Text(
@@ -565,7 +600,8 @@ fun MetaTraderBrokerFlow(
                 stage?.let { Text("${it.label}...", color = ElectricCyan, modifier = Modifier.testTag("connect_progress")) }
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
                 Button(
-                    enabled = !busy && LoginRules.canSubmitLogin(spec, form, modeHintChosen),
+                    enabled = !busy && LoginRules.canSubmitLogin(spec, form, modeHintChosen) &&
+                        (spec.connector != LoginConnector.MT5_TERMINAL || activeMt5ServerSaved),
                     onClick = { connect(spec, form) },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White)

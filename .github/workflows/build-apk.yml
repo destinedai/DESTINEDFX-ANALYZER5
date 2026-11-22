@@ -537,6 +537,23 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write(f"\nAndroid JVM tests executed: **{executed}**; failed: **{failed}**.\n")
           PY
+      - name: Grep release sources for fabricated balances and universal FBS/Deriv servers
+        shell: bash
+        run: |
+          set -euo pipefail
+          pattern='fake[ _-]*balance|hardcoded[ _-]*balance|mock[ _-]*balance|FBS-Real.{0,40}(default|server[[:space:]]*=)|Deriv-Demo.{0,40}(default|server[[:space:]]*=)|ServerSuggestion.{0,80}(FBS-Real|Deriv-Demo)'
+          set +e
+          grep -R -n -i -E "$pattern" -- app/src/main bridge/app.py managed-worker/worker.py mt5-ea
+          result=$?
+          set -e
+          if [ "$result" -eq 0 ]; then
+            echo "Release source contains a prohibited mock balance or universal broker server assignment." >&2
+            exit 1
+          elif [ "$result" -ne 1 ]; then
+            exit "$result"
+          fi
+          echo "0 matches: fake balance, hardcoded balance, mock balance, universal FBS-Real/Deriv-Demo server assignment."
+          echo "Release source integrity grep: **0 prohibited matches**." >> "$GITHUB_STEP_SUMMARY"
       - name: Assemble debug APK
         run: ./gradlew assembleDebug --stacktrace
       - name: Verify APK signature, identity, metadata, ABI, and checksum
@@ -649,6 +666,23 @@ jobs:
           install -m 600 debug.keystore "$HOME/.android/debug.keystore"
       - name: Create .env from example (public placeholders only)
         run: cp .env.example .env
+      - name: Grep release sources for fabricated balances and universal FBS/Deriv servers
+        shell: bash
+        run: |
+          set -euo pipefail
+          pattern='fake[ _-]*balance|hardcoded[ _-]*balance|mock[ _-]*balance|FBS-Real.{0,40}(default|server[[:space:]]*=)|Deriv-Demo.{0,40}(default|server[[:space:]]*=)|ServerSuggestion.{0,80}(FBS-Real|Deriv-Demo)'
+          set +e
+          grep -R -n -i -E "$pattern" -- app/src/main bridge/app.py managed-worker/worker.py mt5-ea
+          result=$?
+          set -e
+          if [ "$result" -eq 0 ]; then
+            echo "Release source contains a prohibited mock balance or universal broker server assignment." >&2
+            exit 1
+          elif [ "$result" -ne 1 ]; then
+            exit "$result"
+          fi
+          echo "0 matches: fake balance, hardcoded balance, mock balance, universal FBS-Real/Deriv-Demo server assignment."
+          echo "Release source integrity grep: **0 prohibited matches**." >> "$GITHUB_STEP_SUMMARY"
       - name: Compile locked Codespaces bootstrap APK without waiting for Robolectric tests
         run: |
           chmod +x gradlew

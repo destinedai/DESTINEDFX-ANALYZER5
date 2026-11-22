@@ -94,6 +94,21 @@ class WorkerTests(unittest.TestCase):
         matching_alias = {**self.job, "account": {**self.job["account"], "broker": " fbs "}}
         self.assertEqual(worker.validate_job(matching_alias)["account"]["broker_brand"], "FBS")
 
+    def test_account_supplied_fbs_and_deriv_servers_are_attempted_without_global_server_allowlist(self):
+        for brand, server in (
+            ("FBS", "FBS-Private-Real-Account-27"),
+            ("FBS", "FBS-Private-Demo-Account-27"),
+            ("DERIV", "Deriv-Private-Server-27"),
+            ("DERIV", "Deriv-Private-Demo-27"),
+        ):
+            job = {**self.job, "account": {**self.job["account"], "broker_brand": brand, "server": server}}
+            self.assertEqual(worker.validate_job(job)["account"]["server"], server)
+
+        for invalid_server in ("FBS Demo", "Deriv-Demo:443", " FBS-Demo", "", "bad\\nserver"):
+            job = {**self.job, "account": {**self.job["account"], "server": invalid_server}}
+            with self.assertRaises(worker.ProvisionError):
+                worker.validate_job(job)
+
     def test_malformed_account_and_missing_required_claim_fields_fail_closed(self):
         for job in ({**self.job, "account": None}, {**self.job, "account": []},
                     {key: value for key, value in self.job.items() if key != "job_id"}):

@@ -92,17 +92,8 @@ object BrokerLoginSpecs {
         "HFM" to listOf("HFM", "HF Markets", "HF Markets (SV) Ltd", "HF Markets (Seychelles) Ltd"),
     )
     private fun mt5Servers(brand: String): List<ServerSuggestion> {
-        val references = when (brand.uppercase()) {
-            // These are suggestions only. Deriv's exact server depends on the account's
-            // issuing company and must still be confirmed by the live MT5 terminal.
-            "DERIV" -> listOf(
-                "Deriv-Demo",
-                "Deriv-Server",
-                "Deriv-Server-02",
-                "Deriv-Server-03",
-            ).map { ServerSuggestion(it, ServerSuggestionSource.USER_SUPPLIED_REFERENCE) }
-            else -> emptyList()
-        }
+        // Broker server names are account-issued values. Never prefill a guessed universal server.
+        val references = emptyList<ServerSuggestion>()
         return listOf(
             ServerSuggestion("", ServerSuggestionSource.OWNER_HISTORY),
             ServerSuggestion("", ServerSuggestionSource.HOST_REPORTED),

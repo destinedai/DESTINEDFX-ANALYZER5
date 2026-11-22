@@ -1720,6 +1720,7 @@ def record_demo_soak_heartbeat(c,p,managed,job,worker,payload,received,day_utc):
                    account_digest,credential_generation,worker_id,worker_generation,host_generation))
 
 
+@app.post('/v1/app/login',status_code=202)
 @app.post('/v1/app/managed-account',status_code=202)
 def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None),
                     x_management_identity:str|None=Header(default=None)):
@@ -1751,7 +1752,7 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
         identity['sub']!=p['owner_subject'] or identity['tenant_id']!=p['owner_tenant']):
         raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'The current management user does not own this account pairing'})
     fernet,worker_secret=managed_config()
-    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in (None,'DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or not x.server.strip() or any(ord(ch)<32 or ord(ch)==127 for ch in x.server+x.password): raise HTTPException(422,'Consent, account number, server, account mode, and valid access_type are required')
+    if not x.consent or x.access_type not in ('MASTER','INVESTOR') or x.account_mode not in (None,'DEMO','LIVE') or not x.login.isdigit() or not 1 <= len(x.login) <= 20 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',x.server) or any(ord(ch)<32 or ord(ch)==127 for ch in x.password): raise HTTPException(422,'Consent, account number, exact server name, account mode, and valid access_type are required')
     brand=x.broker_brand.strip().upper()
     if brand not in ('FBS','EXNESS','HFM','DERIV'): raise HTTPException(422,'A verified supported broker brand is required; UNKNOWN profiles must be revoked and re-enrolled')
     evidence=x.cost_evidence.strip()

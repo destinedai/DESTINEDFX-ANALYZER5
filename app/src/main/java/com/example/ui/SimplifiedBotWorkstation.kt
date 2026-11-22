@@ -531,7 +531,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         if (broker.usesManagedMt5Terminal && bridge?.managedConfigured() == true && bridge.hasPairing()) {
             mt5Snapshot = null
             while (true) {
-                mt5Snapshot = runCatching { bridge.state() }.getOrNull() ?: mt5Snapshot?.copy(managedState = "OFFLINE", workerStatus = "OFFLINE", connected = false, terminalOnline = false, heartbeatFresh = false, state = "OFFLINE", liveAuthorized = false)
+                mt5Snapshot = runCatching { viewModel.refreshManagedMt5Bridge(bridge) }.getOrNull()
                 // Host lifecycle metadata shares the existing five-second Bridge poller.
                 hostApiStatus = runCatching { bridge.hostStatus() }.getOrNull()
                 delay(5_000L)

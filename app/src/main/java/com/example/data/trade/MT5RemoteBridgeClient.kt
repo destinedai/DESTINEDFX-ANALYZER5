@@ -332,7 +332,11 @@ class MT5RemoteBridgeClient(
         require(brokerBrand in setOf("FBS", "EXNESS", "HFM", "DERIV")) { "Unsupported MT5 broker brand." }
         require(consent) { "Explicit consent is required before sending broker credentials." }
         require(login.trim().matches(Regex("[0-9]{1,20}"))) { "Account login must contain digits only." }
-        require(server.isNotBlank() && password.isNotBlank()) { "Exact broker server and password are required." }
+        val exactServer = server.trim()
+        require(server == exactServer && Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(exactServer)) {
+            "Exact broker server is required; spaces and :port suffixes are not allowed."
+        }
+        require(password.isNotBlank()) { "Broker password is required." }
         require(costModel in setOf("OBSERVED_ROUND_TURN", "CONFIGURED_ROUND_TURN", "CONFIGURED_PER_SIDE", "ZERO_COMMISSION_SPREAD_ONLY")) { "Invalid transaction cost model." }
         require(commissionPerLot.isFinite() && commissionPerLot >= 0.0) { "Commission must be finite and non-negative." }
         val evidence = costEvidence.trim()
@@ -345,7 +349,7 @@ class MT5RemoteBridgeClient(
         val previousLogin = secrets.getManagedMT5AccountLogin(profile)
         val previousServer = secrets.getManagedMT5AccountServer(profile)
         val previousGeneration = secrets.getManagedMT5CredentialGeneration(profile)
-        check(secrets.saveManagedMT5AccountProfile(profile, login.trim(), server, accessType, password, savePasswordLocally)) {
+        check(secrets.saveManagedMT5AccountProfile(profile, login.trim(), exactServer, accessType, password, savePasswordLocally)) {
             "Managed MT5 profile could not be durably saved in encrypted storage; no credentials were submitted."
         }
         val nextGeneration = secrets.getManagedMT5CredentialGeneration(profile)
@@ -376,12 +380,12 @@ class MT5RemoteBridgeClient(
         if (secrets.getMT5BridgeAccountAppToken(profile).isBlank()) {
             pair(ownerBootstrapCode, managementIdentityAssertion)
         }
-        val payload = JSONObject().put("login", login.trim()).put("server", server).put("password", password)
+        val payload = JSONObject().put("login", login.trim()).put("server", exactServer).put("password", password)
             .put("access_type", accessType).put("broker_brand", brokerBrand).put("consent", consent)
             .put("account_mode", accountMode)
             .put("credential_generation", nextGeneration)
             .put("cost_model", costModel).put("commission_per_lot", commissionPerLot).put("cost_evidence", evidence)
-        request("POST", "/v1/app/managed-account", payload,
+        request("POST", "/v1/app/login", payload,
             managementIdentityAssertion = managementIdentityAssertion)
         return state()
     }
@@ -435,6 +439,12 @@ class MT5RemoteBridgeClient(
         val actualLogin = account?.optString("login").orEmpty()
         val actualServer = account?.optString("server").orEmpty()
         val actualMode = account?.optString("account_mode").orEmpty().uppercase()
+        val balance = account?.let { finite(it, "balance") }
+        val equity = account?.let { finite(it, "equity") }
+        val margin = account?.let { finite(it, "margin") }
+        val freeMargin = account?.let { finite(it, "free_margin") }
+        val financialSnapshotValid = balance != null && balance > 0.0 && equity != null &&
+            margin != null && freeMargin != null
         val verified = obj.optBoolean("account_identity_verified", false) && actualLogin.isNotBlank() &&
             actualServer.isNotBlank() && actualMode in setOf("DEMO", "LIVE") && actualMode == accountMode
         fun array(key: String): List<JSONObject>? {
@@ -463,14 +473,16 @@ class MT5RemoteBridgeClient(
             else -> HostProfile.EPHEMERAL
         }
         return Snapshot(
-            hostProfile, managedState, workerStatus, access, mode, online && terminalConnected && verified && actualMode == accountMode, online, freshness,
+            hostProfile, managedState, workerStatus, access, mode,
+            online && freshness && terminalConnected && verified && actualMode == accountMode && financialSnapshotValid,
+            online, freshness,
             when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
             actualMode, managed?.optBoolean("live_authorized", false) == true,
             obj.optBoolean("trade_allowed", false), terminalConnected, verified,
             managed?.optBoolean("broker_identity_verified", obj.optBoolean("broker_identity_verified", false)) == true,
-            account?.optString("currency").orEmpty(), account?.let { finite(it, "balance") }, account?.let { finite(it, "equity") },
-            account?.let { finite(it, "margin") }, account?.let { finite(it, "free_margin") }, account?.let { finite(it, "margin_level") },
+            account?.optString("currency").orEmpty(), balance, equity,
+            margin, freeMargin, account?.let { finite(it, "margin_level") },
             account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
             obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes, brokerCandles
@@ -1061,6 +1073,7 @@ class MT5RemoteBridgeClient(
                 "/v1/pairings",
                 "/v1/owner/bootstrap-code",
                 "/v1/app/managed-account",
+                "/v1/app/login",
                 "/v1/app/demo-acceptance",
                 "/v1/app/live-profile-association"
             )) { "Management identity assertions are permitted only for pairing and owner-controlled profile changes." }

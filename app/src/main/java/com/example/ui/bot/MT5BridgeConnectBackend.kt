@@ -107,8 +107,10 @@ class MT5BridgeConnectBackend(private val client: MT5ManagedAccountGateway) : Co
                 brokerIdentityVerified = s.brokerIdentityVerified,
             )
         } == true
+        val balanceUnavailable = s.managedState == "READY" &&
+            (s.balance == null || s.balance <= 0.0 || s.equity == null || s.margin == null || s.freeMargin == null)
         val stage = when {
-            s.managedState == "READY" && s.accountVerified && s.brokerIdentityVerified && s.heartbeatFresh -> ConnectStage.VERIFIED
+            s.managedState == "READY" && s.connected && s.accountVerified && s.brokerIdentityVerified && s.heartbeatFresh -> ConnectStage.VERIFIED
             modeMismatchEvidence -> ConnectStage.VERIFIED
             s.workerStatus in setOf("QUEUED", "AWAITING_ATTESTATION", "LEASED") -> ConnectStage.HOST_QUEUED
             s.workerStatus in setOf("PROVISIONING", "AUTHENTICATING", "READY") -> ConnectStage.TERMINAL_LOGGING_IN
@@ -137,7 +139,8 @@ class MT5BridgeConnectBackend(private val client: MT5ManagedAccountGateway) : Co
         ) else null
         return ConnectObservation(
             stage = stage,
-            failureCode = code.takeUnless { modeMismatchEvidence },
+            failureCode = code.takeUnless { modeMismatchEvidence }
+                ?: if (balanceUnavailable) "ACCOUNT_BALANCE_UNAVAILABLE" else null,
             accountMode = s.actualAccountMode.takeIf { verified },
             account = account,
         )

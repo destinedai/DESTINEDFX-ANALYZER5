@@ -19,6 +19,7 @@ import com.example.data.AppDatabase
 import com.example.data.NotificationService
 import com.example.data.trade.TradeEntity
 import com.example.data.trade.TradeRepository
+import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.data.user.User
 import com.example.data.user.UserDao
 import kotlinx.coroutines.Dispatchers
@@ -364,6 +365,20 @@ open class DestinedFXViewModel(
     val candlestickHistoryByTimeframe = androidx.compose.runtime.mutableStateMapOf<String, List<Candle>>()
     val marketDataStatus = MutableStateFlow("Waiting for an authenticated MT5 Bridge account…")
 
+    private val _managedMt5BridgeSnapshot = MutableStateFlow<MT5RemoteBridgeClient.Snapshot?>(null)
+    val managedMt5BridgeSnapshot: StateFlow<MT5RemoteBridgeClient.Snapshot?> = _managedMt5BridgeSnapshot.asStateFlow()
+
+    /** Refreshes the authenticated broker/mode terminal state; stale metrics are cleared on failure. */
+    suspend fun refreshManagedMt5Bridge(client: MT5RemoteBridgeClient): MT5RemoteBridgeClient.Snapshot {
+        return try {
+            withContext(Dispatchers.IO) { client.state() }.also { _managedMt5BridgeSnapshot.value = it }
+        } catch (error: Exception) {
+            _managedMt5BridgeSnapshot.value = null
+            throw error
+        }
+    }
+
+
     // Real-time market candle fetch errors exposed to UI
     val candleFetchErrors: StateFlow<Map<String, String>> =
         if (isPreview) MutableStateFlow(emptyMap()) else app.marketDataRepository.candleFetchErrors
@@ -381,7 +396,7 @@ open class DestinedFXViewModel(
         if (isPreview) return "Chart preview"
         val detail = app.marketDataRepository.getDataSource(symbol, if (timeframe == "60") "H1" else timeframe)
         return if (detail.startsWith("UNAVAILABLE", ignoreCase = true)) "No verified live candles"
-        else "Live market data"
+        else detail.takeIf { it.contains("MT5 Bridge", ignoreCase = true) } ?: "No verified MT5 Bridge data"
     }
 
     fun candlesForChart(symbol: String, timeframe: String): List<Candle> =

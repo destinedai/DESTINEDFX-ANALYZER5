@@ -806,6 +806,31 @@ def test_managed_credentials_encrypted_and_worker_claim(monkeypatch):
     assert blocked.status_code==409
     assert blocked.json()['detail']['code']=='PAIRING_TERMINAL_ALREADY_ACTIVE'
 
+def test_app_login_alias_attempts_owner_supplied_fbs_and_deriv_servers(monkeypatch):
+    managed_env(monkeypatch)
+    for brand, server in (
+        ('FBS', 'FBS-Private-Demo-Account-27'),
+        ('DERIV', 'Deriv-Private-Demo-27'),
+    ):
+        p, ah = managed_pair(subject='fixture-' + brand.lower(), tenant='fixture-' + brand.lower())
+        response = client.post('/v1/app/login', headers=ah, json={
+            'login': '99881', 'server': server, 'password': 'fixture-secret',
+            'access_type': 'MASTER', 'account_mode': 'DEMO',
+            'broker_brand': brand, 'consent': True,
+        })
+        assert response.status_code == 202
+        state = client.get('/v1/app/state', headers=ah).json()['managed_execution']
+        assert state['requested_server'] == server
+        assert state['broker_brand'] == brand
+    p, ah = managed_pair(subject='fixture-invalid-server', tenant='fixture-invalid-server')
+    invalid = client.post('/v1/app/login', headers=ah, json={
+        'login': '99881', 'server': 'Deriv-Demo:443', 'password': 'fixture-secret',
+        'access_type': 'MASTER', 'account_mode': 'DEMO',
+        'broker_brand': 'DERIV', 'consent': True,
+    })
+    assert invalid.status_code == 422
+
+
 def test_worker_account_mode_unverified_failure_is_reported_safely(monkeypatch):
     managed_env(monkeypatch)
     p, ah = managed_pair()

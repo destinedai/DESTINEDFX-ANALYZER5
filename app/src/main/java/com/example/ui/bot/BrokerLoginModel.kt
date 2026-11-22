@@ -212,6 +212,7 @@ object ConnectFailures {
         "PAIRING_TERMINAL_ALREADY_ACTIVE" to "This broker profile already has another account provisioning or connected. Revoke it and wait for verified cleanup before switching accounts.",
         "FORM_INCOMPLETE" to "Fill in every field first.",
         "LOGIN_FAILED_UNCLASSIFIED" to "Login failed for a reason the host could not classify.",
+        "ACCOUNT_BALANCE_UNAVAILABLE" to "MT5 returned a zero or unavailable balance. The account is DISCONNECTED; no balance is shown.",
     ) + BridgeGatewayFailure.values().associate { it.name to it.userMessage }
 
     val knownCodes: Set<String> get() = sentences.keys

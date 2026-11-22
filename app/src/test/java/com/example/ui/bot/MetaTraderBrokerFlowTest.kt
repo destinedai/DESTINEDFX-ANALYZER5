@@ -80,6 +80,9 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithText("Type exact server name").performClick()
         composeRule.onNodeWithTag("login_button").assertIsNotEnabled()
         composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
+        composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
+        composeRule.onNodeWithText("Server saved").assertIsDisplayed()
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
         composeRule.onNodeWithText("Forgot password? Use your broker app").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("broker_back").assertIsDisplayed().performClick()
@@ -101,6 +104,8 @@ class MetaTraderBrokerFlowTest {
             composeRule.onNodeWithText("Test and verify an existing MT5 broker login").assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_login_fields_help").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_server_field_help").performScrollTo().assertIsDisplayed()
+            if (brand == "FBS") composeRule.onNodeWithText("Copy from FBS Personal Area > MT5 account > Server (e.g. FBS-Real / FBS-Demo). Exact account value only; do NOT add :port.").assertIsDisplayed()
+            if (brand == "DERIV") composeRule.onNodeWithText("Copy from Deriv Dashboard > MT5 > Server (e.g. Deriv-Demo / Deriv-Server). Exact account value only; do NOT add :port.").assertIsDisplayed()
             composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
             composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
             composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("Fixture-Demo")
@@ -112,9 +117,24 @@ class MetaTraderBrokerFlowTest {
                 composeRule.onNodeWithText("HFM Europe1 reference: Live1 service port 1951. Enter the exact server name issued to this account; do not append the port.").assertIsDisplayed()
                 composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
             }
+            composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
+            composeRule.onNodeWithText("Server saved").assertIsDisplayed()
             composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
             composeRule.onNodeWithTag("broker_back").performClick()
         }
+    }
+
+    @Test
+    fun serverWithPortCannotBeSavedAndCannotStartBrokerLogin() {
+        openFlow()
+        composeRule.onNodeWithTag("add_account").performClick()
+        composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
+        composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
+        composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
+        composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("FBS-Demo:443")
+        composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
+        composeRule.onNodeWithTag("save_mt5_server").performScrollTo().assertIsNotEnabled()
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
     }
 
     @Test
