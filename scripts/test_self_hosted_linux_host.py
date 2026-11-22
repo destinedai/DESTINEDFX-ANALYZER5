@@ -195,6 +195,10 @@ def test_codespaces_starts_existing_management_api_and_forwards_port_8010():
     assert "api/v1/auth/bridge-verification-key" in start
     assert 'print("0" if valid else "1")' in start
     assert '"$api_key_valid" == 0' in start
+    assert "management_key_valid" in start
+    assert "Existing Bridge-only Codespaces runtime detected" in start
+    assert 'curl -fsS --max-time 3 http://127.0.0.1:8010/ready' in start
+    assert 'kill "$MANAGEMENT_API_PID"' in start
 
 
 def test_codespaces_owner_bootstrap_is_github_owner_verified_and_non_cacheable():
