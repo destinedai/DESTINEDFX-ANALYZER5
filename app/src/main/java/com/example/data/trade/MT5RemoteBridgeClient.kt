@@ -1232,12 +1232,12 @@ class MT5RemoteBridgeClient(
             locked: Boolean = false,
             allowCodespacesDiscovery: Boolean = false
         ): String = if (locked) {
-            if (allowCodespacesDiscovery) {
-                validServiceOrigin(override)?.takeIf(::isCodespacesForwardedBridgeOrigin)
-                    ?: validServiceOrigin(buildValue).orEmpty()
-            } else {
-                validServiceOrigin(buildValue).orEmpty()
-            }
+            validServiceOrigin(buildValue)?.takeIf { it.isNotBlank() }
+                ?: if (allowCodespacesDiscovery) {
+                    validServiceOrigin(override)?.takeIf(::isCodespacesForwardedBridgeOrigin).orEmpty()
+                } else {
+                    ""
+                }
         } else {
             validServiceOrigin(override).takeIf { override.isNotBlank() }
                 ?: validServiceOrigin(buildValue).orEmpty()
