@@ -59,7 +59,8 @@ fun RiskManagementTab(viewModel: DestinedFXViewModel) {
     val configuredManagedBridgeOrigin = MT5RemoteBridgeClient.initialServiceUrl(
         secrets.getManagedMT5ServiceUrl(),
         com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
-        com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
+        com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED,
+        com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY
     )
     LaunchedEffect(managedProfile, configuredManagedBridgeOrigin) {
         if (secrets.isSecureStorageAvailable &&
