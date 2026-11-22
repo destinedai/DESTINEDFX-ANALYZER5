@@ -239,10 +239,14 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 if ! curl -fs --max-time 2 http://127.0.0.1:8010/ready >/dev/null 2>&1; then
+  kill "$MANAGEMENT_API_PID" >/dev/null 2>&1 || true
+  wait "$MANAGEMENT_API_PID" >/dev/null 2>&1 || true
   fail "Management API/PostgreSQL failed loopback readiness. Bridge and MT5 provisioning will not start."
   exit 1
 fi
 if ! curl -fs --max-time 2 http://127.0.0.1:8010/api/v1/auth/bridge-verification-key >/dev/null 2>&1; then
+  kill "$MANAGEMENT_API_PID" >/dev/null 2>&1 || true
+  wait "$MANAGEMENT_API_PID" >/dev/null 2>&1 || true
   fail "Management API did not publish its EdDSA Bridge verification key."
   exit 1
 fi
