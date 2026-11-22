@@ -45,13 +45,13 @@ val destinedFxCodespacesHostDiscovery = when (codespacesHostDiscoveryRaw.lowerca
   "true" -> true
   else -> error("destinedfxCodespacesHostDiscovery must be true or false.")
 }
-require(!destinedFxCodespacesHostDiscovery || destinedFxEndpointsLocked) {
-  "Codespaces host discovery is only permitted in an endpoint-locked APK."
-}
 val destinedFxEndpointsLocked = when (endpointLockRaw.lowercase()) {
   "", "false" -> false
   "true" -> true
   else -> error("destinedfxEndpointsLocked must be true or false.")
+}
+require(!destinedFxCodespacesHostDiscovery || destinedFxEndpointsLocked) {
+  "Codespaces host discovery is only permitted in an endpoint-locked APK."
 }
 if (destinedFxEndpointsLocked) {
   fun requirePublicHttpsOrigin(raw: String, name: String) {
