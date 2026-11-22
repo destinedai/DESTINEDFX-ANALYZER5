@@ -1235,9 +1235,10 @@ def test_terminal_broker_candles_filter_incomplete_future_invalid_and_duplicate_
         {**base,'symbol':'eurusd'},
     ]
     accepted=app.fresh_terminal_broker_candles({'broker_candles':rows},now_ms=now_ms)
-    assert len(accepted)==1
-    assert accepted[0]['source']=='MT5_TERMINAL'
-    assert accepted[0]['timeframe']=='M1'
+    assert len(accepted)==2
+    assert [item['timestamp_ms'] for item in accepted] == [now_ms-120_000, now_ms-60_000]
+    assert all(item['source']=='MT5_TERMINAL' for item in accepted)
+    assert all(item['timeframe']=='M1' for item in accepted)
 
 
 def test_terminal_quote_validation_rejects_crossed_and_nonfinite_prices():
