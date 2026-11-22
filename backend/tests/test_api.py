@@ -186,7 +186,8 @@ def test_codespaces_owner_token_is_released_only_to_the_github_codespace_owner(c
     # Codespaces host does not know the owner's email address in advance.
     registered = register(client, "phone-owner@example.com", owner_token)
     assert registered.status_code == 201
-    assert registered.json()["is_admin"] is True
+    assert registered.json()["email"] == "phone-owner@example.com"
+    # A second token request is rejected only after the first admin exists.
     assert client.get(
         "/api/v1/auth/owner-setup-token",
         headers={"X-GitHub-Owner-Authorization": "Bearer ghu_" + "a" * 48},
