@@ -66,6 +66,27 @@ def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path
     assert not output.exists()
 
 
+def test_endpoint_manifest_refuses_source_output_collision(tmp_path):
+    import sys
+
+    source = tmp_path / "bridge.env"
+    original = "\\n".join([
+        "BRIDGE_BASE_URL=https://bridge.destinedfxhost.com",
+        "BRIDGE_HOST=bridge.destinedfxhost.com",
+        "EXPECTED_FORWARDED_HOST=bridge.destinedfxhost.com",
+        "APP_DOMAIN=api.destinedfxhost.com",
+    ]) + "\\n"
+    source.write_text(original, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(LINUX_HOST / "public-endpoints.py"),
+         "--source", str(source), "--output", str(source)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "must be different files" in result.stderr.lower()
+    assert source.read_text(encoding="utf-8") == original
+
+
 def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints():
     builder = (LINUX_HOST / "build-self-hosted-apk.sh").read_text()
     assert "/etc/destinedfx/public-endpoints.json" in builder
