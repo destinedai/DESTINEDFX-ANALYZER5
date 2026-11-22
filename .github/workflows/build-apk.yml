@@ -167,8 +167,6 @@ jobs:
       - name: Validate exact broker catalog and transport-only contract
         run: python -m unittest -v scripts.test_broker_validation_contract
       - name: Probe configured broker-server DNS and TCP 443 from GitHub Actions
-        id: broker_probe
-        continue-on-error: true
         run: |
           python scripts/test_broker_validation.py \
             --strict-network \
@@ -221,7 +219,7 @@ jobs:
         shell: pwsh
         run: ./scripts/compile-mt5-ea.ps1 -OutputDir "$env:RUNNER_TEMP\destinedfx-ea"
       - name: Upload compiled EA and compiler evidence
-        if: always() && hashFiles('**/destinedfx-ea/*.ex5') != ''
+        if: steps.metaeditor.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: DestinedFX-MT5-EA-ex5
