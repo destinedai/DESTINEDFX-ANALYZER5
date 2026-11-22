@@ -202,7 +202,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-        cache: gradle
+          cache: gradle
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -542,7 +542,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-        cache: gradle
+          cache: gradle
       - name: Accept Android licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
@@ -631,7 +631,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-        cache: gradle
+          cache: gradle
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
