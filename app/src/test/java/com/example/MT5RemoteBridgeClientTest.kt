@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.trade.MT5RemoteBridgeClient
+import com.example.data.codespaces.isCodespacesForwardedBridgeOrigin
 import com.example.data.trade.parseVerifiedBrokerQuotes
 import com.example.security.SecretsManager
 import androidx.test.core.app.ApplicationProvider
@@ -395,7 +396,7 @@ class MT5RemoteBridgeClientTest {
     }
 
 
-    @Test fun lockedBuildAlwaysUsesEmbeddedBridgeOriginAndIgnoresRuntimeOverrides() {
+    @Test fun lockedBuildUsesOnlyEmbeddedHostOrStrictCodespacesForwardedBridgeOrigin() {
         assertEquals("https://embedded.realcop.com", MT5RemoteBridgeClient.resolveServiceOrigin(
             "https://attacker.realcop.com", "https://embedded.realcop.com", locked = true
         ))
@@ -404,6 +405,40 @@ class MT5RemoteBridgeClientTest {
         ))
         assertEquals("https://embedded.realcop.com", MT5RemoteBridgeClient.initialServiceUrl(
             "https://old.realcop.com", "https://embedded.realcop.com", locked = true
+        ))
+
+        val codespaces = "https://destinedfx-host-abc123-8000.app.github.dev"
+        assertTrue(isCodespacesForwardedBridgeOrigin(codespaces))
+        assertEquals(codespaces, MT5RemoteBridgeClient.resolveServiceOrigin(
+            codespaces, "__CONFIGURATION_REQUIRED__", locked = true
+        ))
+        assertEquals(codespaces, MT5RemoteBridgeClient.initialServiceUrl(
+            codespaces, "__CONFIGURATION_REQUIRED__", locked = true
+        ))
+        assertEquals(
+            "https://destinedfx-host-abc123-8000.preview.app.github.dev",
+            MT5RemoteBridgeClient.resolveServiceOrigin(
+                "https://destinedfx-host-abc123-8000.preview.app.github.dev",
+                "__CONFIGURATION_REQUIRED__", locked = true
+            )
+        )
+        assertEquals(
+            "https://destinedfx-host-abc123-8000.githubpreview.dev",
+            MT5RemoteBridgeClient.resolveServiceOrigin(
+                "https://destinedfx-host-abc123-8000.githubpreview.dev",
+                "__CONFIGURATION_REQUIRED__", locked = true
+            )
+        )
+        assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin(
+            "https://attacker-8000.github.com", "__CONFIGURATION_REQUIRED__", locked = true
+        ))
+        assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin(
+            "https://destinedfx-host-abc123-8000.app.github.dev/path",
+            "__CONFIGURATION_REQUIRED__", locked = true
+        ))
+        assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin(
+            "http://destinedfx-host-abc123-8000.app.github.dev",
+            "__CONFIGURATION_REQUIRED__", locked = true
         ))
     }
 
