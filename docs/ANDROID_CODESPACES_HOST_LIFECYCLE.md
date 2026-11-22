@@ -9,7 +9,7 @@ The Android Bot workspace exposes separate START HOST / STOP HOST controls for t
 The phone authorizes the actual GitHub user through GitHub App Device Flow, discovers the owner's Codespaces through GitHub, and selects only a Codespace whose repository and branch match:
 
 - Repository: destinedai/DESTINEDFX-ANALYZER5
-- Branch: free/phone-only-v1
+- Branch: feat/self-hosted-linux-host-runtime
 
 The Codespace name is discovered from the API. It is never hard-coded.
 
