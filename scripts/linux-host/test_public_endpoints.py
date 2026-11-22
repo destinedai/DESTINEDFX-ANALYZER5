@@ -69,7 +69,7 @@ class PublicEndpointsTests(unittest.TestCase):
         )
         self.assertEqual(run.call_args.args[0], [
             "gh", "codespace", "ports", "--json",
-            "sourcePort,browseUrl,visibility", "-c", "steady-lizard-abc123",
+            "browseUrl,sourcePort,visibility", "-c", "steady-lizard-abc123",
         ])
 
     def test_accepts_current_app_github_dev_forwarding_domain(self):

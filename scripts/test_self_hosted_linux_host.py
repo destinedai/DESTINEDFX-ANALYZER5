@@ -191,7 +191,7 @@ def test_codespaces_starts_existing_management_api_and_forwards_port_8010():
     assert "start-management-api.sh" in start
     assert "http://127.0.0.1:8010/ready" in start
     assert "MANAGEMENT_STEP_UP_PUBLIC_KEY_FILE" in start
-    assert "gh codespace ports visibility 8010:public" in start
+    assert 'gh codespace ports visibility "8000:${visibility}" "8010:${visibility}"' in start
     assert "api/v1/auth/bridge-verification-key" in start
     assert 'print("0" if valid else "1")' in start
     assert '"$api_key_valid" == 0' in start
