@@ -1,6 +1,7 @@
 package com.example.data.trade
 
 import com.example.security.SecretsManager
+import com.example.data.codespaces.isCodespacesForwardedBridgeOrigin
 import com.example.data.broker.ModeArmingPolicy
 import com.example.data.broker.ModeAccountIdentity
 import com.example.data.broker.ModePath
@@ -1225,13 +1226,23 @@ class MT5RemoteBridgeClient(
         }
 
         internal fun resolveServiceOrigin(override: String, buildValue: String, locked: Boolean = false): String =
-            if (locked) validServiceOrigin(buildValue).orEmpty()
-            else validServiceOrigin(override).takeIf { override.isNotBlank() }
-                ?: validServiceOrigin(buildValue).orEmpty()
+            if (locked) {
+                validServiceOrigin(override)
+                    ?.takeIf(::isCodespacesForwardedBridgeOrigin)
+                    ?: validServiceOrigin(buildValue).orEmpty()
+            } else {
+                validServiceOrigin(override).takeIf { override.isNotBlank() }
+                    ?: validServiceOrigin(buildValue).orEmpty()
+            }
 
         internal fun initialServiceUrl(savedValue: String, buildValue: String, locked: Boolean = false): String =
-            if (locked) validServiceOrigin(buildValue).orEmpty()
-            else savedValue.ifBlank { buildValue.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty() }
+            if (locked) {
+                validServiceOrigin(savedValue)
+                    ?.takeIf(::isCodespacesForwardedBridgeOrigin)
+                    ?: validServiceOrigin(buildValue).orEmpty()
+            } else {
+                savedValue.ifBlank { buildValue.takeUnless { it == "__CONFIGURATION_REQUIRED__" }.orEmpty() }
+            }
 
         internal fun validServiceOrigin(raw: String): String? {
             return try {
