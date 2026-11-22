@@ -10,7 +10,14 @@ pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; }
 
 if [[ "$(uname -m)" != x86_64 ]]; then fail 'Expected x86_64 Codespaces host.'; exit 1; fi
-if [[ -z "${CODESPACE_NAME:-}" ]]; then fail 'CODESPACE_NAME is unavailable; this script expects GitHub Codespaces.'; exit 1; fi
+if [[ "${CODESPACES:-}" != "true" || -z "${CODESPACE_NAME:-}" ]]; then
+  fail 'This startup path must run inside the configured GitHub Codespaces container.'
+  exit 1
+fi
+if [[ ! "${CODESPACE_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,127}$ ]]; then
+  fail 'CODESPACE_NAME is malformed; refusing to construct forwarded endpoints.'
+  exit 1
+fi
 IDLE_TIMEOUT_MINUTES="${DESTINEDFX_IDLE_TIMEOUT_MINUTES:-20}"
 if [[ ! "$IDLE_TIMEOUT_MINUTES" =~ ^[0-9]+$ ]] || (( IDLE_TIMEOUT_MINUTES < 5 || IDLE_TIMEOUT_MINUTES > 240 )); then
   fail 'DESTINEDFX_IDLE_TIMEOUT_MINUTES must be an integer from 5 to 240.'; exit 1
@@ -64,7 +71,14 @@ if "$ROOT/deploy/codespaces/verify-public-ready.sh" --check 2>/dev/null \
    || "$ROOT/deploy/codespaces/verify-public-ready.sh" generate; then
   PUBLIC_READY=true
 fi
-FORWARD_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
+FORWARD_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-}"
+case "$FORWARD_DOMAIN" in
+  app.github.dev|preview.app.github.dev|githubpreview.dev) ;;
+  *)
+    fail 'GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN is missing or unsupported; refusing guessed public URLs.'
+    exit 1
+    ;;
+esac
 PUBLIC_HOST="${CODESPACE_NAME}-8000.${FORWARD_DOMAIN}"
 MANAGEMENT_HOST="${CODESPACE_NAME}-8010.${FORWARD_DOMAIN}"
 printf 'PASS: bridge binding remains restricted to 127.0.0.1.\n'
@@ -364,15 +378,44 @@ else:
 PY
 )"
     if [[ "$live" == 200 && "$bad" == 401 && "$none" == 401 && "$api_health" == 200 && "$api_ready" == 200 && "$api_key_valid" == 0 ]]; then
-      pass "Public Bridge and Management API passed forwarded HTTPS, authentication, PostgreSQL readiness and EdDSA key checks."
-      printf 'MANAGEMENT API: https://%s\n' "$MANAGEMENT_HOST"
-      owner_code="$(cd "$ROOT/bridge" && "$STATE/venv/bin/python" owner_ctl.py issue-code)"
-      printf 'BRIDGE URL:   https://%s\n' "$PUBLIC_HOST"
-      printf 'PAIRING CODE: %s\n' "$owner_code"
-      printf 'The phone app discovers the Bridge URL automatically after GitHub host authorization; do not paste a URL into locked APK settings.\n'
+      ENDPOINT_MANIFEST="$RUNTIME/public-endpoints.json"
+      if python3 "$ROOT/scripts/linux-host/public-endpoints.py" --codespaces --output "$ENDPOINT_MANIFEST"; then
+        endpoint_values="$(python3 - "$ENDPOINT_MANIFEST" <<'PY'
+import json, sys
+try:
+    document = json.loads(open(sys.argv[1], encoding="utf-8").read())
+    print(document["bridge_url"])
+    print(document["management_api_origin"])
+except (OSError, ValueError, KeyError, TypeError):
+    raise SystemExit(1)
+PY
+)" || endpoint_values=""
+        mapfile -t verified_endpoints <<< "$endpoint_values"
+        if [[ ${#verified_endpoints[@]} -eq 2 &&
+              "${verified_endpoints[0]}" == "https://$PUBLIC_HOST" &&
+              "${verified_endpoints[1]}" == "https://$MANAGEMENT_HOST" ]]; then
+          pass "Public Bridge and Management API passed forwarded HTTPS, authentication, PostgreSQL readiness, EdDSA and GitHub port-inventory checks."
+          printf 'MANAGEMENT API: %s\n' "${verified_endpoints[1]}"
+          owner_code="$(cd "$ROOT/bridge" && "$STATE/venv/bin/python" owner_ctl.py issue-code)"
+          printf 'BRIDGE URL:   %s\n' "${verified_endpoints[0]}"
+          printf 'PAIRING CODE: %s\n' "$owner_code"
+          printf 'The phone app discovers both URLs automatically after GitHub host authorization; do not paste URLs into locked APK settings.\n'
+        else
+          gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+          gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+          rm -f "$ENDPOINT_MANIFEST"
+          fail 'GitHub forwarded-port inventory did not match the exact Codespace name, forwarding domain and ports 8000/8010. Both ports were returned to private.'
+        fi
+      else
+        gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+        gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+        rm -f "$ENDPOINT_MANIFEST"
+        fail 'Could not verify public forwarded URLs and visibility with gh codespace ports. Both ports were returned to private.'
+      fi
     else
       gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
       gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
+      rm -f "$RUNTIME/public-endpoints.json"
       fail "Public self-check failed (Bridge health=$live bad-token=$bad no-token=$none; Management health=$api_health ready=$api_ready EdDSA=$api_key_valid). Both ports were returned to private."
     fi
   else
