@@ -445,6 +445,41 @@ jobs:
           name: DestinedFX-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Build locked GitHub Codespaces bootstrap APK
+        env:
+          MT5_MANAGED_SERVICE_URL: ""
+          MANAGEMENT_API_ORIGIN: ""
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug \
+            -PdestinedfxEndpointsLocked=true \
+            -PdestinedfxCodespacesHostDiscovery=true \
+            -Pmt5ManagedServiceUrl=__CONFIGURATION_REQUIRED__ \
+            -PmanagementApiOrigin=__CONFIGURATION_REQUIRED__ \
+            --stacktrace
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$apk"
+          config="$(find app/build/generated/source/buildConfig/debug -type f -name BuildConfig.java -print -quit)"
+          test -n "$config"
+          grep -Fq 'DESTINEDFX_ENDPOINTS_LOCKED = true' "$config"
+          grep -Fq 'DESTINEDFX_CODESPACES_HOST_DISCOVERY = true' "$config"
+          grep -Fq 'MT5_MANAGED_SERVICE_URL = "__CONFIGURATION_REQUIRED__"' "$config"
+          grep -Fq 'MANAGEMENT_API_ORIGIN = "__CONFIGURATION_REQUIRED__"' "$config"
+          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
+          "$ANDROID_HOME/build-tools/$tools/apksigner" verify --verbose --print-certs "$apk" > /tmp/codespaces-apk-signature.txt
+          grep -Eq 'certificate SHA-256 digest:[[:space:]]*[0-9a-fA-F]{64}' /tmp/codespaces-apk-signature.txt
+          "$ANDROID_HOME/build-tools/$tools/aapt2" dump badging "$apk" | grep -Fq "package: name='com.aistudio.destinedfx.qwvzxp'"
+          mkdir -p app/build/outputs/apk/codespaces
+          cp "$apk" app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk
+          sha256sum app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk | tee app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk.sha256
+      - name: Upload locked Codespaces bootstrap APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DestinedFX-Codespaces-bootstrap-apk
+          path: |
+            app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk
+            app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk.sha256
+          if-no-files-found: error
 
   android-emulator-instrumentation:
     name: Android emulator instrumentation (runtime acceptance)
