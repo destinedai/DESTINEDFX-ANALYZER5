@@ -745,7 +745,8 @@ open class DestinedFXViewModel(
         com.example.data.management.ManagementApiClient.resolveConfiguredOrigin(
             app.secretsManager.getManagementApiOrigin(),
             com.example.BuildConfig.MANAGEMENT_API_ORIGIN,
-            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED
+            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED,
+            com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY
         )
 
     val managementApiOrigin = MutableStateFlow(
@@ -763,6 +764,30 @@ open class DestinedFXViewModel(
         if (!isPreview && app.secretsManager.getValidManagementAccessToken() != null) "Saved session" else ""
     )
     val managementServiceState = MutableStateFlow("")
+    val managementOwnerSetupToken = MutableStateFlow("")
+
+    fun discoverCodespacesManagementApi() = managementAction {
+        check(com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY) {
+            "This APK was not built with GitHub Codespaces host discovery enabled."
+        }
+        check(app.secretsManager.isSecureStorageAvailable) {
+            "Android Keystore-backed storage is unavailable."
+        }
+        val lifecycle = com.example.data.codespaces.CodespacesLifecycleClient(app.secretsManager)
+        val verifiedOrigin = lifecycle.discoverAndSaveManagementApi()
+        managementApiOrigin.value = verifiedOrigin
+        managementServiceState.value = "GitHub Codespaces Management API verified: HTTPS, PostgreSQL readiness and EdDSA key passed."
+        managementMessage.value = "Management API discovered automatically from your GitHub-owned Codespace."
+    }
+
+    fun fetchCodespacesOwnerSetupToken() = managementAction {
+        check(com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY) {
+            "GitHub Codespaces owner bootstrap is not enabled in this APK."
+        }
+        val lifecycle = com.example.data.codespaces.CodespacesLifecycleClient(app.secretsManager)
+        managementOwnerSetupToken.value = lifecycle.fetchCodespacesOwnerSetupToken(effectiveManagementApiOrigin())
+        managementMessage.value = "One-time owner registration token retrieved from your GitHub-verified Codespace and held in secure app memory."
+    }
 
     /** Verify readiness and EdDSA public-key publication before persisting a runtime API origin. */
     fun verifyAndSaveManagementApiOrigin(rawOrigin: String) = managementAction {
