@@ -20,15 +20,17 @@ CODESPACES_VALUE="$(printenv CODESPACES 2>/dev/null || true)"
 if [[ ! -f "$MANIFEST" && "$CODESPACES_VALUE" == "true" ]]; then
   CODESPACE_NAME="$(printenv CODESPACE_NAME 2>/dev/null || true)"
   CODESPACE_DOMAIN="$(printenv GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN 2>/dev/null || printf 'app.github.dev')"
-  MANAGEMENT_API_ORIGIN="$(printenv MANAGEMENT_API_ORIGIN 2>/dev/null || true)"
+  MANAGEMENT_API_ORIGIN_ENV="$(printenv MANAGEMENT_API_ORIGIN 2>/dev/null || true)"
   [[ "$CODESPACE_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || block "GitHub Codespaces reported an invalid or missing CODESPACE_NAME."
   case "$CODESPACE_DOMAIN" in
     app.github.dev|preview.app.github.dev|githubpreview.dev) ;;
     *) block "Unsupported GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN. Update the strict Codespaces host allowlist before building." ;;
   esac
-  if [[ -z "$MANAGEMENT_API_ORIGIN" ]]; then
-    MANAGEMENT_API_ORIGIN="https://$CODESPACE_NAME-8010.$CODESPACE_DOMAIN"
+  CODESPACE_MANAGEMENT_API_ORIGIN="https://$CODESPACE_NAME-8010.$CODESPACE_DOMAIN"
+  if [[ -n "$MANAGEMENT_API_ORIGIN_ENV" && "${MANAGEMENT_API_ORIGIN_ENV%/}" != "$CODESPACE_MANAGEMENT_API_ORIGIN" ]]; then
+    block "MANAGEMENT_API_ORIGIN does not match the automatically derived Codespaces port-8010 host."
   fi
+  MANAGEMENT_API_ORIGIN="$CODESPACE_MANAGEMENT_API_ORIGIN"
   CODESPACE_BRIDGE_URL="https://$CODESPACE_NAME-8000.$CODESPACE_DOMAIN"
   MANIFEST="$TEMP_DIR/codespaces-public-endpoints.json"
   python3 - "$MANIFEST" "$CODESPACE_BRIDGE_URL" "$MANAGEMENT_API_ORIGIN" <<'PY'
