@@ -124,8 +124,8 @@ class ManagementApiClientTest {
         // The new origin is probed without credentials, but the previous bearer
         // must never be forwarded and /auth/me must not be reached on that origin.
         assertEquals(5, requests.size)
-        assertEquals(3, requests.count { it.first == "first.example.org" })
-        assertEquals(2, requests.count { it.first == "second.example.org" })
+        assertEquals(3, requests.count { it.first == "first.destinedfxhost.com" })
+        assertEquals(2, requests.count { it.first == "second.destinedfxhost.com" })
         assertTrue(requests.all { it.second == null })
     }
 
