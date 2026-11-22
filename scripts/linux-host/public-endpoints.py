@@ -77,6 +77,8 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("/etc/destinedfx/public-endpoints.json"))
     args = parser.parse_args()
     try:
+        if args.source.resolve() == args.output.resolve():
+            raise ValueError("Source bridge configuration and output manifest must be different files.")
         args.output.parent.mkdir(parents=True, exist_ok=True)
         # Invalidate any previous manifest before reading new configuration.
         # A failed regeneration must never leave an old host URL buildable.
