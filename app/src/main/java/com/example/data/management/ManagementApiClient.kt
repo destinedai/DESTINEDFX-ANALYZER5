@@ -1,5 +1,7 @@
 package com.example.data.management
 
+import com.example.data.codespaces.isCodespacesForwardedManagementApiOrigin
+
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -201,10 +203,22 @@ class ManagementApiClient(
 
     companion object {
         /** Production builds use only their embedded host. Dev builds may select a verified runtime origin. */
-        internal fun resolveConfiguredOrigin(savedOrigin: String, buildOrigin: String, locked: Boolean): String =
-            if (locked) validatedOrigin(buildOrigin).orEmpty()
-            else validatedOrigin(savedOrigin).takeIf { savedOrigin.isNotBlank() }
+        internal fun resolveConfiguredOrigin(
+            savedOrigin: String,
+            buildOrigin: String,
+            locked: Boolean,
+            allowCodespacesDiscovery: Boolean = false
+        ): String = if (locked) {
+            if (allowCodespacesDiscovery) {
+                validatedOrigin(savedOrigin)?.takeIf(::isCodespacesForwardedManagementApiOrigin)
+                    ?: validatedOrigin(buildOrigin).orEmpty()
+            } else {
+                validatedOrigin(buildOrigin).orEmpty()
+            }
+        } else {
+            validatedOrigin(savedOrigin).takeIf { savedOrigin.isNotBlank() }
                 ?: validatedOrigin(buildOrigin).orEmpty()
+        }
 
         private val JSON = "application/json; charset=utf-8".toMediaType()
         private const val EXPECTED_STEP_UP_ISSUER = "destinedfx-management"
