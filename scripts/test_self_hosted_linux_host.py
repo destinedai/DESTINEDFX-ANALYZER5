@@ -19,10 +19,10 @@ def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path
     source = tmp_path / "bridge.env"
     output = tmp_path / "public-endpoints.json"
     source.write_text("\n".join([
-        "BRIDGE_BASE_URL=https://bridge.destinedfx.example.org",
-        "BRIDGE_HOST=bridge.destinedfx.example.org",
-        "EXPECTED_FORWARDED_HOST=bridge.destinedfx.example.org",
-        "APP_DOMAIN=api.destinedfx.example.org",
+        "BRIDGE_BASE_URL=https://bridge.destinedfxhost.com",
+        "BRIDGE_HOST=bridge.destinedfxhost.com",
+        "EXPECTED_FORWARDED_HOST=bridge.destinedfxhost.com",
+        "APP_DOMAIN=api.destinedfxhost.com",
         "ADMIN_EMAILS=owner@example.org",
         "WORKER_TOKEN=must-not-be-copied",
     ]) + "\n", encoding="utf-8")
@@ -33,8 +33,8 @@ def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path
     document = json.loads(output.read_text(encoding="utf-8"))
     assert document == {
         "schema_version": 1,
-        "bridge_url": "https://bridge.destinedfx.example.org",
-        "management_api_origin": "https://api.destinedfx.example.org",
+        "bridge_url": "https://bridge.destinedfxhost.com",
+        "management_api_origin": "https://api.destinedfxhost.com",
     }
     assert "WORKER_TOKEN" not in output.read_text(encoding="utf-8")
     assert output.stat().st_mode & 0o777 == 0o644
@@ -43,12 +43,27 @@ def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path
         "BRIDGE_BASE_URL=https://bridge.example.com",
         "BRIDGE_HOST=bridge.example.com",
         "EXPECTED_FORWARDED_HOST=bridge.example.com",
-        "APP_DOMAIN=api.destinedfx.example.org",
+        "APP_DOMAIN=api.destinedfxhost.com",
     ]) + "\n", encoding="utf-8")
     blocked = subprocess.run([sys.executable, str(helper), "--source", str(source), "--output", str(output)],
                              capture_output=True, text=True)
     assert blocked.returncode != 0
     assert "placeholder" in blocked.stderr.lower() or "reserved" in blocked.stderr.lower()
+    # A failed regeneration must invalidate a prior good manifest, not leave
+    # stale endpoints available for a later APK build.
+    assert not output.exists()
+
+    source.write_text("\\n".join([
+        "BRIDGE_BASE_URL=https://bridge.destinedfx.example.org",
+        "BRIDGE_HOST=bridge.destinedfx.example.org",
+        "EXPECTED_FORWARDED_HOST=bridge.destinedfx.example.org",
+        "APP_DOMAIN=api.destinedfxhost.com",
+    ]) + "\\n", encoding="utf-8")
+    reserved = subprocess.run([sys.executable, str(helper), "--source", str(source), "--output", str(output)],
+                              capture_output=True, text=True)
+    assert reserved.returncode != 0
+    assert "reserved" in reserved.stderr.lower() or "placeholder" in reserved.stderr.lower()
+    assert not output.exists()
 
 
 def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints():
