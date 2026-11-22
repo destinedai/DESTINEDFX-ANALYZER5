@@ -220,6 +220,8 @@ def check_health() -> dict[str, Any]:
 
 
 def start_all() -> dict[str, Any]:
+    # ensure_started() owns the PID-attested supervisor. Its _start_command()
+    # launches deploy/codespaces/start.sh; do not launch a second copy here.
     result = host_controller.ensure_started()
     record_usage_start()
     return {"status": result.get("status", "STARTING"), "pid": result.get("pid"), "health": check_health()}

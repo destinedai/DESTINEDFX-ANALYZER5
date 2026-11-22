@@ -113,7 +113,9 @@ grep -Fq -- '--host 127.0.0.1' "$ROOT/deploy/codespaces/start.sh" || fail 'bridg
 grep -Fq 'verify-public-ready.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'missing public K3 readiness guard'
 grep -Fq 'verify-public-ready.sh' "$ROOT/deploy/codespaces/start.sh" || fail 'public exposure must be gated by the code-created marker'
 if grep -Eq '^gh codespace ports visibility .*public' "$ROOT/deploy/codespaces/start.sh"; then fail 'public visibility command must only live inside the guarded function'; fi
-grep -Fq 'gh codespace ports visibility 8000:public -c "$CODESPACE_NAME"' "$ROOT/deploy/codespaces/start.sh" || fail 'guarded public visibility command missing'
+grep -Fq 'gh codespace ports visibility "8000:${visibility}" "8010:${visibility}"' "$ROOT/deploy/codespaces/start.sh" || fail 'combined guarded port visibility command missing'
+grep -Fq 'if ! configure_public_endpoints; then' "$ROOT/deploy/codespaces/start.sh" || fail 'healthy startup fast path must verify and enable guarded public endpoints'
+grep -Fq -- '--json browseUrl,sourcePort,visibility' "$ROOT/scripts/linux-host/public-endpoints.py" || fail 'endpoint inventory must read browseUrl, sourcePort and visibility'
 grep -Fq 'BAD_AUTH' "$ROOT/deploy/codespaces/start.sh" || fail 'bad-token self-check missing'
 grep -Fq 'X-Tunnel-Skip-AntiPhishing-Page: true' "$ROOT/deploy/codespaces/start.sh" || fail 'tunnel header missing from self-check'
 grep -Fq 'EXPECTED_FORWARDED_HOST' "$ROOT/deploy/codespaces/start.sh" || fail 'host check env not exported'

@@ -93,7 +93,7 @@ def make_codespaces_manifest():
 
     command = [
         "gh", "codespace", "ports",
-        "--json", "sourcePort,browseUrl,visibility",
+        "--json", "browseUrl,sourcePort,visibility",
         "-c", codespace,
     ]
     try:

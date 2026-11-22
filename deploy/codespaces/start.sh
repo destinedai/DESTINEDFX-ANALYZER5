@@ -83,6 +83,112 @@ PUBLIC_HOST="${CODESPACE_NAME}-8000.${FORWARD_DOMAIN}"
 MANAGEMENT_HOST="${CODESPACE_NAME}-8010.${FORWARD_DOMAIN}"
 printf 'PASS: bridge binding remains restricted to 127.0.0.1.\n'
 
+# Android START HOST starts the Codespace; this guarded path exposes ports only
+# after the hardening marker and service health contracts pass.
+set_port_visibility() {
+  local visibility="$1"
+  local log_file="$RUNTIME/ports-${visibility}.log"
+  if ! gh codespace ports visibility "8000:${visibility}" "8010:${visibility}" \
+      -c "$CODESPACE_NAME" >"$log_file" 2>&1; then
+    chmod 600 "$log_file" 2>/dev/null || true
+    fail "GitHub CLI could not set Codespaces ports 8000/8010 to ${visibility}; inspect the private diagnostic at $log_file."
+    return 1
+  fi
+  chmod 600 "$log_file"
+  pass "GitHub Codespaces ports 8000 and 8010 set to ${visibility}."
+}
+
+http_code() {
+  local path="$1"; shift
+  curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H 'Accept: application/json' \
+    -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "$@" "https://$PUBLIC_HOST$path" || true
+}
+
+configure_public_endpoints() {
+  local live bad none api_health api_ready api_key api_key_valid
+  local endpoint_manifest endpoint_values
+  endpoint_manifest="$RUNTIME/public-endpoints.json"
+
+  if [[ "$PUBLIC_READY" != true ]]; then
+    set_port_visibility private || true
+    rm -f "$endpoint_manifest"
+    fail 'Public exposure disabled: Bridge K3 hardening tests did not pass. Ports remain private.'
+    return 1
+  fi
+
+  if ! set_port_visibility public; then
+    set_port_visibility private || true
+    rm -f "$endpoint_manifest"
+    return 1
+  fi
+
+  BAD_AUTH="Authorization: Bearer $(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+  live="$(http_code /health/live)"
+  bad="$(http_code /v1/app/state -H "$BAD_AUTH")"
+  none="$(http_code /v1/app/state)"
+  api_health="$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 \
+    -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://$MANAGEMENT_HOST/health" || true)"
+  api_ready="$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 \
+    -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://$MANAGEMENT_HOST/ready" || true)"
+  api_key="$(curl -fs --max-time 12 -H 'X-Tunnel-Skip-AntiPhishing-Page: true' \
+    "https://$MANAGEMENT_HOST/api/v1/auth/bridge-verification-key" 2>/dev/null || true)"
+  api_key_valid="$(python3 - "$api_key" <<'PY'
+import json,sys
+try:
+    d=json.loads(sys.argv[1])
+except Exception:
+    print("1")
+else:
+    valid = (
+        d.get("algorithm") == "EdDSA"
+        and d.get("issuer") == "destinedfx-management"
+        and d.get("audience") == "destinedfx-bridge"
+        and str(d.get("public_key_pem","")).startswith("-----BEGIN PUBLIC KEY-----")
+        and str(d.get("public_key_pem","")).strip().endswith("-----END PUBLIC KEY-----")
+    )
+    print("0" if valid else "1")
+PY
+)"
+
+  if [[ "$live" != 200 || "$bad" != 401 || "$none" != 401 ||
+        "$api_health" != 200 || "$api_ready" != 200 || "$api_key_valid" != 0 ]]; then
+    set_port_visibility private || true
+    rm -f "$endpoint_manifest"
+    fail "Forwarded self-check failed (Bridge health=$live bad-token=$bad no-token=$none; Management health=$api_health ready=$api_ready EdDSA=$api_key_valid). Both ports were returned to private."
+    return 1
+  fi
+
+  if ! python3 "$ROOT/scripts/linux-host/public-endpoints.py" --codespaces --output "$endpoint_manifest"; then
+    set_port_visibility private || true
+    rm -f "$endpoint_manifest"
+    fail 'Could not verify actual GitHub forwarded-port URLs and visibility; both ports were returned to private.'
+    return 1
+  fi
+
+  endpoint_values="$(python3 - "$endpoint_manifest" <<'PY'
+import json, sys
+try:
+    document = json.loads(open(sys.argv[1], encoding="utf-8").read())
+    print(document["bridge_url"])
+    print(document["management_api_origin"])
+except (OSError, ValueError, KeyError, TypeError):
+    raise SystemExit(1)
+PY
+)" || endpoint_values=""
+  mapfile -t verified_endpoints <<< "$endpoint_values"
+  if [[ ${#verified_endpoints[@]} -ne 2 ||
+        "${verified_endpoints[0]}" != "https://$PUBLIC_HOST" ||
+        "${verified_endpoints[1]}" != "https://$MANAGEMENT_HOST" ]]; then
+    set_port_visibility private || true
+    rm -f "$endpoint_manifest"
+    fail 'GitHub forwarded-port inventory did not match the exact Codespace name, forwarding domain and ports 8000/8010. Both ports were returned to private.'
+    return 1
+  fi
+
+  pass 'Public Bridge and Management API passed forwarded HTTPS, auth rejection, PostgreSQL readiness, EdDSA and GitHub port-inventory checks.'
+  return 0
+}
+
 # ---- Per-user terminal template and isolated Linux slot prerequisites. ----
 if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true >/dev/null 2>&1; then
   fail 'Passwordless sudo is required to create isolated non-login MT5 slot identities.'; exit 1
@@ -225,6 +331,10 @@ PY
 )"
     if [[ "$management_key_valid" == "0" ]]; then
       pass 'Existing managed Codespaces processes and the PostgreSQL-backed Management API/EdDSA key are healthy.'
+      if ! configure_public_endpoints; then
+        fail 'Host services are healthy, but public phone connectivity was not enabled.'
+        exit 1
+      fi
       python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
       exit 0
     fi
@@ -339,48 +449,10 @@ pass "Isolated MT5 slot worker started (up to $DESTINEDFX_SLOT_MAX_TERMINALS res
 python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
 python3 "$ROOT/scripts/linux-host/mt5_diagnostics.py" || true
 
-expose_publicly() {
-  # Leave the port protocol as HTTP: switching a public port to HTTPS makes it private again.
-  gh codespace ports visibility 8000:public -c "$CODESPACE_NAME" >/dev/null 2>&1
-}
-expose_management_publicly() {
-  gh codespace ports visibility 8010:public -c "$CODESPACE_NAME" >/dev/null 2>&1
-}
-http_code() {  # $1 = path, rest = extra curl args
-  local path="$1"; shift
-  curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H 'Accept: application/json' \
-    -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "$@" "https://${PUBLIC_HOST}${path}" || true
-}
+# Port visibility and health verification are shared with the healthy fast path.
 for _ in $(seq 1 30); do curl -fs --max-time 2 http://127.0.0.1:8000/health/live >/dev/null 2>&1 && break; sleep 1; done
-if [[ "$PUBLIC_READY" == true ]]; then
-  if expose_publicly && expose_management_publicly; then
-    # A random, never-valid Bridge credential must be refused with 401.
-    BAD_AUTH="Authorization: Bearer $(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
-    live="$(http_code /health/live)"; bad="$(http_code /v1/app/state -H "$BAD_AUTH")"; none="$(http_code /v1/app/state)"
-    api_health="$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://${MANAGEMENT_HOST}/health" || true)"
-    api_ready="$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://${MANAGEMENT_HOST}/ready" || true)"
-    api_key="$(curl -fs --max-time 12 -H 'X-Tunnel-Skip-AntiPhishing-Page: true' "https://${MANAGEMENT_HOST}/api/v1/auth/bridge-verification-key" 2>/dev/null || true)"
-    api_key_valid="$(python3 - "${api_key}" <<'PY'
-import json,sys
-try:
-    d=json.loads(sys.argv[1])
-except Exception:
-    print("1")
-else:
-    valid = (
-        d.get("algorithm") == "EdDSA"
-        and d.get("issuer") == "destinedfx-management"
-        and d.get("audience") == "destinedfx-bridge"
-        and str(d.get("public_key_pem","")).startswith("-----BEGIN PUBLIC KEY-----")
-        and str(d.get("public_key_pem","")).strip().endswith("-----END PUBLIC KEY-----")
-    )
-    print("0" if valid else "1")
-PY
-)"
-    if [[ "$live" == 200 && "$bad" == 401 && "$none" == 401 && "$api_health" == 200 && "$api_ready" == 200 && "$api_key_valid" == 0 ]]; then
-      ENDPOINT_MANIFEST="$RUNTIME/public-endpoints.json"
-      if python3 "$ROOT/scripts/linux-host/public-endpoints.py" --codespaces --output "$ENDPOINT_MANIFEST"; then
-        endpoint_values="$(python3 - "$ENDPOINT_MANIFEST" <<'PY'
+if configure_public_endpoints; then
+  endpoint_values="$(python3 - "$RUNTIME/public-endpoints.json" <<'PY'
 import json, sys
 try:
     document = json.loads(open(sys.argv[1], encoding="utf-8").read())
@@ -390,41 +462,12 @@ except (OSError, ValueError, KeyError, TypeError):
     raise SystemExit(1)
 PY
 )" || endpoint_values=""
-        mapfile -t verified_endpoints <<< "$endpoint_values"
-        if [[ ${#verified_endpoints[@]} -eq 2 &&
-              "${verified_endpoints[0]}" == "https://$PUBLIC_HOST" &&
-              "${verified_endpoints[1]}" == "https://$MANAGEMENT_HOST" ]]; then
-          pass "Public Bridge and Management API passed forwarded HTTPS, authentication, PostgreSQL readiness, EdDSA and GitHub port-inventory checks."
-          printf 'MANAGEMENT API: %s\n' "${verified_endpoints[1]}"
-          owner_code="$(cd "$ROOT/bridge" && "$STATE/venv/bin/python" owner_ctl.py issue-code)"
-          printf 'BRIDGE URL:   %s\n' "${verified_endpoints[0]}"
-          printf 'PAIRING CODE: %s\n' "$owner_code"
-          printf 'The phone app discovers both URLs automatically after GitHub host authorization; do not paste URLs into locked APK settings.\n'
-        else
-          gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-          gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-          rm -f "$ENDPOINT_MANIFEST"
-          fail 'GitHub forwarded-port inventory did not match the exact Codespace name, forwarding domain and ports 8000/8010. Both ports were returned to private.'
-        fi
-      else
-        gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-        gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-        rm -f "$ENDPOINT_MANIFEST"
-        fail 'Could not verify public forwarded URLs and visibility with gh codespace ports. Both ports were returned to private.'
-      fi
-    else
-      gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-      gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-      rm -f "$RUNTIME/public-endpoints.json"
-      fail "Public self-check failed (Bridge health=$live bad-token=$bad no-token=$none; Management health=$api_health ready=$api_ready EdDSA=$api_key_valid). Both ports were returned to private."
-    fi
-  else
-    gh codespace ports visibility 8000:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-    gh codespace ports visibility 8010:private -c "$CODESPACE_NAME" >/dev/null 2>&1 || true
-    fail 'Could not set both Bridge port 8000 and Management API port 8010 public through GitHub CLI. Both ports remain private.'
-  fi
-else
-  fail 'Public exposure disabled: K3 hardening tests did not pass. Port stays private.'
+  mapfile -t verified_endpoints <<< "$endpoint_values"
+  printf 'MANAGEMENT API: %s\n' "${verified_endpoints[1]}"
+  owner_code="$(cd "$ROOT/bridge" && "$STATE/venv/bin/python" owner_ctl.py issue-code)"
+  printf 'BRIDGE URL:   %s\n' "${verified_endpoints[0]}"
+  printf 'PAIRING CODE: %s\n' "$owner_code"
+  printf 'The phone app discovers both URLs automatically after GitHub host authorization; do not paste URLs into locked APK settings.\n'
 fi
 pass 'Foreground service processes are tracked in private Codespaces state.'
 wait
