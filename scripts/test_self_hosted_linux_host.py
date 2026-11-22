@@ -145,6 +145,20 @@ def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints
     assert 'DEX_STRINGS' in builder
 
 
+def test_codespaces_bootstrap_apk_has_independent_ci_job():
+    workflow = (ROOT / ".github" / "workflows" / "build-apk.yml").read_text()
+    assert "  codespaces-bootstrap-apk:" in workflow
+    job_start = workflow.index("  codespaces-bootstrap-apk:")
+    job_end = workflow.find("\\n  android-emulator-instrumentation:", job_start)
+    assert job_end > job_start
+    job = workflow[job_start:job_end]
+    assert "assembleDebug" in job
+    assert "testDebugUnitTest" not in job
+    assert "name: DestinedFX-Codespaces-bootstrap-apk" in job
+    assert "needs: android-build-and-unit-tests" not in job
+    assert "apksigner" in job and "aapt2" in job and "sha256sum" in job
+
+
 def test_codespaces_bootstrap_apk_has_explicit_locked_discovery_without_embedded_hosts():
     gradle = (ROOT / "app" / "build.gradle.kts").read_text()
     assert "val codespacesBootstrapBuild = destinedFxCodespacesHostDiscovery" in gradle
