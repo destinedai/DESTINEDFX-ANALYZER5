@@ -752,6 +752,12 @@ open class DestinedFXViewModel(
     val managementApiOrigin = MutableStateFlow(
         com.example.data.management.ManagementApiClient.validatedOrigin(effectiveManagementApiOrigin()).orEmpty()
     )
+
+    fun refreshManagementApiOriginFromSecureStorage() {
+        if (isPreview) return
+        managementApiOrigin.value = com.example.data.management.ManagementApiClient
+            .validatedOrigin(effectiveManagementApiOrigin()).orEmpty()
+    }
     private val managementClient by lazy {
         com.example.data.management.ManagementApiClient(
             { effectiveManagementApiOrigin() },
