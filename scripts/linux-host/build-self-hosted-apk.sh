@@ -45,7 +45,11 @@ with target.open("x", encoding="utf-8") as stream:
 os.chmod(target, 0o600)
 PY
   export DESTINEDFX_CODESPACES_HOST_BUILD=true
+  export DESTINEDFX_CODESPACES_HOST_DISCOVERY=true
   CODESPACES_BUILD=true
+fi
+if [[ "$CODESPACES_VALUE" != "true" ]]; then
+  export DESTINEDFX_CODESPACES_HOST_DISCOVERY=false
 fi
 [[ -f "$MANIFEST" && ! -L "$MANIFEST" && -r "$MANIFEST" ]] || block "A verified endpoint manifest is missing. On the persistent host, complete install-self-hosted.sh first. In Codespaces, the builder derives both forwarded origins from CODESPACE_NAME and requires both APIs to pass HTTPS readiness and EdDSA-key checks."
 command -v python3 >/dev/null || block "Python 3 is required."
@@ -155,7 +159,7 @@ BRIDGE_URL="${ORIGINS[0]}"; MANAGEMENT_URL="${ORIGINS[1]}"
 cd "$ROOT"
 chmod +x ./gradlew
 export MT5_MANAGED_SERVICE_URL="$BRIDGE_URL" MANAGEMENT_API_ORIGIN="$MANAGEMENT_URL"
-./gradlew testDebugUnitTest assembleDebug -Pmt5ManagedServiceUrl="$BRIDGE_URL" -PmanagementApiOrigin="$MANAGEMENT_URL" -PdestinedfxEndpointsLocked=true --stacktrace
+./gradlew testDebugUnitTest assembleDebug -Pmt5ManagedServiceUrl="$BRIDGE_URL" -PmanagementApiOrigin="$MANAGEMENT_URL" -PdestinedfxEndpointsLocked=true -PdestinedfxCodespacesHostDiscovery="$CODESPACES_BUILD" --stacktrace
 [[ -s "$APK" ]] || block "APK output is missing."
 signature="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1)" || block "APK signature verification failed."
 grep -Eq 'certificate SHA-256 digest:[[:space:]]*[0-9a-fA-F]{64}' <<<"$signature" || block "APK signing fingerprint is missing."
@@ -175,6 +179,7 @@ grep -Fq -- "$MANAGEMENT_URL" <<<"$DEX_STRINGS" || block "Management API origin 
 CONFIG="$(find "$ROOT/app/build/generated/source/buildConfig/debug" -type f -name BuildConfig.java -print -quit)"
 [[ -n "$CONFIG" ]] || block "Generated BuildConfig is missing."
 grep -Fq "DESTINEDFX_ENDPOINTS_LOCKED = true" "$CONFIG" || block "APK is not endpoint-locked."
+grep -Fq "DESTINEDFX_CODESPACES_HOST_DISCOVERY = $CODESPACES_BUILD" "$CONFIG" || block "APK Codespaces host-discovery capability does not match this build target."
 grep -Fq "MT5_MANAGED_SERVICE_URL = \"$BRIDGE_URL\"" "$CONFIG" || block "Bridge origin was not embedded."
 grep -Fq "MANAGEMENT_API_ORIGIN = \"$MANAGEMENT_URL\"" "$CONFIG" || block "Management API origin was not embedded."
 mkdir -p "$OUTPUT"
