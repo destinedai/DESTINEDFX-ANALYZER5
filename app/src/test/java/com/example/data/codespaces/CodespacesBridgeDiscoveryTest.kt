@@ -124,6 +124,35 @@ class CodespacesBridgeDiscoveryTest {
     }
 
     @Test
+    fun buildsAndValidatesForwardedManagementApiOriginsOnPort8010() {
+        assertEquals(
+            "https://steady-lizard-abc123-8010.app.github.dev",
+            codespacesManagementApiOrigin("steady-lizard-abc123")
+        )
+        assertEquals(
+            "https://steady-lizard-abc123-8010.preview.app.github.dev",
+            codespacesManagementApiOrigin("steady-lizard-abc123", "preview.app.github.dev")
+        )
+        assertEquals(
+            "https://steady-lizard-abc123-8010.githubpreview.dev",
+            codespacesManagementApiOrigin("steady-lizard-abc123", "githubpreview.dev")
+        )
+        assertEquals(
+            listOf(
+                "https://steady-lizard-abc123-8010.app.github.dev",
+                "https://steady-lizard-abc123-8010.preview.app.github.dev",
+                "https://steady-lizard-abc123-8010.githubpreview.dev"
+            ),
+            codespacesManagementApiOriginCandidates("steady-lizard-abc123")
+        )
+        assertTrue(isCodespacesForwardedManagementApiOrigin("https://steady-lizard-abc123-8010.app.github.dev"))
+        assertFalse(isCodespacesForwardedManagementApiOrigin("https://steady-lizard-abc123-8000.app.github.dev"))
+        assertFalse(isCodespacesForwardedManagementApiOrigin("https://attacker.github.com"))
+        assertFalse(isCodespacesForwardedManagementApiOrigin("http://steady-lizard-abc123-8010.app.github.dev"))
+        assertFalse(isCodespacesForwardedManagementApiOrigin("https://steady-lizard-abc123-8010.app.github.dev/path"))
+    }
+
+    @Test
     fun rejectsPathInjectionAndArbitraryForwardingDomains() {
         assertThrows(IllegalArgumentException::class.java) {
             codespacesBridgeOrigin("codespace.example/path")
