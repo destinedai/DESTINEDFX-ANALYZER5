@@ -39,6 +39,9 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
     var accountEmail by remember { mutableStateOf("") }
     var accountPassword by remember { mutableStateOf("") }
     var ownerSetupToken by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        viewModel.refreshManagementApiOriginFromSecureStorage()
+    }
     LaunchedEffect(managementOwnerSetupToken) {
         if (managementOwnerSetupToken.isNotBlank()) ownerSetupToken = managementOwnerSetupToken
     }
