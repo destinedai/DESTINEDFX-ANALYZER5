@@ -4,6 +4,7 @@ import com.example.data.management.AccessTokenStore
 import com.example.data.management.ManagementApiClient
 import com.example.data.management.ManagementException
 import com.example.data.management.ManagementFailure
+import com.example.data.codespaces.isCodespacesForwardedManagementApiOrigin
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -50,6 +51,34 @@ class ManagementApiClientTest {
                 locked = false
             )
         )
+    }
+
+    @Test fun lockedBuildUsesOnlyVerifiedCodespacesManagementPortWhenCapabilityIsEnabled() {
+        val codespaces = "https://steady-lizard-abc123-8010.app.github.dev"
+        assertTrue(isCodespacesForwardedManagementApiOrigin(codespaces))
+        assertEquals(
+            "",
+            ManagementApiClient.resolveConfiguredOrigin(
+                codespaces, "__CONFIGURATION_REQUIRED__", locked = true
+            )
+        )
+        assertEquals(
+            codespaces,
+            ManagementApiClient.resolveConfiguredOrigin(
+                codespaces, "__CONFIGURATION_REQUIRED__", locked = true,
+                allowCodespacesDiscovery = true
+            )
+        )
+        assertEquals(
+            "https://api.destinedfxhost.com",
+            ManagementApiClient.resolveConfiguredOrigin(
+                codespaces, "https://api.destinedfxhost.com", locked = true,
+                allowCodespacesDiscovery = true
+            )
+        )
+        assertFalse(isCodespacesForwardedManagementApiOrigin("https://attacker.github.com"))
+        assertFalse(isCodespacesForwardedManagementApiOrigin("https://steady-lizard-abc123-8000.app.github.dev"))
+        assertFalse(isCodespacesForwardedManagementApiOrigin("https://steady-lizard-abc123-8010.app.github.dev/path"))
     }
 
     @Test fun runtimeOriginIsAcceptedOnlyWhenBackendAndEdDsaKeyAreReady() {
