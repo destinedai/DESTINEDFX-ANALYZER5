@@ -9,10 +9,15 @@
   },
   "postCreateCommand": "bash deploy/codespaces/post-create.sh",
   "postStartCommand": "python3 scripts/host/destinedfx_trigger_host.py start_all",
-  "forwardPorts": [8000, 6080],
+  "forwardPorts": [8000, 8010, 6080],
   "portsAttributes": {
     "8000": {
       "label": "DestinedFX bridge (private; K3 public guard required)",
+      "onAutoForward": "notify",
+      "visibility": "private"
+    },
+    "8010": {
+      "label": "DestinedFX Management API (private until startup readiness checks pass)",
       "onAutoForward": "notify",
       "visibility": "private"
     },
