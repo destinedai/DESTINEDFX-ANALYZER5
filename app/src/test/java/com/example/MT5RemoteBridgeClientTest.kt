@@ -409,24 +409,30 @@ class MT5RemoteBridgeClientTest {
 
         val codespaces = "https://destinedfx-host-abc123-8000.app.github.dev"
         assertTrue(isCodespacesForwardedBridgeOrigin(codespaces))
-        assertEquals(codespaces, MT5RemoteBridgeClient.resolveServiceOrigin(
+        assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin(
             codespaces, "__CONFIGURATION_REQUIRED__", locked = true
         ))
-        assertEquals(codespaces, MT5RemoteBridgeClient.initialServiceUrl(
+        assertEquals("", MT5RemoteBridgeClient.initialServiceUrl(
             codespaces, "__CONFIGURATION_REQUIRED__", locked = true
+        ))
+        assertEquals(codespaces, MT5RemoteBridgeClient.resolveServiceOrigin(
+            codespaces, "__CONFIGURATION_REQUIRED__", locked = true, allowCodespacesDiscovery = true
+        ))
+        assertEquals(codespaces, MT5RemoteBridgeClient.initialServiceUrl(
+            codespaces, "__CONFIGURATION_REQUIRED__", locked = true, allowCodespacesDiscovery = true
         ))
         assertEquals(
             "https://destinedfx-host-abc123-8000.preview.app.github.dev",
             MT5RemoteBridgeClient.resolveServiceOrigin(
                 "https://destinedfx-host-abc123-8000.preview.app.github.dev",
-                "__CONFIGURATION_REQUIRED__", locked = true
+                "__CONFIGURATION_REQUIRED__", locked = true, allowCodespacesDiscovery = true
             )
         )
         assertEquals(
             "https://destinedfx-host-abc123-8000.githubpreview.dev",
             MT5RemoteBridgeClient.resolveServiceOrigin(
                 "https://destinedfx-host-abc123-8000.githubpreview.dev",
-                "__CONFIGURATION_REQUIRED__", locked = true
+                "__CONFIGURATION_REQUIRED__", locked = true, allowCodespacesDiscovery = true
             )
         )
         assertEquals("", MT5RemoteBridgeClient.resolveServiceOrigin(
