@@ -66,6 +66,34 @@ def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path
     assert not output.exists()
 
 
+def test_endpoint_manifest_accepts_github_codespaces_forwarding_domains(tmp_path):
+    import json
+    import sys
+
+    helper = LINUX_HOST / "public-endpoints.py"
+    for host in (
+        "demo-codespace-8000.app.github.dev",
+        "demo-codespace-8000.preview.app.github.dev",
+        "demo-codespace-8000.githubpreview.dev",
+    ):
+        source = tmp_path / "bridge.env"
+        output = tmp_path / "public-endpoints.json"
+        source.write_text("\\n".join([
+            f"BRIDGE_BASE_URL=https://{host}",
+            f"BRIDGE_HOST={host}",
+            f"EXPECTED_FORWARDED_HOST={host}",
+            "APP_DOMAIN=api.destinedfxhost.com",
+        ]) + "\\n", encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(helper), "--source", str(source), "--output", str(output)],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        document = json.loads(output.read_text(encoding="utf-8"))
+        assert document["bridge_url"] == f"https://{host}"
+        output.unlink()
+
+
 def test_endpoint_manifest_refuses_source_output_collision(tmp_path):
     import sys
 
