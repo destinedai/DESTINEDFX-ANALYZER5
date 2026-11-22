@@ -134,8 +134,50 @@ def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints
     assert 'printenv CODESPACE_NAME' in builder
     assert 'GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN' in builder
     assert 'DESTINEDFX_CODESPACES_HOST_BUILD=true' in builder
-    assert 'Management API is missing' in builder
+    assert 'DESTINEDFX_CODESPACES_HOST_DISCOVERY=true' in builder
+    assert 'https://$CODESPACE_NAME-8010.$CODESPACE_DOMAIN' in builder
+    assert '-PdestinedfxCodespacesHostDiscovery="$CODESPACES_BUILD"' in builder
     assert '/health/live' in builder and '/health/config' in builder
+    assert 'DEX_STRINGS' in builder
+
+
+def test_codespaces_starts_existing_management_api_and_forwards_port_8010():
+    import json
+
+    devcontainer = json.loads((ROOT / ".devcontainer" / "devcontainer.json").read_text())
+    assert 8000 in devcontainer["forwardPorts"]
+    assert 8010 in devcontainer["forwardPorts"]
+    assert devcontainer["portsAttributes"]["8010"]["visibility"] == "private"
+
+    starter = (ROOT / "deploy" / "codespaces" / "start-management-api.sh").read_text()
+    assert "postgresql-16" in (ROOT / ".devcontainer" / "Dockerfile").read_text()
+    assert "pg_lsclusters" in starter and "pg_ctlcluster" in starter
+    assert "pg_isready -h 127.0.0.1 -p 5432" in starter
+    assert "destinedfx_api" in starter and "destinedfx_management" in starter
+    assert "STEP_UP_PRIVATE_KEY_PEM_FILE" in starter
+    assert "OWNER_SETUP_TOKEN_FILE" in starter
+    assert "gh api user --jq .login" in starter
+    assert "--port 8010" in starter
+
+    start = (ROOT / "deploy" / "codespaces" / "start.sh").read_text()
+    assert "start-management-api.sh" in start
+    assert "http://127.0.0.1:8010/ready" in start
+    assert "MANAGEMENT_STEP_UP_PUBLIC_KEY_FILE" in start
+    assert "gh codespace ports visibility 8010:public" in start
+    assert "api/v1/auth/bridge-verification-key" in start
+
+
+def test_codespaces_owner_bootstrap_is_github_owner_verified_and_non_cacheable():
+    backend = (ROOT / "backend" / "app" / "main.py").read_text()
+    assert "/api/v1/auth/owner-setup-token" in backend
+    assert "X-GitHub-Owner-Authorization" in backend
+    assert "https://api.github.com/user" in backend
+    assert "CODESPACES" in backend and "DESTINEDFX_CODESPACES_OWNER_BOOTSTRAP" in backend
+    assert "hmac.compare_digest(actual_login, expected_login)" in backend
+    assert 'response.headers["Cache-Control"] = "no-store, private"' in backend
+    assert 'response.headers["Pragma"] = "no-cache"' in backend
+    assert 'rate_buckets["codespaces-owner:" + ip]' in backend
+    assert "owner-setup-" not in backend
 
 
 def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
