@@ -156,7 +156,7 @@ jobs:
           "$(go env GOPATH)/bin/gitleaks" dir --redact=100 --exit-code 1 .
 
   broker-validation:
-    name: Read-only DNS and TCP 443 checks for configured MT5 brokers
+    name: Broker DNS and TCP 443 validation (no account login)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -164,28 +164,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Validate exact broker catalog and transport-only contract
+      - name: Check validator contract and exact four-broker catalog
         run: python -m unittest -v scripts.test_broker_validation_contract
-      - name: Probe configured broker-server DNS and TCP 443 from GitHub Actions
-        run: |
-          python scripts/test_broker_validation.py \
-            --strict-network \
-            --json-out "$RUNNER_TEMP/broker-validation.json" \
-            --markdown-out "$RUNNER_TEMP/broker-validation.md"
-      - name: Upload broker report including failed probes
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: DestinedFX-broker-validation
-          path: |
-            ${{ runner.temp }}/broker-validation.json
-            ${{ runner.temp }}/broker-validation.md
-          if-no-files-found: warn
-      - name: Fail CI if a configured endpoint probe fails
-        if: steps.broker_probe.outcome == 'failure'
-        run: |
-          echo "Configured broker DNS/TCP 443 validation failed; inspect job summary and artifact for exact errors." >&2
-          exit 1
+      - name: Run read-only broker DNS and TCP port 443 checks
+        run: python scripts/test_broker_validation.py --strict-network
   mt5-ea-windows-compile:
     name: Compile MT5 EA with genuine MetaEditor
     runs-on: windows-latest
@@ -213,7 +195,7 @@ jobs:
       - name: Run owner-stack PowerShell contract tests
         shell: pwsh
         run: Invoke-Pester -Path managed-worker/windows/OwnerStack.Tests.ps1 -Output Detailed -CI
-      - name: Install MetaTrader and compile the EA (optional if vendor download is unavailable)
+      - name: Install MetaTrader and compile the EA (external vendor download is non-blocking)
         id: metaeditor
         continue-on-error: true
         shell: pwsh
@@ -226,10 +208,10 @@ jobs:
           path: ${{ runner.temp }}/destinedfx-ea/
           if-no-files-found: error
 
-  android-jvm-tests:
-    name: Android JVM tests (separate from APK packaging)
+  android-build-and-unit-tests:
+    name: Android JVM tests and APK build (bounded)
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 60
     # APK assembly and upload are intentionally independent of emulator health.
     # Set this public URL only after the managed bridge is deployed; never put secrets here.
     env:
@@ -503,6 +485,82 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write(f"\nAndroid JVM tests executed: **{executed}**; failed: **{failed}**.\n")
           PY
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+      - name: Verify APK signature, identity, metadata, ABI, and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$apk"
+          apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
+          test -n "$apksigner_path"
+          test -n "$aapt_path"
+          signature="$({ "$apksigner_path" verify --verbose --print-certs "$apk"; } 2>&1)"
+          printf '%s\n' "$signature"
+          metadata="$("$aapt_path" dump badging "$apk")"
+          python - "$metadata" "$signature" <<'PY'
+          import re, sys
+          from pathlib import Path
+          gradle = Path('app/build.gradle.kts').read_text()
+          def configured(pattern, label):
+              match = re.search(pattern, gradle)
+              if not match:
+                  raise SystemExit(f'Could not derive {label} from app/build.gradle.kts')
+              return match.group(1)
+          package = configured(r'applicationId\s*=\s*"([^"]+)"', 'application ID')
+          version_code = configured(r'versionCode\s*=\s*(\d+)', 'version code')
+          version_name = configured(r'versionName\s*=\s*"([^"]+)"', 'version name')
+          abi_block = re.search(r'abiFilters\s*\+=\s*listOf\(([^)]*)\)', gradle)
+          if not abi_block:
+              raise SystemExit('Could not derive configured ABI filters from app/build.gradle.kts')
+          abis = re.findall(r'"([^"]+)"', abi_block.group(1))
+          metadata, signature = sys.argv[1:]
+          expected = f"package: name='{package}' versionCode='{version_code}' versionName='{version_name}'"
+          if expected not in metadata:
+              raise SystemExit(f'APK metadata mismatch; expected {expected!r}')
+          native_line = next((line for line in metadata.splitlines() if line.startswith('native-code:')), '')
+          actual_abis = re.findall(r"'([^']+)'", native_line)
+          if not set(abis).issubset(actual_abis):
+              raise SystemExit(f'APK ABI mismatch: configured {abis}, package reports {actual_abis}')
+          if not re.search(r'certificate SHA-256 digest:\s*[0-9a-fA-F]{64}', signature):
+              raise SystemExit('apksigner output did not contain a signing-certificate SHA-256 fingerprint')
+          print(f'APK package/version validated against Gradle: {package} {version_name} ({version_code}); ABIs={abis}')
+          PY
+          printf '%s\n' "$metadata" | grep -E "sdkVersion:|targetSdkVersion:|native-code:"
+          zip_listing="$(unzip -l "$apk")"
+          printf '%s\n' "$zip_listing" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
+            echo "Chaquopy native library listing was not found for configured ABIs." >&2
+            exit 1
+          }
+          sha256sum "$apk" | tee /tmp/apk-sha256.txt
+          {
+            echo "### Debug APK verification"
+            echo 'Package: `com.aistudio.destinedfx.qwvzxp`'
+            python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('app/build.gradle.kts').read_text()
+          code=re.search(r'versionCode\s*=\s*(\d+)',text).group(1)
+          name=re.search(r'versionName\s*=\s*"([^"]+)"',text).group(1)
+          print(f'Version: `{name}` (code `{code}`)')
+          PY
+            echo 'Signature verified by apksigner; certificate fingerprint:'
+            printf '%s\n' "$signature" | grep -E 'certificate SHA-256 digest:'
+            echo 'Configured ABI metadata and Chaquopy Python native payload inspected.'
+            echo 'SHA-256:'
+            echo '```text'
+            cat /tmp/apk-sha256.txt
+            echo '```'
+            echo 'This is a debug APK, not a production release. Emulator instrumentation is reported by its separate job.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload verified debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DestinedFX-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
   codespaces-bootstrap-apk:
     name: Locked Codespaces bootstrap APK
     runs-on: ubuntu-24.04
