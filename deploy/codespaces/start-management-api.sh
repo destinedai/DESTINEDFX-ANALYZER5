@@ -63,11 +63,10 @@ SQL
 unset DB_PASSWORD
 pass "Local PostgreSQL 16 database and least-privilege application role are ready."
 
-"$ROOT/backend/.venv/bin/python" --version >/dev/null 2>&1 || {
+if [[ ! -x "$VENV/bin/python" ]]; then
   python3 -m venv "$VENV"
-  "$VENV/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$ROOT/backend/requirements.txt"
-}
-if [[ ! -x "$VENV/bin/uvicorn" ]]; then
+fi
+if [[ ! -x "$VENV/bin/uvicorn" || ! -x "$VENV/bin/alembic" ]]; then
   "$VENV/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$ROOT/backend/requirements.txt"
 fi
 
