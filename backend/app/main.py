@@ -122,6 +122,8 @@ def admin_user(user: models.User = Depends(current_user)):
 
 @app.get("/api/v1/auth/owner-setup-token")
 def codespaces_owner_setup_token(
+    request: Request,
+    response: Response,
     x_github_owner_authorization: str | None = Header(default=None, alias="X-GitHub-Owner-Authorization"),
     db: Session = Depends(get_db),
 ):
@@ -138,6 +140,19 @@ def codespaces_owner_setup_token(
     )
     if not enabled:
         raise HTTPException(404, "Codespaces owner bootstrap is not enabled on this host.")
+    # The owner token is a one-time high-value credential: never cache the
+    # response and allow only a small number of owner-verification requests.
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "X-GitHub-Owner-Authorization"
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    bucket = rate_buckets["codespaces-owner:" + ip]
+    while bucket and bucket[0] < now - 60:
+        bucket.popleft()
+    if len(bucket) >= 5:
+        raise HTTPException(429, "Codespaces owner-token rate limit exceeded.")
+    bucket.append(now)
     if not x_github_owner_authorization or not x_github_owner_authorization.startswith("Bearer "):
         raise HTTPException(401, "GitHub owner authorization is required.")
     github_token = x_github_owner_authorization[7:].strip()
