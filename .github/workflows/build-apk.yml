@@ -241,7 +241,8 @@ jobs:
           key: android-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties', 'settings.gradle.kts') }}-robolectric-4.16.1-sdk13-9030017-sdk14-10818077-sdk15-13954326-sdk16-13921718
           restore-keys: |
             android-${{ runner.os }}-
-      - name: Restore all Robolectric instrumented Android runtimes
+      - name: Restore all Robolectric instrumented Android runtimes (bounded)
+        timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
