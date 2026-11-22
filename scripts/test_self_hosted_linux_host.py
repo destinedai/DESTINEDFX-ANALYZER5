@@ -143,6 +143,14 @@ def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints
     assert 'DEX_STRINGS' in builder
 
 
+def test_codespaces_bootstrap_apk_has_explicit_locked_discovery_without_embedded_hosts():
+    gradle = (ROOT / "app" / "build.gradle.kts").read_text()
+    assert "val codespacesBootstrapBuild = destinedFxCodespacesHostDiscovery" in gradle
+    assert "destinedFxEndpointsLocked && !codespacesBootstrapBuild" in gradle
+    assert "Codespaces discovery bootstrap APKs are debug-only" in gradle
+    assert "DESTINEDFX_CODESPACES_HOST_DISCOVERY" in gradle
+
+
 def test_codespaces_starts_existing_management_api_and_forwards_port_8010():
     import json
 
