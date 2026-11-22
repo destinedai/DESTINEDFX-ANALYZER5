@@ -52,8 +52,12 @@ class PublicEndpointsTests(unittest.TestCase):
             ),
         )
 
-    def test_discovers_actual_preview_domain_urls_from_gh_port_inventory(self):
-        with self.mock_gh(self.rows()) as run:
+    def test_uses_environment_preview_domain_even_when_gh_reports_standard_alias(self):
+        rows = [
+            {"sourcePort": 8000, "browseUrl": "https://steady-lizard-abc123-8000.app.github.dev", "visibility": "public"},
+            {"sourcePort": 8010, "browseUrl": "https://steady-lizard-abc123-8010.app.github.dev", "visibility": "public"},
+        ]
+        with self.mock_gh(rows) as run:
             manifest = MODULE.make_codespaces_manifest()
         self.assertEqual(
             manifest["bridge_url"],

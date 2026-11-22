@@ -125,10 +125,21 @@ def make_codespaces_manifest():
             raise ValueError(f"GitHub returned duplicate forwarded-port records for port {port}.")
         if str(row.get("visibility", "")).strip().lower() != "public":
             raise ValueError(f"GitHub port {port} is not public after the guarded exposure check.")
-        origin, host = public_origin(str(row.get("browseUrl", "")), f"port {port} browseUrl")
-        expected_host = f"{codespace.lower()}-{port}.{forwarding_domain}"
-        if host != expected_host:
-            raise ValueError(f"GitHub port {port} URL does not match this Codespace and its forwarding domain.")
+        _, browse_host = public_origin(str(row.get("browseUrl", "")), f"port {port} browseUrl")
+        expected_prefix = f"{codespace.lower()}-{port}."
+        if not browse_host.startswith(expected_prefix):
+            raise ValueError(f"GitHub port {port} URL does not match this Codespace and port.")
+        # gh currently reports its standard app.github.dev browse alias. The
+        # Codespaces environment variable is the authoritative forwarding domain
+        # for this host; accept the CLI alias only when its Codespace/port identity
+        # and its suffix are both on the supported GitHub forwarding allow-list.
+        browse_domain = browse_host[len(expected_prefix):]
+        if browse_domain not in SUPPORTED_FORWARDING_DOMAINS:
+            raise ValueError(f"GitHub port {port} URL uses an unsupported forwarding domain.")
+        origin, _ = public_origin(
+            f"https://{codespace.lower()}-{port}.{forwarding_domain}",
+            f"port {port} environment-derived origin",
+        )
         verified[port] = origin
 
     missing = {8000, 8010} - verified.keys()
