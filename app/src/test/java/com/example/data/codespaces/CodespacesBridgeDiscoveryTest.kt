@@ -37,7 +37,7 @@ class CodespacesBridgeDiscoveryTest {
             codespaceMatchesDestinedFxTarget(
                 "destinedai/DESTINEDFX-ANALYZER5",
                 1409048108L,
-                "refs/heads/free/phone-only-v1"
+                "refs/heads/feat/self-hosted-linux-host-runtime"
             )
         )
         assertFalse(
@@ -51,21 +51,21 @@ class CodespacesBridgeDiscoveryTest {
             codespaceMatchesDestinedFxTarget(
                 "destinedai/DESTINEDFX-ANALYZER5",
                 1409048108L,
-                "free/phone-only-v1"
+                "feat/self-hosted-linux-host-runtime"
             )
         )
         assertFalse(
             codespaceMatchesDestinedFxTarget(
                 "attacker/fork",
                 1409048108L,
-                "refs/heads/free/phone-only-v1"
+                "refs/heads/feat/self-hosted-linux-host-runtime"
             )
         )
         assertFalse(
             codespaceMatchesDestinedFxTarget(
                 "destinedai/DESTINEDFX-ANALYZER5",
                 1L,
-                "refs/heads/free/phone-only-v1"
+                "refs/heads/feat/self-hosted-linux-host-runtime"
             )
         )
     }
