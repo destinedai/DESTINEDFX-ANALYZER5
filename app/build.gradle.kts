@@ -53,7 +53,11 @@ val destinedFxEndpointsLocked = when (endpointLockRaw.lowercase()) {
 require(!destinedFxCodespacesHostDiscovery || destinedFxEndpointsLocked) {
   "Codespaces host discovery is only permitted in an endpoint-locked APK."
 }
-if (destinedFxEndpointsLocked) {
+val codespacesBootstrapBuild = destinedFxCodespacesHostDiscovery &&
+  (mt5ManagedServiceUrl.isBlank() || mt5ManagedServiceUrl == "__CONFIGURATION_REQUIRED__") &&
+  (managementApiOrigin.isBlank() || managementApiOrigin == "__CONFIGURATION_REQUIRED__")
+
+if (destinedFxEndpointsLocked && !codespacesBootstrapBuild) {
   fun requirePublicHttpsOrigin(raw: String, name: String) {
     val uri = runCatching { URI(raw) }.getOrNull()
       ?: error("$name must be a valid HTTPS origin.")
@@ -142,6 +146,9 @@ android {
 
   gradle.taskGraph.whenReady {
     if (allTasks.any { it.name.contains("Release", ignoreCase = true) }) {
+      require(!destinedFxCodespacesHostDiscovery) {
+        "Codespaces discovery bootstrap APKs are debug-only; release APKs must embed the persistent production endpoints."
+      }
       require(destinedFxEndpointsLocked) {
         "Release APKs must embed the verified self-hosted Bridge and management API origins; build with -PdestinedfxEndpointsLocked=true."
       }
