@@ -94,7 +94,7 @@ class SignalGenerationUseCaseImpl(
             // Historical OHLC close values are never substituted for a missing bid/ask.
             if (ticker?.kind == "DAILY_REFERENCE") ticker = null
             val cls = AssetClassifier.of(symbol)
-            val quote: MarketQuote? = ticker?.takeIf { it.isLive && it.kind == "STREAM" }?.let { toQuote(it) }
+            val quote: MarketQuote? = ticker?.takeIf { it.isLive && it.kind == "STREAM" && it.source.endsWith(" MT5 Bridge", ignoreCase = true) }?.let { toQuote(it) }
             if (quote == null) {
                 return unavailable(
                     symbol, timeframe,
@@ -126,6 +126,11 @@ class SignalGenerationUseCaseImpl(
 
                 val raw = market.getCandles(symbol, t.label, n)
                 if (raw.isEmpty()) {
+                    failedFetches[cacheKey] = clock()
+                    return emptyList()
+                }
+                val candleSource = market.candleSources[com.example.data.market.candleSourceKey(symbol, t.label)].orEmpty()
+                if (!candleSource.endsWith(" MT5 Bridge", ignoreCase = true)) {
                     failedFetches[cacheKey] = clock()
                     return emptyList()
                 }

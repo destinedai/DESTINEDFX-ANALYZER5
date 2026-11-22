@@ -117,15 +117,16 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     )
 
     refresh_ok = (
-        "withTimeoutOrNull(36_000L)" in vm
-        and "withTimeoutOrNull(65_000L)" in vm
+        vm.count("withTimeoutOrNull(8_000L)") >= 2
+        and "MT5_BRIDGE" in market
+        and "verifiedMt5Snapshot" in market
         and "withTimeout(65_000)" in signal
     )
     add_check(
         checks,
         "Analyzer outer refresh and MTF budgets",
         refresh_ok,
-        "UI quote/OHLC refresh and multi-timeframe loads must not cancel the longer provider path.",
+        "Analyzer quote and OHLC refreshes use bounded MT5 Bridge requests; multi-timeframe loads retain their 65-second outer ceiling.",
     )
 
     diagnostics_ok = (

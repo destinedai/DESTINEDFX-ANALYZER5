@@ -66,7 +66,7 @@ internal fun canMergeQuoteIntoCandle(candleSource: String, quoteSource: String):
     }
 }
 
-/** Analyzer market data uses Deriv's public market-data endpoint, not an MT5 execution account. */
+/** Legacy explicit-feed detector. Analyzer defaults to MT5_BRIDGE; Deriv remains retained for other consumers. */
 internal fun isExplicitDerivPublicSource(source: String): Boolean =
     source.trim().uppercase(java.util.Locale.ROOT) == "DERIV_PUBLIC"
 
@@ -109,7 +109,7 @@ class MarketDataRepositoryImpl(
     private val dataSourceMap = mutableMapOf<String, String>()
     private val _candleSources = ConcurrentHashMap<String, String>()
     private val _candleRetrievedAtMs = ConcurrentHashMap<String, Long>()
-    // Canonical app symbols discovered from Deriv's live active_symbols directory.
+    // Legacy Deriv symbol cache retained for non-Analyzer consumers; Analyzer routes through MT5_BRIDGE.
     private val dynamicCanonicalByDerivSymbol = ConcurrentHashMap<String, String>()
     override val candleSources: Map<String, String> get() = _candleSources
     override val candleRetrievedAtMs: Map<String, Long> get() = _candleRetrievedAtMs
@@ -477,7 +477,7 @@ class MarketDataRepositoryImpl(
     private val lastSourceUpdate = ConcurrentHashMap<String, Long>()
 
     private fun startLiveStreams() {
-        // OANDA remains an explicitly selected, credentialed alternative feed. The default public feed is Deriv.
+        // Legacy OANDA/Deriv adapters are retained for explicit non-Analyzer use; the Analyzer source is MT5_BRIDGE.
         scope.launch {
             val oandaSymbols = listOf(
                 "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",
@@ -533,7 +533,7 @@ class MarketDataRepositoryImpl(
             }
         }
 
-        // Deriv public quotes and candles are subscribed on demand after their exact
+        // Legacy Deriv quotes and candles are subscribed on demand only when an explicit legacy source is selected.
         // instrument codes are confirmed against active_symbols. They are not broker execution prices.
     }
 
