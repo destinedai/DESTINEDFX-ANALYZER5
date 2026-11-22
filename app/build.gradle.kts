@@ -38,6 +38,16 @@ val managementApiOrigin = providers.gradleProperty("managementApiOrigin").orNull
 val managementApiOriginBuildValue = managementApiOrigin.replace("\\", "\\\\").replace("\"", "\\\"")
 val endpointLockRaw = providers.gradleProperty("destinedfxEndpointsLocked").orNull?.trim()
   ?: System.getenv("DESTINEDFX_ENDPOINTS_LOCKED")?.trim().orEmpty()
+val codespacesHostDiscoveryRaw = providers.gradleProperty("destinedfxCodespacesHostDiscovery").orNull?.trim()
+  ?: System.getenv("DESTINEDFX_CODESPACES_HOST_DISCOVERY")?.trim().orEmpty()
+val destinedFxCodespacesHostDiscovery = when (codespacesHostDiscoveryRaw.lowercase()) {
+  "", "false" -> false
+  "true" -> true
+  else -> error("destinedfxCodespacesHostDiscovery must be true or false.")
+}
+require(!destinedFxCodespacesHostDiscovery || destinedFxEndpointsLocked) {
+  "Codespaces host discovery is only permitted in an endpoint-locked APK."
+}
 val destinedFxEndpointsLocked = when (endpointLockRaw.lowercase()) {
   "", "false" -> false
   "true" -> true
@@ -99,6 +109,7 @@ android {
     buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
     buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
     buildConfigField("boolean", "DESTINEDFX_ENDPOINTS_LOCKED", destinedFxEndpointsLocked.toString())
+    buildConfigField("boolean", "DESTINEDFX_CODESPACES_HOST_DISCOVERY", destinedFxCodespacesHostDiscovery.toString())
     ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
