@@ -217,21 +217,29 @@ jobs:
             ~/.gradle/wrapper
             ~/.m2/repository
             ~/.cache/robolectric
-          key: android-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties', 'settings.gradle.kts') }}-robolectric-4.16.1-android-all-instrumented-14-robolectric-10818077-i7
+          key: android-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties', 'settings.gradle.kts') }}-robolectric-4.16.1-sdk13-9030017-sdk14-10818077-sdk15-13954326-sdk16-13921718
           restore-keys: |
             android-${{ runner.os }}-
-      - name: Restore Robolectric Android 14 instrumented runtime
+      - name: Restore all Robolectric instrumented Android runtimes
         shell: bash
         run: |
           set -euo pipefail
           robolectric_version="4.16.1"
-          android_all_version="14-robolectric-10818077-i7"
           cache_dir="$HOME/.cache/robolectric"
-          jar="$cache_dir/android-all-instrumented-$android_all_version.jar"
+          runtime_versions=(
+            "13-robolectric-9030017-i7"
+            "14-robolectric-10818077-i7"
+            "15-robolectric-13954326-i7"
+            "16-robolectric-13921718-i7"
+          )
           mkdir -p "$cache_dir"
-          if [[ -s "$jar" ]] && unzip -tq "$jar" >/dev/null 2>&1; then
-            echo "Cache restored: Robolectric $robolectric_version / android-all-instrumented $android_all_version"
-          else
+          for android_all_version in "${runtime_versions[@]}"; do
+            jar="$cache_dir/android-all-instrumented-$android_all_version.jar"
+            if [[ -s "$jar" ]] && unzip -tq "$jar" >/dev/null 2>&1; then
+              echo "Cache restored: Robolectric $robolectric_version / android-all-instrumented $android_all_version"
+              continue
+            fi
+
             rm -f "$jar"
             temporary="$jar.part"
             path="org/robolectric/android-all-instrumented/$android_all_version/android-all-instrumented-$android_all_version.jar"
@@ -240,7 +248,7 @@ jobs:
               "https://repo.maven.apache.org/maven2" \
               "https://repo1.maven.org/maven2" \
               "https://maven-central.storage-download.googleapis.com/maven2"; do
-              echo "Fetching Robolectric runtime from $base"
+              echo "Fetching Robolectric $android_all_version from $base"
               if curl --fail --location --silent --show-error \
                   --connect-timeout 20 --max-time 240 \
                   --retry 2 --retry-all-errors --retry-delay 5 \
@@ -254,10 +262,11 @@ jobs:
               rm -f "$temporary"
             done
             if [[ "$downloaded" != true ]]; then
-              echo "Could not seed the Robolectric runtime from Maven Apache, repo1, or Google's Maven Central mirror." >&2
+              echo "Could not seed Robolectric runtime $android_all_version from Maven Apache, repo1, or Google's Maven Central mirror." >&2
               exit 1
             fi
-          fi
+          done
+          echo "All Robolectric SDK 13-16 instrumented runtimes are present and validated."
           echo "ROBOLECTRIC_DEPENDENCY_DIR=$cache_dir" >> "$GITHUB_ENV"
       - name: Prepare stable debug keystore
         env:
