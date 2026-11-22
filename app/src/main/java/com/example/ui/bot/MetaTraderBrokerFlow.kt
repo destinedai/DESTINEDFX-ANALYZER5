@@ -431,15 +431,23 @@ fun MetaTraderBrokerFlow(
                     LoginInput("Password", form.password, { form = form.copy(password = it) }, KeyboardType.Password, true, ImeAction.Next)
                     var serverMenu by remember { mutableStateOf(false) }
                     OutlinedTextField(
-                        form.server,
-                        { server -> form = form.copy(server = server) },
+                        value = form.server,
+                        onValueChange = { server -> form = form.copy(server = server) },
                         modifier = Modifier.fillMaxWidth().testTag("server_field"),
                         trailingIcon = { TextButton(onClick = { serverMenu = true }) { Text("LIST") } },
-                        label = { Text("Server") },
+                        label = { Text("Exact MT5 Server") },
+                        placeholder = { Text("Copy the server from your broker's MT5 account details") },
                         singleLine = true,
                         textStyle = TextStyle(fontSize = 16.sp),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
                         keyboardActions = loginKeyboardActions(),
+                    )
+                    Text(
+                        "Type the exact Server shown in your broker's Personal Area or MT5 dashboard. Do not guess. When you submit, the server is saved in this device's encrypted ${form.mode.name} profile and sent with this login request; the owner host/terminal must still verify the account identity and actual mode.",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                        modifier = Modifier.testTag("mt5_server_field_help"),
                     )
                     Text(
                         "This test sends your broker login through the authenticated HTTPS Bridge to your owner-authorized host. The MT5 terminal performs the actual broker login; the EA then verifies the exact account identity and fresh heartbeat. No trade is submitted by this test.",

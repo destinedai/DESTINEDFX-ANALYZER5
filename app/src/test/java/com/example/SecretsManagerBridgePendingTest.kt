@@ -322,4 +322,32 @@ class SecretsManagerBridgePendingTest {
         assertEquals(0.0, manager.getMT5AccountBalance(), 0.0)
     }
 
+    @Test fun manuallyEnteredMt5ServerPersistsIndependentlyForEachBrokerAndMode() {
+        val manager = SecretsManager(ApplicationProvider.getApplicationContext())
+        if (!manager.isSecureStorageAvailable) return
+        val enteredServers = listOf(
+            Triple("FBS_DEMO", "111111", "FBS-Demo"),
+            Triple("EXNESS_DEMO", "222222", "Exness-Account-Demo-Server"),
+            Triple("HFM_LIVE", "333333", "HFMarketsGlobal-Live1"),
+            Triple("DERIV_DEMO", "444444", "Deriv-Demo"),
+        )
+        enteredServers.forEach { (profileKey, login, server) ->
+            assertTrue(
+                manager.saveManagedMT5AccountProfile(
+                    profileKey, login, server, "MASTER", "", savePassword = false
+                )
+            )
+        }
+
+        val restored = SecretsManager(ApplicationProvider.getApplicationContext())
+        enteredServers.forEach { (profileKey, login, server) ->
+            assertEquals(login, restored.getManagedMT5AccountLogin(profileKey))
+            assertEquals(server, restored.getManagedMT5AccountServer(profileKey))
+            assertEquals(
+                server,
+                restored.getManagedMT5AccountRegistry().first { it.accountId == profileKey }.server,
+            )
+        }
+    }
+
 }

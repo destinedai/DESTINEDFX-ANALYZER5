@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "note": "Only the four MT5 broker profiles currently configured in BrokerLoginSpec.kt. DNS hostnames are included only where provider-published MT5 cluster evidence exists; server labels are not converted into guessed hosts.",
+  "schema_version": 2,
+  "note": "Only the four MT5 broker profiles defined in BrokerLoginSpec.kt. FBS, Exness and Deriv require exact owner-assigned servers and are intentionally skipped until the owner supplies them in the phone app. HFM uses the published Europe1 MT5 endpoints: Demo 1950 and Live1 1951.",
   "brokers": [
     {
       "spec_id": "FBS_MT5",
@@ -9,15 +9,15 @@
         "server_names": [
           "ACCOUNT-SPECIFIC FBS MT5 DEMO server"
         ],
-        "dns_hosts": [],
-        "network_note": "FBS requires the server shown in the individual account login details. This repository has no verified reusable DEMO server FQDN or universal server label."
+        "network_endpoints": [],
+        "network_note": "Needs the exact server shown in this FBS account's MT5 login details. The app accepts a manually entered server."
       },
       "real": {
         "server_names": [
           "FBS-Real (official example; owner must confirm exact assigned server)"
         ],
-        "dns_hosts": [],
-        "network_note": "FBS publishes FBS-Real as an MT5 server example, but account login details must confirm the exact server. No reusable server FQDN is recorded in this repository."
+        "network_endpoints": [],
+        "network_note": "FBS-Real is an example label only. The actual account server must be copied from the owner's FBS MT5 login details."
       },
       "source_urls": [
         "https://fbs.com/fbs-academy/trading-tutorials/how-to-video-guides/three-steps-to-start-trading-on-your-desktop"
@@ -30,15 +30,15 @@
         "server_names": [
           "ACCOUNT-SPECIFIC Exness MT5 DEMO server"
         ],
-        "dns_hosts": [],
-        "network_note": "Exness assigns servers per account; exact server is in the owner's Personal Area. No account FQDN is recorded in this repository."
+        "network_endpoints": [],
+        "network_note": "Exness assigns servers per account. The exact account server is shown in the owner's Personal Area; enter it in the app."
       },
       "real": {
         "server_names": [
           "ACCOUNT-SPECIFIC Exness MT5 REAL server"
         ],
-        "dns_hosts": [],
-        "network_note": "Exness server is account-specific. No account FQDN is recorded in this repository."
+        "network_endpoints": [],
+        "network_note": "Exness server is account-specific. Copy the exact server from the owner's Personal Area and enter it in the app."
       },
       "source_urls": [
         "https://get.exness.help/hc/en-us/articles/360012578619-Trading-account-login-and-server-details",
@@ -52,19 +52,27 @@
         "server_names": [
           "HFMarketsGlobal-Demo"
         ],
-        "dns_hosts": [
-          "mt5-europe1.dcglobalfarm.com"
+        "network_endpoints": [
+          {
+            "server_label": "HFMarketsGlobal-Demo",
+            "host": "mt5-europe1.dcglobalfarm.com",
+            "port": 1950
+          }
         ],
-        "network_note": "Provider-published HFM MT5 cluster hostname; TCP 443 is tested as requested, not the documented MT5 trade port."
+        "network_note": "Provider-published HFM Europe1 Demo MT5 endpoint. Port 1950 is tested."
       },
       "real": {
         "server_names": [
-          "HFMarketsGlobal-Live1 (published example; owner must confirm exact account server)"
+          "HFMarketsGlobal-Live1"
         ],
-        "dns_hosts": [
-          "mt5-europe1.dcglobalfarm.com"
+        "network_endpoints": [
+          {
+            "server_label": "HFMarketsGlobal-Live1",
+            "host": "mt5-europe1.dcglobalfarm.com",
+            "port": 1951
+          }
         ],
-        "network_note": "Published HFM cluster hostname tested for DNS/TCP 443 only; not proof the owner's REAL account uses this cluster."
+        "network_note": "Provider-published HFM Europe1 Live1 MT5 endpoint. Port 1951 is tested."
       },
       "source_urls": [
         "https://www.hfm.com/int/en/platforms/mt5-how-to-connect"
@@ -77,15 +85,15 @@
         "server_names": [
           "Deriv-Demo"
         ],
-        "dns_hosts": [],
-        "network_note": "Published demo MT5 server label; a label is not a DNS hostname. No reusable server FQDN is configured."
+        "network_endpoints": [],
+        "network_note": "Deriv-Demo is an MT5 server label, not a reusable FQDN. Owner must confirm the exact account server and enter it in the app."
       },
       "real": {
         "server_names": [
           "ACCOUNT-SPECIFIC Deriv MT5 REAL server"
         ],
-        "dns_hosts": [],
-        "network_note": "Deriv REAL server varies by account/company entity. Read from the owner's MT5 dashboard; no DNS host is inferred."
+        "network_endpoints": [],
+        "network_note": "Deriv REAL server varies by account/company entity. Copy it from the owner's MT5 dashboard and enter it in the app."
       },
       "source_urls": [
         "https://deriv.com/help-centre-question/how-to-log-in-to-deriv-mt5-account",
