@@ -53,12 +53,12 @@ def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path
     # stale endpoints available for a later APK build.
     assert not output.exists()
 
-    source.write_text("\\n".join([
+    source.write_text("\n".join([
         "BRIDGE_BASE_URL=https://bridge.destinedfx.example.org",
         "BRIDGE_HOST=bridge.destinedfx.example.org",
         "EXPECTED_FORWARDED_HOST=bridge.destinedfx.example.org",
         "APP_DOMAIN=api.destinedfxhost.com",
-    ]) + "\\n", encoding="utf-8")
+    ]) + "\n", encoding="utf-8")
     reserved = subprocess.run([sys.executable, str(helper), "--source", str(source), "--output", str(output)],
                               capture_output=True, text=True)
     assert reserved.returncode != 0
