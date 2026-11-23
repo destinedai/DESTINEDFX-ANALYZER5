@@ -126,7 +126,7 @@ def test_acceptance_private_directory_rejects_public_mode_and_symlink(tmp_path):
     try:
         acceptance._private_directory(alias, owner_uid=os.getuid(), mode=0o700)
     except acceptance.AcceptanceError as error:
-        assert str(error) == "PRIVATE_DIRECTORY_OWNERSHIP_INVALID"
+        assert str(error) == "PRIVATE_DIRECTORY_TYPE_INVALID"
     else:
         raise AssertionError("A symlink must not stand in for a private slot directory.")
 
@@ -178,3 +178,27 @@ def test_cross_user_permission_probe_timeout_is_sanitized():
             assert str(error) == "CROSS_USER_PERMISSION_PROBE_FAILED"
         else:
             raise AssertionError("A timed-out permission probe cannot be reported as successful.")
+
+
+
+def test_acceptance_terminal_executable_rejects_symlink_and_non_absolute_path(tmp_path):
+    executable = tmp_path / "terminal64.exe"
+    executable.write_bytes(b"fixture-not-a-real-terminal")
+    executable.chmod(0o700)
+    acceptance._private_executable(executable, owner_uid=os.getuid())
+
+    alias = tmp_path / "terminal-link.exe"
+    alias.symlink_to(executable)
+    try:
+        acceptance._private_executable(alias, owner_uid=os.getuid())
+    except acceptance.AcceptanceError as error:
+        assert str(error) == "MT5_TERMINAL_EXECUTABLE_TYPE_INVALID"
+    else:
+        raise AssertionError("A terminal executable symlink must not pass the slot acceptance check.")
+
+    try:
+        acceptance._private_executable(Path("relative/terminal64.exe"), owner_uid=os.getuid())
+    except acceptance.AcceptanceError as error:
+        assert str(error) == "MT5_TERMINAL_EXECUTABLE_PATH_NOT_ABSOLUTE"
+    else:
+        raise AssertionError("A relative terminal path must not pass owner-host acceptance.")

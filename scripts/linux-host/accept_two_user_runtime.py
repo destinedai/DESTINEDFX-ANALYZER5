@@ -117,11 +117,15 @@ def _private_file(path: Path, *, owner_uid: int, mode: int) -> dict[str, Any]:
 
 
 def _private_directory(path: Path, *, owner_uid: int, mode: int) -> None:
+    if not path.is_absolute():
+        raise AcceptanceError("PRIVATE_DIRECTORY_PATH_NOT_ABSOLUTE")
     try:
         info = path.lstat()
     except OSError:
         raise AcceptanceError("PRIVATE_DIRECTORY_MISSING") from None
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != owner_uid:
+    if not stat.S_ISDIR(info.st_mode):
+        raise AcceptanceError("PRIVATE_DIRECTORY_TYPE_INVALID")
+    if info.st_uid != owner_uid:
         raise AcceptanceError("PRIVATE_DIRECTORY_OWNERSHIP_INVALID")
     if stat.S_IMODE(info.st_mode) != mode:
         raise AcceptanceError("PRIVATE_DIRECTORY_MODE_INVALID")
@@ -131,6 +135,8 @@ def _private_directory(path: Path, *, owner_uid: int, mode: int) -> None:
 
 
 def _private_regular_file(path: Path, *, owner_uid: int, mode: int) -> None:
+    if not path.is_absolute():
+        raise AcceptanceError("PRIVATE_FILE_PATH_NOT_ABSOLUTE")
     try:
         info = path.lstat()
     except OSError:
@@ -142,6 +148,8 @@ def _private_regular_file(path: Path, *, owner_uid: int, mode: int) -> None:
 
 
 def _private_executable(path: Path, *, owner_uid: int) -> None:
+    if not path.is_absolute():
+        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_PATH_NOT_ABSOLUTE")
     try:
         info = path.lstat()
     except OSError:
@@ -252,6 +260,15 @@ def _check_one_slot(
     terminal_path = Path(str(row["terminal_path"]))
     xauthority = Path(str(row["xauthority"]))
 
+    # Inspect the un-resolved manifest paths first. Checking only a resolved
+    # path would silently accept a symlink that points at the expected target.
+    _private_directory(slot_root, owner_uid=uid, mode=0o700)
+    _private_directory(job_root, owner_uid=uid, mode=0o700)
+    _private_directory(wine_prefix, owner_uid=uid, mode=0o700)
+    _private_directory(terminal_home, owner_uid=uid, mode=0o700)
+    _private_regular_file(xauthority, owner_uid=uid, mode=0o600)
+    _private_executable(terminal_path, owner_uid=uid)
+
     expected_root = (slots_root / pairing_key(pairing_id)).resolve()
     expected_job = expected_root / job_id
     if username != username_for_pairing(pairing_id):
@@ -266,15 +283,6 @@ def _check_one_slot(
         raise AcceptanceError("TERMINAL_PATH_IS_NOT_PRIVATE")
     if xauthority.resolve() != expected_job / ".Xauthority":
         raise AcceptanceError("XAUTHORITY_IS_NOT_PRIVATE")
-
-    # resolve() checks canonical placement; lstat-based checks below also
-    # reject symlinks, hard links, owner changes and broadened directory modes.
-    _private_directory(slot_root, owner_uid=uid, mode=0o700)
-    _private_directory(job_root, owner_uid=uid, mode=0o700)
-    _private_directory(wine_prefix, owner_uid=uid, mode=0o700)
-    _private_directory(terminal_home, owner_uid=uid, mode=0o700)
-    _private_regular_file(xauthority, owner_uid=uid, mode=0o600)
-    _private_executable(terminal_path, owner_uid=uid)
 
     reservation = {
         key: row[key]
