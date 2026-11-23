@@ -339,6 +339,27 @@ class MT5RemoteBridgeClientTest {
         assertFalse(unreachable.hostRuntimeReady)
     }
 
+    @Test fun bridgeConnectionFailuresAreActionableAndNeverEchoRawServerOrExceptionDetails() {
+        val unauthorized = MT5RemoteBridgeClient.BridgeHttpException(401, "TOKEN_EXPIRED")
+        val forbidden = MT5RemoteBridgeClient.BridgeHttpException(403, "PAIRING_FORBIDDEN")
+        val rateLimited = MT5RemoteBridgeClient.BridgeHttpException(429, "RATE_LIMITED")
+        val signIn = MT5RemoteBridgeClient.BridgeHttpException(401, "MANAGEMENT_SIGN_IN_REQUIRED")
+        val timeout = java.net.SocketTimeoutException("private host details")
+        val unknownHost = java.net.UnknownHostException("private host details")
+        val untrusted = IllegalStateException("raw body contains private data")
+
+        assertTrue(MT5RemoteBridgeClient.connectionFailureMessage(unauthorized).contains("HTTP 401"))
+        assertTrue(MT5RemoteBridgeClient.connectionFailureMessage(forbidden).contains("HTTP 403"))
+        assertTrue(MT5RemoteBridgeClient.connectionFailureMessage(rateLimited).contains("HTTP 429"))
+        assertTrue(MT5RemoteBridgeClient.connectionFailureMessage(signIn).contains("Management API sign-in"))
+        assertTrue(MT5RemoteBridgeClient.connectionFailureMessage(timeout).contains("timed out"))
+        assertTrue(MT5RemoteBridgeClient.connectionFailureMessage(unknownHost).contains("could not be resolved"))
+        val safe = MT5RemoteBridgeClient.connectionFailureMessage(untrusted)
+        assertFalse(safe.contains("raw body"))
+        assertFalse(safe.contains("private data"))
+        assertTrue(safe.contains("remain unverified"))
+    }
+
     @Test fun zeroBalanceAndEquityDisconnectsAndBlocksManagedActions() {
         assertEquals(
             "Balance unavailable - DISCONNECTED",

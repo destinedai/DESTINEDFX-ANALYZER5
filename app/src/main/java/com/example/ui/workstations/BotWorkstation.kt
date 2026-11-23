@@ -599,7 +599,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     }
                                 } catch (e: Exception) {
                                     bridgeSnapshot = null
-                                    bridgeMessage = "Bridge health or authenticated account state could not be verified (" + e.javaClass.simpleName + ")."
+                                    bridgeMessage = MT5RemoteBridgeClient.connectionFailureMessage(e)
                                 } finally {
                                     bridgeProbeInProgress = false
                                     bridgeBusy = false

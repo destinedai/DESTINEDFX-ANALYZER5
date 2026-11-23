@@ -127,6 +127,31 @@ def _private_directory(path: Path, *, owner_uid: int, mode: int) -> None:
         raise AcceptanceError("PRIVATE_DIRECTORY_MODE_INVALID")
 
 
+
+
+
+def _private_regular_file(path: Path, *, owner_uid: int, mode: int) -> None:
+    try:
+        info = path.lstat()
+    except OSError:
+        raise AcceptanceError("PRIVATE_FILE_MISSING") from None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise AcceptanceError("PRIVATE_FILE_TYPE_INVALID")
+    if info.st_uid != owner_uid or stat.S_IMODE(info.st_mode) != mode:
+        raise AcceptanceError("PRIVATE_FILE_OWNERSHIP_OR_MODE_INVALID")
+
+
+def _private_executable(path: Path, *, owner_uid: int) -> None:
+    try:
+        info = path.lstat()
+    except OSError:
+        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_MISSING") from None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_TYPE_INVALID")
+    if info.st_uid != owner_uid or not (info.st_mode & stat.S_IXUSR) or (info.st_mode & 0o022):
+        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_OWNERSHIP_INVALID")
+
+
 def _read_active_manifests(manifest_dir: Path, owner_uid: int) -> list[tuple[Path, dict[str, Any]]]:
     _private_directory(manifest_dir, owner_uid=owner_uid, mode=0o700)
     rows: list[tuple[Path, dict[str, Any]]] = []
@@ -242,6 +267,15 @@ def _check_one_slot(
     if xauthority.resolve() != expected_job / ".Xauthority":
         raise AcceptanceError("XAUTHORITY_IS_NOT_PRIVATE")
 
+    # resolve() checks canonical placement; lstat-based checks below also
+    # reject symlinks, hard links, owner changes and broadened directory modes.
+    _private_directory(slot_root, owner_uid=uid, mode=0o700)
+    _private_directory(job_root, owner_uid=uid, mode=0o700)
+    _private_directory(wine_prefix, owner_uid=uid, mode=0o700)
+    _private_directory(terminal_home, owner_uid=uid, mode=0o700)
+    _private_regular_file(xauthority, owner_uid=uid, mode=0o600)
+    _private_executable(terminal_path, owner_uid=uid)
+
     reservation = {
         key: row[key]
         for key in (
@@ -301,15 +335,6 @@ def _check_one_slot(
         or process["start_ticks"] != int(row["process_start_ticks"])
     ):
         raise AcceptanceError("REAL_MT5_PROCESS_IDENTITY_MISMATCH")
-    if not terminal_path.is_file():
-        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_MISSING")
-    try:
-        terminal_info = terminal_path.stat()
-    except OSError:
-        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_MISSING") from None
-    if terminal_info.st_uid != uid or not (terminal_info.st_mode & stat.S_IXUSR):
-        raise AcceptanceError("MT5_TERMINAL_EXECUTABLE_OWNERSHIP_INVALID")
-
     startup_ini = job_root / "startup.ini"
     startup_set = terminal_home / "MQL5" / "Presets" / "DestinedFXTraderEA.set"
     if startup_ini.exists() or startup_set.exists():
@@ -325,14 +350,17 @@ def _deny_cross_slot_access(slots: list[tuple[int, str, Path]]) -> int:
             if source_uid == target_uid:
                 continue
             for flag in ("-r", "-w"):
-                result = subprocess.run(
-                    ["sudo", "-n", "-u", source_user, "--", "test", flag, str(target_auth)],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5,
-                    check=False,
-                )
+                try:
+                    result = subprocess.run(
+                        ["sudo", "-n", "-u", source_user, "--", "test", flag, str(target_auth)],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                        check=False,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    raise AcceptanceError("CROSS_USER_PERMISSION_PROBE_FAILED") from None
                 probes += 1
                 if result.returncode == 0:
                     raise AcceptanceError("CROSS_USER_XAUTHORITY_ACCESS_NOT_BLOCKED")

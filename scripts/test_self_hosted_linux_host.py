@@ -147,6 +147,12 @@ def test_self_hosted_apk_builder_uses_verified_manifest_and_locks_both_endpoints
     assert 'set(d) != expected_keys' in builder
     assert 'AAPT2="$SDK/build-tools/$TOOLS/aapt2"' in builder
     assert '"$AAPT2" dump badging "$APK"' in builder
+    assert 'scripts/verify_apk_artifact.py' in builder
+    assert '--source-sha "$SOURCE_SHA"' in builder
+    assert '--expected-certificate-sha256 "$certificate_sha256"' in builder
+    assert 'apk-metadata.json' in builder
+    assert 'git -C "$ROOT" status --porcelain --untracked-files=normal' in builder
+    assert 'DESTINEDFX_DEBUG_KEYSTORE_PATH' in builder
     assert 'grep -Fq -- "$BRIDGE_URL" <<<"$DEX_STRINGS"' in builder
     assert 'grep -Fq -- "$MANAGEMENT_URL" <<<"$DEX_STRINGS"' in builder
     assert 'printenv CODESPACE_NAME' in builder

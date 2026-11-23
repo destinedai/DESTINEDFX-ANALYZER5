@@ -1,6 +1,9 @@
 from pathlib import Path
 import importlib.util
+import os
+import subprocess
 import sys
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "scripts" / "linux-host" / "accept_two_user_runtime.py"
@@ -101,3 +104,77 @@ def test_mt5_parity_matrix_marks_native_terminal_gaps_and_keeps_them_unavailable
     assert "No phone Depth screen" in matrix
     assert "No terminal-native MT5 news stream" in matrix
     assert "must remain visibly unavailable" in matrix
+
+
+
+def test_acceptance_private_directory_rejects_public_mode_and_symlink(tmp_path):
+    directory = tmp_path / "private"
+    directory.mkdir()
+    directory.chmod(0o700)
+    acceptance._private_directory(directory, owner_uid=os.getuid(), mode=0o700)
+
+    directory.chmod(0o755)
+    try:
+        acceptance._private_directory(directory, owner_uid=os.getuid(), mode=0o700)
+    except acceptance.AcceptanceError as error:
+        assert str(error) == "PRIVATE_DIRECTORY_MODE_INVALID"
+    else:
+        raise AssertionError("A group/world-accessible slot directory must be rejected.")
+
+    alias = tmp_path / "private-alias"
+    alias.symlink_to(directory, target_is_directory=True)
+    try:
+        acceptance._private_directory(alias, owner_uid=os.getuid(), mode=0o700)
+    except acceptance.AcceptanceError as error:
+        assert str(error) == "PRIVATE_DIRECTORY_OWNERSHIP_INVALID"
+    else:
+        raise AssertionError("A symlink must not stand in for a private slot directory.")
+
+
+def test_acceptance_xauthority_requires_private_regular_single_link_file(tmp_path):
+    auth = tmp_path / ".Xauthority"
+    auth.write_bytes(b"test-only-fake-cookie")
+    auth.chmod(0o600)
+    acceptance._private_regular_file(auth, owner_uid=os.getuid(), mode=0o600)
+
+    auth.chmod(0o644)
+    try:
+        acceptance._private_regular_file(auth, owner_uid=os.getuid(), mode=0o600)
+    except acceptance.AcceptanceError as error:
+        assert str(error) == "PRIVATE_FILE_OWNERSHIP_OR_MODE_INVALID"
+    else:
+        raise AssertionError("Xauthority with widened permissions must be rejected.")
+
+    auth.chmod(0o600)
+    hardlink = tmp_path / "xauthority-hardlink"
+    hardlink.hardlink_to(auth)
+    try:
+        acceptance._private_regular_file(auth, owner_uid=os.getuid(), mode=0o600)
+    except acceptance.AcceptanceError as error:
+        assert str(error) == "PRIVATE_FILE_TYPE_INVALID"
+    else:
+        raise AssertionError("A hard-linked Xauthority file must be rejected.")
+
+    symlink = tmp_path / "xauthority-symlink"
+    symlink.symlink_to(auth)
+    try:
+        acceptance._private_regular_file(symlink, owner_uid=os.getuid(), mode=0o600)
+    except acceptance.AcceptanceError as error:
+        assert str(error) == "PRIVATE_FILE_TYPE_INVALID"
+    else:
+        raise AssertionError("An Xauthority symlink must be rejected.")
+
+
+def test_cross_user_permission_probe_timeout_is_sanitized():
+    from pathlib import Path
+    slots = [
+        (10001, "destinedfx-slot-a", Path("/private/a/.Xauthority")),
+        (10002, "destinedfx-slot-b", Path("/private/b/.Xauthority")),
+    ]
+    with patch.object(acceptance.subprocess, "run", side_effect=subprocess.TimeoutExpired("sudo", 5)):
+        try:
+            acceptance._deny_cross_slot_access(slots)
+        except acceptance.AcceptanceError as error:
+            assert str(error) == "CROSS_USER_PERMISSION_PROBE_FAILED"
+        else:
+            raise AssertionError("A timed-out permission probe cannot be reported as successful.")

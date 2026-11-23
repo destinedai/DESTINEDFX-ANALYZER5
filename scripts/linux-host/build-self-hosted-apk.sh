@@ -73,6 +73,8 @@ fi
 [[ -f "$MANIFEST" && ! -L "$MANIFEST" && -r "$MANIFEST" ]] || block "A verified endpoint manifest is missing. On the persistent host, complete install-self-hosted.sh first. In Codespaces, the builder derives both forwarded origins from CODESPACE_NAME and requires both APIs to pass HTTPS readiness and EdDSA-key checks."
 command -v python3 >/dev/null || block "Python 3 is required."
 command -v java >/dev/null || block "JDK 21 is required."
+KEYTOOL="$(command -v keytool || true)"
+[[ -n "$KEYTOOL" ]] || block "JDK keytool is required for APK signing-certificate verification."
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 [[ -n "$SDK" && -d "$SDK/build-tools" ]] || block "Set ANDROID_SDK_ROOT or ANDROID_HOME to an installed Android SDK."
 TOOLS="$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
@@ -83,6 +85,13 @@ UNZIP="$(command -v unzip || true)"
 STRINGS="$(command -v strings || true)"
 [[ -x "$APKSIGNER" && -x "$AAPT" && -x "$AAPT2" ]] || block "Android build-tools must include apksigner, aapt and aapt2."
 [[ -n "$UNZIP" && -n "$STRINGS" ]] || block "unzip and strings are required to inspect the final APK bytecode."
+if [[ -n "${DESTINEDFX_DEBUG_KEYSTORE_PATH:-}" ]]; then
+  DEBUG_KEYSTORE="$DESTINEDFX_DEBUG_KEYSTORE_PATH"
+  [[ -f "$DEBUG_KEYSTORE" && ! -L "$DEBUG_KEYSTORE" && -r "$DEBUG_KEYSTORE" ]] || block "The explicitly configured debug keystore is missing or unsafe."
+else
+  unset DESTINEDFX_DEBUG_KEYSTORE_PATH || true
+  DEBUG_KEYSTORE="$HOME/.android/debug.keystore"
+fi
 
 readarray -t ORIGINS < <(python3 - "$MANIFEST" <<'PY'
 import ipaddress, json, socket, stat, sys, urllib.request
@@ -176,10 +185,18 @@ PY
 [[ "${#ORIGINS[@]}" -eq 2 ]] || block "Endpoint manifest did not provide exactly two HTTPS origins."
 BRIDGE_URL="${ORIGINS[0]}"; MANAGEMENT_URL="${ORIGINS[1]}"
 cd "$ROOT"
+git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || block "The source directory is not a Git checkout."
+SOURCE_SHA="$(git -C "$ROOT" rev-parse --verify HEAD 2>/dev/null)" || block "The exact source commit could not be determined."
+[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || block "The source commit SHA is invalid."
+[[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ]] || block "Commit or remove all non-ignored source changes before building an exact-SHA APK."
 chmod +x ./gradlew
 export MT5_MANAGED_SERVICE_URL="$BRIDGE_URL" MANAGEMENT_API_ORIGIN="$MANAGEMENT_URL"
+if [[ -n "${DESTINEDFX_DEBUG_KEYSTORE_PATH:-}" ]]; then
+  keytool_check="$("$KEYTOOL" -list -keystore "$DEBUG_KEYSTORE" -storepass android -alias androiddebugkey 2>/dev/null)" || block "The configured debug keystore alias could not be opened."
+fi
 ./gradlew testDebugUnitTest assembleDebug -Pmt5ManagedServiceUrl="$BRIDGE_URL" -PmanagementApiOrigin="$MANAGEMENT_URL" -PdestinedfxEndpointsLocked=true -PdestinedfxCodespacesHostDiscovery="$CODESPACES_BUILD" --stacktrace
 [[ -s "$APK" ]] || block "APK output is missing."
+[[ -f "$DEBUG_KEYSTORE" && ! -L "$DEBUG_KEYSTORE" && -r "$DEBUG_KEYSTORE" ]] || block "The Gradle debug signing keystore is missing after APK assembly."
 signature="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1)" || block "APK signature verification failed."
 grep -Eq 'certificate SHA-256 digest:[[:space:]]*[0-9a-fA-F]{64}' <<<"$signature" || block "APK signing fingerprint is missing."
 metadata="$("$AAPT2" dump badging "$APK")"
@@ -204,10 +221,21 @@ if [[ "$CODESPACES_BUILD" == "true" ]]; then
 fi
 grep -Fq "MT5_MANAGED_SERVICE_URL = \"$BRIDGE_URL\"" "$CONFIG" || block "Bridge origin was not embedded."
 grep -Fq "MANAGEMENT_API_ORIGIN = \"$MANAGEMENT_URL\"" "$CONFIG" || block "Management API origin was not embedded."
+# The debug keystore is never printed or copied into the delivery directory.
+certificate_sha256="$("$KEYTOOL" -list -v -keystore "$DEBUG_KEYSTORE" -storepass android -alias androiddebugkey 2>/dev/null | awk 'toupper($1) ~ /^SHA-?256:/ {gsub(":", "", $2); print tolower($2); exit}')"
+[[ "$certificate_sha256" =~ ^[0-9a-f]{64}$ ]] || block "The prepared debug certificate fingerprint could not be verified."
 mkdir -p "$OUTPUT"
 cp "$APK" "$OUTPUT/DestinedFX-debug.apk"
 chmod 0644 "$OUTPUT/DestinedFX-debug.apk"
+python3 "$ROOT/scripts/verify_apk_artifact.py" \
+  --apk "$OUTPUT/DestinedFX-debug.apk" \
+  --gradle "$ROOT/app/build.gradle.kts" \
+  --apksigner "$APKSIGNER" \
+  --aapt "$AAPT2" \
+  --source-sha "$SOURCE_SHA" \
+  --expected-certificate-sha256 "$certificate_sha256" \
+  --output "$OUTPUT/apk-metadata.json" || block "Exact-source APK signature and metadata verification failed."
 sha256sum "$OUTPUT/DestinedFX-debug.apk" > "$OUTPUT/DestinedFX-debug.apk.sha256"
 chmod 0644 "$OUTPUT/DestinedFX-debug.apk.sha256"
-printf 'DESTINEDFX_SELF_HOSTED_APK_BUILD_OK\nAPK: %s/DestinedFX-debug.apk\n' "$OUTPUT"
+printf 'DESTINEDFX_SELF_HOSTED_APK_BUILD_OK\nAPK: %s/DestinedFX-debug.apk\nMetadata: %s/apk-metadata.json\nSource SHA: %s\n' "$OUTPUT" "$OUTPUT" "$SOURCE_SHA"
 cat "$OUTPUT/DestinedFX-debug.apk.sha256"

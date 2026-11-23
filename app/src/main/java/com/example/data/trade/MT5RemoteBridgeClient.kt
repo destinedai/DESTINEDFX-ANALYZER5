@@ -16,8 +16,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.InterruptedIOException
 import java.net.URI
 import java.net.InetAddress
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.math.BigInteger
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -1336,6 +1340,38 @@ class MT5RemoteBridgeClient(
             if (orders.isEmpty() || orders.any { !it.has("managed_by_ea") || it.opt("managed_by_ea") !is Boolean }) return null
             val tickets = orders.filter { it.optBoolean("managed_by_ea") }.map { exactIdentifier(it, "ticket") ?: return null }
             return tickets.takeIf { it.isNotEmpty() && it.distinct().size == it.size }
+        }
+
+        internal fun connectionFailureMessage(error: Exception): String {
+            val bridgeError = error as? BridgeHttpException
+            if (bridgeError != null) {
+                return when {
+                    bridgeError.safeDescription == "MANAGEMENT_SIGN_IN_REQUIRED" ->
+                        "Management API sign-in is required. The account pairing and terminal state remain unverified."
+                    bridgeError.safeDescription == "OWNER_BOOTSTRAP_REQUIRED" ->
+                        "Owner bootstrap authorization is required. No pairing or terminal connection is verified."
+                    bridgeError.status == 401 ->
+                        "Bridge authentication failed (HTTP 401). Re-authenticate the selected pairing; terminal state remains unverified."
+                    bridgeError.status == 403 ->
+                        "Bridge authorization was denied (HTTP 403). Verify the selected account pairing; terminal state remains unverified."
+                    bridgeError.status == 429 ->
+                        "Bridge rate limit reached (HTTP 429). Retry later; account and terminal state remain unverified."
+                    bridgeError.status in 400..499 ->
+                        "Bridge rejected the connection check (HTTP ${bridgeError.status}). Pairing and terminal state remain unverified."
+                    else ->
+                        "Bridge service returned an error. Pairing and terminal state remain unverified."
+                }
+            }
+            return when (error) {
+                is SocketTimeoutException, is InterruptedIOException ->
+                    "Bridge connection check timed out. No authenticated pairing or terminal connection is confirmed."
+                is UnknownHostException ->
+                    "Bridge hostname could not be resolved. Check the configured HTTPS origin; connection state remains unverified."
+                is ConnectException ->
+                    "Bridge host could not be reached. Connection and terminal state remain unverified."
+                else ->
+                    "Bridge connection check failed. Pairing and terminal state remain unverified."
+            }
         }
 
         internal fun zeroBalanceDisconnectedMessage(balance: Double?, equity: Double?): String? =
