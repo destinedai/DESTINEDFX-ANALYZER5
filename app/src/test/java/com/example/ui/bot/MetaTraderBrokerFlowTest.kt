@@ -87,7 +87,7 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithText("Type exact server name").performClick()
         composeRule.onNodeWithTag("login_button").assertIsNotEnabled()
         composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
-        composeRule.onNodeWithTag("server_field").assertTextEquals("Fixture-Demo")
+        composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "Fixture-Demo")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
         composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
@@ -152,14 +152,14 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("FBS-Demo-Exact")
 
         composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
-        composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Demo-Exact")
+        composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "FBS-Demo-Exact")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
         composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
 
         // No REAL value exists yet. Preserve the typed value but do not count it as saved for REAL.
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
-        composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Demo-Exact")
+        composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "FBS-Demo-Exact")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag("mt5_server_save_status").assertTextEquals("")
 
@@ -169,10 +169,10 @@ class MetaTraderBrokerFlowTest {
 
         // Returning to DEMO restores only the DEMO value; LIVE remains separately stored.
         composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
-        composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Demo-Exact")
+        composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "FBS-Demo-Exact")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
-        composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Real-Exact")
+        composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "FBS-Real-Exact")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
     }
 

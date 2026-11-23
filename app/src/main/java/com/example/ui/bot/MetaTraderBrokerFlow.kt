@@ -494,7 +494,7 @@ fun MetaTraderBrokerFlow(
                         enabled = !busy && activeMt5ServerValid,
                         modifier = Modifier.fillMaxWidth().testTag("save_mt5_server")
                     ) { Text("SAVE SERVER") }
-                    Text(
+                    if (serverSaveStatus.isNotBlank()) Text(
                         serverSaveStatus,
                         color = if (serverSaveStatus == "Server saved") ElectricCyan else LossRed,
                         fontSize = 10.sp,
