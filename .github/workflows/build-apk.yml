@@ -451,14 +451,13 @@ jobs:
           print("Managed bridge /health/ready responded. This does not prove worker, news provider, or broker-terminal readiness.")
           PY
           echo "Managed bridge readiness endpoint responded successfully. This is only a deployment health check; provider, worker, MT5 compile, and DEMO fill acceptance remain separate." >> "$GITHUB_STEP_SUMMARY"
-      - name: Run Android JVM unit tests (bounded retries for Maven HTTP 429)
+      - name: Run affected Android JVM test classes, then full suite (bounded retries for Maven HTTP 429)
         id: jvm-tests
         timeout-minutes: 35
         shell: bash
         run: |
           set -uo pipefail
           chmod +x gradlew
-          attempt=1
           repositories=(
             "https://repo.maven.apache.org/maven2"
             "https://maven-central.storage-download.googleapis.com/maven2"
@@ -466,43 +465,55 @@ jobs:
             "https://maven-central.storage-download.googleapis.com/maven2"
           )
           backoff=(30 60 120)
-          last_log=""
-          while [[ "$attempt" -le 4 ]]; do
-            repository="${repositories[$((attempt - 1))]}"
-            export ROBOLECTRIC_DEPENDENCY_REPO_URL="$repository"
-            log="$RUNNER_TEMP/android-jvm-test-attempt-$attempt.log"
-            last_log="$log"
-            echo "Android JVM test attempt $attempt/4; Maven Central mirror: $repository"
-            set +e
-            ./gradlew testDebugUnitTest --max-workers=2 --stacktrace 2>&1 | tee "$log"
-            status=${PIPESTATUS[0]}
-            set -e
-            if [[ "$status" -eq 0 ]]; then
-              echo "status=passed" >> "$GITHUB_OUTPUT"
-              echo "Android JVM tests succeeded on attempt $attempt."
-              exit 0
-            fi
-            if ! grep -Eqi 'HTTP response code: 429|HTTP[[:space:]]+429|status code:? 429|429 Too Many Requests' "$log"; then
-              echo "status=failed" >> "$GITHUB_OUTPUT"
-              echo "Android JVM tests failed for a reason other than Maven HTTP 429; refusing to retry." >&2
-              exit "$status"
-            fi
-            if [[ "$attempt" -lt 4 ]]; then
-              delay="${backoff[$((attempt - 1))]}"
-              echo "Maven HTTP 429 detected; retrying after exponential backoff of ${delay}s."
-              sleep "$delay"
-            fi
-            attempt=$((attempt + 1))
-          done
-          echo "status=rate_limited" >> "$GITHUB_OUTPUT"
-          echo "::error title=Android JVM tests blocked::Robolectric dependency downloads remained HTTP 429 after four attempts. JVM acceptance is NOT PASSED; downstream APK and emulator gates must remain blocked."
-          tail -n 80 "$last_log" >&2
-          {
-            echo
-            echo "Android JVM tests: **NOT PASSED (Maven HTTP 429 after four attempts)**."
-            echo "No APK or emulator acceptance is allowed until the complete JVM suite executes and passes."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 1
+          run_suite() {
+            local suite_name="$1"
+            shift
+            local attempt=1
+            local last_log=""
+            while [[ "$attempt" -le 4 ]]; do
+              local repository="${repositories[$((attempt - 1))]}"
+              export ROBOLECTRIC_DEPENDENCY_REPO_URL="$repository"
+              local log="$RUNNER_TEMP/android-jvm-${suite_name// /-}-attempt-$attempt.log"
+              last_log="$log"
+              echo "Android JVM suite '$suite_name', attempt $attempt/4; Maven mirror: $repository"
+              set +e
+              ./gradlew testDebugUnitTest "$@" --max-workers=2 --stacktrace 2>&1 | tee "$log"
+              local status=${PIPESTATUS[0]}
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                echo "Android JVM suite '$suite_name' passed on attempt $attempt."
+                return 0
+              fi
+              if ! grep -Eqi 'HTTP response code: 429|HTTP[[:space:]]+429|status code:? 429|429 Too Many Requests' "$log"; then
+                echo "Android JVM suite '$suite_name' failed for a reason other than Maven HTTP 429; refusing to retry." >&2
+                return "$status"
+              fi
+              if [[ "$attempt" -lt 4 ]]; then
+                local delay="${backoff[$((attempt - 1))]}"
+                echo "Maven HTTP 429 detected for '$suite_name'; retrying after ${delay}s."
+                sleep "$delay"
+              fi
+              attempt=$((attempt + 1))
+            done
+            echo "Robolectric dependencies remained HTTP 429 for '$suite_name'." >&2
+            tail -n 80 "$last_log" >&2
+            return 1
+          }
+
+          echo "=== Focused Android broker login regression classes ==="
+          if ! run_suite focused-broker-login --tests 'com.example.BrokerLoginSpecTest' --tests 'com.example.ui.bot.MetaTraderBrokerFlowTest'; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "Focused Android broker login tests did not pass." >&2
+            exit 1
+          fi
+
+          echo "=== Complete Android JVM suite ==="
+          if ! run_suite full-jvm; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "Complete Android JVM suite did not pass." >&2
+            exit 1
+          fi
+          echo "status=passed" >> "$GITHUB_OUTPUT"
       - name: Upload Android JVM test reports
         if: always()
         uses: actions/upload-artifact@v4

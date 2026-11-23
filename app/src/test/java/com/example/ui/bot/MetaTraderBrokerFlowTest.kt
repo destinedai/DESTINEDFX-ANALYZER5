@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -20,6 +21,7 @@ import com.example.security.SecretsManager
 import com.example.ui.theme.DestinedFXTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -161,7 +163,11 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
         composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "FBS-Demo-Exact")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
-        composeRule.onNodeWithTag("mt5_server_save_status").assertTextEquals("")
+        composeRule.onNodeWithTag("mt5_server_save_status").assertIsDisplayed()
+        assertTrue(
+            "The previous mode's success message must be cleared",
+            composeRule.onAllNodesWithText("Server saved").fetchSemanticsNodes().isEmpty(),
+        )
 
         composeRule.onNodeWithTag("server_field").performScrollTo().performTextReplacement("FBS-Real-Exact")
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()

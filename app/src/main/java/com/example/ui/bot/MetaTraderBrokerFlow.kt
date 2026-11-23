@@ -494,12 +494,20 @@ fun MetaTraderBrokerFlow(
                         enabled = !busy && activeMt5ServerValid,
                         modifier = Modifier.fillMaxWidth().testTag("save_mt5_server")
                     ) { Text("SAVE SERVER") }
-                    if (serverSaveStatus.isNotBlank()) Text(
-                        serverSaveStatus,
-                        color = if (serverSaveStatus == "Server saved") ElectricCyan else LossRed,
-                        fontSize = 10.sp,
-                        modifier = Modifier.testTag("mt5_server_save_status")
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().testTag("mt5_server_save_status"),
+                    ) {
+                        if (serverSaveStatus.isNotBlank()) {
+                            Text(
+                                serverSaveStatus,
+                                color = if (serverSaveStatus == "Server saved") ElectricCyan else LossRed,
+                                fontSize = 10.sp,
+                            )
+                        } else {
+                            // Keep a stable status region when mode changes clear the last message.
+                            Spacer(Modifier.size(1.dp))
+                        }
+                    }
                     Text(
                         "Login is verified by the paired MT5 terminal. No order is sent during sign-in.",
                         color = TextSecondary,
