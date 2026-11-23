@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Resource-bounded, per-pairing Linux MT5 worker for GitHub Codespaces.
+"""Resource-bounded, per-pairing Linux MT5 worker.
+
+The persistent self-hosted systemd service uses this worker with a PERSISTENT
+Linux host profile. The ephemeral GitHub Codespaces test launcher reuses the
+same isolation worker with an EPHEMERAL profile and remains DEMO-only.
 
 Credentials are not released until a unique non-login Unix user, private Wine
 prefix, private Xauthority file, isolated Xvfb display and terminal directory

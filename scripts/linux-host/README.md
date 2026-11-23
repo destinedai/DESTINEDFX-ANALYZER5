@@ -1,9 +1,10 @@
 # DestinedFX-owned Linux execution host
 
-This directory contains two distinct Linux paths:
+This directory contains three execution contexts which must not be conflated:
 
-- **Self-hosted persistent host**: the production target for broker execution. It uses the repository's Bridge, root host-attestation agent, per-pairing Linux identities, isolated Wine prefixes, one MT5 terminal per authenticated pairing, encrypted systemd credentials, local Caddy HTTPS and persistent local storage. It runs on the operator-controlled Ubuntu machine; it does not use Azure, Oracle, Railway, Render, Cloudflare Workers, or another hosted execution vendor.
-- **Legacy single-terminal/Codespaces tooling**: retained for compatibility and tests. It is not the production multi-user runtime and must not be started beside the self-hosted slot worker.
+- **Self-hosted persistent host**: the production target for broker execution. Its systemd units run the Bridge, Management API, root host-attestation agent and linux-slot-worker.py with BRIDGE_HOST_PROFILE=PERSISTENT and BRIDGE_HOST_MODE=linux-host. Each authenticated pairing receives its own non-login Unix identity, private Wine prefix, terminal tree, Xauthority cookie and display, with encrypted systemd credentials and persistent local storage. It runs on the operator-controlled Ubuntu machine; it does not use Azure, Oracle, Railway, Render, Cloudflare Workers, or another hosted execution vendor.
+- **Ephemeral Codespaces development/test host**: the Codespaces launcher also runs linux-slot-worker.py and the same isolation/host-agent code, but sets an EPHEMERAL host profile and finite lifecycle. It is DEMO-only development/test infrastructure, not a persistent production host and not evidence of real broker acceptance.
+- **Legacy single-terminal Linux compatibility path**: linux-worker.py, destinedfx-linux-worker.timer, destinedfx-mt5.service and destinedfx-xvfb.service remain for compatibility. They do not provide per-user OS isolation and must not be started beside the persistent isolated slot worker.
 
 No installer creates broker accounts or submits orders. Every user supplies their own broker account through the authenticated app flow. DEMO and LIVE use the same isolated runtime; LIVE remains subject to explicit selection/confirmation, user authentication, account identity, broker validation, risk controls, and order reconciliation.
 
@@ -83,7 +84,7 @@ The host-agent never returns account passwords, broker login credentials, tokens
 
 ## Legacy tooling
 
-The legacy `linux-worker.py`, `destinedfx-linux-worker.timer`, `destinedfx-mt5.service`, and `destinedfx-xvfb.service` path is a **single-terminal** compatibility path. The self-hosted installer refuses to migrate while those legacy services or an unowned MT5 process is active, then disables the inactive shared-terminal units. Do not start the legacy worker on a host running the isolated slot worker. The Codespaces two-user scripts remain useful for isolated CI/sandbox tests, but Codespaces state is not production persistence.
+The legacy single-terminal Linux path is a compatibility path. The self-hosted installer refuses to migrate while those legacy services or an unowned MT5 process is active, then disables inactive shared-terminal units. Do not start the legacy worker on a host running the isolated slot worker. The deploy/codespaces launcher is a separate EPHEMERAL test harness which reuses the isolated slot-worker code; its state and credentials are not production persistence or owner-host acceptance.
 
 ## Official MetaTrader reference
 

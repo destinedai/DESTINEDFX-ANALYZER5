@@ -6,9 +6,11 @@ GitHub Actions builds a debug APK. This is not a store release or production sig
 
 ## Optional MT5 host and bridge
 
-`bridge/` is a FastAPI/SQLite service with pairing, worker/terminal coordination and transaction-related command routes. `managed-worker/` and `mt5-ea/` run separately on an owner-controlled Windows MT5 host. Linux hosting files are a separate operational option and have not been verified on a genuine terminal.
+The Bridge is a FastAPI/SQLite service with pairing, worker/terminal coordination and transaction-related command routes. The current production-target deployment is the persistent Ubuntu x86-64 systemd runtime in scripts/linux-host/: it runs the Bridge and Management API alongside a root-attested per-pairing Linux slot worker, isolated Wine prefixes and genuine MT5 terminals. The same linux-slot-worker.py is also reused by the separate ephemeral Codespaces development/test launcher, which remains DEMO-only. The Windows-specific owner-worker package is in managed-worker/windows/ and is a separate, limited alternative; separate Windows /portable directories do not prove per-user OS isolation, so Windows LIVE remains blocked.
 
-The bridge is not required for local market analysis. An HTTP health response does not prove a worker, EA, terminal, provider or broker is ready. Execution requests require authenticated transport, exact account identity and mode, fresh heartbeat, policy authorization, risk checks and broker acknowledgement/reconciliation.
+The Linux installer, host agent and slot-worker paths are implemented and CI-tested, but no genuine MT5 terminal, owner host or broker account has been accepted on that runtime. A successful source build or test does not establish real broker connectivity.
+
+The Bridge is not required for local market analysis. An HTTP health response does not prove a worker, EA, terminal, provider or broker is ready. Execution requests require authenticated transport, exact account identity and mode, fresh heartbeat, policy authorization, risk checks and broker acknowledgement/reconciliation.
 
 ## Hosting limits and owner steps
 

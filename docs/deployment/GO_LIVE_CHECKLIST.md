@@ -61,7 +61,7 @@ Run:
 ```sh
 python scripts/live_activation_preflight.py \
   --management-url https://<management-api-origin> \
-  --bridge-url https://<private-windows-bridge-origin> \
+  --bridge-url https://<private-bridge-origin> \
   --arm-live
 ```
 

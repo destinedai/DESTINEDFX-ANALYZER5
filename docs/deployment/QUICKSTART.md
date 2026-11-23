@@ -1,6 +1,8 @@
-# Owner quick start: Stages 1 and 2
+# Windows owner-worker quick start: Stages 1 and 2
 
-Private Windows host and one read-only DEMO connection only. Do not place orders or select LIVE. `CONNECTED` requires a fresh EA heartbeat matching the exact account, server, broker identity, and mode.
+**This page is only for the Windows owner-worker path.** The repository's production-target host implementation is the persistent Ubuntu x86-64 per-pairing runtime documented in [scripts/linux-host/README.md](../../scripts/linux-host/README.md); do not apply these PowerShell/Tailscale instructions to Linux.
+
+This Windows quick start covers a private Windows host and one read-only DEMO connection only. Do not place orders or select LIVE. CONNECTED requires a fresh EA heartbeat matching the exact account, server, broker identity, and mode. The Windows worker's use of separate /portable directories does not establish per-user Windows OS isolation; Windows multi-user LIVE remains blocked pending independently verified process identities and ACLs.
 
 ## Stage 1: Windows host, no broker
 

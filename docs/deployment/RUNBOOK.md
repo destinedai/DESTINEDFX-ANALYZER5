@@ -1,4 +1,6 @@
-# Stop and rollback runbook
+# Windows owner-worker stop and rollback runbook
+
+**Scope:** the commands in this file are for the Windows owner-worker path only (Windows Task Scheduler, PowerShell and DPAPI). They are not Linux service commands. For the persistent Ubuntu production-target host, use [scripts/linux-host/README.md](../../scripts/linux-host/README.md) and its owner-controlled host-service, slot cleanup, backup and recovery procedures; do not run the Windows commands below on Linux.
 
 **Use this during an incident.** This procedure stops new entries. It does not automatically liquidate open positions. The broker terminal is the source for checking and manually managing live positions. Keep the broker's official contact and account recovery details separately available.
 
