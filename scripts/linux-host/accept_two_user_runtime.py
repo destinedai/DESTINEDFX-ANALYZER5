@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Read-only two-user MT5 runtime acceptance for a persistent DestinedFX Linux host.
 
-Run only on the Codespaces host after two separate DEMO pairings have reached READY:
-    sudo python3 /opt/destinedfx/scripts/linux-host/accept_two_user_runtime.py --expected-users 2 --owner-uid <destinedfx-uid> --state-dir /var/lib/destinedfx/host-runtime
+Run only on the persistent owner-operated Ubuntu host after two separate DEMO pairings have reached READY:
+    sudo python3 /opt/destinedfx/scripts/linux-host/accept_two_user_runtime.py --expected-users 2 --owner-uid <destinedfx-uid> --state-dir /var/lib/destinedfx/host-runtime --bridge-url http://127.0.0.1:8000
 
 This script never provisions, revokes, launches, or modifies a terminal. It emits
 sanitized evidence only; it never prints pairing IDs, logins, server names or tokens.
@@ -47,6 +47,62 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 class AcceptanceError(RuntimeError):
     """A sanitized, user-actionable acceptance failure."""
 
+
+
+
+def _check_loopback_bridge_url(value: str) -> str:
+    parsed = urllib.parse.urlsplit(value)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed.username or parsed.password or parsed.query or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise AcceptanceError("BRIDGE_URL_MUST_BE_LOOPBACK_HTTP_ORIGIN")
+    return f"http://{parsed.netloc}/health/config"
+
+
+def validate_persistent_linux_configuration(config: dict[str, Any], *, expected_users: int) -> dict[str, Any]:
+    if not isinstance(config, dict) or config.get("status") != "configured":
+        raise AcceptanceError("BRIDGE_CONFIGURATION_NOT_READY")
+    if config.get("host_profile") != "PERSISTENT":
+        raise AcceptanceError("PERSISTENT_HOST_PROFILE_REQUIRED")
+    if config.get("linux_host_mode") is not True:
+        raise AcceptanceError("LINUX_HOST_MODE_REQUIRED")
+    if (
+        config.get("per_user_terminal_isolation") != "VERIFIED"
+        or config.get("multi_user_terminal_isolation") != "VERIFIED"
+    ):
+        raise AcceptanceError("ROOT_ATTESTED_MULTI_USER_ISOLATION_REQUIRED")
+    active = config.get("isolated_slots")
+    maximum = config.get("max_isolated_slots")
+    if not isinstance(active, int) or isinstance(active, bool) or active < expected_users:
+        raise AcceptanceError("INSUFFICIENT_ROOT_ATTESTED_ACTIVE_SLOTS")
+    if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum < expected_users:
+        raise AcceptanceError("HOST_SLOT_CAPACITY_BELOW_EXPECTED")
+    return {
+        "persistent_host_verified": True,
+        "linux_host_mode_verified": True,
+        "root_attested_slots": active,
+        "configured_slot_capacity": maximum,
+    }
+
+
+def _bridge_configuration_report(value: str, *, expected_users: int) -> dict[str, Any]:
+    target = _check_loopback_bridge_url(value)
+    request = urllib.request.Request(target, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if response.status != 200:
+                raise AcceptanceError("BRIDGE_CONFIGURATION_PROBE_FAILED")
+            payload = json.loads(response.read(65536).decode("utf-8"))
+    except AcceptanceError:
+        raise
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError):
+        raise AcceptanceError("BRIDGE_CONFIGURATION_PROBE_FAILED") from None
+    if not isinstance(payload, dict):
+        raise AcceptanceError("BRIDGE_CONFIGURATION_RESPONSE_INVALID")
+    return validate_persistent_linux_configuration(payload, expected_users=expected_users)
 
 def _private_file(path: Path, *, owner_uid: int, mode: int) -> dict[str, Any]:
     try:
@@ -288,6 +344,7 @@ def _deny_cross_slot_access(slots: list[tuple[int, str, Path]]) -> int:
 def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
     if os.geteuid() != 0:
         raise AcceptanceError("RUN_AS_ROOT_WITH_SUDO_E")
+    bridge_configuration = _bridge_configuration_report(args.bridge_url, expected_users=args.expected_users)
     owner_uid = _owner_uid(args)
     owner_home = Path(pwd.getpwuid(owner_uid).pw_dir)
     state_dir = Path(args.state_dir or os.environ.get("DESTINEDFX_HOST_STATE_DIR") or os.environ.get("DESTINEDFX_CODESPACES_STATE_DIR") or (owner_home / ".local/share/destinedfx-codespaces"))
@@ -332,6 +389,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "accepted": True,
         "scope": "read-only persistent self-hosted Linux runtime validation",
+        **bridge_configuration,
         "active_ready_slots": len(active),
         "expected_minimum_users": args.expected_users,
         "unique_os_uids": len({item[0] for item in checked}),
@@ -355,6 +413,7 @@ def main() -> int:
     parser.add_argument("--state-dir")
     parser.add_argument("--slots-root")
     parser.add_argument("--host-agent-url")
+    parser.add_argument("--bridge-url", default="http://127.0.0.1:8000")
     args = parser.parse_args()
     if args.expected_users < 2 or args.expected_users > 8:
         print(json.dumps({"accepted": False, "error": "EXPECTED_USERS_OUT_OF_RANGE"}))
