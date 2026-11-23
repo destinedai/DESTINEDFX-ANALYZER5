@@ -29,6 +29,8 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check pip-audit
           pip-audit -r bridge/requirements.txt
+      - name: Run APK artifact-integrity verifier tests
+        run: python -m pytest -q scripts/test_apk_integrity.py
       - name: Run shared MT5 login contract fixtures
         run: python -m pytest -q scripts/test_login_contract.py
       - name: Run offline Deriv DEMO smoke-harness tests
@@ -328,18 +330,33 @@ jobs:
         env:
           DESTINEDFX_DEBUG_KEYSTORE_B64: ${{ secrets.DESTINEDFX_DEBUG_KEYSTORE_B64 }}
         run: |
+          set -euo pipefail
           if [ -n "$DESTINEDFX_DEBUG_KEYSTORE_B64" ]; then
-            printf '%s' "$DESTINEDFX_DEBUG_KEYSTORE_B64" | base64 --decode > debug.keystore
+            if ! printf '%s' "$DESTINEDFX_DEBUG_KEYSTORE_B64" | base64 --decode > debug.keystore 2>/dev/null || [ ! -s debug.keystore ]; then
+              echo "::error::DESTINEDFX_DEBUG_KEYSTORE_B64 is not a valid encoded keystore; refusing to generate a replacement."
+              exit 1
+            fi
             chmod 600 debug.keystore
-            echo "Stable protected debug keystore loaded; APK updates retain the same signing certificate." >> "$GITHUB_STEP_SUMMARY"
+            if ! keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null 2>&1; then
+              echo "::error::The configured debug keystore does not contain the required androiddebugkey alias with the Android debug store password."
+              exit 1
+            fi
+            echo "Stable protected debug keystore loaded and alias verified." >> "$GITHUB_STEP_SUMMARY"
           else
-            keytool -genkeypair -v -keystore debug.keystore \
+            keytool -genkeypair -keystore debug.keystore \
               -storepass android -keypass android -alias androiddebugkey \
               -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-            echo "::warning title=Fresh-install-only APK::DESTINEDFX_DEBUG_KEYSTORE_B64 is not configured; this build uses a new debug certificate and is not guaranteed to update an earlier APK."
-            echo "Fresh debug keystore generated; configure the protected DESTINEDFX_DEBUG_KEYSTORE_B64 secret for upgrade-compatible builds." >> "$GITHUB_STEP_SUMMARY"
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+            echo "::warning title=Fresh-install-only APK::DESTINEDFX_DEBUG_KEYSTORE_B64 is not configured; this job generated a fresh debug certificate. APKs from other jobs or runs may not be upgrade-compatible."
+            echo "No stable debug keystore is configured; each independent build job may generate a different debug signer. No upgrade compatibility is claimed." >> "$GITHUB_STEP_SUMMARY"
           fi
+          cert_sha256="$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey 2>/dev/null | awk 'toupper($1) ~ /^SHA-?256:/ {gsub(":", "", $2); print tolower($2); exit}')"
+          if ! [[ "$cert_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Unable to derive the prepared debug certificate fingerprint."
+            exit 1
+          fi
+          echo "DESTINEDFX_DEBUG_CERT_SHA256=$cert_sha256" >> "$GITHUB_ENV"
+          echo "Prepared debug certificate SHA-256: $cert_sha256" >> "$GITHUB_STEP_SUMMARY"
           mkdir -p "$HOME/.android"
           install -m 600 debug.keystore "$HOME/.android/debug.keystore"
       - name: Create .env from example (public placeholders only)
@@ -564,79 +581,36 @@ jobs:
           echo "Release source integrity grep: **0 prohibited matches**." >> "$GITHUB_STEP_SUMMARY"
       - name: Assemble debug APK
         run: ./gradlew assembleDebug --stacktrace
-      - name: Verify APK signature, identity, metadata, ABI, and checksum
+      - name: Verify APK source, signer, package, SDKs, ABIs and checksums
         shell: bash
         run: |
           set -euo pipefail
-          apk="app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$apk"
-          apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
-          aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
-          test -n "$apksigner_path"
-          test -n "$aapt_path"
-          signature="$({ "$apksigner_path" verify --verbose --print-certs "$apk"; } 2>&1)"
-          printf '%s\n' "$signature"
-          metadata="$("$aapt_path" dump badging "$apk")"
-          python - "$metadata" "$signature" <<'PY'
-          import re, sys
-          from pathlib import Path
-          gradle = Path('app/build.gradle.kts').read_text()
-          def configured(pattern, label):
-              match = re.search(pattern, gradle)
-              if not match:
-                  raise SystemExit(f'Could not derive {label} from app/build.gradle.kts')
-              return match.group(1)
-          package = configured(r'applicationId\s*=\s*"([^"]+)"', 'application ID')
-          version_code = configured(r'versionCode\s*=\s*(\d+)', 'version code')
-          version_name = configured(r'versionName\s*=\s*"([^"]+)"', 'version name')
-          abi_block = re.search(r'abiFilters\s*\+=\s*listOf\(([^)]*)\)', gradle)
-          if not abi_block:
-              raise SystemExit('Could not derive configured ABI filters from app/build.gradle.kts')
-          abis = re.findall(r'"([^"]+)"', abi_block.group(1))
-          metadata, signature = sys.argv[1:]
-          expected = f"package: name='{package}' versionCode='{version_code}' versionName='{version_name}'"
-          if expected not in metadata:
-              raise SystemExit(f'APK metadata mismatch; expected {expected!r}')
-          native_line = next((line for line in metadata.splitlines() if line.startswith('native-code:')), '')
-          actual_abis = re.findall(r"'([^']+)'", native_line)
-          if not set(abis).issubset(actual_abis):
-              raise SystemExit(f'APK ABI mismatch: configured {abis}, package reports {actual_abis}')
-          if not re.search(r'certificate SHA-256 digest:\s*[0-9a-fA-F]{64}', signature):
-              raise SystemExit('apksigner output did not contain a signing-certificate SHA-256 fingerprint')
-          print(f'APK package/version validated against Gradle: {package} {version_name} ({version_code}); ABIs={abis}')
-          PY
-          printf '%s\n' "$metadata" | grep -E "sdkVersion:|targetSdkVersion:|native-code:"
-          zip_listing="$(unzip -l "$apk")"
-          printf '%s\n' "$zip_listing" | grep -E 'lib/(arm64-v8a|x86_64)/.*(python|chaquopy)' || {
-            echo "Chaquopy native library listing was not found for configured ABIs." >&2
-            exit 1
-          }
-          sha256sum "$apk" | tee /tmp/apk-sha256.txt
+          tools_dir="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
+          apksigner="$ANDROID_HOME/build-tools/$tools_dir/apksigner"
+          aapt="$ANDROID_HOME/build-tools/$tools_dir/aapt"
+          test -x "$apksigner"
+          test -x "$aapt"
+          python scripts/verify_apk_artifact.py \
+            --apk app/build/outputs/apk/debug/app-debug.apk \
+            --gradle app/build.gradle.kts \
+            --apksigner "$apksigner" \
+            --aapt "$aapt" \
+            --source-sha "$GITHUB_SHA" \
+            --expected-certificate-sha256 "$DESTINEDFX_DEBUG_CERT_SHA256" \
+            --output app/build/outputs/apk/debug/verified/apk-metadata.json
           {
             echo "### Debug APK verification"
-            echo 'Package: `com.aistudio.destinedfx.qwvzxp`'
-            python - <<'PY'
-          import re
-          from pathlib import Path
-          text=Path('app/build.gradle.kts').read_text()
-          code=re.search(r'versionCode\s*=\s*(\d+)',text).group(1)
-          name=re.search(r'versionName\s*=\s*"([^"]+)"',text).group(1)
-          print(f'Version: `{name}` (code `{code}`)')
-          PY
-            echo 'Signature verified by apksigner; certificate fingerprint:'
-            printf '%s\n' "$signature" | grep -E 'certificate SHA-256 digest:'
-            echo 'Configured ABI metadata and Chaquopy Python native payload inspected.'
-            echo 'SHA-256:'
-            echo '```text'
-            cat /tmp/apk-sha256.txt
-            echo '```'
-            echo 'This is a debug APK, not a production release. Emulator instrumentation is reported by its separate job.'
+            echo "The metadata records exact source SHA, package/version, SDKs, ABIs, size, APK SHA-256 and certificate SHA-256."
+            cat app/build/outputs/apk/debug/verified/apk-metadata.json
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload verified debug APK
+      - name: Upload verified debug APK and metadata
         uses: actions/upload-artifact@v4
         with:
           name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/verified/apk-metadata.json
+            app/build/outputs/apk/debug/verified/apk-metadata.json.sha256
           if-no-files-found: error
   codespaces-bootstrap-apk:
     name: Locked Codespaces bootstrap APK
@@ -659,18 +633,33 @@ jobs:
         env:
           DESTINEDFX_DEBUG_KEYSTORE_B64: ${{ secrets.DESTINEDFX_DEBUG_KEYSTORE_B64 }}
         run: |
+          set -euo pipefail
           if [ -n "$DESTINEDFX_DEBUG_KEYSTORE_B64" ]; then
-            printf '%s' "$DESTINEDFX_DEBUG_KEYSTORE_B64" | base64 --decode > debug.keystore
+            if ! printf '%s' "$DESTINEDFX_DEBUG_KEYSTORE_B64" | base64 --decode > debug.keystore 2>/dev/null || [ ! -s debug.keystore ]; then
+              echo "::error::DESTINEDFX_DEBUG_KEYSTORE_B64 is not a valid encoded keystore; refusing to generate a replacement."
+              exit 1
+            fi
             chmod 600 debug.keystore
-            echo "Stable protected debug keystore loaded." >> "$GITHUB_STEP_SUMMARY"
+            if ! keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null 2>&1; then
+              echo "::error::The configured debug keystore does not contain the required androiddebugkey alias with the Android debug store password."
+              exit 1
+            fi
+            echo "Stable protected debug keystore loaded and alias verified." >> "$GITHUB_STEP_SUMMARY"
           else
-            keytool -genkeypair -v -keystore debug.keystore \
+            keytool -genkeypair -keystore debug.keystore \
               -storepass android -keypass android -alias androiddebugkey \
               -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-            echo "::warning title=Fresh-install-only bootstrap APK::DESTINEDFX_DEBUG_KEYSTORE_B64 is not configured; this bootstrap APK may require uninstalling an earlier differently signed app before installation."
-            echo "Fresh debug keystore generated; configure the protected DESTINEDFX_DEBUG_KEYSTORE_B64 secret for update-compatible builds." >> "$GITHUB_STEP_SUMMARY"
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+            echo "::warning title=Fresh-install-only APK::DESTINEDFX_DEBUG_KEYSTORE_B64 is not configured; this job generated a fresh debug certificate. APKs from other jobs or runs may not be upgrade-compatible."
+            echo "No stable debug keystore is configured; each independent build job may generate a different debug signer. No upgrade compatibility is claimed." >> "$GITHUB_STEP_SUMMARY"
           fi
+          cert_sha256="$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey 2>/dev/null | awk 'toupper($1) ~ /^SHA-?256:/ {gsub(":", "", $2); print tolower($2); exit}')"
+          if ! [[ "$cert_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Unable to derive the prepared debug certificate fingerprint."
+            exit 1
+          fi
+          echo "DESTINEDFX_DEBUG_CERT_SHA256=$cert_sha256" >> "$GITHUB_ENV"
+          echo "Prepared debug certificate SHA-256: $cert_sha256" >> "$GITHUB_STEP_SUMMARY"
           mkdir -p "$HOME/.android"
           install -m 600 debug.keystore "$HOME/.android/debug.keystore"
       - name: Create .env from example (public placeholders only)
@@ -730,6 +719,13 @@ jobs:
           grep -Fq "x86_64" <<<"$metadata"
           echo "APK_PACKAGE_AND_ABIS_VERIFIED"
           mkdir -p app/build/outputs/apk/codespaces
+          python scripts/verify_apk_artifact.py \
+            --apk "$apk" --gradle app/build.gradle.kts \
+            --apksigner "$ANDROID_HOME/build-tools/$tools/apksigner" \
+            --aapt "$ANDROID_HOME/build-tools/$tools/aapt2" \
+            --source-sha "$GITHUB_SHA" \
+            --expected-certificate-sha256 "$DESTINEDFX_DEBUG_CERT_SHA256" \
+            --output app/build/outputs/apk/codespaces/Codespaces-bootstrap.metadata.json
           cp "$apk" app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk
           sha256sum app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk | tee app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk.sha256
       - name: Upload locked Codespaces bootstrap APK
@@ -739,6 +735,8 @@ jobs:
           path: |
             app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk
             app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk.sha256
+            app/build/outputs/apk/codespaces/Codespaces-bootstrap.metadata.json
+            app/build/outputs/apk/codespaces/Codespaces-bootstrap.metadata.json.sha256
           if-no-files-found: error
       - name: Explain optional in-app GitHub Device Flow client ID
         if: vars.CODESPACES_GITHUB_CLIENT_ID == ''
@@ -774,8 +772,14 @@ jobs:
           grep -Fq 'MT5_MANAGED_SERVICE_URL = "__CONFIGURATION_REQUIRED__"' "$config"
           grep -Fq 'MANAGEMENT_API_ORIGIN = "__CONFIGURATION_REQUIRED__"' "$config"
           mkdir -p app/build/outputs/apk/debug/verified
+          python scripts/verify_apk_artifact.py \
+            --apk "$apk" --gradle app/build.gradle.kts \
+            --apksigner "$apksigner" --aapt "$aapt2" \
+            --source-sha "$GITHUB_SHA" \
+            --expected-certificate-sha256 "$DESTINEDFX_DEBUG_CERT_SHA256" \
+            --output app/build/outputs/apk/debug/verified/apk-metadata.json
           sha256sum "$apk" | tee app/build/outputs/apk/debug/verified/app-debug.apk.sha256
-          echo "Standard debug APK signature, package, endpoint mode, and ABIs verified."
+          echo "Standard debug APK source SHA, signer, package, SDKs, ABIs and digest verified."
       - name: Upload standard debug APK independently of JVM tests
         uses: actions/upload-artifact@v4
         with:
@@ -783,6 +787,8 @@ jobs:
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/verified/app-debug.apk.sha256
+            app/build/outputs/apk/debug/verified/apk-metadata.json
+            app/build/outputs/apk/debug/verified/apk-metadata.json.sha256
           if-no-files-found: error
 
   android-emulator-instrumentation:
