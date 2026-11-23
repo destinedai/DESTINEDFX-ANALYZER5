@@ -54,7 +54,7 @@ def test_aapt_badging_extracts_installed_apk_metadata():
 def test_apksigner_requires_verified_scheme_and_certificate_fingerprint():
     fingerprint, schemes = verifier.parse_apksigner_output(SIGNER)
     assert fingerprint == "0123456789abcdef" * 4
-    assert schemes == ["APK Signature Scheme v2"]
+    assert schemes == ["v2 scheme (APK Signature Scheme v2)"]
 
 
 def test_apksigner_rejects_signature_without_verified_scheme():

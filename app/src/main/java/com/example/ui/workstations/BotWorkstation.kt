@@ -141,7 +141,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         else -> "TOKEN STORED · NOT VERIFIED"
     }
     val terminalHeartbeatLabel = when {
-        bridgeIdentityFresh -> "FRESH · IDENTITY VERIFIED"
+        bridgeSnapshot?.connected == true -> "FRESH · IDENTITY VERIFIED"
         bridgeSnapshot?.heartbeatFresh == true && bridgeSnapshot?.terminalConnected == true ->
             "FRESH · ACCOUNT IDENTITY UNVERIFIED"
         bridgeSnapshot?.terminalOnline == true -> "STALE"
