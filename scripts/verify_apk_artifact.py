@@ -54,7 +54,8 @@ def parse_apk_badging(content: str) -> dict[str, Any]:
     )
     if not package:
         raise VerificationError("APK badging does not contain package, versionCode and versionName.")
-    min_sdk = int(_capture(r"^sdkVersion:\s*['\"]?(\d+)", content, "minimum SDK"))
+    # aapt emits sdkVersion; aapt2 emits minSdkVersion.
+    min_sdk = int(_capture(r"^(?:sdkVersion|minSdkVersion):\s*['\"]?(\d+)", content, "minimum SDK"))
     target_sdk = int(_capture(r"^targetSdkVersion:\s*['\"]?(\d+)", content, "target SDK"))
     native_line = next((line for line in content.splitlines() if line.startswith("native-code:")), "")
     abis = sorted(set(re.findall(r"""['"]([^'"]+)['"]""", native_line)))

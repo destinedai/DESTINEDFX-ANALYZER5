@@ -51,6 +51,22 @@ def test_aapt_badging_extracts_installed_apk_metadata():
     }
 
 
+def test_aapt2_badging_accepts_min_sdk_version_label():
+    aapt2_badging = """package: name='com.aistudio.destinedfx.qwvzxp' versionCode='13' versionName='1.0.13'
+minSdkVersion:'24'
+targetSdkVersion:'36'
+native-code: 'arm64-v8a' 'x86_64'
+"""
+    assert verifier.parse_apk_badging(aapt2_badging) == {
+        "package_name": "com.aistudio.destinedfx.qwvzxp",
+        "version_code": 13,
+        "version_name": "1.0.13",
+        "minimum_sdk": 24,
+        "target_sdk": 36,
+        "abis": ["arm64-v8a", "x86_64"],
+    }
+
+
 def test_apksigner_requires_verified_scheme_and_certificate_fingerprint():
     fingerprint, schemes = verifier.parse_apksigner_output(SIGNER)
     assert fingerprint == "0123456789abcdef" * 4
