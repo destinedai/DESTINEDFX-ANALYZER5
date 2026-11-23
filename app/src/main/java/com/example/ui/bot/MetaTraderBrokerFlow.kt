@@ -463,11 +463,7 @@ fun MetaTraderBrokerFlow(
                         keyboardActions = loginKeyboardActions(),
                     )
                     val mt5Brand = spec.id.removeSuffix("_MT5")
-                    val serverHint = when (mt5Brand) {
-                        "FBS" -> "Copy from FBS Personal Area > MT5 account > Server (e.g. FBS-Real / FBS-Demo). Exact account value only; do NOT add :port."
-                        "DERIV" -> "Copy from Deriv Dashboard > MT5 > Server (e.g. Deriv-Demo / Deriv-Server). Exact account value only; do NOT add :port."
-                        else -> "Copy the exact server name issued for this MT5 account. Do NOT add :port."
-                    }
+                    val serverHint = ServerOptions.fieldHint(spec)
                     Text(serverHint, color = TextSecondary, fontSize = 10.sp, lineHeight = 14.sp,
                         modifier = Modifier.testTag("mt5_server_field_help"))
                     Button(

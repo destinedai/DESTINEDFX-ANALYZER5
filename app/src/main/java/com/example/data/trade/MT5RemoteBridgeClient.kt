@@ -463,16 +463,23 @@ class MT5RemoteBridgeClient(
         ) == true
         val verified = obj.optBoolean("account_identity_verified", false) && localIdentityMatches &&
             actualMode in setOf("DEMO", "LIVE") && actualMode == accountMode
-        val zeroBalanceAndStale = age > 60L && balance == 0.0 && equity == 0.0
-        val connectionWarning = when {
+        val zeroBalanceWarning = zeroBalanceDisconnectedMessage(balance, equity)
+        val zeroBalanceAndEquity = zeroBalanceWarning != null
+        val connectionWarning = zeroBalanceWarning ?: when {
             !localIdentityMatches || !brokerIdentityVerified ->
                 "NOT CONNECTED - Login/Company/Server mismatch, Check Server"
-            zeroBalanceAndStale ->
-                "NOT CONNECTED - Stale / Zero Balance, Check Server"
             !freshness || !terminalConnected || !verified || !financialSnapshotValid ->
                 "NOT CONNECTED - Stale / Zero Balance, Check Server"
             else -> ""
         }
+        // A zero/zero account snapshot is not a usable account balance. Do not expose
+        // those zeroes as account figures while the account is marked disconnected.
+        val displayBalance = balance.takeUnless { zeroBalanceAndEquity }
+        val displayEquity = equity.takeUnless { zeroBalanceAndEquity }
+        val displayMargin = margin.takeUnless { zeroBalanceAndEquity }
+        val displayFreeMargin = freeMargin.takeUnless { zeroBalanceAndEquity }
+        val displayMarginLevel = account?.takeUnless { zeroBalanceAndEquity }?.let { finite(it, "margin_level") }
+        val displayLeverage = account?.takeUnless { zeroBalanceAndEquity }?.let { finiteInt(it, "leverage") }
         fun array(key: String): List<JSONObject>? {
             val a = obj.optJSONArray(key) ?: return null
             val out = mutableListOf<JSONObject>()
@@ -503,7 +510,12 @@ class MT5RemoteBridgeClient(
             online && freshness && terminalConnected && verified && brokerIdentityVerified &&
                 localIdentityMatches && actualMode == accountMode && financialSnapshotValid,
             online, freshness,
-            when { !online -> "OFFLINE"; !freshness -> "STALE"; else -> obj.optString("ea_state", "OFFLINE").uppercase() },
+            when {
+                zeroBalanceAndEquity -> "DISCONNECTED"
+                !online -> "OFFLINE"
+                !freshness -> "STALE"
+                else -> obj.optString("ea_state", "OFFLINE").uppercase()
+            },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
             actualMode, managed?.optBoolean("live_authorized", false) == true &&
                 online && freshness && terminalConnected && verified && brokerIdentityVerified &&
@@ -511,9 +523,9 @@ class MT5RemoteBridgeClient(
             obj.optBoolean("trade_allowed", false) && online && freshness && terminalConnected &&
                 verified && brokerIdentityVerified && localIdentityMatches && financialSnapshotValid,
             terminalConnected, verified, brokerIdentityVerified,
-            account?.optString("currency").orEmpty(), balance, equity,
-            margin, freeMargin, account?.let { finite(it, "margin_level") },
-            account?.let { finiteInt(it, "leverage") }, array("open_positions"), array("active_orders"), array("closed_deals"),
+            account?.optString("currency").orEmpty().takeUnless { zeroBalanceAndEquity }.orEmpty(),
+            displayBalance, displayEquity, displayMargin, displayFreeMargin, displayMarginLevel, displayLeverage,
+            array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
             obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes, brokerCandles,
             actualCompany, connectionWarning
@@ -1314,8 +1326,14 @@ class MT5RemoteBridgeClient(
             return tickets.takeIf { it.isNotEmpty() && it.distinct().size == it.size }
         }
 
+        internal fun zeroBalanceDisconnectedMessage(balance: Double?, equity: Double?): String? =
+            if (balance == 0.0 && equity == 0.0) "Balance unavailable - DISCONNECTED" else null
+
         internal fun canManageSnapshot(selectedProfile: String, expectedLogin: String, expectedServer: String, snapshot: Snapshot): Boolean =
-            selectedProfile.uppercase() in setOf("DEMO", "LIVE") && snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh &&
+            selectedProfile.uppercase() in setOf("DEMO", "LIVE") &&
+                snapshot.balance != null && snapshot.balance > 0.0 &&
+                snapshot.equity != null && snapshot.equity > 0.0 &&
+                snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh &&
                 snapshot.terminalConnected && snapshot.tradeAllowed && snapshot.accountVerified && snapshot.managedState == "READY" &&
                 snapshot.accessType == "MASTER" && snapshot.profileMode == selectedProfile.uppercase() &&
                 snapshot.actualAccountMode == selectedProfile.uppercase() && expectedLogin.isNotBlank() && snapshot.actualLogin == expectedLogin &&

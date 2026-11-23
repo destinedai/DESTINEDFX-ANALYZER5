@@ -306,10 +306,16 @@ class MT5RemoteBridgeClientTest {
 
 
 
-    @Test fun managedPositionActionsRejectZeroBalanceAndIdentityMismatchSnapshots() {
+    @Test fun zeroBalanceAndEquityDisconnectsAndBlocksManagedActions() {
+        assertEquals(
+            "Balance unavailable - DISCONNECTED",
+            MT5RemoteBridgeClient.zeroBalanceDisconnectedMessage(0.0, 0.0)
+        )
+        assertEquals(null, MT5RemoteBridgeClient.zeroBalanceDisconnectedMessage(0.0, 100.0))
         val valid = snapshot(emptyList())
         assertTrue(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Broker-Demo", valid))
         assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Broker-Demo", valid.copy(balance = 0.0, equity = 0.0)))
+        assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Broker-Demo", valid.copy(balance = null, equity = null)))
         assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "999", "Broker-Demo", valid))
         assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Other-Server", valid))
         assertFalse(MT5RemoteBridgeClient.canManageSnapshot("DEMO", "123", "Broker-Demo", valid.copy(actualCompany = "")))

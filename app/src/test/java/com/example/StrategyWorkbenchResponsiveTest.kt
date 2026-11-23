@@ -17,15 +17,15 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import com.example.ui.StrategyWorkbench
 import com.example.ui.theme.DestinedFXTheme
+import org.junit.Rule
+import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import org.junit.Rule
-import org.junit.Test
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35])
-class StrategyWorkbenchResponsiveTest {
+@Config(sdk = [34], qualifiers = "w320dp-h640dp")
+class StrategyWorkbenchCompactResponsiveTest {
     @get:Rule
     val composeRule = createComposeRule()
 
@@ -33,7 +33,7 @@ class StrategyWorkbenchResponsiveTest {
     fun compactHandsetShowsCandidateOnlyAndBlocksAnalyzerRouting() {
         composeRule.setContent {
             DestinedFXTheme {
-                Box(Modifier.width(320.dp).height(760.dp)) {
+                Box(Modifier.width(320.dp).height(640.dp)) {
                     StrategyWorkbench(
                         selectedStrategyId = "volatility-breakout",
                         onSelect = {},
@@ -51,12 +51,19 @@ class StrategyWorkbenchResponsiveTest {
         composeRule.onNodeWithText("NOT ELIGIBLE").assertIsDisplayed()
         composeRule.onNodeWithText("Volatility Breakout").assertIsDisplayed()
     }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], qualifiers = "w360dp-h640dp")
+class StrategyWorkbenchStandardResponsiveTest {
+    @get:Rule
+    val composeRule = createComposeRule()
 
     @Test
     fun standardHandsetFiltersWithoutLosingCanonicalStrategyIdentity() {
         composeRule.setContent {
             DestinedFXTheme {
-                Box(Modifier.width(380.dp).height(800.dp)) {
+                Box(Modifier.width(360.dp).height(640.dp)) {
                     StrategyWorkbench(
                         selectedStrategyId = "smc-confluence-1.0.0",
                         onSelect = {},

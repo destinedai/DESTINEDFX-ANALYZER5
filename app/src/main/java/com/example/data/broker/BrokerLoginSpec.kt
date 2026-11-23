@@ -91,13 +91,9 @@ object BrokerLoginSpecs {
         "EXNESS" to listOf("Exness", "Exness Technologies Ltd", "Exness (SC) Ltd"),
         "HFM" to listOf("HFM", "HF Markets", "HF Markets (SV) Ltd", "HF Markets (Seychelles) Ltd"),
     )
-    private fun mt5Servers(brand: String): List<ServerSuggestion> {
-        // Broker server names are account-issued values. Never prefill a guessed universal server.
-        val references = emptyList<ServerSuggestion>()
-        return listOf(
-            ServerSuggestion("", ServerSuggestionSource.OWNER_HISTORY),
-            ServerSuggestion("", ServerSuggestionSource.HOST_REPORTED),
-        ) + references
+    private fun mt5Servers(): List<ServerSuggestion> {
+        // MT5 server names are account-issued values. Never prefill or suggest guessed names.
+        return emptyList()
     }
     private fun mt5Aliases(brand: String): List<String> = mt5Aliases[brand].orEmpty()
     private val noServers = emptyList<ServerSuggestion>()
@@ -130,7 +126,7 @@ object BrokerLoginSpecs {
             fields = mt5Fields, fieldLabels = mt5Labels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("fresh EA heartbeat", "exact login", "exact server", "company alias match", "terminal mode match"),
             demoSignupUrl = DERIV_SIGNUP, realAccountUrl = DERIV_LOGIN, passwordRecoveryUrl = DERIV_LOGIN, sourceUrls = listOf(DERIV_SIGNUP, DERIV_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
-            serverSuggestions = mt5Servers("DERIV"), companyAliases = mt5Aliases("DERIV"),
+            serverSuggestions = mt5Servers(), companyAliases = mt5Aliases("DERIV"),
             capabilityRow = "Owner-hosted genuine MT5 terminal; Android does not log into MT5 directly.",
         ),
         BrokerLoginSpec(
@@ -138,7 +134,7 @@ object BrokerLoginSpecs {
             fields = mt5Fields, fieldLabels = mt5Labels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("fresh EA heartbeat", "exact login", "exact server", "company alias match", "terminal mode match"),
             demoSignupUrl = FBS_SIGNUP, realAccountUrl = FBS_HOME, passwordRecoveryUrl = FBS_LOGIN, sourceUrls = listOf(FBS_HOME, FBS_SIGNUP, FBS_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
-            serverSuggestions = mt5Servers("FBS"), companyAliases = mt5Aliases("FBS"),
+            serverSuggestions = mt5Servers(), companyAliases = mt5Aliases("FBS"),
             capabilityRow = "Owner-hosted genuine MT5 terminal; exact broker-issued server is required and never guessed.",
         ),
         BrokerLoginSpec(
@@ -146,7 +142,7 @@ object BrokerLoginSpecs {
             fields = mt5Fields, fieldLabels = mt5Labels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("fresh EA heartbeat", "exact login", "exact server", "company alias match", "terminal mode match"),
             demoSignupUrl = EXNESS_SIGNUP, realAccountUrl = EXNESS_HOME, passwordRecoveryUrl = EXNESS_LOGIN, sourceUrls = listOf(EXNESS_HOME, EXNESS_SIGNUP, EXNESS_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
-            serverSuggestions = mt5Servers("EXNESS"), companyAliases = mt5Aliases("EXNESS"),
+            serverSuggestions = mt5Servers(), companyAliases = mt5Aliases("EXNESS"),
             capabilityRow = "Owner-hosted genuine MT5 terminal; Exness API is not substituted for the MT5 route.",
         ),
         BrokerLoginSpec(
@@ -154,7 +150,7 @@ object BrokerLoginSpecs {
             fields = mt5Fields, fieldLabels = mt5Labels, modes = setOf(LoginMode.DEMO, LoginMode.LIVE), investorAccess = true,
             connectedEvidence = setOf("fresh EA heartbeat", "exact login", "exact server", "company alias match", "terminal mode match"),
             demoSignupUrl = HFM_SIGNUP, realAccountUrl = HFM_HOME, passwordRecoveryUrl = HFM_LOGIN, sourceUrls = listOf(HFM_HOME, HFM_SIGNUP, HFM_LOGIN, MT5_PYTHON_INIT, MT5_PYTHON_LOGIN),
-            serverSuggestions = mt5Servers("HFM"), companyAliases = mt5Aliases("HFM"),
+            serverSuggestions = mt5Servers(), companyAliases = mt5Aliases("HFM"),
             capabilityRow = "Owner-hosted genuine MT5 terminal; exact broker-issued server and company identity are required.",
         ),
         BrokerLoginSpec(

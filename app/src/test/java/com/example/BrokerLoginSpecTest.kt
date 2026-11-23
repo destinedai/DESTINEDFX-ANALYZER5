@@ -4,6 +4,9 @@ import com.example.data.broker.BrokerLoginSpecs
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginField
 import com.example.data.broker.ServerSuggestionSource
+import com.example.ui.bot.LoginForm
+import com.example.ui.bot.ServerOption
+import com.example.ui.bot.ServerOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -70,14 +73,15 @@ class BrokerLoginSpecTest {
     }
 
     @Test
-    fun derivServerSuggestionsAreClearlyUnverifiedAndMt5DoesNotAskForClientId() {
+    fun derivRequiresOwnerEnteredServerAndDoesNotSuggestGuessedNames() {
         val deriv = BrokerLoginSpecs.byId("DERIV_MT5")!!
+        assertEquals("", LoginForm().server)
+        assertTrue(deriv.serverSuggestions.isEmpty())
         assertEquals(
-            setOf("Deriv-Demo", "Deriv-Server", "Deriv-Server-02", "Deriv-Server-03"),
-            deriv.serverSuggestions.filter { it.value.isNotBlank() }.map { it.value }.toSet(),
+            listOf(ServerOption.TypeServerName),
+            ServerOptions.build(deriv, emptyList(), emptyList()),
         )
-        assertTrue(deriv.serverSuggestions.filter { it.value.isNotBlank() }
-            .all { it.source == ServerSuggestionSource.USER_SUPPLIED_REFERENCE })
+        assertTrue(ServerOptions.fieldHint(deriv).startsWith("Copy from Deriv Dashboard > MT5 > Server"))
         BrokerLoginSpecs.all.filter { it.connector == LoginConnector.MT5_TERMINAL }.forEach { spec ->
             assertEquals(listOf(LoginField.LOGIN, LoginField.PASSWORD, LoginField.SERVER), spec.fields)
             assertFalse(spec.fields.contains(LoginField.APP_ID))

@@ -169,7 +169,14 @@ sealed interface ServerOption {
 }
 
 object ServerOptions {
-    /** Owner history, host-reported servers and official-page entries. Blank entries are skipped; nothing is guessed. */
+    /** Exact account-issued instructions shown below each MT5 server field. */
+    fun fieldHint(spec: BrokerLoginSpec): String = when (spec.id) {
+        "FBS_MT5" -> "Copy from FBS Personal Area > MT5 account > Server (e.g. FBS-Real / FBS-Demo). Exact account value only; do NOT add :port."
+        "DERIV_MT5" -> "Copy from Deriv Dashboard > MT5 > Server (e.g. Deriv-Demo / Deriv-Server). Exact account value only; do NOT add :port."
+        else -> "Copy the exact server name issued for this MT5 account. Do NOT add :port."
+    }
+
+    /** Owner history and host-reported server entries only; never guess a provider server name. */
     fun build(spec: BrokerLoginSpec, ownerHistory: List<String>, hostReported: List<String>): List<ServerOption> {
         val suggestions = LinkedHashMap<String, String>()
         ownerHistory.filter { it.isNotBlank() }.forEach { suggestions.putIfAbsent(it.trim(), "Your history") }
