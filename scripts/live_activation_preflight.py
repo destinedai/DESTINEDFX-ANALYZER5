@@ -156,8 +156,25 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
             checks.append({"name":name,"status":"BLOCKED","code":str(e) if name == "bridge_config" else "BRIDGE_CONFIG_UNAVAILABLE"})
     try:
         code, data = get_json(bridge + "/health/ready")
-        ready = code == 200 and data.get("status") == "ready"
-        checks.append({"name":"verified_mt5_terminal","status":"PASS" if ready else "PENDING","code":"TERMINAL_READY" if ready else error_code(data) if code >= 400 else "TERMINAL_NOT_READY"})
+        host_runtime_ready = (
+            code == 200 and data.get("status") == "ready"
+        ) or (code == 503 and error_code(data) == "NO_VERIFIED_TERMINAL_PAIRING")
+        checks.append({
+            "name":"bridge_host_runtime",
+            "status":"PASS" if host_runtime_ready else "BLOCKED",
+            "code":"HOST_RUNTIME_READY" if host_runtime_ready else "HOST_RUNTIME_NOT_READY",
+        })
+        terminal_verified = (
+            code == 200 and data.get("status") == "ready"
+            and data.get("verified_terminal_pairing") == "healthy"
+        )
+        checks.append({
+            "name":"verified_mt5_terminal",
+            "status":"PASS" if terminal_verified else "PENDING" if host_runtime_ready else "BLOCKED",
+            "code":"VERIFIED_TERMINAL_PAIRING" if terminal_verified else
+                  "HOST_READY_ACCOUNT_PAIRING_NOT_VERIFIED" if host_runtime_ready else
+                  error_code(data) if code >= 400 else "TERMINAL_NOT_READY",
+        })
     except PreflightError: checks.append({"name":"verified_mt5_terminal","status":"PENDING","code":"BRIDGE_READINESS_UNREACHABLE"})
     chosen = tuple(dict.fromkeys(b.upper() for b in brokers))
     valid = bool(chosen) and all(b in BROKERS for b in chosen)
@@ -167,7 +184,7 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
     state = "BLOCKED" if blocked else "INFRASTRUCTURE_READY_ACCOUNT_ACCEPTANCE_PENDING" if pending else "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY"
     return {"schema_version":1,"overall_status":state,"checks":checks,
             "non_actions":["No LIVE switch changed","No credentials read","No broker evidence fabricated","No order or trading command submitted"],
-            "still_required":["Same-user, same-broker, separately paired DEMO and LIVE profiles","Genuine 5-7 day DEMO PASS with order lifecycle, reconciliation, restart and risk evidence","Independently verified per-user Windows process/SID/ACL isolation; separate /portable directories under one Windows user do not qualify","Two simultaneously active isolated MT5 terminals for the DEMO and LIVE profiles","Fresh LIVE MT5 identity, MASTER trade permission and authenticated EA heartbeat","Fresh risk telemetry within limits and clear news verdict","Password reauthentication and exact typed LIVE confirmation","Account-bound 15-minute LIVE authorization"]}
+            "still_required":["Same-user, same-broker, separately paired DEMO and LIVE profiles","Genuine 5-7 day DEMO PASS with order lifecycle, reconciliation, restart and risk evidence","Root-attested Linux per-pairing Unix identities, private Wine prefixes, terminal trees, displays and Xauthority; Windows portable directories under one shared identity do not qualify for multi-user LIVE","Two simultaneously active isolated MT5 terminals for the DEMO and LIVE profiles","Fresh LIVE MT5 identity, MASTER trade permission and authenticated EA heartbeat","Fresh risk telemetry within limits and clear news verdict","Password reauthentication and exact typed LIVE confirmation","Account-bound 15-minute LIVE authorization"]}
 
 
 
@@ -337,7 +354,7 @@ def arm_live(management_url: str, bridge_url: str, *,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--management-url",required=True,help="Management API HTTPS origin")
-    parser.add_argument("--bridge-url",required=True,help="Persistent Windows Bridge private HTTPS origin")
+    parser.add_argument("--bridge-url",required=True,help="Persistent Linux production Bridge HTTPS origin (the legacy Windows worker remains multi-user LIVE blocked)")
     parser.add_argument("--public-key-file",type=Path,help="Optional local public PEM to compare with the backend")
     parser.add_argument("--write-public-key",type=Path,help="Optional output path for backend PUBLIC PEM")
     parser.add_argument("--overwrite-public-key",action="store_true")

@@ -1,6 +1,12 @@
 # DestinedFX phone-to-MT5 remote controller
 
-The Android app is the remote controller. The actual MT5 terminal and broker execution remain on the user's separately provisioned Windows host. Android sends authenticated, account-bound commands through the Bridge; it never talks to the MT5 terminal process directly and does not calculate or supply lot size for managed market orders.
+The Android app is the remote controller. The production MT5 terminal and broker execution run on the user's persistent, owner-operated Ubuntu x86-64 Linux host. MetaTrader 5 terminal and EA binaries remain Windows applications and run in each isolated per-pairing Wine runtime; this is not native Linux MT5 support. Android sends authenticated, account-bound commands through the Bridge; it never talks to the terminal process directly and does not calculate or supply lot size for managed market orders.
+
+## Host runtime architecture and support limits
+
+The production target is the root-attested Linux slot runtime documented in [HOSTING.md](../HOSTING.md) and [the Linux host guide](../scripts/linux-host/README.md). Each authenticated pairing is provisioned under its own non-login Unix identity with a private Wine prefix, terminal tree, Xauthority file and display. LIVE remains gated by a persistent host profile, fresh root-agent isolation evidence, at least two simultaneously active isolated slots for the linked DEMO/LIVE profiles, account identity, risk/news/session checks and explicit authorization.
+
+A separate owner-operated Windows Bridge/worker kit remains a compatibility path. It currently launches accounts under the same Windows identity; separate portable directories do not establish OS-level process isolation. Do not claim Windows multi-user LIVE support until distinct Windows process identities and account-specific ACLs are independently verified. Genuine MetaEditor compilation in CI runs on Windows; that compile does not prove a deployed Linux host or broker connection.
 
 ## Implemented managed MT5 capabilities
 
@@ -11,7 +17,7 @@ The Android app is the remote controller. The actual MT5 terminal and broker exe
 | Account metrics | Balance, equity, margin, free margin, margin level, leverage | Implemented where the broker/terminal reports them |
 | Positions | Fresh position snapshot, selected close, explicit close-all confirmation | Implemented |
 | Pending orders | Snapshot and selected/EA-owned cancel | Implemented |
-| Manual market BUY/SELL | Phone confirmation, SL/TP and risk input, exact quote binding, Bridge validation, Windows EA risk sizing and submission | Implemented for first configured EA symbol |
+| Manual market BUY/SELL | Phone confirmation, SL/TP and risk input, exact quote binding, Bridge validation, MT5 EA risk sizing and submission | Implemented for first configured EA symbol |
 | Automated strategy | Start, pause, resume, stop, strategy configuration, risk guards and EA acknowledgements | Implemented for registered managed strategies |
 | History | Broker closed-deal snapshots and trade-report synchronization | Implemented, subject to broker history returned by terminal |
 | Analyzer charts | Separate analysis/provider market-data path | Available, but not claimed as the same broker-native MT5 chart |
@@ -35,7 +41,7 @@ The phone sends `PLACE_MARKET_ORDER` with:
 
 The phone does **not** send lot size. The Bridge checks the authenticated MASTER profile, persistent host, current account identity, quote freshness/match, economic-calendar verdict, daily risk telemetry, risk cap, concurrency cap and (for LIVE) the account-bound 15-minute LIVE lease. The command expires after 20 seconds.
 
-The Windows EA rechecks terminal/account identity, terminal/broker trade permission, quote deviation, news, daily risk, existing unresolved order state, broker contract data, commission/spread/slippage cost, stop distance, margin and the configured lot cap. It sizes the order using the EA's existing `OrderCalcProfit` and `OrderCalcMargin` risk path. The user-supplied TP must satisfy the existing cost-adjusted net 1:2 minimum reward/risk; it is not silently moved.
+The MT5 EA rechecks terminal/account identity, terminal/broker trade permission, quote deviation, news, daily risk, existing unresolved order state, broker contract data, commission/spread/slippage cost, stop distance, margin and the configured lot cap. It sizes the order using the EA's existing `OrderCalcProfit` and `OrderCalcMargin` risk path. The user-supplied TP must satisfy the existing cost-adjusted net 1:2 minimum reward/risk; it is not silently moved.
 
 The EA records a durable order intent before calling the broker. The Bridge returns command acknowledgement separately from order fill. The app keeps the exact request ID until a fresh EA heartbeat carries the matching `signal_key` and a reconciled execution state. Timeouts and UNKNOWN results are not resent automatically.
 
@@ -46,13 +52,13 @@ The EA heartbeat currently carries one news verdict at a time, for the first con
 
 ### Position stop tightening
 
-The phone can select a fresh open-position ticket and request a tighter SL. The Bridge checks the current ticket, direction, old SL, fresh bid/ask and exact account. The Windows EA then rechecks the authenticated Bridge session, position ticket, old SL, current quote, broker tick size and stop/freeze levels before using `CTrade.PositionModify(ticket,newSL,currentTP)`. The existing TP is passed through unchanged. BUY stops can only move upward and remain below bid; SELL stops can only move downward and remain above ask. A wider or removed SL is rejected. The app only clears the pending request after a fresh heartbeat shows the same ticket with the new SL.
+The phone can select a fresh open-position ticket and request a tighter SL. The Bridge checks the current ticket, direction, old SL, fresh bid/ask and exact account. The MT5 EA then rechecks the authenticated Bridge session, position ticket, old SL, current quote, broker tick size and stop/freeze levels before using `CTrade.PositionModify(ticket,newSL,currentTP)`. The existing TP is passed through unchanged. BUY stops can only move upward and remain below bid; SELL stops can only move downward and remain above ask. A wider or removed SL is rejected. The app only clears the pending request after a fresh heartbeat shows the same ticket with the new SL.
 
 ## DEMO and LIVE
 
 DEMO and LIVE are both selectable profile modes. A DEMO market order needs the exact authenticated DEMO MASTER profile, persistent terminal, fresh quotes, clear news/risk evidence and an explicit order review. A prior DEMO soak acceptance is not required merely to place a controlled DEMO test order; it remains required for LIVE association/authorization.
 
-LIVE requires a separately paired LIVE account, same-user/same-broker accepted DEMO profile, verified persistent Windows host, fresh MT5 LIVE heartbeat, MASTER trade permission, fresh risk/news evidence, management password reauthentication and exact typed confirmation. The lease is account-bound and expires. An expired/absent lease blocks new LIVE orders; there is no global or build-time LIVE bypass.
+LIVE requires a separately paired LIVE account, same-user/same-broker accepted DEMO profile, verified persistent Linux production host, fresh MT5 LIVE heartbeat, MASTER trade permission, fresh risk/news evidence, management password reauthentication and exact typed confirmation. The lease is account-bound and expires. An expired/absent lease blocks new LIVE orders; there is no global or build-time LIVE bypass.
 
 Multi-user operation additionally requires independent per-user Windows process/terminal isolation. A terminal-capacity number is not proof of OS-level isolation. Do not claim concurrent multi-user readiness until the preflight reports isolation VERIFIED and the owner host has been capacity-tested.
 

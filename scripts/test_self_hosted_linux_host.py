@@ -5,6 +5,24 @@ ROOT = Path(__file__).resolve().parents[1]
 LINUX_HOST = ROOT / "scripts" / "linux-host"
 
 
+
+def test_remote_controller_architecture_docs_and_preflight_match_linux_production_target():
+    hosting = (ROOT / "HOSTING.md").read_text(encoding="utf-8")
+    linux_guide = (LINUX_HOST / "README.md").read_text(encoding="utf-8")
+    controller = (ROOT / "docs" / "mt5-phone-remote-controller-matrix.md").read_text(encoding="utf-8")
+    preflight = (ROOT / "scripts" / "mt5_remote_controller_preflight.py").read_text(encoding="utf-8")
+    safe_deployment = (ROOT / "docs" / "deployment" / "SAFE_DEPLOYMENT.md").read_text(encoding="utf-8")
+
+    assert "owner-operated, persistent Ubuntu Linux host" in hosting
+    assert "private Wine prefix" in linux_guide
+    assert "production MT5 terminal and broker execution run" in controller
+    assert "Windows applications and run in each isolated per-pairing Wine runtime" in controller
+    assert "persistent_linux_execution_host" in preflight
+    assert "verified_terminal_pairing" in preflight
+    assert "Legacy Windows compatibility guide" in safe_deployment
+    assert "Codespaces remains ephemeral and DEMO-only" in safe_deployment
+    assert "Codespaces/Linux remains DEMO-only" not in safe_deployment
+
 def test_self_hosted_installer_shell_syntax():
     for path in sorted(LINUX_HOST.glob("*.sh")):
         result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)

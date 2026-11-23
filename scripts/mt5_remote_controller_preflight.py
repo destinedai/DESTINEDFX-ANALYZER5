@@ -92,7 +92,7 @@ def source_checks(root: Path) -> list[dict[str, str]]:
             "Phone reviews BUY/SELL, SL/TP and risk, stores the request ID securely and reconciles the EA heartbeat.",
         ),
         (
-            "windows_ea_is_only_broker_executor",
+            "mt5_ea_is_only_broker_executor",
             all(token in ea for token in (
                 "bool ExecutePhoneMarketOrder(",
                 'action=="PLACE_MARKET_ORDER"',
@@ -105,7 +105,7 @@ def source_checks(root: Path) -> list[dict[str, str]]:
                 "OrderCalcMargin",
                 "signal_key",
             )),
-            "The Windows MT5 EA checks the current account, quote, news, risk, margin and broker result; volume is sized on-terminal.",
+            "The MT5 EA checks the current account, quote, news, risk, margin and broker result; on the Linux production host the Windows terminal binary runs under Wine.",
         ),
         (
             "phone_position_stop_tightening_path",
@@ -126,7 +126,7 @@ def source_checks(root: Path) -> list[dict[str, str]]:
                 and 'mt5_position_stop_tighten_card' in workstation
                 and 'TIGHTEN_POSITION_SL' in workstation
             ),
-            "A position edit may only tighten SL, preserves TP, and is reconciled from the exact broker ticket on the Windows EA.",
+            "A position edit may only tighten SL, preserves TP, and is reconciled from the exact broker ticket by the MT5 EA runtime.",
         ),
         (
             "apk_service_origins_are_configurable",
@@ -233,24 +233,53 @@ def remote_checks(management_raw: str, bridge_raw: str, timeout: float = 8.0) ->
     except Exception as exc:
         checks.append({"name": "bridge_configuration", "status": "BLOCKED", "detail": type(exc).__name__})
 
-    if config:
-        persistent = config.get("host_profile") == "PERSISTENT" and config.get("linux_host_mode") is not True
+    config_ready = bool(config and config.get("status") == "configured")
+    if config_ready:
+        persistent = config.get("host_profile") == "PERSISTENT"
+        linux_host = config.get("linux_host_mode") is True
+        isolation = (
+            linux_host
+            and config.get("per_user_terminal_isolation") == "VERIFIED"
+            and config.get("multi_user_terminal_isolation") == "VERIFIED"
+        )
+        linux_production_host = persistent and linux_host and isolation
         checks.append({
-            "name": "persistent_windows_execution_host",
-            "status": "PASS" if persistent else "BLOCKED",
-            "detail": "LIVE execution requires the persistent owner host, not Codespaces/Linux mode.",
+            "name": "persistent_linux_execution_host",
+            "status": "PASS" if linux_production_host else "BLOCKED",
+            "detail": (
+                "Persistent Linux host and root-host-agent per-pairing isolation are reported."
+                if linux_production_host else
+                "LIVE requires the persistent Linux production runtime; ephemeral Codespaces and the Windows compatibility worker are not accepted."
+            ),
+        })
+        checks.append({
+            "name": "per_user_terminal_isolation",
+            "status": "PASS" if linux_production_host else "BLOCKED",
+            "detail": (
+                "Root host-agent reports per-pairing Unix identity and terminal isolation."
+                if linux_production_host else
+                "Linux root attestation is absent or unverified; Windows portable folders do not prove separate OS identities."
+            ),
+        })
+        active_slots = config.get("isolated_slots")
+        max_slots = config.get("max_isolated_slots")
+        valid_active = isinstance(active_slots, int) and not isinstance(active_slots, bool)
+        valid_maximum = isinstance(max_slots, int) and not isinstance(max_slots, bool)
+        capacity = linux_production_host and valid_active and active_slots >= 2 and valid_maximum and max_slots >= 2
+        checks.append({
+            "name": "live_terminal_slot_capacity",
+            "status": "PASS" if capacity else "BLOCKED",
+            "detail": (
+                "At least two simultaneously active root-attested Linux slots are reported for linked DEMO and LIVE profiles."
+                if capacity else
+                "LIVE requires two active, separately isolated MT5 slots on the persistent Linux host."
+            ),
         })
         news = config.get("news_provider_configured") is True
         checks.append({
             "name": "news_calendar",
             "status": "PASS" if news else "BLOCKED",
             "detail": "Bridge reports a configured economic-calendar provider; runtime freshness is still checked on every order.",
-        })
-        isolation = config.get("multi_user_terminal_isolation") == "VERIFIED"
-        checks.append({
-            "name": "per_user_terminal_isolation",
-            "status": "PASS" if isolation else "BLOCKED",
-            "detail": "Multi-user support requires independently verified per-user terminal/process isolation.",
         })
         bridge_fingerprint = str(config.get("management_step_up_key_fingerprint_sha256", ""))
         trust = bool(remote_fingerprint and bridge_fingerprint == remote_fingerprint)
@@ -259,10 +288,7 @@ def remote_checks(management_raw: str, bridge_raw: str, timeout: float = 8.0) ->
             "status": "PASS" if trust else "BLOCKED",
             "detail": "Bridge verification-key fingerprint must exactly match the management API public key.",
         })
-        issuer_ok = (
-            issuer == config.get("management_step_up_issuer")
-            and audience == config.get("management_step_up_audience")
-        )
+        issuer_ok = issuer == config.get("management_step_up_issuer") and audience == config.get("management_step_up_audience")
         checks.append({
             "name": "management_bridge_issuer_audience",
             "status": "PASS" if issuer_ok else "BLOCKED",
@@ -271,14 +297,36 @@ def remote_checks(management_raw: str, bridge_raw: str, timeout: float = 8.0) ->
 
     try:
         status, readiness = get_json(bridge + "/health/ready", timeout)
-        ready = status == 200 and readiness.get("status") == "ready"
-        detail = "A verified MT5 terminal is READY." if ready else "A broker-specific MT5 terminal/account heartbeat is not yet verified."
+        detail_value = readiness.get("detail", {})
+        runtime_error = detail_value.get("code", "") if isinstance(detail_value, dict) else ""
+        runtime_ready = (
+            status == 200 and readiness.get("status") == "ready"
+        ) or (status == 503 and runtime_error == "NO_VERIFIED_TERMINAL_PAIRING")
+        checks.append({
+            "name": "bridge_host_runtime",
+            "status": "PASS" if runtime_ready else "BLOCKED",
+            "detail": (
+                "Bridge host runtime and storage report ready; this does not prove a broker account is paired."
+                if runtime_ready else "Bridge host runtime is not ready."
+            ),
+        })
+        terminal_verified = (
+            status == 200 and readiness.get("status") == "ready"
+            and readiness.get("verified_terminal_pairing") == "healthy"
+        )
         checks.append({
             "name": "verified_mt5_terminal",
-            "status": "PASS" if ready else ("PENDING" if status == 503 else "BLOCKED"),
-            "detail": detail,
+            "status": "PASS" if terminal_verified else ("PENDING" if runtime_ready else "BLOCKED"),
+            "detail": (
+                "Bridge explicitly reports a verified terminal pairing."
+                if terminal_verified else
+                "Host readiness is not broker acceptance; a fresh authenticated MT5 account heartbeat is still required."
+                if runtime_ready else
+                "A broker-specific MT5 terminal/account heartbeat is not verified because host readiness is blocked."
+            ),
         })
     except Exception as exc:
+        checks.append({"name": "bridge_host_runtime", "status": "BLOCKED", "detail": type(exc).__name__})
         checks.append({"name": "verified_mt5_terminal", "status": "PENDING", "detail": type(exc).__name__})
 
     return checks
@@ -298,7 +346,7 @@ def build_report(root: Path, management_url: str = "", bridge_url: str = "", tim
     pending = any(item["status"] == "PENDING" for item in checks)
     source_blocked = any(item["status"] == "BLOCKED" for item in checks if item["name"] in {
         "bridge_market_order_contract", "android_remote_market_order_client",
-        "phone_remote_order_panel_and_reconciliation", "windows_ea_is_only_broker_executor",
+        "phone_remote_order_panel_and_reconciliation", "mt5_ea_is_only_broker_executor",
         "apk_service_origins_are_configurable",
     })
     status = (
@@ -320,8 +368,9 @@ def build_report(root: Path, management_url: str = "", bridge_url: str = "", tim
         ],
         "still_required": [
             "Configure the exact deployed Management API and private managed-Bridge HTTPS origins in the APK build or app settings.",
-            "Install matching management Ed25519 public verification key on the persistent Windows Bridge.",
-            "Verify per-user terminal/process isolation before enabling multi-user service claims.",
+            "Install the Management API's public Ed25519 verification key on the persistent Linux production Bridge; never copy its private key.",
+            "Verify root-attested per-pairing Unix identities, Wine prefixes, terminal trees, displays and Xauthority state on the real Linux host.",
+            "Treat the Windows owner-worker as a limited compatibility path; its shared Windows identity does not qualify for multi-user LIVE.",
             "Pair the exact user DEMO and LIVE broker accounts and verify MASTER permission and account-issued server.",
             "Complete the broker-specific DEMO acceptance and fresh risk/news checks.",
             "Perform LIVE password reauthentication and exact account-bound confirmation for each user's LIVE account.",

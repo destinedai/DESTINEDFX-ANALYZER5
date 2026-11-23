@@ -1,5 +1,7 @@
 # Safe staged deployment guide
 
+> **Legacy Windows compatibility guide — not the production deployment baseline.** The current production target is the persistent owner-operated Ubuntu x86-64 host documented in [HOSTING.md](../../HOSTING.md) and [the Linux host guide](../../scripts/linux-host/README.md). This document's Tailscale Serve, DPAPI, Windows firewall and owner-worker procedures apply only when deliberately using the separate Windows compatibility kit. The Windows worker does not prove per-user OS isolation and must not be used to claim multi-user LIVE readiness. GitHub Codespaces remains ephemeral development/test infrastructure only.
+
 **Checked:** 2026-11-06. **Status:** preparation only. This document is not a deployment attestation. No broker account, Windows host, VPS, tailnet, or live order was accessed from the sandbox. Do not treat HTTP reachability, a pairing code, process presence, or a build as broker connectivity. `CONNECTED` requires a fresh authenticated EA heartbeat that matches the expected login, exact server, broker identity, and DEMO or LIVE mode.
 
 ## Selected network path
@@ -74,7 +76,7 @@ This endpoint returns only the public PEM, algorithm, issuer, and audience. Save
 
 Pass that file to `install-owner-stack.ps1` with `-ManagementStepUpPublicKeyPath <path-to-public-pem>`. The installer validates that it is an Ed25519 public key and stores it in the existing owner-user DPAPI bundle. The supervisor sets `BRIDGE_HOST_MODE=windows-owner`, `BRIDGE_HOST_PROFILE=PERSISTENT`, and `EXECUTION_STORAGE_DURABLE=true`, then supplies the public key and matching issuer/audience to the Bridge. A missing key produces an explicit warning and leaves management account enrollment and LIVE step-up blocked; a malformed key prevents the supervisor from starting a misconfigured Bridge. After rotating the backend private key, retrieve and install its matching new public key before using identity-protected account flows.
 
-This wiring only establishes the cryptographic trust configuration. It does **not** authorize trading. LIVE still requires the exact broker/account's accepted 5–7 day DEMO evidence, a separately enrolled LIVE MASTER profile, a fresh matching terminal/EA heartbeat, conservative risk and daily-loss telemetry, a ready worker on a persistent host, and the short-lived challenge plus typed confirmation and password reauthentication. Codespaces/Linux remains DEMO-only.
+This wiring only establishes the cryptographic trust configuration for the Windows compatibility path. It does **not** authorize trading. LIVE still requires the exact broker/account's accepted 5–7 day DEMO evidence, a separately enrolled LIVE MASTER profile, a fresh matching terminal/EA heartbeat, conservative risk and daily-loss telemetry, a ready worker on a persistent host, and the short-lived challenge plus typed confirmation and password reauthentication. Codespaces remains ephemeral and DEMO-only. The separate Linux production target may pass the host gate only when its root host agent attests each per-pairing Unix identity and at least two simultaneously active isolated slots; account-specific broker acceptance and all existing LIVE safeguards remain required.
 
 ### Cloudflare Access service-token owner steps
 
@@ -100,7 +102,7 @@ MetaQuotes Virtual Hosting is not offered by this design. It runs a terminal and
 
 ## LIVE infrastructure preflight
 
-After the management backend and persistent Windows Bridge have been deployed, run the read-only preflight from a machine that can reach both HTTPS endpoints:
+For the legacy Windows compatibility path, after the management backend and persistent Windows Bridge have been deployed, run the read-only preflight from a machine that can reach both HTTPS endpoints. The tool also recognizes the separate persistent Linux host only when root-attested isolation is verified; neither host's /health/ready response alone proves broker pairing:
 
 ```powershell
 python scripts/live_activation_preflight.py `

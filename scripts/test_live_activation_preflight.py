@@ -21,7 +21,7 @@ def fixture_responses():
             "isolated_slots":2, "max_isolated_slots":2,
             "linux_host_mode":False, "management_step_up_key_fingerprint_sha256":FP,
             "management_step_up_issuer":preflight.ISSUER, "management_step_up_audience":preflight.AUDIENCE}),
-        "https://bridge.owner.ts.net/health/ready": (200, {"status":"ready"}),
+        "https://bridge.owner.ts.net/health/ready": (200, {"status":"ready", "verified_terminal_pairing":"healthy"}),
     }
 
 def test_preflight_accepts_matching_persistent_bridge(monkeypatch):
@@ -67,15 +67,21 @@ def test_preflight_blocks_windows_host_without_multi_user_os_isolation(monkeypat
     assert result["overall_status"] == "BLOCKED"
 
 
-def test_preflight_accepts_persistent_root_attested_linux_host(monkeypatch):
+def test_preflight_accepts_persistent_root_attested_linux_host_but_not_unproven_pairing(monkeypatch):
     data=fixture_responses()
     data["https://bridge.owner.ts.net/health/config"][1]["linux_host_mode"]=True
+    data["https://bridge.owner.ts.net/health/ready"][1].pop("verified_terminal_pairing")
     monkeypatch.setattr(preflight,"get_json",lambda url:data[url])
     result=preflight.run("https://management.owner.ts.net","https://bridge.owner.ts.net")
     row=next(x for x in result["checks"] if x["name"]=="persistent_live_host_type")
     assert row["status"] == "PASS"
     assert row["code"] == "PERSISTENT_ISOLATED_LINUX_HOST"
-    assert result["overall_status"] == "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY"
+    runtime=next(x for x in result["checks"] if x["name"]=="bridge_host_runtime")
+    terminal=next(x for x in result["checks"] if x["name"]=="verified_mt5_terminal")
+    assert runtime["status"] == "PASS"
+    assert terminal["status"] == "PENDING"
+    assert terminal["code"] == "HOST_READY_ACCOUNT_PAIRING_NOT_VERIFIED"
+    assert result["overall_status"] == "INFRASTRUCTURE_READY_ACCOUNT_ACCEPTANCE_PENDING"
 
 
 def test_preflight_blocks_ephemeral_linux_host_even_with_root_attestation(monkeypatch):
