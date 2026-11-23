@@ -172,8 +172,8 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
             "name":"verified_mt5_terminal",
             "status":"PASS" if terminal_verified else "PENDING" if host_runtime_ready else "BLOCKED",
             "code":"VERIFIED_TERMINAL_PAIRING" if terminal_verified else
-                  "HOST_READY_ACCOUNT_PAIRING_NOT_VERIFIED" if host_runtime_ready else
-                  error_code(data) if code >= 400 else "TERMINAL_NOT_READY",
+                  error_code(data) if code >= 400 else
+                  "HOST_READY_ACCOUNT_PAIRING_NOT_VERIFIED" if host_runtime_ready else "TERMINAL_NOT_READY",
         })
     except PreflightError: checks.append({"name":"verified_mt5_terminal","status":"PENDING","code":"BRIDGE_READINESS_UNREACHABLE"})
     chosen = tuple(dict.fromkeys(b.upper() for b in brokers))

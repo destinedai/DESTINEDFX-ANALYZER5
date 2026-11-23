@@ -101,6 +101,8 @@ def test_missing_terminal_readiness_is_pending_not_a_false_pass(monkeypatch):
     result=preflight.run("https://management.owner.ts.net","https://bridge.owner.ts.net")
     row=next(x for x in result["checks"] if x["name"]=="verified_mt5_terminal")
     assert row["status"] == "PENDING" and row["code"] == "NO_VERIFIED_TERMINAL_PAIRING"
+    runtime=next(x for x in result["checks"] if x["name"]=="bridge_host_runtime")
+    assert runtime["status"] == "PASS" and runtime["code"] == "HOST_RUNTIME_READY"
     assert result["overall_status"] == "INFRASTRUCTURE_READY_ACCOUNT_ACCEPTANCE_PENDING"
 
 def test_urls_require_https_and_no_credentials():
