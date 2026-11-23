@@ -1,28 +1,69 @@
-# DestinedFX hosting policy
+# DestinedFX hosting and execution policy
 
-## Development versus production
+## Production architecture and current status
 
-- **GitHub Codespaces is DEVELOPMENT ONLY.** Use it for source work, CI, isolated fixtures and development-host experiments. It is not the production trading host or an always-on MT5 terminal.
-- **Production execution requires an owner-operated Windows PC or Windows VPS** that remains powered on, awake, connected, signed in and running the genuine broker-issued MetaTrader 5 terminal continuously.
-- The broker-reported account identity is authoritative. Use the exact account login and server string issued for that account. Do not guess server names or append ports.
-- Begin with an authorized **DEMO** account. This guide does not authorize LIVE trading.
+The production execution target is an **owner-operated, persistent Ubuntu Linux host** using the self-hosted per-pairing runtime in [scripts/linux-host/README.md](scripts/linux-host/README.md). That implementation uses a root-attested host agent, a dedicated non-login Unix identity for each authenticated pairing, a separate Wine prefix and MT5 terminal tree per pairing, encrypted systemd credentials, persistent local storage, a local PostgreSQL management database, and Caddy as the only public ingress.
 
-## Move from Codespaces development to a production Windows host
+This is an implemented deployment path, **not a claim that an owner host has already been installed, deployed, or accepted**. Repository CI validates code and fixtures; it does not create the operator's host, configure the operator's DNS, authenticate a broker account, or prove a broker order.
 
-1. Keep Codespaces for source changes, CI and development-only experiments. Do not turn a transient Codespace into the production host.
-2. Prepare a dedicated Windows PC/VPS. Disable sleep/hibernation during operation, apply security updates, enable disk encryption and restrict interactive access to the owner.
-3. Install MetaTrader 5 directly from the broker. Sign in to the broker-issued DEMO account and verify the exact account number and server in the terminal.
-4. Install the DestinedFX Windows worker/bridge kit from a verified CI artifact. Read the worker's Windows OWNER-SETUP.md and the kit's START-HERE.txt before running setup scripts.
-5. Configure the bridge, management API, terminal worker and EA using documented owner-only environment and secret stores. Never put passwords, API tokens, bootstrap codes or private keys in source, .env.example, GitHub commits, CI output or APK BuildConfig fields.
-6. Keep the bridge bound to loopback on Windows. Use the supported private Tailscale tailnet/Serve arrangement; Android and Windows must both be authorized members of the same tailnet. Do not use Funnel, an open LAN listener, raw public ports or an unauthenticated public endpoint.
-7. Attach the DestinedFX MT5 EA to the intended DEMO chart. Confirm Algo Trading and the required WebRequest address in MT5 settings. Independently verify terminal online, EA heartbeat, broker identity, account mode, balance, equity, worker READY, quotes and account snapshots.
-8. On Android, install only the artifact labelled **DEBUG APK - FOR DEMO TEST ONLY**. Pair the exact DEMO account, wait for a heartbeat younger than 60 seconds, verify positive broker-reported balance/equity, then test login and STOP. An HTTP 200, queued command, running process or saved credential is not proof of terminal connectivity.
-9. Test order acceptance, protective SL/TP, closure, ticket and deal profit only on the paired DEMO account. Reconcile terminal-side history. A fixture, local estimate or Codespaces test balance is not broker evidence.
-10. Back up the Windows worker state, terminal data, encrypted credential store and database using the owner backup procedure. Test restore before relying on it. Keep the Windows host continuously available.
+The production target does not rely on Azure, Oracle, Railway, Render, Cloudflare Workers, Codespaces, or a third-party hosted MT5 execution vendor. PostgreSQL runs locally on the same operator-controlled Linux machine.
 
-## Operational limits
+## Supported hosting paths
 
-- A Windows host that sleeps, signs out, loses broker connection or stops its EA is **NOT READY**.
-- Bridge, management API and terminal health are separate checks. All must pass before the app reports a broker pairing as READY.
-- Codespaces, fake terminals and CI fixtures cannot prove production broker pairing or a real DEMO order round trip.
-- No LIVE action is authorized by this guide. Keep account isolation, authentication, risk, news, quote, protective-order and emergency-stop gates.
+### Persistent self-hosted Linux runtime — production target
+
+The currently supported baseline is Ubuntu 22.04 or 24.04 on x86-64, systemd 250+, a genuine x86-64 MT5 terminal and MetaEditor under the reviewed Wine setup, Xvfb/xauth, Caddy, Python, Docker Engine for the local PostgreSQL container, and persistent storage. ARM MT5/EA execution is not accepted by the installer.
+
+The machine must have two operator-controlled DNS names: one for the Bridge and a separate one for the Management API. Both point to the same host. Caddy terminates public HTTPS on ports 80/443; do not expose the Bridge loopback listener, host agent, database, Wine display, or MT5 terminal ports publicly. See the Linux host guide for exact sizing, installation, endpoint manifest, systemd credential, backup, recovery, and two-user acceptance commands.
+
+Each pairing is provisioned under its own locked Unix identity and private terminal runtime. LIVE is not enabled by host selection or login; it remains subject to the existing account authentication, exact broker identity, DEMO/LIVE pairing, fresh host-attestation, risk/news/session, explicit confirmation, and order-reconciliation gates. A persistent host configuration or passing CI test is not proof that these gates have been satisfied.
+
+### Windows owner-operated worker — limited path
+
+The repository also contains an owner-operated Windows Bridge/worker kit. Follow [managed-worker/windows/OWNER-SETUP.md](managed-worker/windows/OWNER-SETUP.md) only when using that Windows-specific path. It runs under the Windows owner's identity and protects its owner state with DPAPI. Separate MT5 `/portable` directories do **not** establish separate Windows OS identities or prove per-user process isolation.
+
+Until per-account Windows process SIDs/tokens and account-specific ACLs are independently verified, this Windows path must not be represented as a multi-user isolated LIVE host. Windows LIVE remains blocked by that isolation limitation. Do not describe the Windows kit as the primary production topology or as equivalent to the Linux per-pairing runtime.
+
+### GitHub Codespaces — development and test only
+
+Codespaces is **EPHEMERAL and DEVELOPMENT ONLY**. Use it for source changes, CI, fixtures, and development-host experiments. It is not the production trading host, a persistent multi-user runtime, or proof of broker connectivity. Do not change its host profile, bypass its expiry gate, or rely on its state for production execution.
+
+## Linux host setup
+
+1. Review [scripts/linux-host/README.md](scripts/linux-host/README.md) at the exact commit intended for deployment.
+2. Prepare the supported Ubuntu x86-64 machine, persistent disk, DNS names, firewall, and operator access.
+3. Run the documented bootstrap and self-hosted installation scripts on that host. Use the documented owner-only interactive process to handle setup credentials. Never put passwords, tokens, private keys, signing material, or broker credentials in Git, ordinary environment files, CI logs, chat, or APK resources.
+4. Install the genuine MT5 terminal and MetaEditor into the clean shared template prefix without logging a broker account into that template. Real pairing terminals are created separately under each pairing's private runtime.
+5. Configure the Bridge and Management API hostnames in the documented host configuration. Keep internal listeners and the database loopback-only; Caddy is the only public ingress.
+6. Build a deployment APK from the host-generated public endpoint manifest using `scripts/linux-host/build-self-hosted-apk.sh`. That build verifies the public endpoints and Management Ed25519 key and locks the verified origins into the APK. The normal CI debug APK is a DEMO-test artifact and is not evidence of a deployed or reachable service.
+7. Complete the real-host two-user acceptance command in the Linux host guide. It must prove distinct UIDs, slot homes, terminal trees, Wine prefixes, Xvfb displays, Xauthority files, and terminal process ownership. A CI fixture is not a substitute.
+8. Separately complete owner-side broker DEMO acceptance: authenticate each user's own DEMO account, verify terminal-reported identity and fresh EA heartbeats, and reconcile an explicitly supervised DEMO order lifecycle.
+
+The installer preserves existing configuration and refuses unsafe migration conditions. Review its documented checks and recovery boundaries rather than disabling them to force installation.
+
+## Connection and operational evidence
+
+Keep these states separate:
+
+- Android application built and installed.
+- Management API configured and reachable.
+- Bridge configured and reachable.
+- Persistent host supervisor available and attested.
+- Per-pairing MT5 terminal available.
+- EA heartbeat fresh and authenticated.
+- Broker login authenticated and broker identity/mode verified.
+- DEMO order accepted, filled, reconciled, and safely closed.
+
+A DNS lookup, TCP 443 check, HTTP 200, running process, saved credential, APK build, EA compile, or fixture test is not proof of broker authentication or an executed order. A pairing is not READY until the authenticated terminal and broker evidence matches the exact user, account, server, and mode.
+
+## Safety and recovery
+
+Begin with an explicitly authorized DEMO account. Login does not arm trading. Keep the existing risk, protective-order, news freshness, quote freshness, session, authentication, isolation, and explicit-confirmation checks.
+
+Emergency STOP is an execution-control stop; **it does not liquidate or close existing open positions**. Manage and reconcile those positions through the separately confirmed position-management path. Never describe STOP as an automatic liquidation safeguard.
+
+Keep encrypted systemd credentials, host state, terminal data, and local PostgreSQL backups protected. Follow the Linux guide's independent recovery-copy and restore-test procedures. A backup timer on the same disk does not protect against host or disk loss.
+
+## Release boundary
+
+CI artifacts named **DEBUG APK - FOR DEMO TEST ONLY** are for controlled DEMO validation, not production release. GitHub Release/prerelease publishing remains disabled. Do not tag or publish a release until the exact candidate has passed Android JVM tests, emulator instrumentation, physical phone-to-Bridge pairing, authenticated MT5 DEMO telemetry, and supervised DEMO order/position acceptance. LIVE remains independently gated and is not authorized by these steps.

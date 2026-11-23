@@ -10,12 +10,18 @@
 
 ## Checkout
 
+Use the active host-runtime feature branch for this work. Do not switch to the divergent `free/phone-only-v1` branch.
+
 ```sh
 git clone https://github.com/destinedai/DESTINEDFX-ANALYZER5.git
 cd DESTINEDFX-ANALYZER5
-git switch free/phone-only-v1
+git fetch origin feat/self-hosted-linux-host-runtime
+git switch --track origin/feat/self-hosted-linux-host-runtime
+git pull --ff-only origin feat/self-hosted-linux-host-runtime
 cp .env.example .env
 ```
+
+Before contributing, verify the remote branch HEAD and your working-tree state. Keep changes on `feat/self-hosted-linux-host-runtime`; do not merge, rebase, reset, or force-push the divergent phone-only branch.
 
 Do not populate `.env` with private production values for ordinary development. It is ignored by Git. The Android app can run without a configured managed-bridge URL for local analysis; bridge-dependent paths remain unavailable unless an operator configures a service.
 

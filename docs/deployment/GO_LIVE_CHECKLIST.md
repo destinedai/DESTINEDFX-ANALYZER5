@@ -2,6 +2,12 @@
 
 This checklist is owner-operated. A green CI run proves only the exact commit's automated checks; it does not prove a broker login, terminal heartbeat, DEMO fill, LIVE readiness, or deployment.
 
+## Supported host architecture
+
+The production execution target is the persistent, owner-operated Ubuntu x86-64 runtime documented in [scripts/linux-host/README.md](../../scripts/linux-host/README.md). It uses root-attested per-pairing Linux identities and separate Wine prefixes, terminal trees, displays and Xauthority state. Codespaces is ephemeral and DEMO-only for development/CI. The Windows owner-worker remains a separate supported owner-operated path, but all accounts currently share the same Windows identity; separate `/portable` folders do not prove OS-level isolation, so Windows LIVE remains blocked until process identity and ACL isolation are independently verified.
+
+The Linux deployment scripts and CI tests are implementation evidence only. No owner-operated persistent host, phone-to-Bridge pairing, or broker account is accepted by CI. Each must be independently verified by the owner.
+
 ## Phone-only Bot flow
 
 - The default Bot path is Accounts, Brokers, Login, and the verified account workspace. Legacy bot tools are available under Settings > Advanced.
@@ -33,8 +39,9 @@ The paths below are implemented in the app and covered by local fixture/state te
 - Confirm the branch head and CI run are green for the exact commit.
 - Review the Android debug APK artifact and SHA-256 from that run. It is a debug build, not a production signing release.
 - Review `DestinedFX-MT5-EA-ex5` and its compiler evidence. Confirm the EA was compiled by genuine MetaEditor with zero errors.
-- Download and inspect `DestinedFX-Windows-Worker-Kit`; keep the owner-operated Windows host powered on, awake, connected, and signed in.
-- Set the managed bridge HTTPS origin in the app at **Bot > Remote MT5 EA Bridge**. Do not put credentials or tokens in source, CI variables, issue reports, or the APK.
+- For the production Linux topology, follow the host install, local backup/recovery and APK endpoint-locking instructions in `scripts/linux-host/README.md`. Build the deployment APK from the host-generated public endpoint manifest. Do not expect the generic CI debug APK to contain a configured Management API or Bridge origin.
+- Treat `DestinedFX-Windows-Worker-Kit` as the separate Windows owner-worker path only. It does not establish per-user Windows OS isolation; do not use it to claim multi-user LIVE readiness.
+- Do not put credentials or tokens in source, CI variables, issue reports, or the APK.
 
 ## Owner-side DEMO proof
 
@@ -74,17 +81,10 @@ Do not mark LIVE production-ready merely because this command succeeds: the brok
 - Do not attempt LIVE on an ephemeral/test host. Confirm the owner host profile, backup/recovery path, terminal process identity, and emergency-stop procedure first.
 - The owner must explicitly approve any live action; this repository does not create accounts, reset passwords, submit orders, or claim external connectivity.
 
-## Creating the prerelease artifacts
+## Prerelease and production release — HOLD
 
-The workflow creates a prerelease only when the owner deliberately pushes a tag matching `host-v*`. It packages the APK, the genuine MetaEditor `DestinedFXTraderEA.ex5`, the Windows worker kit, and `SHA256SUMS.txt`.
+Do not create or push a `host-v*` tag and do not publish a GitHub Release at this stage. The prerelease job in `.github/workflows/build-apk.yml` is deliberately disabled with `if: false`. Keep it disabled until all seven acceptance stages are independently complete for the same candidate, including physical phone-to-Bridge pairing, authenticated MT5 DEMO telemetry, and supervised DEMO order/position acceptance.
 
-```sh
-git fetch origin free/phone-only-v1
-git switch free/phone-only-v1
-git pull --ff-only origin free/phone-only-v1
-# Review the exact green CI run and commit first.
-git tag -a host-v1 -m "DestinedFX host-v1 prerelease"
-git push origin host-v1
-```
+For repository work, remain on `feat/self-hosted-linux-host-runtime` and verify its current remote HEAD before changing anything. `free/phone-only-v1` is a separate divergent branch: do not switch to it, merge it, or use it as the deployment source.
 
-Do not run the tag commands until the owner has reviewed the exact green CI run and deliberately approved the prerelease publication. The tag workflow is packaging only; it is not a broker or deployment proof.
+A debug APK, compiled EA, Windows worker archive, green CI run, or packaging job is not a production release and does not prove a deployed service or broker connection. Revisit release publication only after owner acceptance and a separate review of the production signing/release workflow.
