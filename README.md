@@ -142,7 +142,7 @@ Install bridge/requirements.txt before running the Bridge tests. See [Android se
 
 ## Deployment and verification boundary
 
-The workflows under .github/workflows/ validate source, build artifacts and run offline/unit/emulator tests. Each result applies only to the exact commit and completed jobs. A debug APK is not a production-signed release.
+The workflows under .github/workflows/ validate source, build artifacts and run offline/unit/emulator tests. Each result applies only to the exact commit and completed jobs. APK metadata records the source SHA, package/version, SDKs, ABIs, size, checksum and signing certificate fingerprint; see docs/deployment/APK_SIGNING.md. A debug APK is not a production-signed release. Owner-host acceptance levels and the real two-user Linux isolation command are defined in docs/deployment/LINUX_HOST_ACCEPTANCE.md.
 
 The following require owner-side runtime evidence and are not established by a green CI run:
 

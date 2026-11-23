@@ -37,9 +37,9 @@ The paths below are implemented in the app and covered by local fixture/state te
 ## Before release
 
 - Confirm the branch head and CI run are green for the exact commit.
-- Review the Android debug APK artifact and SHA-256 from that run. It is a debug build, not a production signing release.
+- Review the Android debug APK artifact and SHA-256 from that run. It is a debug build, not a production signing release. Keep the exact-source metadata artifact; see docs/deployment/APK_SIGNING.md.
 - Review `DestinedFX-MT5-EA-ex5` and its compiler evidence. Confirm the EA was compiled by genuine MetaEditor with zero errors.
-- For the production Linux topology, follow the host install, local backup/recovery and APK endpoint-locking instructions in `scripts/linux-host/README.md`. Build the deployment APK from the host-generated public endpoint manifest. Do not expect the generic CI debug APK to contain a configured Management API or Bridge origin.
+- For the production Linux topology, follow the host install, local backup/recovery and APK endpoint-locking instructions in `scripts/linux-host/README.md`. and complete docs/deployment/LINUX_HOST_ACCEPTANCE.md. Build the deployment APK from the host-generated public endpoint manifest. Do not expect the generic CI debug APK to contain a configured Management API or Bridge origin.
 - Treat `DestinedFX-Windows-Worker-Kit` as the separate Windows owner-worker path only. It does not establish per-user Windows OS isolation; do not use it to claim multi-user LIVE readiness.
 - Do not put credentials or tokens in source, CI variables, issue reports, or the APK.
 

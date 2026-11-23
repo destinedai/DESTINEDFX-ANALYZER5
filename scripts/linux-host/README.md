@@ -12,7 +12,7 @@ No installer creates broker accounts or submits orders. Every user supplies thei
 
 The installer currently validates Ubuntu 22.04 or 24.04 on x86-64 with systemd 250+, an x86-64 MT5 terminal, Wine, Xvfb, xauth, Caddy, SQLite tools, Python 3/venv, sudo, and Docker Engine for the local PostgreSQL container. Docker is used only on this same machine for the management database; it is not a cloud runtime or remote host. The host must have persistent storage and a working system clock. ARM MT5 terminal/EA execution remains unverified and is rejected by the installer.
 
-For two concurrent isolated broker accounts, plan at least 8 GiB RAM and two CPU cores. The installer enforces a static reserve of 2 GiB for the host plus 3 GiB per configured terminal and does not permit a configured slot count above the host's CPU/RAM capacity. The worker also checks *currently available* RAM before claiming work. This is a fail-closed capacity estimate, not a promise that every machine meeting the minimum will sustain continuous MT5 execution. SSD capacity should allow separate terminal copies, Wine prefixes, logs, database growth and backups.
+For two concurrent isolated broker accounts, plan at least 8 GiB RAM and two CPU cores. These are admission/readiness guards; the current worker does not apply a hard CPU or memory cgroup quota to each individual terminal. The installer enforces a static reserve of 2 GiB for the host plus 3 GiB per configured terminal and does not permit a configured slot count above the host's CPU/RAM capacity. The worker also checks *currently available* RAM before claiming work. This is a fail-closed capacity estimate, not a promise that every machine meeting the minimum will sustain continuous MT5 execution. SSD capacity should allow separate terminal copies, Wine prefixes, logs, database growth and backups.
 
 The host needs two separate DNS names controlled by the operator: one for the Bridge and one for the app-management API. Both A/AAAA records must point to this same machine. Inbound TCP 80/443 is required for Caddy's TLS issuance/renewal, and outbound HTTPS is needed for OS/software updates, the local Postgres image pull and the news provider. The APK build consumes the installer-generated public endpoint manifest, so the phone owner never types either URL. Keep SSH restricted. Do not expose the host agent, Bridge loopback port, database, Wine display or MT5 terminal ports to the public Internet. Caddy is the only public ingress process.
 
@@ -54,7 +54,7 @@ Systemd encrypted credentials are used for the host-agent token, Bridge Fernet k
 
 ## Two-user acceptance and trading acceptance
 
-After two different authenticated DEMO pairings have been added through the app and fresh terminal heartbeats are present, run:
+After two different authenticated DEMO pairings have been added through the app and fresh terminal heartbeats are present, run the persistent-host-only acceptance command. It first checks the live Bridge configuration for a persistent Linux profile, root-attested multi-user isolation and sufficient slot capacity:
 
 ```sh
 sudo /opt/destinedfx/venv/bin/python \
@@ -63,10 +63,11 @@ sudo /opt/destinedfx/venv/bin/python \
   --owner-uid "$(id -u destinedfx)" \
   --state-dir /var/lib/destinedfx/host-runtime \
   --slots-root /home/destinedfx-slots \
+  --bridge-url http://127.0.0.1:8000 \
   --host-agent-url http://127.0.0.1:8787/health/ready
 ```
 
-The acceptance must prove distinct Unix UIDs, separate slot homes, terminal copies, Wine prefixes, Xvfb displays and process ownership. It must fail rather than count the same terminal twice. Capture the sanitized result and retain it with the host release evidence. This is a real-host acceptance command; a CI fixture is not a substitute.
+The acceptance must prove that the live Bridge reports host_profile=PERSISTENT, linux_host_mode=true, root-attested per-user and multi-user isolation, and sufficient active/configured slots, in addition to distinct Unix UIDs, separate slot homes, terminal copies, Wine prefixes, Xvfb displays and process ownership. It must fail rather than count the same terminal twice. Capture the sanitized result and retain it with the host release evidence. This is a real-host acceptance command; a CI fixture is not a substitute. See docs/deployment/LINUX_HOST_ACCEPTANCE.md.
 
 Actual DEMO acceptance additionally requires two genuine broker DEMO profiles, successful authorization heartbeats, symbol/account identity matches, market-data availability, one approved DEMO market order, broker-reported fill, order reconciliation and safe close. LIVE acceptance is separate and must only occur after the user explicitly authorizes a specific LIVE test under their own authenticated broker profile. No source-code build, EA compile, readiness endpoint or simulated fixture proves a broker fill.
 

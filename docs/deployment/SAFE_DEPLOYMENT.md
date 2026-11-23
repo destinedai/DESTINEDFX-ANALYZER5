@@ -1,5 +1,7 @@
 # Safe staged deployment guide
 
+APK debug signing, certificate continuity and exact-source artifact verification are documented in APK_SIGNING.md. Persistent Ubuntu host and real two-user acceptance evidence are documented in LINUX_HOST_ACCEPTANCE.md. Neither guide authorizes a production release by itself.
+
 > **Legacy Windows compatibility guide — not the production deployment baseline.** The current production target is the persistent owner-operated Ubuntu x86-64 host documented in [HOSTING.md](../../HOSTING.md) and [the Linux host guide](../../scripts/linux-host/README.md). This document's Tailscale Serve, DPAPI, Windows firewall and owner-worker procedures apply only when deliberately using the separate Windows compatibility kit. The Windows worker does not prove per-user OS isolation and must not be used to claim multi-user LIVE readiness. GitHub Codespaces remains ephemeral development/test infrastructure only.
 
 **Checked:** 2026-11-06. **Status:** preparation only. This document is not a deployment attestation. No broker account, Windows host, VPS, tailnet, or live order was accessed from the sandbox. Do not treat HTTP reachability, a pairing code, process presence, or a build as broker connectivity. `CONNECTED` requires a fresh authenticated EA heartbeat that matches the expected login, exact server, broker identity, and DEMO or LIVE mode.

@@ -79,3 +79,14 @@ def test_bridge_acceptance_probe_rejects_non_loopback_origins():
             pass
         else:
             raise AssertionError("Real-host acceptance must use only the local loopback Bridge.")
+
+
+def test_documentation_separates_owner_acceptance_from_ci_fixtures_and_real_trading():
+    acceptance_doc = (ROOT / "docs" / "deployment" / "LINUX_HOST_ACCEPTANCE.md").read_text(encoding="utf-8")
+    signing_doc = (ROOT / "docs" / "deployment" / "APK_SIGNING.md").read_text(encoding="utf-8")
+    assert "Source-code tests" in acceptance_doc
+    assert "CI fixture tests" in acceptance_doc
+    assert "Host installation verification" in acceptance_doc
+    assert "Real two-user isolation acceptance" in acceptance_doc
+    assert "debug certificate" in signing_doc.lower()
+    assert "fresh debug key" in signing_doc.lower()
