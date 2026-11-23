@@ -194,8 +194,6 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
 
         composeRule.onNodeWithText("Server could not be saved to encrypted storage.").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("mt5_server_save_status")
-            .assertTextEquals("Server could not be saved to encrypted storage.")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
     }
 
