@@ -1,7 +1,6 @@
 package com.example.ui.bot
 
 import android.content.Context
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -162,7 +161,7 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
         composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Demo-Exact")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
-        composeRule.onNodeWithText("Server saved").assertDoesNotExist()
+        composeRule.onNodeWithTag("mt5_server_save_status").assertTextEquals("")
 
         composeRule.onNodeWithTag("server_field").performScrollTo().performTextReplacement("FBS-Real-Exact")
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
@@ -189,7 +188,8 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
 
         composeRule.onNodeWithText("Server could not be saved to encrypted storage.").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Server saved").assertDoesNotExist()
+        composeRule.onNodeWithTag("mt5_server_save_status")
+            .assertTextEquals("Server could not be saved to encrypted storage.")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
     }
 
