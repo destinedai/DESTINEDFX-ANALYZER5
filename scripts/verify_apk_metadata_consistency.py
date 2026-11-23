@@ -91,7 +91,9 @@ def load_verified_artifact(name: str, metadata_path: Path, apk_path: Path, expec
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise VerificationError(f"{name}: metadata JSON is invalid.") from None
     result = _valid_metadata(name, metadata, expected_source_sha)
-    _require(result["apk_file"] == apk_path.name, f"{name}: APK filename does not match metadata.")
+    # CI may rename a verified APK when packaging a distinct artifact. The APK bytes,
+    # size and metadata SHA remain authoritative; retain both names in the report.
+    result["downloaded_apk_file"] = apk_path.name
     apk_digest = hashlib.sha256(apk_path.read_bytes()).hexdigest()
     _require(apk_path.stat().st_size == result["size_bytes"], f"{name}: APK size does not match metadata.")
     _require(apk_digest == result["sha256"], f"{name}: APK SHA-256 does not match metadata.")
@@ -142,7 +144,7 @@ def build_report(metadata_by_name: dict[str, dict[str, Any]], expected_source_sh
             name: {
                 field: validated[name].get(field)
                 for field in (
-                    "apk_file", "package_name", "version_name", "version_code",
+                    "apk_file", "downloaded_apk_file", "package_name", "version_name", "version_code",
                     "minimum_sdk", "target_sdk", "abis", "size_bytes", "sha256",
                     "certificate_sha256", "verified_signature_schemes",
                     "metadata_file", "metadata_sha256", "debug_only",

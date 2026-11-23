@@ -126,3 +126,29 @@ def test_metadata_sidecar_tampering_is_rejected(tmp_path):
     Path(str(metadata_path) + ".sha256").write_text("0" * 64 + "  apk-metadata.json\n")
     with pytest.raises(checker.VerificationError, match="sidecar"):
         checker.load_verified_artifact("android-jvm", metadata_path, apk, ROOT_SHA)
+
+def test_metadata_remains_valid_when_ci_renames_apk_after_verification(tmp_path):
+    apk = tmp_path / "DestinedFX-Codespaces-bootstrap.apk"
+    apk.write_bytes(b"synthetic APK bytes for metadata consistency tests")
+    metadata = _metadata(apk_name="app-debug.apk")
+    metadata_path = tmp_path / "Codespaces-bootstrap.metadata.json"
+    raw = json.dumps(metadata).encode()
+    metadata_path.write_bytes(raw)
+    Path(str(metadata_path) + ".sha256").write_text(
+        f"{hashlib.sha256(raw).hexdigest()}  {metadata_path.name}\n"
+    )
+    loaded = checker.load_verified_artifact("codespaces-bootstrap", metadata_path, apk, ROOT_SHA)
+    assert loaded["apk_file"] == "app-debug.apk"
+    assert loaded["downloaded_apk_file"] == "DestinedFX-Codespaces-bootstrap.apk"
+    report = checker.build_report(
+        {
+            "android-jvm": _metadata(),
+            "codespaces-bootstrap": loaded,
+            "independent-standard": _metadata(),
+        },
+        ROOT_SHA,
+        stable_signing_required=False,
+    )
+    assert report["artifacts"]["codespaces-bootstrap"]["apk_file"] == "app-debug.apk"
+    assert report["artifacts"]["codespaces-bootstrap"]["downloaded_apk_file"] == "DestinedFX-Codespaces-bootstrap.apk"
+
