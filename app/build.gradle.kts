@@ -209,6 +209,11 @@ android {
     unitTests {
       isIncludeAndroidResources = true
       all { testTask ->
+        // Bound the unit-test worker on hosted runners. Without this, Dispatchers.Default
+        // observes the host's very high CPU count and can spawn dozens of worker threads.
+        testTask.maxHeapSize = "1536m"
+        testTask.maxParallelForks = 1
+        testTask.jvmArgs("-XX:ActiveProcessorCount=2")
         // The CI job seeds this directory with the exact instrumented Android SDK jar
         // so Robolectric does not perform one independent Maven download per test class.
         val robolectricDependencyDir = System.getenv("ROBOLECTRIC_DEPENDENCY_DIR").orEmpty()

@@ -71,9 +71,12 @@ internal fun isExplicitDerivPublicSource(source: String): Boolean =
     source.trim().uppercase(java.util.Locale.ROOT) == "DERIV_PUBLIC"
 
 /** Reject stale, zero, or future-dated feed timestamps instead of counting a negative age as fresh. */
-internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean =
-    timestampMs > 0L && nowMs > 0L && maxAgeMillis > 0L &&
-        (nowMs - timestampMs).let { it >= 0L && it < maxAgeMillis }
+internal fun isTimestampFresh(timestampMs: Long, nowMs: Long, maxAgeMillis: Long): Boolean {
+    if (timestampMs <= 0L || nowMs <= 0L || maxAgeMillis <= 0L) return false
+    // Reject every future timestamp before subtraction; only a non-negative age is fresh.
+    if (timestampMs > nowMs) return false
+    return nowMs - timestampMs < maxAgeMillis
+}
 
 /** Keep the last accepted provider quote when a refresh candidate is rejected. */
 internal fun canonicalTickerAfterRefresh(

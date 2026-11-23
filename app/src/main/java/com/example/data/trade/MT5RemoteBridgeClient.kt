@@ -1337,7 +1337,7 @@ class MT5RemoteBridgeClient(
                 snapshot.terminalConnected && snapshot.tradeAllowed && snapshot.accountVerified && snapshot.managedState == "READY" &&
                 snapshot.accessType == "MASTER" && snapshot.profileMode == selectedProfile.uppercase() &&
                 snapshot.actualAccountMode == selectedProfile.uppercase() && expectedLogin.isNotBlank() && snapshot.actualLogin == expectedLogin &&
-                expectedServer.isNotBlank() && snapshot.actualServer == expectedServer && snapshot.snapshotsValid &&
+                expectedServer.isNotBlank() && snapshot.actualServer == expectedServer && snapshot.actualCompany.isNotBlank() && snapshot.snapshotsValid &&
                 positionIdList(snapshot) != null && orderTicketList(snapshot) != null
 
         internal fun effectConfirmed(action: String, snapshot: Snapshot, tickets: List<String>): Boolean {

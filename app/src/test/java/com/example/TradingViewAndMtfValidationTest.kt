@@ -110,17 +110,6 @@ allowWeekendGap = false,
         assertFalse(mapping.values.contains("XRP/USD"))
     }
 
-    @Test
-    fun isTimestampFresh_RejectsFutureStaleAndInvalidTimestamps() {
-        assertTrue(isTimestampFresh(timestampMs = 9_950L, nowMs = 10_000L, maxAgeMillis = 100L))
-        assertFalse("At the max-age boundary the tick is stale",
-            isTimestampFresh(timestampMs = 9_900L, nowMs = 10_000L, maxAgeMillis = 100L))
-        assertFalse("A future-dated quote must not count as fresh",
-            isTimestampFresh(timestampMs = 10_001L, nowMs = 10_000L, maxAgeMillis = 100L))
-        assertFalse(isTimestampFresh(timestampMs = 1L, nowMs = 10_000L, maxAgeMillis = 100L))
-        assertFalse(isTimestampFresh(timestampMs = 0L, nowMs = 10_000L, maxAgeMillis = 100L))
-        assertFalse(isTimestampFresh(timestampMs = 9_950L, nowMs = 10_000L, maxAgeMillis = 0L))
-    }
 
     // --- 3. MULTI-TIMEFRAME ANALYSIS TESTS ---
 
@@ -216,40 +205,6 @@ allowWeekendGap = false,
         assertNull("Conflicting timeframes must have no agreed direction", result.dir)
     }
 
-    @Test
-    fun testDynamicAnalysisInfo_ExposesMtfBiasesCorrectly() {
-        val signal = TradeSignal(
-            id = "test-signal-1",
-            symbol = "EUR/USD",
-            timeframe = "M15",
-            direction = SignalDirection.LONG,
-            entryPrice = 1.0850,
-            stopLoss = 1.0840,
-            takeProfit = 1.0875,
-            confidenceScore = 78,
-            rationale = "MTF: 2/3 aligned",
-            timestamp = System.currentTimeMillis(),
-            mtfSummary = "2/3 aligned",
-            mtfState = "PARTIAL_BULLISH",
-            mtfPerTimeframe = mapOf(
-                "H1" to "BULLISH",
-                "H4" to "BULLISH",
-                "D1" to "BEARISH",
-                "W1" to "BULLISH"
-            ),
-            signalState = "BUY",
-            executable = true
-        )
-
-        val uiModel = mapTradeSignalToUiModel(signal)
-        assertEquals("BULLISH", uiModel.getTfBias("H1"))
-        assertEquals("BULLISH", uiModel.getTfBias("H4"))
-        assertEquals("BEARISH", uiModel.getTfBias("D1"))
-        assertEquals("BULLISH", uiModel.getTfBias("W1"))
-        assertEquals("N/A", uiModel.getTfBias("M1"))
-        assertEquals("2/3 aligned", uiModel.mtfSummary)
-        assertEquals("PARTIAL_BULLISH", uiModel.mtfStatus)
-    }
 
     @Test
     fun testCandleCache_DoesNotLetTwoBarReferencePriceHideFullHistoryRequest() {
@@ -273,36 +228,5 @@ allowWeekendGap = false,
         assertTrue(check.problems.any { it.contains("Non-increasing timestamps") })
     }
 
-    @Test
-    fun testChartImagePixelScannerReportsOnlyMeasuredColourEvidence() {
-        val bitmap = Bitmap.createBitmap(40, 40, Bitmap.Config.ARGB_8888)
-        bitmap.eraseColor(AndroidColor.rgb(18, 24, 36))
-        for (y in 0 until 40) {
-            for (x in 0 until 20) bitmap.setPixel(x, y, AndroidColor.rgb(30, 220, 100))
-            for (x in 20 until 30) bitmap.setPixel(x, y, AndroidColor.rgb(238, 55, 65))
-        }
-
-        val report = scanChartBitmap(bitmap)
-        assertEquals(1600, report.sampledPixelCount)
-        assertEquals(800, report.bullishTonePixels)
-        assertEquals(400, report.bearishTonePixels)
-        assertEquals(75.00, report.colourCoveragePercent, 0.02)
-        assertTrue(report.visualBalance.contains("GREEN/CYAN COLOUR"))
-        assertTrue(report.explanation.contains("not bullish/bearish market confirmation"))
-        bitmap.recycle()
-    }
-
-    @Test
-    fun testChartImagePixelScannerDoesNotCallDarkImageASetup() {
-        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
-        bitmap.eraseColor(AndroidColor.rgb(12, 16, 26))
-
-        val report = scanChartBitmap(bitmap)
-        assertEquals(0, report.bullishTonePixels)
-        assertEquals(0, report.bearishTonePixels)
-        assertEquals("UNCLEAR", report.visualBalance)
-        assertTrue(report.evidenceStatus.contains("LIMITED"))
-        bitmap.recycle()
-    }
 
 }

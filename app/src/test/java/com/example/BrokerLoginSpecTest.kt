@@ -3,7 +3,6 @@ package com.example
 import com.example.data.broker.BrokerLoginSpecs
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginField
-import com.example.data.broker.ServerSuggestionSource
 import com.example.ui.bot.LoginForm
 import com.example.ui.bot.ServerOption
 import com.example.ui.bot.ServerOptions
@@ -133,8 +132,18 @@ class BrokerLoginSpecTest {
     @Test
     fun mt5ServerSuggestionsAreNeverInventedAndCarryProvenance() {
         BrokerLoginSpecs.all.filter { it.connector == LoginConnector.MT5_TERMINAL }.forEach { spec ->
-            assertTrue(spec.serverSuggestions.any { it.source == ServerSuggestionSource.OWNER_HISTORY })
-            assertTrue(spec.serverSuggestions.any { it.source == ServerSuggestionSource.HOST_REPORTED })
+            assertTrue(spec.id, spec.serverSuggestions.isEmpty())
+            assertEquals(listOf(ServerOption.TypeServerName), ServerOptions.build(spec, emptyList(), emptyList()))
+            val dashboardSource = if (spec.id == "DERIV_MT5") "Copy from Deriv Dashboard" else "Copy from Broker Dashboard"
+            assertTrue(spec.id, ServerOptions.fieldHint(spec).startsWith(dashboardSource))
+            assertEquals(
+                listOf(
+                    ServerOption.Suggested("Owner-Exact", "Your history"),
+                    ServerOption.Suggested("Host-Exact", "Reported by host"),
+                    ServerOption.TypeServerName,
+                ),
+                ServerOptions.build(spec, listOf("Owner-Exact"), listOf("Host-Exact")),
+            )
             assertTrue(spec.companyAliases.any { it.isNotBlank() })
         }
     }

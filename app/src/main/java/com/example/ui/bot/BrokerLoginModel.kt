@@ -171,9 +171,9 @@ sealed interface ServerOption {
 object ServerOptions {
     /** Exact account-issued instructions shown below each MT5 server field. */
     fun fieldHint(spec: BrokerLoginSpec): String = when (spec.id) {
-        "FBS_MT5" -> "Copy from FBS Personal Area > MT5 account > Server (e.g. FBS-Real / FBS-Demo). Exact account value only; do NOT add :port."
-        "DERIV_MT5" -> "Copy from Deriv Dashboard > MT5 > Server (e.g. Deriv-Demo / Deriv-Server). Exact account value only; do NOT add :port."
-        else -> "Copy the exact server name issued for this MT5 account. Do NOT add :port."
+        "FBS_MT5" -> "Copy from Broker Dashboard > FBS Personal Area > MT5 account > Server. Enter the exact account-issued value only; do NOT add :port."
+        "DERIV_MT5" -> "Copy from Deriv Dashboard > MT5 > Server. Enter the exact account-issued value only; do NOT add :port."
+        else -> "Copy from Broker Dashboard > MT5 account details > Server. Enter the exact account-issued value only; do NOT add :port."
     }
 
     /** Owner history and host-reported server entries only; never guess a provider server name. */
