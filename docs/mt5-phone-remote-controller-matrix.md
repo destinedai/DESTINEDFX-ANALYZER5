@@ -31,6 +31,29 @@ A separate owner-operated Windows Bridge/worker kit remains a compatibility path
 
 A screen that looks like an MT5 control is not evidence of feature parity. The unimplemented items above must remain visibly unavailable until they are wired to fresh broker data, a defined Bridge command and an EA-side implementation with tests.
 
+
+## Detailed parity and dependency audit
+
+These capabilities are split between the Analyzer chart/market-data path and the broker-native MT5 terminal path. A similarly named screen, snapshot, or Analyzer feature does not establish MT5 Android parity.
+
+| Requested capability | Existing implementation | Missing phone, Bridge and EA work | Regression coverage and dependencies |
+|---|---|---|---|
+| Pending orders | Authenticated active-order snapshots and selected/EA-owned pending-order cancellation | No pending-order creation form or PLACE_PENDING command; no general pending-order modify/expiry command or screen | Existing snapshot and cancellation tests cover read/cancel only. Placement needs typed parameters, broker tick/stop/freeze validation, expiry handling, EA CTrade submission, idempotency and per-ticket reconciliation. |
+| Full TP/SL editing | Exact-ticket, account-bound and quote-bound monotonic SL tightening; existing TP is preserved | No TP edit, SL widening/removal, or unrestricted protection form | Client and EA safety tests cover tighten-only. Broader edits need a separate risk policy, fresh quotes, broker constraints, confirmation and EA reconciliation. Loosening/removal remain blocked. |
+| Native MT5 chart | TradingChartContainer and Analyzer/provider OHLC are available; Bridge validates terminal-origin candles in the authenticated state snapshot | No complete remote MT5 terminal chart-object/template workflow or chart command proving actual terminal chart state | Analyzer chart and candle parser tests do not prove terminal parity. Requires broker-terminal history, symbol mapping, account-bound chart interface and stale-data validation. |
+| Timeframe controls | Analyzer has its own market-analysis timeframe selection; the verified-candle parser accepts a bounded timeframe set | No verified command to change the actual MT5 terminal chart timeframe from the phone and retrieve matching terminal chart state | Analyzer timeframe and candle parser tests only. Requires terminal-side timeframe selection, history synchronization and selected-account/symbol checks. |
+| Indicator controls | EA internal signal/risk calculations and Analyzer indicators exist | No remote add/remove/configure interface for indicators attached to an MT5 terminal chart; no Bridge contract or terminal chart-object implementation | Signal engine and EA calculation tests are not terminal indicator parity. Requires a supported-indicator list, parameter validation, chart object lifecycle and per-terminal persistence. |
+| Market Depth / DOM | No supported broker DOM subscription or depth-level snapshot is exposed by the managed Bridge | No phone Depth screen, Bridge model, or EA MarketBookAdd/OnBookEvent collection path | No DOM acceptance test exists; it must remain unavailable rather than display simulated depth. Requires broker and symbol support. |
+| MT5 native news/mailbox | An authenticated economic-calendar verdict is used as a separate entry/risk guard | No terminal-native MT5 news stream, mailbox/messages view, message cursor or per-account notification reconciliation | Calendar freshness and order-block tests cover only calendar gating, not native MT5 news/mailbox parity. Requires a distinct terminal-source contract and UI reconciliation. |
+
+### Availability rules
+
+- Implemented snapshot/cancel and tighten-only actions may appear only when the selected authenticated account snapshot is fresh and identity-matched.
+- Pending placement, broad protection edits, native chart controls, terminal indicator controls, Depth and native mailbox/news must remain visibly unavailable until the phone UI, account-bound Bridge API, EA runtime and behavior-focused tests are all implemented.
+- Analyzer/provider charts, timeframe selection and indicators must be labelled as Analyzer functionality, not terminal-native MT5 features.
+- A placeholder screen, mock service, parser-only test or source-string assertion does not complete a capability.
+
+
 ## Manual market order contract
 
 The phone sends `PLACE_MARKET_ORDER` with:

@@ -90,3 +90,14 @@ def test_documentation_separates_owner_acceptance_from_ci_fixtures_and_real_trad
     assert "Real two-user isolation acceptance" in acceptance_doc
     assert "debug certificate" in signing_doc.lower()
     assert "fresh debug key" in signing_doc.lower()
+
+
+def test_mt5_parity_matrix_marks_native_terminal_gaps_and_keeps_them_unavailable():
+    matrix = (ROOT / "docs" / "mt5-phone-remote-controller-matrix.md").read_text(encoding="utf-8")
+    assert "No pending-order creation form" in matrix
+    assert "monotonic SL tightening" in matrix
+    assert "No verified command to change the actual MT5 terminal chart timeframe" in matrix
+    assert "No remote add/remove/configure interface" in matrix
+    assert "No phone Depth screen" in matrix
+    assert "No terminal-native MT5 news stream" in matrix
+    assert "must remain visibly unavailable" in matrix
