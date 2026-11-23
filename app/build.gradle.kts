@@ -56,6 +56,7 @@ require(!destinedFxCodespacesHostDiscovery || destinedFxEndpointsLocked) {
 val codespacesBootstrapBuild = destinedFxCodespacesHostDiscovery &&
   (mt5ManagedServiceUrl.isBlank() || mt5ManagedServiceUrl == "__CONFIGURATION_REQUIRED__") &&
   (managementApiOrigin.isBlank() || managementApiOrigin == "__CONFIGURATION_REQUIRED__")
+val destinedFxDebugKeystorePath = System.getenv("DESTINEDFX_DEBUG_KEYSTORE_PATH")?.trim().orEmpty()
 
 if (destinedFxEndpointsLocked && !codespacesBootstrapBuild) {
   fun requirePublicHttpsOrigin(raw: String, name: String) {
@@ -126,6 +127,14 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
+    if (destinedFxDebugKeystorePath.isNotBlank()) {
+      create("destinedfxCiDebug") {
+        storeFile = file(destinedFxDebugKeystorePath)
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
+    }
   }
 
   buildTypes {
@@ -139,6 +148,9 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      if (destinedFxDebugKeystorePath.isNotBlank()) {
+        signingConfig = signingConfigs.getByName("destinedfxCiDebug")
+      }
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
       buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
       buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")

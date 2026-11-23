@@ -29,8 +29,8 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check pip-audit
           pip-audit -r bridge/requirements.txt
-      - name: Run APK artifact-integrity verifier tests
-        run: python -m pytest -q scripts/test_apk_integrity.py
+      - name: Run APK artifact-integrity and signing-config tests
+        run: python -m pytest -q scripts/test_apk_integrity.py scripts/test_android_signing_config.py
       - name: Run shared MT5 login contract fixtures
         run: python -m pytest -q scripts/test_login_contract.py
       - name: Run offline Deriv DEMO smoke-harness tests
@@ -356,7 +356,9 @@ jobs:
             exit 1
           fi
           echo "DESTINEDFX_DEBUG_CERT_SHA256=$cert_sha256" >> "$GITHUB_ENV"
+          echo "DESTINEDFX_DEBUG_KEYSTORE_PATH=$GITHUB_WORKSPACE/debug.keystore" >> "$GITHUB_ENV"
           echo "Prepared debug certificate SHA-256: $cert_sha256" >> "$GITHUB_STEP_SUMMARY"
+          chmod 600 debug.keystore
           mkdir -p "$HOME/.android"
           install -m 600 debug.keystore "$HOME/.android/debug.keystore"
       - name: Create .env from example (public placeholders only)
@@ -659,7 +661,9 @@ jobs:
             exit 1
           fi
           echo "DESTINEDFX_DEBUG_CERT_SHA256=$cert_sha256" >> "$GITHUB_ENV"
+          echo "DESTINEDFX_DEBUG_KEYSTORE_PATH=$GITHUB_WORKSPACE/debug.keystore" >> "$GITHUB_ENV"
           echo "Prepared debug certificate SHA-256: $cert_sha256" >> "$GITHUB_STEP_SUMMARY"
+          chmod 600 debug.keystore
           mkdir -p "$HOME/.android"
           install -m 600 debug.keystore "$HOME/.android/debug.keystore"
       - name: Create .env from example (public placeholders only)
