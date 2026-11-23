@@ -370,3 +370,28 @@ private suspend fun runQuickDemoOrder(
     }
     return "DEMO test closed and reconciled · ticket $ticket · broker-reported deal profit $profitText"
 }
+
+@Composable
+private fun DashboardLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(0.9f),
+            color = TextSecondary,
+            fontSize = 10.sp
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(1.1f),
+            color = TextPrimary,
+            fontSize = 10.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
+    }
+}

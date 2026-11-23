@@ -154,9 +154,30 @@ def test_codespaces_bootstrap_apk_has_independent_ci_job():
     job = workflow[job_start:job_end]
     assert "assembleDebug" in job
     assert "testDebugUnitTest" not in job
-    assert "name: DestinedFX-Codespaces-bootstrap-apk" in job
-    assert "needs: android-build-and-unit-tests" not in job
+    assert "name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-Codespaces-bootstrap" in job
+    assert "needs: [python-tests, android-build-and-unit-tests]" in job
     assert "apksigner" in job and "aapt2" in job and "sha256sum" in job
+
+
+
+
+def test_android_emulator_and_bootstrap_jobs_wait_for_prior_acceptance_gates():
+    workflow = (ROOT / ".github" / "workflows" / "build-apk.yml").read_text()
+
+    android_start = workflow.index("  android-build-and-unit-tests:")
+    bootstrap_start = workflow.index("  codespaces-bootstrap-apk:")
+    emulator_start = workflow.index("  android-emulator-instrumentation:")
+    worker_start = workflow.index("  package-windows-worker-kit:", emulator_start)
+
+    android_job = workflow[android_start:bootstrap_start]
+    bootstrap_job = workflow[bootstrap_start:emulator_start]
+    emulator_job = workflow[emulator_start:worker_start]
+
+    assert "needs: python-tests" in android_job
+    assert "needs: [python-tests, android-build-and-unit-tests]" in bootstrap_job
+    assert "needs: [python-tests, android-build-and-unit-tests]" in emulator_job
+    assert "\\n    if: always()" not in emulator_job
+    assert "JVM acceptance is NOT PASSED" in workflow
 
 
 def test_codespaces_bootstrap_apk_has_explicit_locked_discovery_without_embedded_hosts():
