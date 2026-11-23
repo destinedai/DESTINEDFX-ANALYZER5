@@ -1,9 +1,11 @@
 package com.example.ui.bot
 
 import android.content.Context
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -11,6 +13,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.broker.HostProfile
@@ -31,11 +34,16 @@ class MetaTraderBrokerFlowTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private fun openFlow() {
+    private fun openFlow(storageAvailable: Boolean = true) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("broker_flow_ui_fixture", Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
-        val secrets = SecretsManager(context) { preferences }
+        // Injected fixture preferences are test-only; production continues using EncryptedSharedPreferences.
+        val secrets = if (storageAvailable) {
+            SecretsManager(context) { preferences }
+        } else {
+            SecretsManager(context) { throw IllegalStateException("simulated secure-storage failure") }
+        }
         composeRule.setContent {
             DestinedFXTheme {
                 MetaTraderBrokerFlow(
@@ -80,6 +88,7 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithText("Type exact server name").performClick()
         composeRule.onNodeWithTag("login_button").assertIsNotEnabled()
         composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
+        composeRule.onNodeWithTag("server_field").assertTextEquals("Fixture-Demo")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
         composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
@@ -104,8 +113,12 @@ class MetaTraderBrokerFlowTest {
             composeRule.onNodeWithText("MT5 account sign-in").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_login_fields_help").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_server_field_help").performScrollTo().assertIsDisplayed()
-            composeRule.onNodeWithText("Copy from Broker Dashboard > MT5 account details > Server. Enter the exact account-issued value only; do NOT add :port.")
-                .performScrollTo().assertIsDisplayed()
+            val expectedServerHint = if (brand == "DERIV") {
+                "Copy from Deriv Dashboard > MT5 > Server. Enter the exact account-issued value only; do NOT add :port."
+            } else {
+                "Copy from Broker Dashboard > MT5 account details > Server. Enter the exact account-issued value only; do NOT add :port."
+            }
+            composeRule.onNodeWithText(expectedServerHint).performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
             composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
             composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("Fixture-Demo")
@@ -127,6 +140,56 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("FBS-Demo:443")
         composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().assertIsNotEnabled()
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
+    }
+
+    @Test
+    fun demoAndRealServerValuesRemainIndependentAcrossModeSwitches() {
+        openFlow()
+        composeRule.onNodeWithTag("add_account").performClick()
+        composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
+        composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
+        composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
+        composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("FBS-Demo-Exact")
+
+        composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
+        composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Demo-Exact")
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
+        composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
+        composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
+
+        // No REAL value exists yet. Preserve the typed value but do not count it as saved for REAL.
+        composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
+        composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Demo-Exact")
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
+        composeRule.onNodeWithText("Server saved").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("server_field").performScrollTo().performTextReplacement("FBS-Real-Exact")
+        composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
+        composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
+
+        // Returning to DEMO restores only the DEMO value; LIVE remains separately stored.
+        composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
+        composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Demo-Exact")
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
+        composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
+        composeRule.onNodeWithTag("server_field").assertTextEquals("FBS-Real-Exact")
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
+    }
+
+    @Test
+    fun failedSecureServerPersistenceNeverShowsSuccessOrEnablesLogin() {
+        openFlow(storageAvailable = false)
+        composeRule.onNodeWithTag("add_account").performClick()
+        composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
+        composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
+        composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
+        composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("FBS-Demo-Exact")
+        composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
+        composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
+
+        composeRule.onNodeWithText("Server could not be saved to encrypted storage.").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Server saved").assertDoesNotExist()
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
     }
 

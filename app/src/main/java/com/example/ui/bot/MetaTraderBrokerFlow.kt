@@ -442,7 +442,10 @@ fun MetaTraderBrokerFlow(
                                     .clickable {
                                         val brand = spec.id.removeSuffix("_MT5")
                                         val savedServer = secrets.getManagedMT5AccountServer("${brand}_${mode.name}")
-                                        form = LoginRules.withMode(form, mode).copy(server = savedServer)
+                                        // Never erase owner-entered text when this mode has no saved server.
+                                        // The active-mode saved check below still requires an explicit save.
+                                        val serverForMode = savedServer.takeIf { it.isNotBlank() } ?: form.server
+                                        form = LoginRules.withMode(form, mode).copy(server = serverForMode)
                                         serverSaveStatus = ""
                                         modeHintChosen = true
                                     }

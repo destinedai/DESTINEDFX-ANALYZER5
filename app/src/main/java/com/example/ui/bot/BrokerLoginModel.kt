@@ -170,8 +170,14 @@ sealed interface ServerOption {
 
 object ServerOptions {
     /** Exact account-issued instructions shown below each MT5 server field. */
-    fun fieldHint(spec: BrokerLoginSpec): String =
-        "Copy from Broker Dashboard > MT5 account details > Server. Enter the exact account-issued value only; do NOT add :port."
+    fun fieldHint(spec: BrokerLoginSpec): String {
+        val dashboardPath = if (spec.id == "DERIV_MT5") {
+            "Copy from Deriv Dashboard > MT5 > Server"
+        } else {
+            "Copy from Broker Dashboard > MT5 account details > Server"
+        }
+        return "$dashboardPath. Enter the exact account-issued value only; do NOT add :port."
+    }
 
     /** Owner history and host-reported server entries only; never guess a provider server name. */
     fun build(spec: BrokerLoginSpec, ownerHistory: List<String>, hostReported: List<String>): List<ServerOption> {

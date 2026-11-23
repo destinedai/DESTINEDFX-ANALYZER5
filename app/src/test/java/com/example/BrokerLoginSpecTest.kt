@@ -134,8 +134,16 @@ class BrokerLoginSpecTest {
         BrokerLoginSpecs.all.filter { it.connector == LoginConnector.MT5_TERMINAL }.forEach { spec ->
             assertTrue(spec.id, spec.serverSuggestions.isEmpty())
             assertEquals(listOf(ServerOption.TypeServerName), ServerOptions.build(spec, emptyList(), emptyList()))
-            val dashboardSource = if (spec.id == "DERIV_MT5") "Copy from Deriv Dashboard" else "Copy from Broker Dashboard"
-            assertTrue(spec.id, ServerOptions.fieldHint(spec).startsWith(dashboardSource))
+            val dashboardPath = if (spec.id == "DERIV_MT5") {
+                "Copy from Deriv Dashboard > MT5 > Server"
+            } else {
+                "Copy from Broker Dashboard > MT5 account details > Server"
+            }
+            assertEquals(
+                spec.id,
+                "$dashboardPath. Enter the exact account-issued value only; do NOT add :port.",
+                ServerOptions.fieldHint(spec),
+            )
             assertEquals(
                 listOf(
                     ServerOption.Suggested("Owner-Exact", "Your history"),

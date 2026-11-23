@@ -15,6 +15,27 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class SecretsManagerBridgePendingTest {
+    /**
+     * Test-only SharedPreferences adapter whose reads delegate to a fixture and whose writes
+     * deliberately fail at commit. Production storage remains EncryptedSharedPreferences.
+     */
+    private class CommitFailingSharedPreferences(
+        private val delegate: android.content.SharedPreferences,
+    ) : android.content.SharedPreferences by delegate {
+        override fun edit(): android.content.SharedPreferences.Editor =
+            object : android.content.SharedPreferences.Editor {
+                override fun putString(key: String, value: String?) = this
+                override fun putStringSet(key: String, values: Set<String>?) = this
+                override fun putInt(key: String, value: Int) = this
+                override fun putLong(key: String, value: Long) = this
+                override fun putFloat(key: String, value: Float) = this
+                override fun putBoolean(key: String, value: Boolean) = this
+                override fun remove(key: String) = this
+                override fun clear() = this
+                override fun commit(): Boolean = false
+                override fun apply() {}
+            }
+    }
     @Test fun botConfigurationPersistsSeparatelyFromAnalyzerStrategy() {
         val manager = SecretsManager(ApplicationProvider.getApplicationContext())
         if (!manager.isSecureStorageAvailable) return
@@ -179,6 +200,41 @@ class SecretsManagerBridgePendingTest {
         assertTrue(manager.saveSelectedMT5BrokerBrand("DERIV"))
         assertEquals("DERIV", manager.getSelectedMT5BrokerBrand())
         assertFalse(manager.saveSelectedMT5BrokerBrand("UNKNOWN"))
+    }
+
+    @Test fun managedMt5ServerPersistenceIsBrokerAndModeScopedAndFailsClosed() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val preferences = context.getSharedPreferences("managed_mt5_server_scope_fixture", 0)
+        preferences.edit().clear().commit()
+        // This injected fixture is test-only and exercises the existing persistence seam.
+        val manager = SecretsManager(context) { preferences }
+        assertTrue(manager.isSecureStorageAvailable)
+
+        assertTrue(manager.saveManagedMT5AccountServer("FBS_DEMO", "FBS-Demo-17"))
+        assertTrue(manager.saveManagedMT5AccountServer("FBS_LIVE", "FBS-Real-17"))
+        assertTrue(manager.saveManagedMT5AccountServer("EXNESS_DEMO", "Exness-Demo-29"))
+        assertEquals("FBS-Demo-17", manager.getManagedMT5AccountServer("FBS_DEMO"))
+        assertEquals("FBS-Real-17", manager.getManagedMT5AccountServer("FBS_LIVE"))
+        assertEquals("Exness-Demo-29", manager.getManagedMT5AccountServer("EXNESS_DEMO"))
+        assertEquals("", manager.getManagedMT5AccountServer("EXNESS_LIVE"))
+        assertEquals("", manager.getManagedMT5AccountServer("HFM_DEMO"))
+
+        listOf("", " ", "FBS Demo", "FBS-Demo:443", " FBS-Demo-17").forEach { invalid ->
+            assertFalse("Invalid server should be rejected: '$invalid'", manager.saveManagedMT5AccountServer("FBS_DEMO", invalid))
+        }
+        assertEquals("FBS-Demo-17", manager.getManagedMT5AccountServer("FBS_DEMO"))
+
+        val unavailable = SecretsManager(context) {
+            throw IllegalStateException("simulated Android Keystore failure")
+        }
+        assertFalse(unavailable.isSecureStorageAvailable)
+        assertFalse(unavailable.saveManagedMT5AccountServer("FBS_DEMO", "FBS-Demo-18"))
+        assertEquals("", unavailable.getManagedMT5AccountServer("FBS_DEMO"))
+
+        val failedCommit = SecretsManager(context) { CommitFailingSharedPreferences(preferences) }
+        assertTrue(failedCommit.isSecureStorageAvailable)
+        assertFalse(failedCommit.saveManagedMT5AccountServer("HFM_DEMO", "HFM-Demo-4"))
+        assertEquals("", failedCommit.getManagedMT5AccountServer("HFM_DEMO"))
     }
 
     @Test fun managedMt5ProfileRefusesUnavailableStorageAndDefaultsPasswordSavingOff() {
