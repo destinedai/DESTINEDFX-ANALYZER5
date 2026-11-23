@@ -112,7 +112,7 @@ class RemoteControllerPreflightTests(unittest.TestCase):
         self.assertEqual("BLOCKED", by_name["per_user_terminal_isolation"]["status"])
         self.assertEqual("BLOCKED", by_name["live_terminal_slot_capacity"]["status"])
         self.assertEqual("PASS", by_name["bridge_host_runtime"]["status"])
-        self.assertEqual("PENDING", by_name["verified_mt5_terminal"]["status")
+        self.assertEqual("PENDING", by_name["verified_mt5_terminal"]["status"]
 
 if __name__ == "__main__":
     unittest.main()

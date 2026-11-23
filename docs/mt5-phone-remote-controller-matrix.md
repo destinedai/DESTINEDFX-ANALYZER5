@@ -60,7 +60,7 @@ DEMO and LIVE are both selectable profile modes. A DEMO market order needs the e
 
 LIVE requires a separately paired LIVE account, same-user/same-broker accepted DEMO profile, verified persistent Linux production host, fresh MT5 LIVE heartbeat, MASTER trade permission, fresh risk/news evidence, management password reauthentication and exact typed confirmation. The lease is account-bound and expires. An expired/absent lease blocks new LIVE orders; there is no global or build-time LIVE bypass.
 
-Multi-user operation additionally requires independent per-user Windows process/terminal isolation. A terminal-capacity number is not proof of OS-level isolation. Do not claim concurrent multi-user readiness until the preflight reports isolation VERIFIED and the owner host has been capacity-tested.
+Multi-user operation on the production Linux path requires root-attested independent Unix identities, private Wine prefixes, terminal trees, displays and Xauthority files for the simultaneously active DEMO and LIVE pairings. A terminal-capacity number alone is not proof of OS-level isolation. The Windows compatibility worker still lacks independently verified per-user process/ACL isolation and must not be presented as a multi-user LIVE host.
 
 ## Fast Python verification
 
@@ -75,7 +75,7 @@ This performs offline source-contract checks only. To add read-only runtime chec
 ```bash
 python scripts/mt5_remote_controller_preflight.py \
   --management-url https://<management-api-origin> \
-  --bridge-url https://<private-windows-bridge-origin>
+  --bridge-url https://<private-linux-production-bridge-origin>
 ```
 
 The runtime probe uses HTTPS GET only. It checks management readiness and public Ed25519 key publication, Bridge persistence/news configuration, key fingerprint and issuer/audience match, terminal readiness and multi-user isolation. It does not ask for broker credentials, read private signing keys, create a pairing, arm LIVE or submit an order.

@@ -100,7 +100,7 @@ MetaQuotes Virtual Hosting is not offered by this design. It runs a terminal and
 [6]: https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/ "Cloudflare Access Service Tokens, headers and rotation"
 [7]: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/ "Cloudflare Access JWT assertion verification, JWKS, issuer, and audience"
 
-## LIVE infrastructure preflight
+## LIVE infrastructure preflight (Windows compatibility and Linux production)
 
 For the legacy Windows compatibility path, after the management backend and persistent Windows Bridge have been deployed, run the read-only preflight from a machine that can reach both HTTPS endpoints. The tool also recognizes the separate persistent Linux host only when root-attested isolation is verified; neither host's /health/ready response alone proves broker pairing:
 
