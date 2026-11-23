@@ -145,16 +145,17 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
         selectedAccountMode = profile
         bridgeSecrets.saveManagedMT5SelectedProfile(profile)
     }
+    val displaySnapshot = bridgeSnapshot
     val bridgeDisplayState = when {
         !bridgeClient.managedConfigured() -> "CONFIGURATION_REQUIRED"
         bridgeToken.isBlank() -> "SETUP REQUIRED"
         !bridgeMode -> "REMOTE CONTROL DISABLED"
         bridgeCommandPending && bridgePendingAction in setOf("START", "RESUME") -> "STARTING / AWAITING ACK"
         bridgeCommandPending && bridgePendingAction in setOf("STOP", "EMERGENCY_STOP") -> "STOPPING / AWAITING ACK"
-        bridgeSnapshot != null && !bridgeSnapshot.connected -> bridgeSnapshot.connectionWarning
-        verifiedRemoteSnapshotForBot != null -> bridgeSnapshot?.state ?: "UNKNOWN"
-        bridgeIdentityFresh -> bridgeSnapshot?.managedState?.ifBlank { "PROVISIONING" } ?: "PROVISIONING"
-        bridgeSnapshot != null -> "STALE / UNVERIFIED"
+        displaySnapshot != null && !displaySnapshot.connected -> displaySnapshot.connectionWarning
+        verifiedRemoteSnapshotForBot != null -> displaySnapshot?.state ?: "UNKNOWN"
+        bridgeIdentityFresh -> displaySnapshot?.managedState?.ifBlank { "PROVISIONING" } ?: "PROVISIONING"
+        displaySnapshot != null -> "STALE / UNVERIFIED"
         else -> "OFFLINE"
     }
     val bridgeStatusColor = when {
@@ -440,12 +441,13 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
                     }
-                    Text("Bridge: ${if (bridgeSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && bridgeSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) bridgeSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
-                    if (bridgeSnapshot != null && !bridgeSnapshot.connected) {
-                        Text(bridgeSnapshot.connectionWarning, color = LossRed, fontSize = 11.sp,
+                    val cardSnapshot = bridgeSnapshot
+                    Text("Bridge: ${if (cardSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && cardSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) cardSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    if (cardSnapshot != null && !cardSnapshot.connected) {
+                        Text(cardSnapshot.connectionWarning, color = LossRed, fontSize = 11.sp,
                             fontWeight = FontWeight.Black, modifier = Modifier.testTag("mt5_not_connected_warning"))
                     }
-                    val observedHostProfile = bridgeSnapshot?.hostProfile?.name ?: "UNKNOWN"
+                    val observedHostProfile = cardSnapshot?.hostProfile?.name ?: "UNKNOWN"
                     Text(
                         "HOST PROFILE: $observedHostProfile · LIVE GATE: " +
                             if (observedHostProfile == "PERSISTENT") "PERSISTENT HOST EVIDENCE PRESENT" else "BLOCKED — PERSISTENT HOST NOT VERIFIED",

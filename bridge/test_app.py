@@ -833,7 +833,7 @@ def test_app_login_alias_attempts_owner_supplied_fbs_and_deriv_servers(monkeypat
 
 def test_mt5_journal_reason_and_exact_failure_code_are_returned_to_owner(monkeypatch):
     managed_env(monkeypatch)
-    p, ah = managed_pair(subject='journal-owner', tenant='journal-tenant')
+    p, ah = managed_pair(subject='journal-owner', tenant='journal-owner')
     registered = client.post('/v1/app/login', headers=ah, json={
         'login':'123456', 'server':'FBS-Private-Demo-27', 'password':'fixture-secret',
         'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS', 'consent':True,

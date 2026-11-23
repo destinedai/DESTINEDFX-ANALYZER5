@@ -43,7 +43,7 @@ def test_utf16le_bom_fixture_decodes_as_labeled_synthetic_mt5_journal():
 def test_real_format_reason_mapping_is_conservative():
     lines = [line for line in fixture_text().splitlines() if "Network '00000000'" in line]
     expected = [
-        "WRONG_CREDENTIALS",
+        "INVALID_ACCOUNT",
         "WRONG_CREDENTIALS",
         "NO_CONNECTION",
         "SERVER_NOT_FOUND",
