@@ -61,7 +61,7 @@ latestClosedCandleAtMs = 10_000L,
 timeframe = "H1",
 allowWeekendGap = false,
 )
-        assertEquals("Native chart rendered", nativeRendered.chartLabel)
+        assertEquals("Chart rendered (WebView verified)", nativeRendered.chartLabel)
     }
 
     private fun getSecretsManager(): SecretsManager {
