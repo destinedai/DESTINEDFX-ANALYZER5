@@ -211,7 +211,19 @@ class MT5RemoteBridgeClient(
         val httpReachable: Boolean, val httpStatus: Int?, val serviceStatus: String,
         val database: String, val managedExecution: String, val errorCode: String = "",
         val perUserTerminalIsolation: String = "unknown"
-    )
+    ) {
+        /**
+         * /health/ready reports infrastructure, not account readiness.
+         * Linux returns 200 when persistent isolated-slot infrastructure is ready.
+         * Windows compatibility returns 503 NO_VERIFIED_TERMINAL_PAIRING until a
+         * real account heartbeat exists; that response still does not verify a pairing.
+         */
+        val hostRuntimeReady: Boolean
+            get() = httpReachable && (
+                (httpStatus == 200 && serviceStatus.equals("ready", ignoreCase = true)) ||
+                    (httpStatus == 503 && errorCode == "NO_VERIFIED_TERMINAL_PAIRING")
+            )
+    }
     data class HostLifecycle(
         val hostProfile: HostProfile,
         val lifecycleStatus: String,

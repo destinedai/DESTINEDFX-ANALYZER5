@@ -306,6 +306,39 @@ class MT5RemoteBridgeClientTest {
 
 
 
+    @Test fun hostRuntimeReadinessDoesNotImplyAuthenticatedPairingOrTerminalHeartbeat() {
+        val linuxHost = MT5RemoteBridgeClient.ServiceReadiness(
+            httpReachable = true, httpStatus = 200, serviceStatus = "ready",
+            database = "ok", managedExecution = "configured"
+        )
+        assertTrue(linuxHost.hostRuntimeReady)
+
+        // A Windows compatibility host reports this specific 503 while the real
+        // broker pairing is absent. This reports host infrastructure only.
+        val noPairing = MT5RemoteBridgeClient.ServiceReadiness(
+            httpReachable = true, httpStatus = 503, serviceStatus = "not_ready",
+            database = "ok", managedExecution = "configured",
+            errorCode = "NO_VERIFIED_TERMINAL_PAIRING"
+        )
+        assertTrue(noPairing.httpReachable)
+        assertTrue(noPairing.hostRuntimeReady)
+
+        val blockedHost = MT5RemoteBridgeClient.ServiceReadiness(
+            httpReachable = true, httpStatus = 503, serviceStatus = "not_ready",
+            database = "unknown", managedExecution = "unknown",
+            errorCode = "LINUX_HOST_AGENT_UNHEALTHY"
+        )
+        assertTrue(blockedHost.httpReachable)
+        assertFalse(blockedHost.hostRuntimeReady)
+
+        val unreachable = MT5RemoteBridgeClient.ServiceReadiness(
+            httpReachable = false, httpStatus = null, serviceStatus = "unreachable",
+            database = "unknown", managedExecution = "unknown"
+        )
+        assertFalse(unreachable.httpReachable)
+        assertFalse(unreachable.hostRuntimeReady)
+    }
+
     @Test fun zeroBalanceAndEquityDisconnectsAndBlocksManagedActions() {
         assertEquals(
             "Balance unavailable - DISCONNECTED",

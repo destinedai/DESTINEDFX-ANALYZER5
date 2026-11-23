@@ -82,6 +82,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     var ownerBootstrapCodeInput by remember(bridgeProfileKey) { mutableStateOf("") }
     var bridgeMessage by remember(bridgeProfileKey) { mutableStateOf(bridgeSecrets.getMT5BridgeAccountPendingCommandId(bridgeProfileKey).let { id -> if (id.isBlank()) "SETUP REQUIRED" else "Unresolved saved request $id; checking its acknowledgement. Do not resend." }) }
     var bridgeSnapshot by remember(bridgeProfileKey) { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
+    var bridgeServiceReadiness by remember(bridgeProfileKey) { mutableStateOf<MT5RemoteBridgeClient.ServiceReadiness?>(null) }
+    var bridgeProbeInProgress by remember(bridgeProfileKey) { mutableStateOf(false) }
     var managedBridgeUrlInput by remember {
         mutableStateOf(MT5RemoteBridgeClient.initialServiceUrl(
             bridgeSecrets.getManagedMT5ServiceUrl(),
@@ -120,6 +122,31 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
             it.actualLogin == bridgeSecrets.getManagedMT5AccountLogin(bridgeProfileKey) &&
             it.actualServer == bridgeSecrets.getManagedMT5AccountServer(bridgeProfileKey)
     } == true
+    val bridgeReachabilityLabel = when {
+        bridgeProbeInProgress -> "CONNECTING"
+        bridgeServiceReadiness?.httpReachable == true -> "REACHABLE"
+        bridgeServiceReadiness?.httpReachable == false -> "UNREACHABLE"
+        else -> "NOT CHECKED"
+    }
+    val bridgeHostRuntimeLabel = when {
+        bridgeServiceReadiness == null -> "NOT CHECKED"
+        bridgeServiceReadiness?.hostRuntimeReady == true -> "READY"
+        bridgeServiceReadiness?.httpReachable == true -> "NOT READY"
+        else -> "UNKNOWN"
+    }
+    val authenticatedPairingLabel = when {
+        bridgeToken.isBlank() -> "NOT PAIRED"
+        bridgeSnapshot?.raw?.optString("pairing_id")?.isNotBlank() == true ->
+            "AUTHENTICATED · PAIRING VERIFIED"
+        else -> "TOKEN STORED · NOT VERIFIED"
+    }
+    val terminalHeartbeatLabel = when {
+        bridgeIdentityFresh -> "FRESH · IDENTITY VERIFIED"
+        bridgeSnapshot?.heartbeatFresh == true && bridgeSnapshot?.terminalConnected == true ->
+            "FRESH · ACCOUNT IDENTITY UNVERIFIED"
+        bridgeSnapshot?.terminalOnline == true -> "STALE"
+        else -> "NOT VERIFIED"
+    }
     val bridgeTerminalFresh = bridgeIdentityFresh
     val bridgeTerminalReady = bridgeSnapshot?.let { snapshot ->
         MT5RemoteBridgeClient.canStart(selectedAccountMode, snapshot.managedState, snapshot.accessType, snapshot.actualAccountMode,
@@ -442,7 +469,10 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         }
                     }
                     val cardSnapshot = bridgeSnapshot
-                    Text("Bridge: ${if (cardSnapshot?.connected == true) "CONNECTED" else "DISCONNECTED"} · Terminal: ${when { !bridgeIdentityFresh && cardSnapshot != null -> "STALE / UNVERIFIED"; bridgeIdentityFresh -> "ONLINE · ACCOUNT VERIFIED"; else -> "UNVERIFIED" }} · EA: ${if (bridgeIdentityFresh) cardSnapshot?.state ?: "UNKNOWN" else "STALE / UNKNOWN"}", color = TextPrimary, fontSize = 11.sp)
+                    Text("Bridge: $bridgeReachabilityLabel · Host runtime: $bridgeHostRuntimeLabel",
+                        color = TextPrimary, fontSize = 11.sp, modifier = Modifier.testTag("mt5_bridge_health_state"))
+                    Text("Authenticated pairing: $authenticatedPairingLabel · MT5 heartbeat: $terminalHeartbeatLabel · EA: ${if (bridgeIdentityFresh) cardSnapshot?.state ?: "UNKNOWN" else "UNVERIFIED"}",
+                        color = TextPrimary, fontSize = 11.sp, modifier = Modifier.testTag("mt5_pairing_terminal_state"))
                     if (cardSnapshot != null && !cardSnapshot.connected) {
                         Text(cardSnapshot.connectionWarning, color = LossRed, fontSize = 11.sp,
                             fontWeight = FontWeight.Black, modifier = Modifier.testTag("mt5_not_connected_warning"))
@@ -467,6 +497,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         onBridgeOriginDiscovered = { origin ->
                             managedBridgeUrlInput = origin
                             bridgeSnapshot = null
+                            bridgeServiceReadiness = null
                         }
                     )
                     if (showBridgeDetails) {
@@ -533,6 +564,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 else -> {
                                     managedBridgeUrlInput = origin
                                     bridgeSnapshot = null
+                                    bridgeServiceReadiness = null
                                     bridgeMode = false
                                     bridgeMessage = "Bridge URL saved. Tap CHECK CONNECTION."
                                 }
@@ -542,15 +574,38 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                         OutlinedButton(enabled = !bridgeBusy && bridgeClient.managedConfigured(), onClick = {
                             coroutineScope.launch {
                                 bridgeBusy = true
+                                bridgeProbeInProgress = true
                                 try {
-                                    val snapshot = bridgeClient.state()
-                                    bridgeSnapshot = snapshot
-                                    bridgeMessage = "Bridge responded. Worker: ${snapshot.managedState.ifBlank { "UNKNOWN" }}; EA: ${snapshot.state}."
+                                    val readiness = bridgeClient.checkServiceReadiness()
+                                    bridgeServiceReadiness = readiness
+                                    if (!readiness.httpReachable) {
+                                        bridgeSnapshot = null
+                                        bridgeMessage = "Bridge did not return an HTTP response. Host, pairing and terminal state remain unverified."
+                                    } else if (bridgeToken.isBlank()) {
+                                        bridgeSnapshot = null
+                                        bridgeMessage = if (readiness.hostRuntimeReady) {
+                                            "Bridge is reachable and its host runtime is ready. No authenticated pairing is stored; terminal heartbeat is not verified."
+                                        } else {
+                                            "Bridge is reachable, but host runtime readiness is blocked. No authenticated pairing or terminal heartbeat is verified."
+                                        }
+                                    } else {
+                                        val snapshot = bridgeClient.state()
+                                        bridgeSnapshot = snapshot
+                                        bridgeMessage = when {
+                                            snapshot.connected -> "Bridge reachable; authenticated pairing and fresh account/terminal identity are verified."
+                                            !snapshot.heartbeatFresh -> "Bridge reachable; pairing authenticated, but the terminal heartbeat is missing or stale."
+                                            else -> "Bridge reachable; pairing authenticated, but account or broker identity checks are incomplete."
+                                        }
+                                    }
                                 } catch (e: Exception) {
-                                    bridgeMessage = e.message ?: "Bridge connection failed; status is unverified."
-                                } finally { bridgeBusy = false }
+                                    bridgeSnapshot = null
+                                    bridgeMessage = "Bridge health or authenticated account state could not be verified (" + e.javaClass.simpleName + ")."
+                                } finally {
+                                    bridgeProbeInProgress = false
+                                    bridgeBusy = false
+                                }
                             }
-                        }) { Text("CHECK CONNECTION") }
+                        }) { Text(if (bridgeProbeInProgress) "CONNECTING…" else "CHECK CONNECTION") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(enabled = !bridgeBusy && bridgeSecrets.getMT5BridgeAccountAppToken(bridgeProfileKey).isNotBlank(), onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeClient.revoke(); bridgeSecrets.clearMT5BridgeAccountPendingCommand(bridgeProfileKey); bridgeCommandPending = false; bridgePendingId = ""; bridgePendingAction = ""; bridgeExpectedState = ""; bridgeSnapshot = null; bridgeMode = false; bridgeCode = ""; bridgeMessage = "$selectedAccountMode pairing revoked" } catch (_: Exception) { bridgeMessage = "Revoke not confirmed" }; bridgeBusy = false } }) { Text("Revoke $selectedAccountMode") }

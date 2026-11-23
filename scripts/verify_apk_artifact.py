@@ -185,7 +185,8 @@ def main() -> int:
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         args.output.chmod(0o644)
         checksum_path = args.output.with_suffix(args.output.suffix + ".sha256")
-        checksum_path.write_text(f"{report['sha256']}  {report['apk_file']}\n", encoding="ascii")
+        metadata_digest = hashlib.sha256(args.output.read_bytes()).hexdigest()
+        checksum_path.write_text(f"{metadata_digest}  {args.output.name}\n", encoding="ascii")
         checksum_path.chmod(0o644)
         print(json.dumps(report, sort_keys=True))
         return 0
