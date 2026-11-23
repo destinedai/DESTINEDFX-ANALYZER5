@@ -30,7 +30,7 @@ jobs:
           python -m pip install --disable-pip-version-check pip-audit
           pip-audit -r bridge/requirements.txt
       - name: Run APK artifact-integrity and signing-config tests
-        run: python -m pytest -q scripts/test_apk_integrity.py scripts/test_android_signing_config.py
+        run: python -m pytest -q scripts/test_apk_integrity.py scripts/test_android_signing_config.py scripts/test_apk_metadata_consistency.py
       - name: Run shared MT5 login contract fixtures
         run: python -m pytest -q scripts/test_login_contract.py
       - name: Run offline Deriv DEMO smoke-harness tests
@@ -795,6 +795,65 @@ jobs:
             app/build/outputs/apk/debug/verified/apk-metadata.json.sha256
           if-no-files-found: error
 
+  apk-signing-consistency:
+    name: Verify APK source and signer consistency
+    needs: [android-build-and-unit-tests, codespaces-bootstrap-apk]
+    runs-on: ubuntu-24.04
+    env:
+      STABLE_DEBUG_SIGNING_CONFIGURED: ${{ secrets.DESTINEDFX_DEBUG_KEYSTORE_B64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download Android JVM APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY
+          path: incoming/android-jvm
+      - name: Download locked Codespaces bootstrap APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-Codespaces-bootstrap
+          path: incoming/codespaces-bootstrap
+      - name: Download independent standard debug APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-independent
+          path: incoming/independent-standard
+      - name: Verify exact source SHA, APK digests, package metadata and signer consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$STABLE_DEBUG_SIGNING_CONFIGURED" == "true" ]]; then
+            args+=(--stable-signing-required)
+          fi
+          python scripts/verify_apk_metadata_consistency.py \
+            --source-sha "$GITHUB_SHA" \
+            --metadata android-jvm=incoming/android-jvm/verified/apk-metadata.json \
+            --apk android-jvm=incoming/android-jvm/app-debug.apk \
+            --metadata codespaces-bootstrap=incoming/codespaces-bootstrap/Codespaces-bootstrap.metadata.json \
+            --apk codespaces-bootstrap=incoming/codespaces-bootstrap/DestinedFX-Codespaces-bootstrap.apk \
+            --metadata independent-standard=incoming/independent-standard/verified/apk-metadata.json \
+            --apk independent-standard=incoming/independent-standard/app-debug.apk \
+            --output dist/apk-signing-consistency.json \
+            "${args[@]}"
+          {
+            echo "### APK provenance and signing consistency"
+            echo "No private signing material is included. A successful metadata check is not an APK upgrade test."
+            cat dist/apk-signing-consistency.json
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload APK provenance and signing consistency report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: APK-signing-consistency-report
+          path: |
+            dist/apk-signing-consistency.json
+            dist/apk-signing-consistency.json.sha256
+          if-no-files-found: warn
+
   android-emulator-instrumentation:
     name: Android emulator instrumentation (runtime acceptance)
     runs-on: ubuntu-24.04
@@ -917,9 +976,9 @@ jobs:
           if-no-files-found: error
 
   package-host-v1-prerelease:
-    name: Package host-v1 prerelease (HOLD — acceptance gates not wired)
-    if: false # No GitHub Release until JVM PASS + emulator PASS + real DEMO pairing PASS.
-    needs: [mt5-ea-windows-compile, android-build-and-unit-tests, package-windows-worker-kit]
+    name: Package host-v1 prerelease (HOLD — owner acceptance required)
+    if: false # Keep disabled until persistent Linux host/two-user acceptance, physical phone pairing and real DEMO lifecycle evidence exist. CI fixtures cannot satisfy owner acceptance.
+    needs: [mt5-ea-windows-compile, android-build-and-unit-tests, codespaces-bootstrap-apk, android-emulator-instrumentation, apk-signing-consistency, package-windows-worker-kit, python-tests, backend-tests, secret-scan, broker-validation, iac-validate]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

@@ -2,10 +2,15 @@ package com.example.data.codespaces
 
 import android.content.Context
 import com.example.security.SecretsManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -218,6 +223,82 @@ class GitHubCodespacesClientTest {
         client(mock).stopCodespace(target)
         assertEquals("/user/codespaces/owner-codespace-dynamic", mock.takeRequest().path)
         assertEquals("/user/codespaces/owner-codespace-dynamic/stop", mock.takeRequest().path)
+    }
+
+
+    @Test
+    fun expiredDeviceCodeDoesNotPersistAuthorizationTokens() = runBlocking {
+        val mock = server()
+        mock.enqueue(MockResponse().setBody("""{"error":"expired_token"}"""))
+        val authorization = GitHubCodespacesClient.DeviceAuthorization(
+            "expired-device-fixture", "ABCD-EFGH", "https://github.com/login/device", 60, 0
+        )
+        val failure = runCatching { client(mock).completeDeviceAuthorization(authorization) }.exceptionOrNull()
+        assertTrue(failure?.message.orEmpty().contains("expired", ignoreCase = true))
+        assertEquals("", secrets.getCodespacesGitHubAccessToken())
+        assertEquals("", secrets.getCodespacesGitHubRefreshToken())
+    }
+
+    @Test
+    fun deniedDeviceAuthorizationDoesNotPersistTokens() = runBlocking {
+        val mock = server()
+        mock.enqueue(MockResponse().setBody("""{"error":"access_denied"}"""))
+        val authorization = GitHubCodespacesClient.DeviceAuthorization(
+            "denied-device-fixture", "ABCD-EFGH", "https://github.com/login/device", 60, 0
+        )
+        val failure = runCatching { client(mock).completeDeviceAuthorization(authorization) }.exceptionOrNull()
+        assertTrue(failure?.message.orEmpty().contains("denied", ignoreCase = true))
+        assertEquals("", secrets.getCodespacesGitHubAccessToken())
+        assertEquals("", secrets.getCodespacesGitHubRefreshToken())
+    }
+
+    @Test
+    fun slowDownResponseSurfacesWaitingStateWithoutPersistingTokens() = runBlocking {
+        val mock = server()
+        mock.enqueue(MockResponse().setBody("""{"error":"slow_down"}"""))
+        val authorization = GitHubCodespacesClient.DeviceAuthorization(
+            "slow-device-fixture", "ABCD-EFGH", "https://github.com/login/device", 60, 0
+        )
+        var remainingSeconds = -1L
+        val failure = runCatching {
+            client(mock).completeDeviceAuthorization(authorization) {
+                remainingSeconds = it
+                throw CancellationException("stop after verifying slow_down state")
+            }
+        }.exceptionOrNull()
+        assertTrue(failure is CancellationException)
+        assertTrue(remainingSeconds >= 0L)
+        assertEquals(1, mock.requestCount)
+        assertEquals("", secrets.getCodespacesGitHubAccessToken())
+        assertEquals("", secrets.getCodespacesGitHubRefreshToken())
+    }
+
+    @Test
+    fun cancellingDeviceAuthorizationPollingDoesNotPersistTokens() = runBlocking {
+        val mock = server()
+        val authorization = GitHubCodespacesClient.DeviceAuthorization(
+            "cancel-device-fixture", "ABCD-EFGH", "https://github.com/login/device", 60, 60
+        )
+        val polling = launch { client(mock).completeDeviceAuthorization(authorization) }
+        yield()
+        polling.cancelAndJoin()
+        assertTrue(polling.isCancelled)
+        assertEquals(0, mock.requestCount)
+        assertEquals("", secrets.getCodespacesGitHubAccessToken())
+        assertEquals("", secrets.getCodespacesGitHubRefreshToken())
+    }
+
+    @Test
+    fun networkFailureDuringDeviceAuthorizationDoesNotPersistTokens() = runBlocking {
+        val mock = server()
+        mock.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+        val authorization = GitHubCodespacesClient.DeviceAuthorization(
+            "network-device-fixture", "ABCD-EFGH", "https://github.com/login/device", 60, 0
+        )
+        val failure = runCatching { client(mock).completeDeviceAuthorization(authorization) }.exceptionOrNull()
+        assertTrue(failure != null)
+        assertEquals("", secrets.getCodespacesGitHubAccessToken())
+        assertEquals("", secrets.getCodespacesGitHubRefreshToken())
     }
 
     @Test

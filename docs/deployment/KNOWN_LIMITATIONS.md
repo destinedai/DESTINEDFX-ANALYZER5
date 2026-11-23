@@ -44,3 +44,7 @@
 3. Implement cTrader trading behind a separate gateway and shared arming/risk controls.
 4. Complete Android lifecycle, accessibility, privacy, secret-handling and data-retention reviews.
 5. Test bridge/worker/EA recovery on owner-controlled hardware before enabling an unattended path.
+
+## Android local multi-user isolation
+
+- Android Room uses SQLCipher for encryption at rest, but the audited TradeEntity and AnalysisEntity rows are not scoped by authenticated Supabase user ID; their DAOs expose unfiltered reads. Legacy rows cannot safely be assigned to a user because their owner was not recorded. A schema migration, repository-wide owner scoping, quarantine of unknown-owner legacy data and cross-user regression tests are required before claiming local multi-user isolation.

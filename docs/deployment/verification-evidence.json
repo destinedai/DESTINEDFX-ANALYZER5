@@ -1,119 +1,66 @@
 {
-  "schema": "destinedfx.verification-evidence.v1",
-  "source_commit": "fc007f06f15fa8dfab17fe4ab78a48c64030491c",
-  "recorded_at_utc": "2026-11-10T13:53:37Z",
-  "ci": [
+  "schema": "destinedfx.verification-evidence.v2",
+  "source_commit": "234523c36e0799a93a22d02eeee5417f3c5e9d06",
+  "recorded_at_utc": "2026-11-23T15:16:45Z",
+  "evidence_scope": "Last completed CI baseline before the subsequent audit verification changes. This record must not be interpreted as proof for a later commit.",
+  "workflows": [
     {
-      "workflow": "Build APK",
-      "run_id": "42828697504",
-      "workflow_url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42828697504",
-      "job_result": "QUEUED",
-      "verification_status": "NOT_VERIFIED",
-      "artifact_reference": null,
-      "outstanding_issue": "Workflow has not completed."
+      "name": "Build APK",
+      "run_id": "45201228383",
+      "url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/45201228383",
+      "conclusion": "success",
+      "artifacts": [
+        "14830654682 DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY",
+        "14832970781 DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-Codespaces-bootstrap",
+        "14833110760 DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-independent",
+        "14831163304 Android-emulator-test-reports",
+        "14832640539 Android-jvm-test-reports-45201228383"
+      ],
+      "caveat": "Android JVM job and Codespaces bootstrap job used different ephemeral debug certificates because DESTINEDFX_DEBUG_KEYSTORE_B64 was absent."
     },
     {
-      "workflow": "Verify MT5 installer pins",
-      "run_id": "42828697597",
-      "workflow_url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42828697597",
-      "job_result": "QUEUED",
-      "verification_status": "NOT_VERIFIED",
-      "artifact_reference": null,
-      "outstanding_issue": "Workflow has not completed."
+      "name": "Codespaces deployment diagnostics",
+      "run_id": "45201228430",
+      "url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/45201228430",
+      "conclusion": "success",
+      "caveat": "Offline contract and regression evidence only; no live owner host was deployed or accepted."
     }
   ],
-  "checks": [
-    {
-      "check": "source_implementation",
-      "verification_status": "IMPLEMENTED",
-      "workflow_run_id": null,
-      "workflow_url": null,
-      "job_result": null,
-      "artifact_reference": null,
-      "outstanding_issue": "Implementation exists at the exact source commit; runtime deployment is separate."
+  "automated_evidence": {
+    "android_jvm": {
+      "executed": 451,
+      "failed": 0
     },
-    {
-      "check": "ci_tested",
-      "verification_status": "NOT_VERIFIED",
-      "workflow_run_id": "42828697504",
-      "workflow_url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42828697504",
-      "job_result": "QUEUED",
-      "artifact_reference": null,
-      "outstanding_issue": "Await exact-head CI completion."
+    "android_api34_emulator": {
+      "executed": 9,
+      "failed": 0,
+      "skipped": 0
     },
-    {
-      "check": "artifact_generated",
-      "verification_status": "NOT_VERIFIED",
-      "workflow_run_id": "42828697504",
-      "workflow_url": "https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/runs/42828697504",
-      "job_result": "QUEUED",
-      "artifact_reference": null,
-      "outstanding_issue": "APK and worker artifacts require a completed exact-head run."
+    "linux_host_acceptance_tests": {
+      "passed": 103
     },
-    {
-      "check": "deployment_recorded",
-      "verification_status": "NOT_VERIFIED",
-      "workflow_run_id": null,
-      "workflow_url": null,
-      "job_result": null,
-      "artifact_reference": null,
-      "outstanding_issue": "Owner must create and run the Codespace and return a redacted self-check report."
-    },
-    {
-      "check": "runtime_verified",
-      "verification_status": "NOT_VERIFIED",
-      "workflow_run_id": null,
-      "workflow_url": null,
-      "job_result": null,
-      "artifact_reference": null,
-      "outstanding_issue": "No owner-returned broker login, terminal heartbeat, DEMO acceptance, fill, or LIVE evidence."
-    }
-  ],
-  "rollout_stages": [
-    {
-      "stage": 1,
-      "name": "stack applied and host agent healthy with no broker",
-      "decision": "NO-GO",
-      "verification_status": "NOT_VERIFIED",
-      "owner_evidence_required": "Redacted first-run-check output from the owner Codespace."
-    },
-    {
-      "stage": 2,
-      "name": "INVESTOR read-only telemetry with identity-matched heartbeat",
-      "decision": "NO-GO",
-      "verification_status": "NOT_VERIFIED",
-      "owner_evidence_required": "Redacted account identity, server, mode, worker READY, and fresh heartbeat report."
-    },
-    {
-      "stage": 3,
-      "name": "one owner-approved DEMO order and full lifecycle",
-      "decision": "NO-GO",
-      "verification_status": "NOT_VERIFIED",
-      "owner_evidence_required": "Owner-approved DEMO lifecycle report including reconciliation and emergency stop."
-    },
-    {
-      "stage": 4,
-      "name": "five to seven day DEMO soak",
-      "decision": "NO-GO",
-      "verification_status": "NOT_VERIFIED",
-      "owner_evidence_required": "Owner-run soak, restart, reconciliation, and recovery evidence."
-    },
-    {
-      "stage": 5,
-      "name": "LIVE for one broker with minimum lot, lease, and typed confirmation",
-      "decision": "NO-GO",
-      "verification_status": "NOT_VERIFIED",
-      "owner_evidence_required": "Persistent owner host, DEMO PASS, fresh LIVE verification, lease, typed confirmation, and owner approval."
-    }
-  ],
-  "paths": {
-    "Deriv Options": "NOT_VERIFIED",
-    "cTrader": "BLOCKED BY OWNER STEP",
-    "MT5 on Codespaces host: FBS": "NOT_VERIFIED",
-    "MT5 on Codespaces host: Exness": "NOT_VERIFIED",
-    "MT5 on Codespaces host: HFM": "NOT_VERIFIED",
-    "MT5 on Codespaces host: Deriv MT5": "NOT_VERIFIED"
+    "python_bridge_and_preflight": "PASS",
+    "backend_postgresql": "PASS",
+    "gitleaks": "PASS",
+    "azure_bicep": "PASS",
+    "metaeditor_compile": "PASS",
+    "windows_worker_kit": "PASS",
+    "broker_network_probe": "DNS_TCP_ONLY"
   },
-  "orders_placed_by_this_work": false,
-  "deployment_claim": false
+  "not_configured_or_skipped": [
+    "MANAGEMENT_API_ORIGIN and its EdDSA configuration were absent; conditional endpoint validation was skipped.",
+    "MT5_MANAGED_SERVICE_URL was absent; bridge readiness endpoint check was skipped.",
+    "host-v1 prerelease packaging was intentionally skipped/disabled pending real owner host, two-user, physical-phone and DEMO acceptance."
+  ],
+  "known_blockers": [
+    "Android TradeEntity and AnalysisEntity records are not scoped to authenticated user identity; legacy rows have no reliable owner attribution.",
+    "No actual persistent Linux host installation or live two-user OS isolation acceptance.",
+    "No physical Android phone installation and GitHub Device Flow pairing.",
+    "No broker account authentication or DEMO order lifecycle; network probe only.",
+    "APK in-place upgrade was not tested."
+  ],
+  "deployment_recorded": false,
+  "physical_device_verified": false,
+  "broker_account_authenticated": false,
+  "production_release": "HOLD"
 }

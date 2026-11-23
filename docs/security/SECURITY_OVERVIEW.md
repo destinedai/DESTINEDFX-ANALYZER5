@@ -34,3 +34,9 @@ The restored GitHub Actions workflow includes a Gitleaks scan of the checked-out
 3. Review logs, crash reports, URL redaction, local storage and account-data retention.
 4. Validate network security, release signing, secret scanning and artifact provenance on an exact commit.
 5. Complete independent security review before external deployment.
+
+## Confirmed Android local-record ownership gap (2026-11-23)
+
+SQLCipher protects the local Room database at rest, but it does not provide row-level account isolation. In the audited source, TradeEntity and AnalysisEntity have no authenticated-user owner column; TradeDao.getAllTrades() and AnalysisDao.getAllHistory() return records without a signed-in-user filter. The application database is a process-wide singleton, while logout resets authentication UI state rather than partitioning these records. Backend preference isolation tests do not cover this Android-local data path.
+
+Until a versioned migration adds an authenticated owner identifier to every user-owned table, every read/write/delete is scoped to that identifier, and legacy rows with unknown ownership are quarantined rather than assigned to whichever user signs in next, shared-device multi-account isolation is NOT VERIFIED. Do not treat encrypted-at-rest storage as proof of per-user authorization. This is an engineering and release blocker for a multi-user/shared-device claim.
