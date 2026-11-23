@@ -170,11 +170,8 @@ sealed interface ServerOption {
 
 object ServerOptions {
     /** Exact account-issued instructions shown below each MT5 server field. */
-    fun fieldHint(spec: BrokerLoginSpec): String = when (spec.id) {
-        "FBS_MT5" -> "Copy from Broker Dashboard > FBS Personal Area > MT5 account > Server. Enter the exact account-issued value only; do NOT add :port."
-        "DERIV_MT5" -> "Copy from Deriv Dashboard > MT5 > Server. Enter the exact account-issued value only; do NOT add :port."
-        else -> "Copy from Broker Dashboard > MT5 account details > Server. Enter the exact account-issued value only; do NOT add :port."
-    }
+    fun fieldHint(spec: BrokerLoginSpec): String =
+        "Copy from Broker Dashboard > MT5 account details > Server. Enter the exact account-issued value only; do NOT add :port."
 
     /** Owner history and host-reported server entries only; never guess a provider server name. */
     fun build(spec: BrokerLoginSpec, ownerHistory: List<String>, hostReported: List<String>): List<ServerOption> {
@@ -372,13 +369,7 @@ class ConnectUseCase(
     ): ConnectOutcome.Failed {
         val reason = brokerReason?.trim()?.takeIf { it.isNotBlank() && it.length <= 160 }
             ?: ConnectFailures.sentence(code)
-        val brokerHint = when {
-            code == "SERVER_NOT_FOUND" && spec?.id == "FBS_MT5" -> "Check Exact Server from FBS Personal Area."
-            code == "SERVER_NOT_FOUND" && spec?.id == "DERIV_MT5" -> "Check Exact Server from Deriv Dashboard."
-            code == "SERVER_NOT_FOUND" -> "Check the exact MT5 server supplied by your broker."
-            else -> ""
-        }
-        return ConnectOutcome.Failed(code, "$code - $reason" + brokerHint.takeIf { it.isNotBlank() }?.let { " - $it" }.orEmpty())
+        return ConnectOutcome.Failed(code, reason)
     }
 
     companion object {

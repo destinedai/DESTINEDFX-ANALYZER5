@@ -28,6 +28,9 @@ internal fun redactSecrets(text: String?, vararg secrets: String): String {
 /** Telegram can return HTTP 2xx with a JSON-level ok=false response; never treat that as delivery. */
 internal data class TelegramApiResult(val ok: Boolean, val description: String? = null)
 
+/** Result shown in Settings; server descriptions are scrubbed for token-like values. */
+data class TelegramSendResult(val ok: Boolean, val detail: String)
+
 internal fun parseTelegramApiResult(httpSuccessful: Boolean, body: String): TelegramApiResult {
     val json = runCatching { JSONObject(body) }.getOrNull()
         ?: return TelegramApiResult(false, if (httpSuccessful) "Telegram returned invalid JSON" else null)
@@ -103,7 +106,7 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
                     } else {
                         val errorJson = runCatching { JSONObject(body) }.getOrNull()
                         val desc = api.description ?: errorJson?.optString("description", "").orEmpty()
-                        Log.e("DestinedFX_Notification", "Telegram send error: $desc")
+                        Log.e("DestinedFX_Notification", "Telegram send rejected (HTTP ${response.code})")
                         val helpfulMsg = when {
                             desc.contains("chat not found", ignoreCase = true) || desc.contains("Forbidden", ignoreCase = true) ->
                                 "Bot @$botUsername is valid, but cannot reach Chat ID $effectiveChatId. Open Telegram, search for @$botUsername, tap START, then tap Connect again."
@@ -134,13 +137,12 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
                 val request = Request.Builder().url(url).get().build()
                 okHttpClient.newCall(request).execute().use { response ->
                     val body = response.body?.string().orEmpty()
-                    if (!response.isSuccessful || body.isBlank()) {
-                        return@withContext null to "Could not connect to Telegram bot API. Verify your Bot Token."
+                    val api = parseTelegramApiResult(response.isSuccessful, body)
+                    if (!api.ok) {
+                        val exactError = api.description ?: "HTTP ${response.code}"
+                        return@withContext null to "Telegram API error (HTTP ${response.code}): ${redactSecrets(exactError, cleanToken)}"
                     }
                     val json = JSONObject(body)
-                    if (!json.optBoolean("ok", false)) {
-                        return@withContext null to "Telegram error: ${json.optString("description")}"
-                    }
                     val resultArray = json.optJSONArray("result")
                     if (resultArray == null || resultArray.length() == 0) {
                         return@withContext null to "No messages found yet. Please open Telegram, search for your bot, send /start, and tap 'Auto-Detect Chat ID' again."
@@ -161,56 +163,57 @@ class NotificationService(private val okHttpClient: OkHttpClient) {
                     }
                     null to "No chat ID found in recent updates. Please send /start to your bot in Telegram."
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 null to "Error querying Telegram updates: ${redactSecrets(e.message, cleanToken).ifBlank { e.javaClass.simpleName }}"
             }
         }
     }
 
-    suspend fun sendTelegramMessage(botToken: String, chatId: String, message: String): Boolean {
-        return withContext(Dispatchers.IO) {
+    suspend fun sendTelegramMessageDetailed(botToken: String, chatId: String, message: String): TelegramSendResult =
+        withContext(Dispatchers.IO) {
+            val cleanToken = botToken.trim().removePrefix("bot").trim()
+            val cleanChatId = chatId.trim()
+            if (cleanToken.isBlank() || cleanChatId.isBlank()) {
+                return@withContext TelegramSendResult(false, "Telegram Bot Token and Chat ID are required.")
+            }
             try {
-                val cleanToken = botToken.trim().removePrefix("bot").trim()
-                val cleanChatId = chatId.trim()
-                if (cleanToken.isBlank() || cleanChatId.isBlank()) return@withContext false
-
-                val url = "https://api.telegram.org/bot$cleanToken/sendMessage"
-
-                // Try sending with Markdown formatting first
-                val jsonMarkdown = JSONObject().apply {
+                val payload = JSONObject().apply {
                     put("chat_id", cleanChatId)
                     put("text", message)
-                    put("parse_mode", "Markdown")
                 }
-                val requestBodyMarkdown = jsonMarkdown.toString().toRequestBody("application/json".toMediaTypeOrNull())
-                val requestMarkdown = Request.Builder().url(url).post(requestBodyMarkdown).build()
-
-                val firstAttempt = okHttpClient.newCall(requestMarkdown).execute()
-                val firstBody = firstAttempt.body?.string().orEmpty()
-                val firstSuccess = parseTelegramApiResult(firstAttempt.isSuccessful, firstBody).ok
-                firstAttempt.close()
-                if (firstSuccess) return@withContext true
-
-                // Fallback: send as plain text without parse_mode (prevents failure from unescaped markdown)
-                val jsonPlain = JSONObject().apply {
-                    put("chat_id", cleanChatId)
-                    put("text", message.replace("*", "").replace("`", "").replace("_", ""))
-                }
-                val requestBodyPlain = jsonPlain.toString().toRequestBody("application/json".toMediaTypeOrNull())
-                val requestPlain = Request.Builder().url(url).post(requestBodyPlain).build()
-
-                okHttpClient.newCall(requestPlain).execute().use { response ->
-                    val body = response.body?.string().orEmpty()
-                    parseTelegramApiResult(response.isSuccessful, body).ok
+                val body = payload.toString().toRequestBody("application/json".toMediaTypeOrNull())
+                val request = Request.Builder()
+                    .url("https://api.telegram.org/bot$cleanToken/sendMessage")
+                    .header("Accept", "application/json")
+                    .post(body)
+                    .build()
+                okHttpClient.newCall(request).execute().use { response ->
+                    val responseBody = response.body?.string().orEmpty()
+                    val api = parseTelegramApiResult(response.isSuccessful, responseBody)
+                    if (api.ok) {
+                        TelegramSendResult(true, "Telegram message delivered.")
+                    } else {
+                        val exactError = api.description
+                            ?: response.message.takeIf { it.isNotBlank() }
+                            ?: "HTTP ${response.code}"
+                        TelegramSendResult(
+                            false,
+                            "Telegram API error (HTTP ${response.code}): ${redactSecrets(exactError, cleanToken)}"
+                        )
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e("DestinedFX_Notification", "Telegram API error: ${e.javaClass.simpleName}")
-                false
+                val safeMessage = redactSecrets(e.message, cleanToken).ifBlank { e.javaClass.simpleName }
+                TelegramSendResult(false, "Telegram network error: $safeMessage")
             }
         }
-    }
+
+    suspend fun sendTelegramMessage(botToken: String, chatId: String, message: String): Boolean =
+        sendTelegramMessageDetailed(botToken, chatId, message).ok
 
     suspend fun sendWhatsAppMessage(apiKey: String, phoneNumber: String, message: String): Boolean {
         return withContext(Dispatchers.IO) {

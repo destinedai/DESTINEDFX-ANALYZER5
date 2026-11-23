@@ -95,6 +95,7 @@ import com.example.ui.bot.ProviderConnectBackend
 import com.example.ui.bot.DerivOptionsLoginVerifier
 import com.example.ui.bot.CTraderLoginVerifier
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -235,6 +236,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var showAdvancedConnection by remember { mutableStateOf(false) }
     var showModernBrokerFlow by remember { mutableStateOf(true) }
     var mt5Snapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
+    LaunchedEffect(viewModel.managedMt5BridgeSnapshot) {
+        viewModel.managedMt5BridgeSnapshot.collect { snapshot -> mt5Snapshot = snapshot }
+    }
     var showPairingRevokeDialog by remember(mt5Profile) { mutableStateOf(false) }
     var showLiveAuthorizationDialog by remember(mt5Profile) { mutableStateOf(false) }
     var liveTypedConfirmation by remember(mt5Profile) { mutableStateOf("") }
@@ -520,7 +524,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         else -> "NOT READY"
     }
 
-    LaunchedEffect(broker, mt5Profile) {
+    LaunchedEffect(broker, mt5Profile, mt5Mode) {
         if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) {
             login = secrets.getManagedMT5AccountLogin(mt5Profile)
             server = secrets.getManagedMT5AccountServer(mt5Profile)
@@ -529,15 +533,14 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             password = if (savePassword) secrets.getManagedMT5AccountPassword(mt5Profile) else ""
         }
         if (broker.usesManagedMt5Terminal && bridge?.managedConfigured() == true && bridge.hasPairing()) {
-            mt5Snapshot = null
+            // The ViewModel owns this poller so Telegram alerts continue across app tabs.
+            viewModel.startManagedMt5BridgeMonitor(bridge, mt5Profile, mt5Mode)
             while (true) {
-                mt5Snapshot = runCatching { viewModel.refreshManagedMt5Bridge(bridge) }.getOrNull()
-                // Host lifecycle metadata shares the existing five-second Bridge poller.
                 hostApiStatus = runCatching { bridge.hostStatus() }.getOrNull()
                 delay(5_000L)
             }
         } else {
-            mt5Snapshot = null
+            viewModel.clearManagedMt5BridgeMonitor()
         }
     }
 

@@ -226,8 +226,9 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
         item {
             HorizontalDivider(color = TabBorder)
             Spacer(modifier = Modifier.height(8.dp))
-            Text("TELEGRAM ALERTS", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
-            Text("Connection, delivery test and alert controls.", fontSize = 10.sp, color = TextSecondary)
+            Text("NOTIFICATIONS", fontWeight = FontWeight.Black, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
+            Text("TELEGRAM", fontWeight = FontWeight.Bold, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = CyanPrimary)
+            Text("Steady broker and trade messages. The Bot Token is encrypted on this phone.", fontSize = 10.sp, color = TextSecondary)
         }
 
         item {
@@ -238,6 +239,8 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
 
             var botTokenInput by remember { mutableStateOf(viewModel.getTelegramBotToken()) }
             var chatIdInput by remember { mutableStateOf(viewModel.getTelegramChatId()) }
+            val telegramInputMatchesSaved = botTokenInput.trim() == viewModel.getTelegramBotToken().trim() &&
+                chatIdInput.trim() == viewModel.getTelegramChatId().trim()
             var showBotFatherGuide by remember { mutableStateOf(false) }
 
             Card(
@@ -258,14 +261,19 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         Column {
                             Text("Connection Status", fontSize = 11.sp, color = TextSecondary)
                             Text(
-                                text = telegramStatus,
+                                text = if (telegramNotifEnabled && telegramStatus == "Connected" &&
+                                    telegramInputMatchesSaved && botTokenInput.isNotBlank() && chatIdInput.isNotBlank()
+                                ) "Telegram ON" else "Telegram OFF",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
-                                color = when (telegramStatus) {
-                                    "Connected" -> ProfitGreen
-                                    "Connection failed" -> LossRed
-                                    else -> OrangeAccent
-                                }
+                                color = if (telegramNotifEnabled && telegramStatus == "Connected" &&
+                                    telegramInputMatchesSaved && botTokenInput.isNotBlank() && chatIdInput.isNotBlank()
+                                ) ProfitGreen else OrangeAccent
+                            )
+                            Text(
+                                text = if (telegramStatus == "Connected") "Bot connection verified" else telegramStatus,
+                                fontSize = 10.sp,
+                                color = TextSecondary
                             )
                         }
                         TextButton(onClick = { showBotFatherGuide = !showBotFatherGuide }) {
@@ -281,19 +289,24 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         ) {
                             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("BotFather Setup Guide:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CyanPrimary)
-                                Text("1. Open Telegram and search for official @BotFather.", fontSize = 10.sp, color = TextPrimary)
-                                Text("2. Send /newbot and follow instructions to name your bot.", fontSize = 10.sp, color = TextPrimary)
-                                Text("3. Copy the HTTP API Token provided by BotFather.", fontSize = 10.sp, color = TextPrimary)
-                                Text("4. Send a message to your bot in Telegram, then enter your Chat ID.", fontSize = 10.sp, color = TextPrimary)
-                                Text("5. Enter Bot Token and Chat ID below and tap Connect Telegram.", fontSize = 10.sp, color = TextPrimary)
-                                Text("6. Handshake verifies delivery and activates secure alerts.", fontSize = 10.sp, color = TextPrimary)
+                                Text("1. Open Telegram and find the official @BotFather.", fontSize = 10.sp, color = TextPrimary)
+                                Text("2. Send /newbot and follow its steps.", fontSize = 10.sp, color = TextPrimary)
+                                Text("3. Enter the Bot Token here; it stays encrypted on this phone.", fontSize = 10.sp, color = TextPrimary)
+                                Text("4. Open your new bot and send /start. You may enter your Chat ID or leave it blank for Auto-Detect.", fontSize = 10.sp, color = TextPrimary)
+                                Text("5. Tap TEST TELEGRAM. The test sends: DestinedFX Telegram Connected.", fontSize = 10.sp, color = TextPrimary)
+                                Text("6. Turn steady messages ON only after the test succeeds.", fontSize = 10.sp, color = TextPrimary)
                             }
                         }
                     }
 
                     OutlinedTextField(
                         value = botTokenInput,
-                        onValueChange = { botTokenInput = it },
+                        onValueChange = {
+                            botTokenInput = it
+                            if (it.trim() != viewModel.getTelegramBotToken().trim()) {
+                                viewModel.setTelegramNotificationsEnabled(false)
+                            }
+                        },
                         label = { Text("Telegram Bot Token") },
                         modifier = Modifier.fillMaxWidth().testTag("telegram_token_input"),
                         singleLine = true,
@@ -302,7 +315,12 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
 
                     OutlinedTextField(
                         value = chatIdInput,
-                        onValueChange = { chatIdInput = it },
+                        onValueChange = {
+                            chatIdInput = it
+                            if (it.trim() != viewModel.getTelegramChatId().trim()) {
+                                viewModel.setTelegramNotificationsEnabled(false)
+                            }
+                        },
                         label = { Text("Telegram Chat ID") },
                         modifier = Modifier.fillMaxWidth().testTag("telegram_chat_id_input"),
                         singleLine = true,
@@ -328,24 +346,17 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         lineHeight = 14.sp
                     )
 
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { viewModel.connectTelegram(botTokenInput, chatIdInput) },
-                            enabled = !isTelegramLoading,
-                            colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
-                            modifier = Modifier.weight(1f).testTag("connect_telegram_button")
-                        ) {
-                            Text(if (isTelegramLoading) "Connecting..." else "Connect Telegram", color = DarkBackground, fontWeight = FontWeight.Bold)
-                        }
-
-                        Button(
-                            onClick = { viewModel.sendTelegramTestNotification() },
-                            enabled = !isTelegramLoading && telegramStatus == "Connected",
-                            colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen),
-                            modifier = Modifier.weight(1f).testTag("test_telegram_button")
-                        ) {
-                            Text("Test Message", color = DarkBackground, fontWeight = FontWeight.Bold)
-                        }
+                    Button(
+                        onClick = {
+                            viewModel.connectTelegram(botTokenInput, chatIdInput) { resolvedChatId ->
+                                chatIdInput = resolvedChatId
+                            }
+                        },
+                        enabled = !isTelegramLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen),
+                        modifier = Modifier.fillMaxWidth().testTag("test_telegram_button")
+                    ) {
+                        Text(if (isTelegramLoading) "TESTING TELEGRAM..." else "TEST TELEGRAM", color = DarkBackground, fontWeight = FontWeight.Bold)
                     }
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -371,13 +382,15 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text("Enable Automated Alerts", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            Text("Requires verified connection status", fontSize = 10.sp, color = TextSecondary)
+                            Text("Steady Telegram Messages", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                            Text("Login, Bridge, order and balance alerts", fontSize = 10.sp, color = TextSecondary)
                         }
                         Switch(
-                            checked = telegramNotifEnabled,
+                            checked = telegramNotifEnabled && telegramInputMatchesSaved &&
+                                botTokenInput.isNotBlank() && chatIdInput.isNotBlank(),
                             onCheckedChange = { viewModel.setTelegramNotificationsEnabled(it) },
-                            enabled = telegramStatus == "Connected",
+                            enabled = telegramStatus == "Connected" && telegramInputMatchesSaved &&
+                                botTokenInput.isNotBlank() && chatIdInput.isNotBlank(),
                             modifier = Modifier.testTag("telegram_switch")
                         )
                     }
@@ -385,7 +398,7 @@ fun SettingsTab(viewModel: DestinedFXViewModel) {
                     val res = telegramResult
                     if (res != null) {
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(res, fontSize = 11.sp, color = if (telegramStatus == "Connected") ProfitGreen else LossRed)
+                        Text(res, fontSize = 11.sp, color = if (res.startsWith("SUCCESS:") || res.contains("steady messages ON")) ProfitGreen else LossRed)
                     }
                 }
             }

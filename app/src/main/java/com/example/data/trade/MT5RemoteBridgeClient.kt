@@ -1334,7 +1334,7 @@ class MT5RemoteBridgeClient(
                 snapshot.balance != null && snapshot.balance > 0.0 &&
                 snapshot.equity != null && snapshot.equity > 0.0 &&
                 snapshot.connected && snapshot.terminalOnline && snapshot.heartbeatFresh &&
-                snapshot.terminalConnected && snapshot.tradeAllowed && snapshot.accountVerified && snapshot.managedState == "READY" &&
+                snapshot.terminalConnected && snapshot.tradeAllowed && snapshot.accountVerified && snapshot.brokerIdentityVerified && snapshot.managedState == "READY" &&
                 snapshot.accessType == "MASTER" && snapshot.profileMode == selectedProfile.uppercase() &&
                 snapshot.actualAccountMode == selectedProfile.uppercase() && expectedLogin.isNotBlank() && snapshot.actualLogin == expectedLogin &&
                 expectedServer.isNotBlank() && snapshot.actualServer == expectedServer && snapshot.actualCompany.isNotBlank() && snapshot.snapshotsValid &&

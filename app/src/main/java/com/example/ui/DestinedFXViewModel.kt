@@ -17,6 +17,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
 import com.example.data.NotificationService
+import com.example.data.TelegramSteadyMessages
 import com.example.data.trade.TradeEntity
 import com.example.data.trade.TradeRepository
 import com.example.data.trade.MT5RemoteBridgeClient
@@ -367,6 +368,44 @@ open class DestinedFXViewModel(
 
     private val _managedMt5BridgeSnapshot = MutableStateFlow<MT5RemoteBridgeClient.Snapshot?>(null)
     val managedMt5BridgeSnapshot: StateFlow<MT5RemoteBridgeClient.Snapshot?> = _managedMt5BridgeSnapshot.asStateFlow()
+    private var managedMt5BridgeMonitorJob: Job? = null
+    private var managedMt5BridgeMonitorKey: String? = null
+
+    /**
+     * App-lifetime monitor for the selected managed MT5 profile. It remains active while the
+     * user switches tabs, but is cancelled when a different account profile is selected.
+     */
+    fun startManagedMt5BridgeMonitor(
+        client: MT5RemoteBridgeClient,
+        profileKey: String,
+        mode: String,
+    ) {
+        val key = "${profileKey.uppercase()}|${mode.uppercase()}"
+        if (managedMt5BridgeMonitorKey == key && managedMt5BridgeMonitorJob?.isActive == true) return
+        managedMt5BridgeMonitorJob?.cancel()
+        managedMt5BridgeMonitorKey = key
+        _managedMt5BridgeSnapshot.value = null
+        managedMt5BridgeMonitorJob = viewModelScope.launch {
+            while (true) {
+                val snapshot = try {
+                    refreshManagedMt5Bridge(client)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                TelegramSteadyMessages.observeSnapshot(app.secretsManager, profileKey, mode, snapshot)
+                delay(5_000L)
+            }
+        }
+    }
+
+    fun clearManagedMt5BridgeMonitor() {
+        managedMt5BridgeMonitorJob?.cancel()
+        managedMt5BridgeMonitorJob = null
+        managedMt5BridgeMonitorKey = null
+        _managedMt5BridgeSnapshot.value = null
+    }
 
     /** Refreshes the authenticated broker/mode terminal state; stale metrics are cleared on failure. */
     suspend fun refreshManagedMt5Bridge(client: MT5RemoteBridgeClient): MT5RemoteBridgeClient.Snapshot {
@@ -612,43 +651,90 @@ open class DestinedFXViewModel(
     val telegramTestMessageResult = MutableStateFlow<String?>(null)
     val isTelegramLoading = MutableStateFlow(false)
 
-    fun connectTelegram(botToken: String, chatId: String) {
+    fun connectTelegram(
+        botToken: String,
+        chatId: String,
+        onChatIdResolved: ((String) -> Unit)? = null,
+    ) {
         viewModelScope.launch {
             isTelegramLoading.value = true
             telegramTestMessageResult.value = null
             try {
-                val cleanToken = botToken.trim().removePrefix("bot").trim()
-                val cleanChatId = chatId.trim()
-                if (cleanToken.isBlank() || cleanChatId.isBlank()) {
+                if (!app.secretsManager.isSecureStorageAvailable) {
                     telegramStatus.value = "Connection failed"
-                    telegramTestMessageResult.value = "Bot token and Telegram Chat ID are both required."
-                    isTelegramLoading.value = false
+                    telegramNotificationsEnabled.value = false
+                    telegramTestMessageResult.value = "Encrypted device storage is unavailable; Telegram credentials were not saved."
                     return@launch
                 }
+                val cleanToken = botToken.trim().removePrefix("bot").trim()
+                var cleanChatId = chatId.trim()
+                if (cleanToken.isBlank()) {
+                    app.secretsManager.saveTelegramToken("")
+                    app.secretsManager.saveTelegramChatId("")
+                    app.secretsManager.saveTelegramConnectionStatus("Not configured")
+                    app.secretsManager.saveTelegramNotificationsEnabled(false)
+                    telegramBotToken.value = ""
+                    telegramChatId.value = ""
+                    telegramStatus.value = "Not configured"
+                    telegramNotificationsEnabled.value = false
+                    telegramTestMessageResult.value = "Telegram OFF — enter a Bot Token inside the app."
+                    return@launch
+                }
+                if (!app.secretsManager.saveTelegramToken(cleanToken)) {
+                    telegramStatus.value = "Connection failed"
+                    telegramNotificationsEnabled.value = false
+                    telegramTestMessageResult.value = "Telegram Bot Token could not be saved in encrypted device storage."
+                    return@launch
+                }
+                telegramBotToken.value = cleanToken
+
                 val notificationService = NotificationService(OkHttpClient())
-                val (success, message) = notificationService.verifyAndConnectTelegram(
+                if (cleanChatId.isBlank()) {
+                    val (detectedId, detectionMessage) = notificationService.autoDetectChatId(cleanToken)
+                    cleanChatId = detectedId.orEmpty()
+                    if (cleanChatId.isBlank()) {
+                        app.secretsManager.saveTelegramConnectionStatus("Connection failed")
+                        app.secretsManager.saveTelegramNotificationsEnabled(false)
+                        telegramStatus.value = "Connection failed"
+                        telegramNotificationsEnabled.value = false
+                        telegramTestMessageResult.value = detectionMessage
+                        return@launch
+                    }
+                }
+                if (!app.secretsManager.saveTelegramChatId(cleanChatId)) {
+                    telegramStatus.value = "Connection failed"
+                    telegramNotificationsEnabled.value = false
+                    telegramTestMessageResult.value = "Telegram Chat ID could not be saved in encrypted device storage."
+                    return@launch
+                }
+                telegramChatId.value = cleanChatId
+                onChatIdResolved?.invoke(cleanChatId)
+
+                val delivery = notificationService.sendTelegramMessageDetailed(
                     cleanToken,
                     cleanChatId,
-                    "DestinedFX: Telegram alerts successfully connected to your terminal at ${java.util.Date()}."
+                    "DestinedFX Telegram Connected"
                 )
-                if (success) {
-                    app.secretsManager.saveTelegramToken(cleanToken)
-                    app.secretsManager.saveTelegramChatId(cleanChatId)
+                if (delivery.ok) {
                     app.secretsManager.saveTelegramConnectionStatus("Connected")
-                    app.secretsManager.saveTelegramNotificationsEnabled(true)
-                    telegramBotToken.value = cleanToken
-                    telegramChatId.value = cleanChatId
+                    app.secretsManager.saveTelegramNotificationsEnabled(false)
                     telegramStatus.value = "Connected"
-                    telegramTestMessageResult.value = message
-                    telegramNotificationsEnabled.value = true
+                    telegramNotificationsEnabled.value = false
+                    telegramTestMessageResult.value = "SUCCESS: DestinedFX Telegram Connected"
                 } else {
+                    app.secretsManager.saveTelegramConnectionStatus("Connection failed")
+                    app.secretsManager.saveTelegramNotificationsEnabled(false)
                     telegramStatus.value = "Connection failed"
-                    telegramTestMessageResult.value = message
+                    telegramNotificationsEnabled.value = false
+                    telegramTestMessageResult.value = delivery.detail
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 telegramStatus.value = "Connection failed"
-                telegramTestMessageResult.value = "Error: ${e.message}"
+                telegramNotificationsEnabled.value = false
+                val secret = botToken.trim().removePrefix("bot").trim()
+                telegramTestMessageResult.value =
+                    "Telegram test failed: ${com.example.data.redactSecrets(e.message, secret).ifBlank { e.javaClass.simpleName }}"
             } finally {
                 isTelegramLoading.value = false
             }
@@ -672,7 +758,7 @@ open class DestinedFXViewModel(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                telegramTestMessageResult.value = "Detection failed: ${e.message}"
+                telegramTestMessageResult.value = "Detection failed: ${com.example.data.redactSecrets(e.message, botToken)}"
                 onResult(null)
             } finally {
                 isTelegramLoading.value = false
@@ -681,35 +767,7 @@ open class DestinedFXViewModel(
     }
 
     fun sendTelegramTestNotification() {
-        viewModelScope.launch {
-            isTelegramLoading.value = true
-            telegramTestMessageResult.value = null
-            try {
-                val token = app.secretsManager.getTelegramToken()
-                val chatId = app.secretsManager.getTelegramChatId()
-                if (token.isBlank() || chatId.isBlank()) {
-                    telegramTestMessageResult.value = "Not configured. Please connect Telegram first."
-                    isTelegramLoading.value = false
-                    return@launch
-                }
-                val notificationService = NotificationService(OkHttpClient())
-                val success = notificationService.sendTelegramMessage(
-                    token,
-                    chatId,
-                    "DestinedFX Analyzer: Verified test alert delivered at ${java.util.Date()}"
-                )
-                if (success) {
-                    telegramTestMessageResult.value = "Test alert delivered successfully to your Telegram chat!"
-                } else {
-                    telegramTestMessageResult.value = "Delivery failed. Make sure you pressed START with your bot in Telegram."
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                telegramTestMessageResult.value = "Test failed: ${e.message}"
-            } finally {
-                isTelegramLoading.value = false
-            }
-        }
+        connectTelegram(app.secretsManager.getTelegramToken(), app.secretsManager.getTelegramChatId())
     }
 
     fun connectDemoAccount(initialBalance: Double? = null, onResult: ((Boolean, String) -> Unit)? = null) {
@@ -722,28 +780,49 @@ open class DestinedFXViewModel(
         app.secretsManager.saveTelegramChatId("")
         app.secretsManager.saveTelegramConnectionStatus("Not configured")
         app.secretsManager.saveTelegramNotificationsEnabled(false)
+        telegramBotToken.value = ""
+        telegramChatId.value = ""
         telegramStatus.value = "Not configured"
         telegramNotificationsEnabled.value = false
-        telegramTestMessageResult.value = "Telegram unlinked successfully."
+        telegramTestMessageResult.value = "Telegram OFF"
     }
 
     fun refreshTelegramStatus() {
         val token = app.secretsManager.getTelegramToken()
         val chatId = app.secretsManager.getTelegramChatId()
-        val status = if (token.isBlank() || chatId.isBlank()) "Not configured" else app.secretsManager.getTelegramConnectionStatus()
-        telegramStatus.value = status
-        telegramNotificationsEnabled.value = app.secretsManager.getTelegramNotificationsEnabled() && status == "Connected"
+        val configured = token.isNotBlank() && chatId.isNotBlank() && app.secretsManager.isSecureStorageAvailable
+        if (!configured) {
+            telegramStatus.value = "Not configured"
+            telegramNotificationsEnabled.value = false
+            app.secretsManager.saveTelegramNotificationsEnabled(false)
+            return
+        }
+        telegramStatus.value = app.secretsManager.getTelegramConnectionStatus()
+        telegramNotificationsEnabled.value =
+            app.secretsManager.getTelegramNotificationsEnabled() && telegramStatus.value == "Connected"
     }
 
     fun setTelegramNotificationsEnabled(enabled: Boolean) {
-        if (telegramStatus.value != "Connected" && enabled) {
-            telegramTestMessageResult.value = "Cannot enable notifications until Telegram connection is verified."
+        val configured = app.secretsManager.isSecureStorageAvailable &&
+            app.secretsManager.getTelegramToken().isNotBlank() &&
+            app.secretsManager.getTelegramChatId().isNotBlank() &&
+            telegramStatus.value == "Connected"
+        if (enabled && !configured) {
+            telegramNotificationsEnabled.value = false
+            app.secretsManager.saveTelegramNotificationsEnabled(false)
+            telegramTestMessageResult.value = "Telegram OFF — run TEST TELEGRAM successfully before enabling steady messages."
             return
         }
         telegramNotificationsEnabled.value = enabled
         app.secretsManager.saveTelegramNotificationsEnabled(enabled)
+        if (!enabled) telegramTestMessageResult.value = "Telegram OFF"
+        else telegramTestMessageResult.value = "Telegram steady messages ON"
     }
-    
+
+    fun notifyTelegramEvent(message: String) {
+        TelegramSteadyMessages.send(app.secretsManager, message)
+    }
+
     // Safety Risk Filters & News Safeguards (Non-Farm Payroll / NFP CPI Protection)
     val nfpProtectionArmed = MutableStateFlow(true)
     val nextNfpDate = "Friday, July 3, 2026"

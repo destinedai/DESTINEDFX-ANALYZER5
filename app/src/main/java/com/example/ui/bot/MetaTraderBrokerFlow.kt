@@ -94,6 +94,7 @@ fun MetaTraderBrokerFlow(
     onArmLive: suspend (BrokerLoginSpec, LoginForm, String, String) -> String,
     onOpenAdvanced: () -> Unit,
     onClose: () -> Unit,
+    onTelegramEvent: (String) -> Unit = {},
 ) {
     var page by remember { mutableStateOf(FlowPage.ACCOUNTS) }
     var selected by remember { mutableStateOf<BrokerLoginSpec?>(null) }
@@ -146,12 +147,23 @@ fun MetaTraderBrokerFlow(
                     accountTab = AccountTab.TRADE
                     accountMessage = null
                     page = FlowPage.ACCOUNT
+                    val brokerLabel = spec.id.removeSuffix("_MT5").removeSuffix("_OPTIONS")
+                    fun accountMetric(value: Double?): String =
+                        value?.takeIf { it.isFinite() && it >= 0.0 }
+                            ?.let { String.format(java.util.Locale.US, "%.2f", it) }
+                            ?: "UNAVAILABLE"
+                    onTelegramEvent(
+                        "$brokerLabel ${outcome.accountMode.uppercase()} Connected - Balance: ${accountMetric(outcome.account?.balance)}, Equity: ${accountMetric(outcome.account?.equity)}"
+                    )
                 }
                 is ConnectOutcome.SelectAccount -> {
                     accountChoices = outcome.accounts
                     page = FlowPage.PICK_ACCOUNT
                 }
-                is ConnectOutcome.Failed -> failure = outcome.sentence
+                is ConnectOutcome.Failed -> {
+                    failure = outcome.sentence
+                    onTelegramEvent(outcome.code)
+                }
             }
             busy = false
         }

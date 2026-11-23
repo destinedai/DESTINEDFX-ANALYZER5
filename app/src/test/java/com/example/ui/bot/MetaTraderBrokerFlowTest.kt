@@ -82,7 +82,7 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
-        composeRule.onNodeWithText("Server saved").assertIsDisplayed()
+        composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
         composeRule.onNodeWithText("Forgot password? Use your broker app").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("broker_back").assertIsDisplayed().performClick()
@@ -101,11 +101,11 @@ class MetaTraderBrokerFlowTest {
         listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
             composeRule.onNodeWithTag("broker_list").performScrollToNode(hasTestTag("broker_${brand}_MT5"))
             composeRule.onNodeWithTag("broker_${brand}_MT5").performClick()
-            composeRule.onNodeWithText("Test and verify an existing MT5 broker login").assertIsDisplayed()
+            composeRule.onNodeWithText("Test and verify an existing MT5 broker login").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_login_fields_help").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_server_field_help").performScrollTo().assertIsDisplayed()
-            if (brand == "FBS") composeRule.onNodeWithText("Copy from FBS Personal Area > MT5 account > Server (e.g. FBS-Real / FBS-Demo). Exact account value only; do NOT add :port.").assertIsDisplayed()
-            if (brand == "DERIV") composeRule.onNodeWithText("Copy from Deriv Dashboard > MT5 > Server (e.g. Deriv-Demo / Deriv-Server). Exact account value only; do NOT add :port.").assertIsDisplayed()
+            composeRule.onNodeWithText("Copy from Broker Dashboard > MT5 account details > Server. Enter the exact account-issued value only; do NOT add :port.")
+                .performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
             composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
             composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("Fixture-Demo")
@@ -118,7 +118,7 @@ class MetaTraderBrokerFlowTest {
                 composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
             }
             composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
-            composeRule.onNodeWithText("Server saved").assertIsDisplayed()
+            composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
             composeRule.onNodeWithTag("broker_back").performClick()
         }
