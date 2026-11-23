@@ -1,7 +1,5 @@
 package com.example.ui
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -24,7 +22,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -44,7 +41,6 @@ import java.util.Locale
 
 @Composable
 fun TelegramQuickInfoPanel(viewModel: DestinedFXViewModel) {
-    val context = LocalContext.current
     val appNameSaved by viewModel.telegramAppName.collectAsStateWithLifecycle()
     val apiIdSaved by viewModel.telegramApiId.collectAsStateWithLifecycle()
     val apiHashSaved by viewModel.telegramApiHash.collectAsStateWithLifecycle()
@@ -60,6 +56,7 @@ fun TelegramQuickInfoPanel(viewModel: DestinedFXViewModel) {
     var botToken by remember(viewModel) { mutableStateOf(viewModel.getTelegramBotToken()) }
     var reveal by remember { mutableStateOf(false) }
     var localMessage by remember { mutableStateOf("") }
+    var internalCopy by remember { mutableStateOf("") }
 
     val configured = appNameSaved.isNotBlank() && apiIdSaved.isNotBlank() &&
         apiHashSaved.isNotBlank() && viewModel.getTelegramBotToken().isNotBlank()
@@ -146,11 +143,8 @@ fun TelegramQuickInfoPanel(viewModel: DestinedFXViewModel) {
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
                     onClick = {
-                        val summary = "App Name: $appNameSaved\napi_id: $apiIdSaved\napi_hash: $apiHashSaved\nStatus: $status\nLast Message: $lastMessage"
-                        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
-                            ClipData.newPlainText("DestinedFX Telegram Quick Info", summary)
-                        )
-                        localMessage = "Quick Info copied. Bot Token was excluded."
+                        internalCopy = "App Name: $appNameSaved\napi_id: ****\napi_hash: ********\nStatus: $status\nLast Message: $lastMessage"
+                        localMessage = "Copied inside DestinedFX only. Android system clipboard was not accessed."
                     },
                     enabled = configured,
                     modifier = Modifier.weight(1f)
@@ -164,6 +158,22 @@ fun TelegramQuickInfoPanel(viewModel: DestinedFXViewModel) {
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = LossRed)
                 ) { Text("DELETE", fontSize = 10.sp) }
+            }
+            if (internalCopy.isNotBlank()) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkBackground),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, TabBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("IN-APP-ONLY COPY · NOT IN ANDROID CLIPBOARD", color = TextPrimary, fontSize = 9.sp)
+                        Text(internalCopy, color = TextSecondary, fontSize = 10.sp)
+                    }
+                }
             }
             if (localMessage.isNotBlank()) Text(localMessage, color = TextSecondary, fontSize = 10.sp)
             if (!result.isNullOrBlank()) {

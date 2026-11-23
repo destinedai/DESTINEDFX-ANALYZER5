@@ -78,8 +78,10 @@ fun TradingChartContainer(
     isRealTradingViewEnabled: Boolean,
     onToggleChartType: (Boolean) -> Unit,
     onPriceUpdate: ((String, Double) -> Unit)? = null,
+    onChartRenderStateChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    LaunchedEffect(activeSymbol, selectedTimeframe) { onChartRenderStateChanged(false) }
     var showStructureOverlayOnTv by remember { mutableStateOf(true) }
 
     Box(
@@ -107,6 +109,7 @@ fun TradingChartContainer(
                 fallbackSpot = currentSpotPrice,
                 fallbackStrategy = activeStrategy,
                 fallbackAnalysis = dynamicAnalysis,
+                onChartRenderStateChanged = onChartRenderStateChanged,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -216,8 +219,11 @@ fun TradingViewWebView(
     fallbackAnalysis: DynamicAnalysisInfo = DynamicAnalysisInfo(symbol = symbol),
     onSwitchToCanvas: (() -> Unit)? = null,
     onPriceUpdate: ((String, Double) -> Unit)? = null,
+    onChartRenderStateChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val reportChartRender by rememberUpdatedState(onChartRenderStateChanged)
+    LaunchedEffect(symbol, timeframe) { reportChartRender(false) }
     if (LocalInspectionMode.current) {
         TradingViewPreviewPlaceholder(symbol = symbol, timeframe = timeframe, modifier = modifier)
         return
@@ -294,6 +300,7 @@ fun TradingViewWebView(
         <script src="https://unpkg.com/lightweight-charts@5.3.0/dist/lightweight-charts.standalone.production.js"></script>
         </head><body><div id="chart"></div><div id="status">MT5 BRIDGE · LAST VERIFIED QUOTE</div>
         <script>
+          window.__destinedfxChartRendered = false;
           (function(){
             const bars = __BARS__;
             const mid = __MID__;
@@ -322,6 +329,7 @@ fun TradingViewWebView(
               axisLabelVisible: true, title: 'MT5 LIVE QUOTE'
             });
             chart.timeScale().fitContent();
+            window.__destinedfxChartRendered = true;
             new ResizeObserver(function(entries) {
               const rect = entries[0].contentRect;
               if (rect.width > 0 && rect.height > 0) chart.applyOptions({width: rect.width, height: rect.height});
@@ -330,6 +338,7 @@ fun TradingViewWebView(
         </script></body></html>
         """.replace("__BARS__", displayBarsJson).replace("__MID__", midText)
     }
+    LaunchedEffect(html) { reportChartRender(false) }
     Column(modifier = modifier.fillMaxSize().background(Color(0xFF171B27))) {
         Text(
             if (ready) "Chart: TradingView style | Price: Live from ${displayBroker} via MT5 Bridge"
@@ -349,18 +358,36 @@ fun TradingViewWebView(
                         overScrollMode = View.OVER_SCROLL_NEVER
                         isVerticalScrollBarEnabled = false
                         isHorizontalScrollBarEnabled = false
-                        webViewClient = WebViewClient()
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                view?.evaluateJavascript("window.__destinedfxChartRendered === true") { value ->
+                                    reportChartRender(value?.trim()?.trim('"') == "true")
+                                }
+                            }
+
+                            override fun onReceivedError(
+                                view: WebView?,
+                                request: WebResourceRequest?,
+                                error: WebResourceError?
+                            ) {
+                                super.onReceivedError(view, request, error)
+                                if (request?.isForMainFrame == true) reportChartRender(false)
+                            }
+                        }
                         tag = html
                         loadDataWithBaseURL("https://unpkg.com/", html, "text/html", "UTF-8", null)
                     }
                 },
                 update = { view ->
                     if (view.tag != html) {
+                        reportChartRender(false)
                         view.tag = html
                         view.loadDataWithBaseURL("https://unpkg.com/", html, "text/html", "UTF-8", null)
                     }
                 },
                 onRelease = { view ->
+                    reportChartRender(false)
                     view.stopLoading()
                     view.webViewClient = WebViewClient()
                     view.removeAllViews()

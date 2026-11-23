@@ -258,7 +258,8 @@ class MT5RemoteBridgeClient(
         val brokerQuotes: List<VerifiedBrokerQuote>? = null,
         val brokerCandles: List<VerifiedBrokerCandle>? = null,
         val actualCompany: String = "",
-        val connectionWarning: String = "NOT CONNECTED - Stale / Zero Balance, Check Server"
+        val connectionWarning: String = "MT5 terminal state is not verified.",
+        val connectionErrorCode: String = ""
     )
 
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
@@ -480,22 +481,31 @@ class MT5RemoteBridgeClient(
         val verified = obj.optBoolean("account_identity_verified", false) && localIdentityMatches &&
             actualMode in setOf("DEMO", "LIVE") && actualMode == accountMode
         val zeroBalanceWarning = zeroBalanceDisconnectedMessage(balance, equity)
-        val zeroBalanceAndEquity = zeroBalanceWarning != null
-        val connectionWarning = zeroBalanceWarning ?: when {
-            !localIdentityMatches || !brokerIdentityVerified ->
-                "NOT CONNECTED - Login/Company/Server mismatch, Check Server"
-            !freshness || !terminalConnected || !verified || !financialSnapshotValid ->
-                "NOT CONNECTED - Stale / Zero Balance, Check Server"
+        val accountBalanceUnavailable = balance == null || balance <= 0.0 || equity == null || equity <= 0.0
+        val suppressFinancialDisplay = zeroBalanceWarning != null || accountBalanceUnavailable
+        val connectionErrorCode = obj.optJSONObject("connection_error")?.optString("code")
+            ?.takeIf { it.isNotBlank() }
+            ?: if (online && terminalConnected && verified && brokerIdentityVerified && accountBalanceUnavailable)
+                "ACCOUNT_BALANCE_UNAVAILABLE" else ""
+        val connectionWarning = when {
+            !localIdentityMatches -> "MT5_ACCOUNT_PROFILE_MISMATCH: selected login/server differs from broker-reported identity."
+            !brokerIdentityVerified -> "MT5_BROKER_IDENTITY_UNVERIFIED: broker company/server identity did not pass validation."
+            !online -> "MT5_TERMINAL_OFFLINE: no fresh authenticated MT5 heartbeat."
+            !freshness -> "MT5_HEARTBEAT_STALE: terminal heartbeat is outside the accepted freshness window."
+            !terminalConnected -> "MT5_TERMINAL_DISCONNECTED: terminal reports disconnected."
+            !verified -> "MT5_ACCOUNT_IDENTITY_UNVERIFIED: broker account identity is not verified."
+            connectionErrorCode == "ACCOUNT_BALANCE_UNAVAILABLE" ->
+                "ACCOUNT_BALANCE_UNAVAILABLE: broker balance/equity is missing or non-positive; verified quotes may remain visible, but trading is blocked."
+            !financialSnapshotValid ->
+                "ACCOUNT_FINANCIAL_SNAPSHOT_UNAVAILABLE: balance, equity, margin or free margin is incomplete; trading is blocked."
             else -> ""
         }
-        // A zero/zero account snapshot is not a usable account balance. Do not expose
-        // those zeroes as account figures while the account is marked disconnected.
-        val displayBalance = balance.takeUnless { zeroBalanceAndEquity }
-        val displayEquity = equity.takeUnless { zeroBalanceAndEquity }
-        val displayMargin = margin.takeUnless { zeroBalanceAndEquity }
-        val displayFreeMargin = freeMargin.takeUnless { zeroBalanceAndEquity }
-        val displayMarginLevel = account?.takeUnless { zeroBalanceAndEquity }?.let { finite(it, "margin_level") }
-        val displayLeverage = account?.takeUnless { zeroBalanceAndEquity }?.let { finiteInt(it, "leverage") }
+        val displayBalance = balance.takeUnless { suppressFinancialDisplay }
+        val displayEquity = equity.takeUnless { suppressFinancialDisplay }
+        val displayMargin = margin.takeUnless { suppressFinancialDisplay }
+        val displayFreeMargin = freeMargin.takeUnless { suppressFinancialDisplay }
+        val displayMarginLevel = account?.takeUnless { suppressFinancialDisplay }?.let { finite(it, "margin_level") }
+        val displayLeverage = account?.takeUnless { suppressFinancialDisplay }?.let { finiteInt(it, "leverage") }
         fun array(key: String): List<JSONObject>? {
             val a = obj.optJSONArray(key) ?: return null
             val out = mutableListOf<JSONObject>()
@@ -524,12 +534,12 @@ class MT5RemoteBridgeClient(
         return Snapshot(
             hostProfile, managedState, workerStatus, access, mode,
             online && freshness && terminalConnected && verified && brokerIdentityVerified &&
-                localIdentityMatches && actualMode == accountMode && financialSnapshotValid,
+                localIdentityMatches && actualMode == accountMode,
             online, freshness,
             when {
-                zeroBalanceAndEquity -> "DISCONNECTED"
                 !online -> "OFFLINE"
                 !freshness -> "STALE"
+                !terminalConnected -> "DISCONNECTED"
                 else -> obj.optString("ea_state", "OFFLINE").uppercase()
             },
             listOf(actualLogin, actualServer).filter { it.isNotBlank() }.joinToString(" @ "), actualLogin, actualServer,
@@ -539,12 +549,12 @@ class MT5RemoteBridgeClient(
             obj.optBoolean("trade_allowed", false) && online && freshness && terminalConnected &&
                 verified && brokerIdentityVerified && localIdentityMatches && financialSnapshotValid,
             terminalConnected, verified, brokerIdentityVerified,
-            account?.optString("currency").orEmpty().takeUnless { zeroBalanceAndEquity }.orEmpty(),
+            account?.optString("currency").orEmpty().takeUnless { suppressFinancialDisplay }.orEmpty(),
             displayBalance, displayEquity, displayMargin, displayFreeMargin, displayMarginLevel, displayLeverage,
             array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
             obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes, brokerCandles,
-            actualCompany, connectionWarning
+            actualCompany, connectionWarning, connectionErrorCode
         )
     }
 

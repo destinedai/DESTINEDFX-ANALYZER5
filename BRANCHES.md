@@ -2,7 +2,7 @@
 
 ## Active destination
 
-All work for the self-hosted host-runtime implementation belongs on `feat/self-hosted-linux-host-runtime`. At the start of the final Android acceptance repair task on 2026-11-23, its remote HEAD was `a899055a0af91e1b17bb4d3456fcf0139dc84287`. The fully tested code checkpoint before this documentation alignment was `c659697a33761557e180c7861c5bd00c23e173ee` (236 commits ahead of `main`, 0 behind at that comparison). This documentation update is committed fast-forward on top of that checkpoint.
+All work for the self-hosted host-runtime implementation belongs on `feat/self-hosted-linux-host-runtime`. At the 2026-11-23 live GitHub audit before this repair, remote HEAD was `714ad2a8a14b390ce43e12e89134c954237b3c7a`. GitHub's live comparison against `main` (`61bc5373bd9b546e1f6fc75fb48a1d988a7b49f4`) reported **257 commits ahead and 0 behind**. This is a dated audit record, not a permanent count; re-read remote refs before future work.
 
 Always read the current remote branch HEAD before editing and preserve it. Do not assume a SHA or ahead/behind count in this document remains current after subsequent commits. Do not switch to `main` to continue this task.
 

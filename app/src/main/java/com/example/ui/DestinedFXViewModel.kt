@@ -940,6 +940,77 @@ open class DestinedFXViewModel(
         }
     }
 
+    /**
+     * Starts the owner-authorized repository Codespace when enabled, or verifies the
+     * configured persistent host. It never claims an Android request can power on an
+     * offline physical/VPS machine.
+     */
+    fun startHostAndVerify(onResult: (String) -> Unit) {
+        if (isPreview) {
+            onResult("RED NOT READY · Host start is disabled in preview mode.")
+            return
+        }
+        viewModelScope.launch {
+            quickHostHealth.value = "NOT READY"
+            quickHostError.value = "Host start and /health verification are in progress."
+            try {
+                val brand = app.secretsManager.getSelectedMT5BrokerBrand().uppercase()
+                    .takeIf { it in setOf("FBS", "EXNESS", "HFM", "DERIV") } ?: "FBS"
+                val profile = "${brand}_DEMO"
+                val bridge = MT5RemoteBridgeClient(
+                    secrets = app.secretsManager,
+                    profile = profile,
+                    sensitiveActionAuthorized = { AppSecurityGuard.authorizeSensitiveAction() },
+                    accountMode = "DEMO",
+                    brokerBrand = brand,
+                    modeArmingPolicy = app.modeArmingPolicy,
+                    managementIdentityAssertionProvider = { issueBridgeIdentityAssertion() }
+                )
+                var bridgeFailure = ""
+                val existingHost = try {
+                    withContext(Dispatchers.IO) { bridge.hostLifecycle() }
+                } catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    bridgeFailure = error.message.orEmpty().take(180)
+                    null
+                }
+                if (existingHost != null) {
+                    requireManagementApiHealth()
+                    quickHostHealth.value = "READY"
+                    quickHostError.value = ""
+                    onResult("GREEN READY · Existing ${existingHost.hostProfile} Bridge GET /health and Management API GET /health both returned healthy status.")
+                    return@launch
+                }
+                check(com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY) {
+                    "RED NOT READY · Bridge GET /health failed ($bridgeFailure). This APK has no owner-authorized Codespaces start control; power on the persistent Ubuntu host and its Bridge/Management API services, then retry."
+                }
+                val lifecycle = com.example.data.codespaces.CodespacesLifecycleClient(app.secretsManager)
+                val started = withContext(Dispatchers.IO) { lifecycle.startRepositoryCodespace() }
+                check(started.accepted) { "GitHub did not accept Codespaces start: ${started.message}" }
+                val bridgeUrl = withContext(Dispatchers.IO) { lifecycle.discoverAndSaveBridge() }
+                val managementUrl = withContext(Dispatchers.IO) { lifecycle.discoverAndSaveManagementApi() }
+                managementApiOrigin.value = managementUrl
+                requireManagementApiHealth()
+                val startedHost = withContext(Dispatchers.IO) { bridge.hostLifecycle() }
+                check(startedHost.hostProfile.toString().equals("EPHEMERAL", ignoreCase = true)) {
+                    "Started Codespace did not report expected EPHEMERAL host profile."
+                }
+                quickHostHealth.value = "READY"
+                quickHostError.value = ""
+                onResult("GREEN READY · Codespace ${started.codespaceName}; Bridge /health passed at $bridgeUrl; Management API /health passed at $managementUrl. EPHEMERAL is DEMO-only; LIVE remains locked.")
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                val safe = (error.message ?: error.javaClass.simpleName)
+                    .replace(Regex("(?i)(?:token|password|secret|authorization)\\s*[:=]\\s*[^\\s,]+"), "[REDACTED]")
+                    .take(220)
+                quickHostHealth.value = "NOT READY"
+                quickHostError.value = safe
+                managementServiceState.value = "NOT READY · $safe"
+                onResult("RED NOT READY · $safe")
+            }
+        }
+    }
+
     fun discoverCodespacesManagementApi() = managementAction {
         check(com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY) {
             "This APK was not built with GitHub Codespaces host discovery enabled."

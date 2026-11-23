@@ -6,6 +6,8 @@ The production execution target is an **owner-operated, persistent Ubuntu Linux 
 
 This is an implemented deployment path, **not a claim that an owner host has already been installed, deployed, or accepted**. Repository CI validates code and fixtures; it does not create the operator's host, configure the operator's DNS, authenticate a broker account, or prove a broker order.
 
+**Owner-reported operating window:** the owner reports that the separately created persistent host is available for at least two hours per day. This is operator-provided information, not CI-verified uptime. At each session verify Bridge /health, durable database readiness, actual MT5 account identity and a fresh terminal heartbeat. Two hours per day is not continuous availability.
+
 The production target does not rely on Azure, Oracle, Railway, Render, Cloudflare Workers, Codespaces, or a third-party hosted MT5 execution vendor. PostgreSQL runs locally on the same operator-controlled Linux machine.
 
 ## Supported hosting paths
@@ -26,7 +28,7 @@ Until per-account Windows process SIDs/tokens and account-specific ACLs are inde
 
 ### GitHub Codespaces — development and test only
 
-Codespaces is **EPHEMERAL and DEVELOPMENT ONLY**. Use it for source changes, CI, fixtures, and development-host experiments. It is not the production trading host, a persistent multi-user runtime, or proof of broker connectivity. Do not change its host profile, bypass its expiry gate, or rely on its state for production execution.
+Codespaces is **EPHEMERAL and DEVELOPMENT ONLY**. Use it for source changes, CI, fixtures, and supervised DEMO experiments. A DEMO order is accepted only when `EXECUTION_STORAGE_DURABLE=true` and durable database readiness is verified, alongside MASTER access, broker identity, fresh heartbeat, risk, quote, protective-order and reconciliation checks. If storage is non-durable, execution remains blocked. LIVE is never available on EPHEMERAL; Codespaces is not the production trading host or persistent multi-user runtime.
 
 ## Linux host setup
 
@@ -66,4 +68,4 @@ Keep encrypted systemd credentials, host state, terminal data, and local Postgre
 
 ## Release boundary
 
-CI artifacts named **DEBUG APK - FOR DEMO TEST ONLY** are for controlled DEMO validation, not production release. Exact-source APK metadata, certificate verification and stable debug-key provisioning are documented in docs/deployment/APK_SIGNING.md. GitHub Release/prerelease publishing remains disabled. Do not tag or publish a release until the exact candidate has passed Android JVM tests, emulator instrumentation, physical phone-to-Bridge pairing, authenticated MT5 DEMO telemetry, and supervised DEMO order/position acceptance. LIVE remains independently gated and is not authorized by these steps.
+CI artifacts named **DEBUG APK - FOR DEMO TEST ONLY - LIVE LOCKED FOR SAFETY** are for controlled DEMO validation, not production release. Exact-source APK metadata, certificate verification and stable debug-key provisioning are documented in docs/deployment/APK_SIGNING.md. GitHub Release/prerelease publishing remains disabled. Do not tag or publish a release until the exact candidate has passed Android JVM tests, emulator instrumentation, physical phone-to-Bridge pairing, authenticated MT5 DEMO telemetry, and supervised DEMO order/position acceptance. LIVE remains independently gated and is not authorized by these steps.

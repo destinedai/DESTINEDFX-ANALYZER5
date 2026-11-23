@@ -77,6 +77,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val candleFetchErrors by viewModel.candleFetchErrors.collectAsStateWithLifecycle()
     val strategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     var advancedOpen by remember { mutableStateOf(false) }
+    var chartRenderVerified by remember(symbol, timeframe) { mutableStateOf(false) }
     // Analyzer charts use only closed OHLC bars received from the authenticated MT5 terminal.
 
     val activeTicker = ticker[symbol]
@@ -93,7 +94,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         ticker = activeTicker,
         candleSource = viewModel.marketDataSource(symbol, timeframe),
         candlesAvailable = candles.isNotEmpty(),
-        chartDisplayed = candles.isNotEmpty(),
+        chartDisplayed = chartRenderVerified,
         signal = currentSignal,
         candleRetrievedAtMs = viewModel.candleSnapshotRetrievedAtMs(symbol, timeframe),
         latestClosedCandleAtMs = candles.asSequence()
@@ -232,6 +233,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                         isRealTradingViewEnabled = false,
                         onToggleChartType = { /* widget failure may switch to the native fallback */ },
                         onPriceUpdate = { _, _ -> },
+                        onChartRenderStateChanged = { rendered -> chartRenderVerified = rendered },
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
                 }

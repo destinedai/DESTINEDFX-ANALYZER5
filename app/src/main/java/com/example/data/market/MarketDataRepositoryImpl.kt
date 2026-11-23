@@ -121,6 +121,7 @@ class MarketDataRepositoryImpl(
     override val tickerFlow: StateFlow<Map<String, MarketTicker>> = _tickers.asStateFlow()
     private val _quoteDiagnostics = MutableStateFlow<Map<String, String>>(emptyMap())
     override val quoteDiagnostics: StateFlow<Map<String, String>> = _quoteDiagnostics.asStateFlow()
+    @Volatile private var bridgeSnapshotFailure: String = "MT5_BRIDGE_ACCOUNT_SNAPSHOT_UNAVAILABLE"
 
     override val selectedApiSource = MutableStateFlow("MT5_BRIDGE")
 
@@ -294,6 +295,13 @@ class MarketDataRepositoryImpl(
                 if (brand.isBlank() || mode !in setOf("DEMO", "LIVE") ||
                     login.isBlank() || server.isBlank() ||
                     secrets.getMT5BridgeAccountAppToken(profileKey).isBlank()) {
+                    bridgeSnapshotFailure = when {
+                        brand.isBlank() -> "MT5_BRIDGE_BROKER_NOT_SELECTED"
+                        mode !in setOf("DEMO", "LIVE") -> "MT5_BRIDGE_ACCOUNT_MODE_NOT_SELECTED"
+                        login.isBlank() -> "MT5_BRIDGE_ACCOUNT_LOGIN_NOT_CONFIGURED"
+                        server.isBlank() -> "MT5_BRIDGE_ACCOUNT_SERVER_NOT_CONFIGURED"
+                        else -> "MT5_BRIDGE_PAIRING_TOKEN_MISSING"
+                    }
                     bridgeSnapshotCache = null
                     bridgeSnapshotCacheProfile = profileKey
                     bridgeSnapshotCacheAtMs = 0L
@@ -304,19 +312,42 @@ class MarketDataRepositoryImpl(
                     now >= bridgeSnapshotCacheAtMs && now - bridgeSnapshotCacheAtMs < 1_000L) {
                     return@withLock bridgeSnapshotCache
                 }
-                val snapshot = runCatching {
+                val snapshot = try {
                     MT5RemoteBridgeClient(
-                        secrets = secrets,
-                        profile = profileKey,
-                        accountMode = mode,
-                        brokerBrand = brand
+                        secrets = secrets, profile = profileKey, accountMode = mode, brokerBrand = brand
                     ).state()
-                }.getOrNull()
+                } catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    bridgeSnapshotFailure = "MT5_BRIDGE_STATE_REQUEST_FAILED: " +
+                        (error.message?.take(160) ?: error.javaClass.simpleName)
+                    null
+                }
+                val rejection = snapshot?.let {
+                    when {
+                        !it.terminalOnline -> "MT5_TERMINAL_OFFLINE"
+                        !it.heartbeatFresh -> "MT5_TERMINAL_HEARTBEAT_STALE"
+                        !it.terminalConnected -> "MT5_TERMINAL_NOT_CONNECTED"
+                        !it.accountVerified -> "MT5_ACCOUNT_IDENTITY_UNVERIFIED"
+                        !it.brokerIdentityVerified -> "MT5_BROKER_IDENTITY_UNVERIFIED"
+                        it.actualCompany.isBlank() -> "MT5_BROKER_COMPANY_UNAVAILABLE"
+                        it.actualAccountMode != mode -> "MT5_ACCOUNT_MODE_MISMATCH"
+                        it.actualLogin != login -> "MT5_ACCOUNT_LOGIN_MISMATCH"
+                        it.actualServer != server -> "MT5_ACCOUNT_SERVER_MISMATCH"
+                        !it.connected -> it.connectionWarning.ifBlank { "MT5_ACCOUNT_CONNECTION_NOT_VERIFIED" }
+                        else -> null
+                    }
+                }
                 val verified = snapshot?.takeIf {
-                    it.connected && it.terminalOnline && it.heartbeatFresh && it.terminalConnected &&
-                        it.accountVerified && it.brokerIdentityVerified && it.actualCompany.isNotBlank() &&
-                        it.balance != null && it.balance > 0.0 && it.equity != null && it.equity > 0.0 &&
-                        it.actualAccountMode == mode && it.actualLogin == login && it.actualServer == server
+                    rejection == null && it.connected && it.terminalOnline && it.heartbeatFresh &&
+                        it.terminalConnected && it.accountVerified && it.brokerIdentityVerified &&
+                        it.actualCompany.isNotBlank() && it.actualAccountMode == mode &&
+                        it.actualLogin == login && it.actualServer == server
+                }
+                bridgeSnapshotFailure = when {
+                    rejection != null -> rejection
+                    verified != null -> ""
+                    snapshot == null && bridgeSnapshotFailure.isBlank() -> "MT5_BRIDGE_STATE_UNAVAILABLE"
+                    else -> bridgeSnapshotFailure
                 }
                 bridgeSnapshotCache = verified
                 bridgeSnapshotCacheProfile = profileKey
@@ -385,12 +416,12 @@ class MarketDataRepositoryImpl(
     private suspend fun fetchMt5BridgeQuote(symbol: String): MarketTicker? {
         val snapshot = verifiedMt5Snapshot()
         if (snapshot == null) {
-            markMt5QuoteUnavailable(symbol, "DISCONNECTED - Price stale. Connect and verify the selected MT5 account.")
+            markMt5QuoteUnavailable(symbol, bridgeSnapshotFailure.ifBlank { "MT5_BRIDGE_ACCOUNT_SNAPSHOT_UNAVAILABLE" })
             return null
         }
         val ticker = mt5Ticker(snapshot, symbol)
         if (ticker == null || !isTimestampFresh(ticker.lastUpdateMillis, clock(), 15_000L)) {
-            markMt5QuoteUnavailable(symbol, "DISCONNECTED - Price stale. No fresh bid/ask for this symbol from the selected MT5 terminal.")
+            markMt5QuoteUnavailable(symbol, "MT5_TERMINAL_QUOTE_UNAVAILABLE: no unique fresh bid/ask for $symbol was reported by the authenticated account")
             return null
         }
         return ticker
@@ -660,10 +691,12 @@ class MarketDataRepositoryImpl(
                 _candleFetchErrors.update { it - key }
                 return@withContext bridgeCandles
             }
-            val detail = if (snapshot == null) {
-                "DISCONNECTED - Price stale. No verified MT5 terminal snapshot; no alternate feed will be used."
-            } else {
-                "MT5 Bridge has not supplied closed OHLC bars for ${symbol} ${timeframe}. No alternate feed will be used."
+            val detail = when {
+                snapshot == null -> bridgeSnapshotFailure.ifBlank {
+                    "MT5_BRIDGE_ACCOUNT_SNAPSHOT_UNAVAILABLE: no verified terminal state; no alternate feed will be used."
+                }
+                terminalSymbol == null -> "MT5_TERMINAL_SYMBOL_QUOTE_UNAVAILABLE: no unique broker quote resolved for $symbol."
+                else -> "MT5_TERMINAL_CLOSED_OHLC_UNAVAILABLE: no validated closed candles for $symbol $timeframe from the same broker symbol."
             }
             _candleFetchErrors.update { it + (key to detail) }
             dataSourceMap.remove(key)

@@ -75,7 +75,7 @@ fun deriveMarketReadiness(
             else -> "Quote unavailable or delayed"
         },
         candleLabel = if (candlesConfirmed) "Fresh OHLC candles confirmed" else "OHLC candles not confirmed",
-        chartLabel = if (chartDisplayed) "Native chart rendered" else "Chart candle rendering unverified",
+        chartLabel = if (chartDisplayed) "Chart rendered (WebView verified)" else "Chart candle rendering unverified",
         analysisLabel = when {
             signal == null -> "Analysis not completed"
             !signalFresh -> "Prior analysis — rescan to refresh"

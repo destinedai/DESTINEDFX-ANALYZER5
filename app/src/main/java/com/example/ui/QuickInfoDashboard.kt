@@ -25,7 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.broker.HostProfile
 import com.example.data.deriv.DerivConnectionState
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.security.AppSecurityGuard
@@ -73,6 +72,7 @@ fun QuickInfoDashboard(viewModel: DestinedFXViewModel) {
     val hostHealth by viewModel.quickHostHealth.collectAsStateWithLifecycle()
     val hostError by viewModel.quickHostError.collectAsStateWithLifecycle()
     val telegramStatus by viewModel.telegramStatus.collectAsStateWithLifecycle()
+    val telegramTestMessage by viewModel.telegramTestMessageResult.collectAsStateWithLifecycle()
     val lastTelegramMessage by viewModel.telegramLastMessageAtMs.collectAsStateWithLifecycle()
     val derivAccount by viewModel.app.derivBrokerGateway.accountInfo.collectAsStateWithLifecycle()
     val derivState by viewModel.app.derivBrokerGateway.connectionState.collectAsStateWithLifecycle()
@@ -93,11 +93,16 @@ fun QuickInfoDashboard(viewModel: DestinedFXViewModel) {
     } == true
     val expectedLogin = secrets.getManagedMT5AccountLogin(profile)
     val expectedServer = secrets.getManagedMT5AccountServer(profile)
+    // Pairing confirms broker identity; it does not imply order permission.
     val paired = client.hasPairing() && snapshot?.let {
-        it.connected && it.accountVerified && it.brokerIdentityVerified &&
+        it.connected && it.terminalOnline && it.terminalConnected && it.heartbeatFresh &&
+            it.accountVerified && it.brokerIdentityVerified &&
             it.actualAccountMode == "DEMO" && it.actualLogin == expectedLogin &&
-            it.actualServer == expectedServer && it.actualCompany.isNotBlank() &&
-            it.accessType == "MASTER" && heartbeatFresh && balanceVerified
+            it.actualServer == expectedServer && it.actualCompany.isNotBlank() && heartbeatFresh
+    } == true
+    val tradeReady = paired && snapshot?.let {
+        it.accessType == "MASTER" && it.tradeAllowed && it.managedState == "READY" &&
+            balanceVerified && it.snapshotsValid
     } == true
     val bridgeReady = client.managedConfigured() && paired
     val lastHeartbeat = if (snapshot != null && heartbeatAge != Long.MAX_VALUE) {
@@ -114,9 +119,9 @@ fun QuickInfoDashboard(viewModel: DestinedFXViewModel) {
     val derivBalance = derivMetrics?.balance?.takeIf { derivDemoReady && it.isFinite() && it > 0.0 }
     val derivEquity = derivMetrics?.equity?.takeIf { derivDemoReady && it.isFinite() && it > 0.0 }
     val pendingBridgeCommand = secrets.getMT5BridgeAccountPendingCommandId(profile)
-    val demoOrderReady = paired && balanceVerified &&
-        snapshot?.hostProfile == HostProfile.PERSISTENT && snapshot?.snapshotsValid == true &&
-        pendingBridgeCommand.isBlank() && !actionBusy
+    val executionStorageDurable = snapshot?.raw?.optBoolean("execution_storage_durable", false) == true
+    val demoOrderReady = tradeReady && executionStorageDurable &&
+        snapshot?.snapshotsValid == true && pendingBridgeCommand.isBlank() && !actionBusy
     val lastMessage = if (lastTelegramMessage > 0L) {
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(lastTelegramMessage))
     } else "Never"
@@ -140,13 +145,21 @@ fun QuickInfoDashboard(viewModel: DestinedFXViewModel) {
             DashboardLine("URL", client.baseUrl().ifBlank { "Not configured" })
             DashboardLine("Last Heartbeat", lastHeartbeat)
             DashboardLine("MT5 Pairing", if (paired) "PAIRED" else "NOT PAIRED")
+            DashboardLine(
+                "MT5 Trade Permission",
+                if (tradeReady) "TRADE READY"
+                else if (paired && snapshot?.accessType == "INVESTOR") "INVESTOR · READ ONLY"
+                else "NOT TRADE READY"
+            )
 
             Text("BROKER", color = TextPrimary, fontSize = 11.sp)
             DashboardLine("$brand DEMO", if (paired) "PAIRED" else "DISCONNECTED")
             DashboardLine("MT5 Account", if (paired) snapshot?.actualLogin.orEmpty() else "DISCONNECTED")
             DashboardLine("MT5 Server", if (paired) snapshot?.actualServer.orEmpty() else "DISCONNECTED")
-            DashboardLine("MT5 Balance", balance?.let { String.format(Locale.US, "%.2f", it) } ?: "DISCONNECTED")
-            DashboardLine("MT5 Equity", equity?.let { String.format(Locale.US, "%.2f", it) } ?: "DISCONNECTED")
+            DashboardLine("MT5 Balance", balance?.let { String.format(Locale.US, "%.2f", it) }
+                ?: if (paired) "ACCOUNT_BALANCE_UNAVAILABLE" else "DISCONNECTED")
+            DashboardLine("MT5 Equity", equity?.let { String.format(Locale.US, "%.2f", it) }
+                ?: if (paired) "ACCOUNT_BALANCE_UNAVAILABLE" else "DISCONNECTED")
             DashboardLine("Deriv DEMO", if (derivDemoReady) "CONNECTED" else "OFF")
             DashboardLine("Deriv Account", if (derivDemoReady) derivAccount?.loginId.orEmpty() else "DISCONNECTED")
             DashboardLine("Deriv Balance", derivBalance?.let { String.format(Locale.US, "%.2f", it) } ?: "DISCONNECTED")
@@ -159,18 +172,55 @@ fun QuickInfoDashboard(viewModel: DestinedFXViewModel) {
                 if (lastTelegramMessage > 0L) SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                     .format(Date(lastTelegramMessage)) else "Never"
             )
+            DashboardLine("Last Telegram Test", telegramTestMessage ?: "Not tested")
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = {
-                        viewModel.checkManagementApiHealth()
-                        viewModel.selectScreen(DestinedFXScreen.Bot)
+                        actionBusy = true
+                        actionMessage = "Starting or verifying the configured host..."
+                        viewModel.startHostAndVerify { result ->
+                            actionMessage = result
+                            actionBusy = false
+                        }
                     },
                     enabled = !actionBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("START HOST", fontSize = 10.sp) }
                 OutlinedButton(
-                    onClick = { viewModel.selectScreen(DestinedFXScreen.Bot) },
-                    enabled = hostHealth == "READY" && !actionBusy,
+                    onClick = {
+                        actionBusy = true
+                        actionMessage = "Testing the authenticated MT5 account session..."
+                        scope.launch {
+                            try {
+                                val tested = viewModel.refreshManagedMt5Bridge(client)
+                                val age = tested.raw.optLong("heartbeat_age_seconds", Long.MAX_VALUE)
+                                val loginReady = tested.connected && tested.terminalOnline &&
+                                    tested.terminalConnected && tested.heartbeatFresh &&
+                                    age in 0..60 && tested.accountVerified && tested.brokerIdentityVerified
+                                val permission = if (tested.accessType == "MASTER" && tested.tradeAllowed)
+                                    "MASTER · TRADE ALLOWED"
+                                else tested.accessType.ifBlank { "UNKNOWN" } + " · READ ONLY / NOT TRADE READY"
+                                actionMessage = buildString {
+                                    append(if (loginReady) "LOGIN PASS" else "LOGIN NOT READY")
+                                    append(" · Broker: ").append(tested.actualCompany.ifBlank { brand })
+                                    append(" · Account: ").append(tested.actualLogin.ifBlank { "UNAVAILABLE" })
+                                    append(" · Server: ").append(tested.actualServer.ifBlank { "UNAVAILABLE" })
+                                    append(" · Balance: ").append(tested.balance?.let { String.format(Locale.US, "%.2f", it) } ?: "UNAVAILABLE")
+                                    append(" · Equity: ").append(tested.equity?.let { String.format(Locale.US, "%.2f", it) } ?: "UNAVAILABLE")
+                                    append(" · Heartbeat: ").append(if (age != Long.MAX_VALUE) "${age}s" else "MISSING")
+                                    append(" · ").append(permission)
+                                    if (tested.connectionErrorCode.isNotBlank()) append(" · ").append(tested.connectionErrorCode)
+                                    if (!loginReady && tested.connectionWarning.isNotBlank()) append(" · ").append(tested.connectionWarning)
+                                }
+                            } catch (error: Exception) {
+                                if (error is kotlinx.coroutines.CancellationException) throw error
+                                actionMessage = "LOGIN NOT READY · ${error.message?.take(180) ?: error.javaClass.simpleName}"
+                            } finally {
+                                actionBusy = false
+                            }
+                        }
+                    },
+                    enabled = !actionBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("TEST LOGIN", fontSize = 10.sp) }
             }
@@ -181,7 +231,10 @@ fun QuickInfoDashboard(viewModel: DestinedFXViewModel) {
                     modifier = Modifier.weight(1f)
                 ) { Text("TEST DEMO ORDER 0.01", fontSize = 9.sp) }
                 OutlinedButton(
-                    onClick = { viewModel.sendTelegramTestNotification() },
+                    onClick = {
+                        actionMessage = "Sending Telegram test message from encrypted phone settings..."
+                        viewModel.sendTelegramTestNotification()
+                    },
                     enabled = viewModel.getTelegramBotToken().isNotBlank() && !actionBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("TEST TELEGRAM", fontSize = 10.sp) }
@@ -191,14 +244,14 @@ fun QuickInfoDashboard(viewModel: DestinedFXViewModel) {
             }
             if (!demoOrderReady) {
                 Text(
-                    "DEMO test blocked: requires identity-matched DEMO pairing, heartbeat under 60 seconds, positive verified balance/equity, complete snapshots and a persistent Windows host. LIVE is unavailable.",
+                    "DEMO test requires broker-verified DEMO MASTER access, fresh heartbeat, positive balance/equity, complete snapshots and durable Bridge storage. EPHEMERAL is allowed only when storage is durable. LIVE remains locked.",
                     color = WarningAmber,
                     fontSize = 10.sp
                 )
             }
             if (actionMessage.isNotBlank()) Text(actionMessage, color = TextSecondary, fontSize = 10.sp)
             Text(
-                "START HOST opens Bot > owner Host Controls. Codespaces is development-only; production execution requires the owner's always-on Windows MT5 host.",
+                "START HOST starts the owner-authorized repository Codespace when enabled, then checks Bridge and Management API /health. An offline Ubuntu host must be powered on by its operator. Production target: persistent Ubuntu Linux; Windows worker is limited and LIVE-blocked.",
                 color = TextSecondary,
                 fontSize = 10.sp
             )
@@ -211,7 +264,7 @@ fun QuickInfoDashboard(viewModel: DestinedFXViewModel) {
             title = { Text("Run one 0.01 DEMO order and close it?") },
             text = {
                 Text(
-                    "One BUY market request will be sent to the selected persistent DEMO terminal. The app then attempts to close only the new broker-identified position. Fresh quote, verified SL/TP, EA risk and news checks are required. Ambiguous outcomes are never retried automatically. No LIVE order is available."
+                    "One BUY 0.01 market request will be sent only to the selected broker-verified DEMO terminal. EPHEMERAL is allowed only when Bridge execution storage is explicitly durable. The app reconciles and closes only the exact new broker position. Fresh quote, verified SL/TP, EA risk and news checks are required. Ambiguous outcomes are never retried automatically. LIVE remains unavailable."
                 )
             },
             confirmButton = {
@@ -247,7 +300,9 @@ private suspend fun runQuickDemoOrder(
 ): String {
     val before = client.state()
     val age = before.raw.optLong("heartbeat_age_seconds", Long.MAX_VALUE)
-    require(before.hostProfile == HostProfile.PERSISTENT) { "persistent Windows host required" }
+    require(before.raw.optBoolean("execution_storage_durable", false)) {
+        "Bridge execution storage is not durable; DEMO order requests are disabled to prevent an unreconciled order after restart"
+    }
     require(before.connected && before.terminalOnline && before.terminalConnected &&
         before.heartbeatFresh && age in 0..60) { "MT5 heartbeat is stale or terminal is disconnected" }
     require(before.accountVerified && before.brokerIdentityVerified && before.actualCompany.isNotBlank()) {

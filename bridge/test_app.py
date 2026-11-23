@@ -3174,15 +3174,17 @@ def test_phone_market_order_rejects_wrong_symbol_price_side_risk_and_stale_quote
     assert response.json()['detail']['code'] == 'MARKET_ORDER_QUOTE_CHANGED'
 
 
-def test_phone_market_order_rejects_ephemeral_host_and_investor_profile(monkeypatch):
+def test_phone_market_order_allows_ephemeral_demo_with_durable_storage(monkeypatch):
     pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'DEMO')
     config = _publish_market_order_quote(terminal_headers, actual)
     monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
-    blocked = client.post('/v1/app/commands', headers=headers, json={
+    monkeypatch.setattr(app, 'durable_execution_enabled', lambda: True)
+    accepted = client.post('/v1/app/commands', headers=headers, json={
         'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config
     })
-    assert blocked.status_code == 409
-    assert blocked.json()['detail']['code'] == 'PERSISTENT_HOST_REQUIRED'
+    assert accepted.status_code == 202
+    assert accepted.json()['action'] == 'PLACE_MARKET_ORDER'
+    assert accepted.json()['config']['account_mode'] == 'DEMO'
 
 
 def _store_test_open_position(pairing, *, ticket='920001', direction='BUY', stop_loss=1.09000):

@@ -108,7 +108,7 @@ android {
     targetSdk = 36
     versionCode = 13
     versionName = "1.0.13"
-    buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - FOR DEMO TEST ONLY\"")
+    buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - FOR DEMO TEST ONLY - LIVE LOCKED FOR SAFETY\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")

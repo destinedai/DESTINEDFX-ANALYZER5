@@ -2510,7 +2510,21 @@ def state(authorization:str|None=Header(default=None)):
                                  identity_verified and broker_identity_verified)
     broker_quotes = fresh_terminal_broker_quotes(beat) if terminal_data_verified else []
     broker_candles = fresh_terminal_broker_candles(beat) if terminal_data_verified else []
-    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command,'broker_quotes':broker_quotes,'broker_candles':broker_candles,'broker_quote_stale_ms':BROKER_QUOTE_MAX_AGE_MS}
+    state_account = beat.get('account') if online and isinstance(beat,dict) else None
+    def positive_account_metric(value):
+        return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(float(value)) and float(value)>0
+    account_balance_available = bool(
+        isinstance(state_account,dict) and
+        positive_account_metric(state_account.get('balance')) and
+        positive_account_metric(state_account.get('equity'))
+    )
+    connection_error = None
+    if online and not account_balance_available:
+        connection_error = {
+            'code':'ACCOUNT_BALANCE_UNAVAILABLE',
+            'message':'The authenticated terminal did not provide a finite positive balance and equity snapshot; quote display may continue, but order execution remains blocked.'
+        }
+    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_balance_available':account_balance_available,'connection_error':connection_error,'execution_storage_durable':durable_execution_enabled(),'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command,'broker_quotes':broker_quotes,'broker_candles':broker_candles,'broker_quote_stale_ms':BROKER_QUOTE_MAX_AGE_MS}
     if managed is not None: result['managed_execution']=managed
     return result
 
@@ -3251,9 +3265,12 @@ def issue_market_order_command(x,p):
                 'config':json.loads(prior['config']),'status':'acknowledged' if prior['ack'] else 'queued'}
 
     require_durable_execution()
-    if HOST_PROFILE!='PERSISTENT':
-        raise HTTPException(409,detail={'code':'PERSISTENT_HOST_REQUIRED','message':'New MT5 market orders require the persistent owner host'})
     managed,beat=destructive_context(p)
+    if managed['account_mode']=='LIVE':
+        # LIVE orders remain on the persistent independently isolated host.
+        require_live_host_isolation(minimum_active_slots=2)
+    elif managed['account_mode']!='DEMO':
+        raise HTTPException(409,detail={'code':'ACCOUNT_MODE_NOT_SUPPORTED','message':'Phone market orders require a verified DEMO profile or separately authorized LIVE profile'})
     require_terminal_trade_outcome_resolved(beat)
     cfg=x.config
     account=beat.get('account') or {}
