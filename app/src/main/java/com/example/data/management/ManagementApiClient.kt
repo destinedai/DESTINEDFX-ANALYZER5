@@ -32,7 +32,7 @@ class ManagementApiClient(
     ) : this({ origin }, tokens, http)
 
     private fun currentBaseUrl(): String =
-        validatedOrigin(originProvider()) ?: throw ManagementException(ManagementFailure.UNCONFIGURED)
+        validatedOrigin(originProvider()) ?: throw ManagementException(ManagementFailure.UNCONFIGURED, "MANAGEMENT_API_ORIGIN is not configured in this APK.")
 
     private fun verifiedBaseUrl(): String {
         val origin = currentBaseUrl()
@@ -105,6 +105,9 @@ class ManagementApiClient(
             ?: throw ManagementException(ManagementFailure.INVALID_RESPONSE)
     }
 
+    /** Public management health probe; only GET /health is called, without broker credentials. */
+    fun healthCheck(): JSONObject = execute("GET", "/health")
+
     fun status(): ManagementStatus {
         val service = execute("GET", "/api/v1/service-status")
         val health = execute("GET", "/health")
@@ -168,21 +171,21 @@ class ManagementApiClient(
         repeat(attempts) { attempt ->
             try {
                 http.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) throw statusFailure(response.code, path)
+                    if (!response.isSuccessful) throw statusFailure(response.code, path, method)
                     val text = response.body?.string().orEmpty()
                     if (text.isBlank() && allowEmpty) return JSONObject()
-                    return try { JSONObject(text) } catch (_: Exception) { throw ManagementException(ManagementFailure.INVALID_RESPONSE) }
+                    return try { JSONObject(text) } catch (_: Exception) { throw ManagementException(ManagementFailure.INVALID_RESPONSE, "$method $path returned invalid JSON.") }
                 }
             } catch (e: ManagementException) {
                 throw e
-            } catch (_: IOException) {
-                if (attempt == attempts - 1) throw ManagementException(ManagementFailure.OFFLINE)
+            } catch (e: IOException) {
+                if (attempt == attempts - 1) throw ManagementException(ManagementFailure.OFFLINE, "$method $path failed: ${e.message ?: e.javaClass.simpleName}")
             }
         }
         throw ManagementException(ManagementFailure.OFFLINE)
     }
 
-    private fun statusFailure(code: Int, path: String): ManagementException = ManagementException(when {
+    private fun statusFailure(code: Int, path: String, method: String): ManagementException = ManagementException(when {
         code == 401 && path.endsWith("/auth/login") -> ManagementFailure.INVALID_CREDENTIALS
         code == 401 -> ManagementFailure.AUTH_EXPIRED
         code == 403 -> ManagementFailure.FORBIDDEN
@@ -192,7 +195,7 @@ class ManagementApiClient(
         code == 429 -> ManagementFailure.RATE_LIMITED
         code in 500..599 -> ManagementFailure.SERVICE_UNAVAILABLE
         else -> ManagementFailure.REQUEST_FAILED
-    })
+    }, "$method $path returned HTTP $code.")
 
     private fun userFrom(json: JSONObject): ManagementUser {
         val id = json.optString("id")
@@ -317,6 +320,6 @@ class SecretsManagerAccessTokenStore(private val secrets: com.example.security.S
 data class ManagementUser(val id: String, val email: String)
 data class ManagementStatus(val service: String, val health: String, val readiness: String, val database: String, val version: String)
 enum class ManagementFailure { UNCONFIGURED, SECURE_STORAGE_UNAVAILABLE, AUTH_EXPIRED, INVALID_CREDENTIALS, OFFLINE, FORBIDDEN, NOT_FOUND, CONFLICT, INVALID_REQUEST, RATE_LIMITED, SERVICE_UNAVAILABLE, REQUEST_FAILED, INVALID_RESPONSE }
-class ManagementException(val failure: ManagementFailure) : Exception(failure.name)
+class ManagementException(val failure: ManagementFailure, detail: String? = null) : Exception(detail ?: failure.name)
 
 private fun String.encodePathSegment(): String = java.net.URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")

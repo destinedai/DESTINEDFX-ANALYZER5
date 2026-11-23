@@ -497,18 +497,6 @@ fun MetaTraderBrokerFlow(
                         fontSize = 10.sp,
                         modifier = Modifier.testTag("mt5_server_save_status")
                     )
-                    if (spec.id == "HFM_MT5") {
-                        Text(
-                            if (form.mode == LoginMode.DEMO)
-                                "HFM Europe1 reference: DEMO service port 1950. Enter the exact server name issued to this account; do not append the port."
-                            else
-                                "HFM Europe1 reference: Live1 service port 1951. Enter the exact server name issued to this account; do not append the port.",
-                            color = ElectricCyan,
-                            fontSize = 10.sp,
-                            lineHeight = 14.sp,
-                            modifier = Modifier.testTag("hfm_mt5_port_reference")
-                        )
-                    }
                     Text(
                         "Login is verified by the paired MT5 terminal. No order is sent during sign-in.",
                         color = TextSecondary,

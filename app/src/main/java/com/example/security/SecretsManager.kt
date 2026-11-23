@@ -28,6 +28,10 @@ class SecretsManager internal constructor(
     companion object {
         private const val PREFS   = "destinedfx_secrets"
         private const val TG_TOK  = "telegram_bot_token"
+        private const val TG_APP_NAME = "telegram_app_name"
+        private const val TG_API_ID = "telegram_api_id"
+        private const val TG_API_HASH = "telegram_api_hash"
+        private const val TG_LAST_MESSAGE_AT_MS = "telegram_last_message_at_ms"
         private const val TG_CHAT = "telegram_chat_id"
         private const val WA_KEY  = "whatsapp_api_key"
         private const val WA_PHN  = "whatsapp_phone"
@@ -711,6 +715,35 @@ class SecretsManager internal constructor(
         .remove(CTRADER_ACCESS_TOKEN).remove(CTRADER_REFRESH_TOKEN).remove(CTRADER_ACCESS_EXPIRES_AT_MS)
         .commit()
 
+
+    /** Store phone-entered Telegram Quick Info only in Android Keystore-backed encrypted preferences. */
+    fun saveTelegramQuickInfo(appName: String, apiId: String, apiHash: String, botToken: String): Boolean {
+        if (!isSecureStorageAvailable) return false
+        val name = appName.trim()
+        val id = apiId.trim()
+        val hash = apiHash.trim()
+        val token = botToken.trim().removePrefix("bot").trim()
+        if (name.isBlank() || id.toLongOrNull() == null || hash.isBlank() || token.isBlank()) return false
+        return prefs.edit().putString(TG_APP_NAME, name).putString(TG_API_ID, id)
+            .putString(TG_API_HASH, hash).putString(TG_TOK, token).remove(TG_CHAT)
+            .putString(TG_STATUS, "Not tested").putBoolean(TG_NOTIF_ENABLED, false)
+            .putLong(TG_LAST_MESSAGE_AT_MS, 0L).commit()
+    }
+
+    fun saveTelegramLastMessageAtMs(value: Long): Boolean =
+        isSecureStorageAvailable && value > 0L && prefs.edit().putLong(TG_LAST_MESSAGE_AT_MS, value).commit()
+
+    fun clearTelegramQuickInfo(): Boolean {
+        if (!isSecureStorageAvailable) return false
+        return prefs.edit().remove(TG_APP_NAME).remove(TG_API_ID).remove(TG_API_HASH)
+            .remove(TG_TOK).remove(TG_CHAT).remove(TG_LAST_MESSAGE_AT_MS)
+            .putString(TG_STATUS, "Not configured").putBoolean(TG_NOTIF_ENABLED, false).commit()
+    }
+
+    fun getTelegramAppName(): String = prefs.getString(TG_APP_NAME, "") ?: ""
+    fun getTelegramApiId(): String = prefs.getString(TG_API_ID, "") ?: ""
+    fun getTelegramApiHash(): String = prefs.getString(TG_API_HASH, "") ?: ""
+    fun getTelegramLastMessageAtMs(): Long = prefs.getLong(TG_LAST_MESSAGE_AT_MS, 0L)
 
     fun saveTelegramToken(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(TG_TOK, v).commit()
     fun saveTelegramChatId(v: String): Boolean = isSecureStorageAvailable && prefs.edit().putString(TG_CHAT, v).commit()

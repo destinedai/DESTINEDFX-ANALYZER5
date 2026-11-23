@@ -645,11 +645,33 @@ open class DestinedFXViewModel(
     val whatsappPhoneNumber = MutableStateFlow(if (isPreview) "" else app.secretsManager.getWhatsAppPhone())
     val whatsappApiKey = MutableStateFlow(if (isPreview) "" else app.secretsManager.getWhatsAppApiKey())
 
-    // --- TELEGRAM NOTIFICATIONS & ONBOARDING ---
+    // --- TELEGRAM QUICK INFO & NOTIFICATIONS ---
+    val telegramAppName = MutableStateFlow(if (isPreview) "" else app.secretsManager.getTelegramAppName())
+    val telegramApiId = MutableStateFlow(if (isPreview) "" else app.secretsManager.getTelegramApiId())
+    val telegramApiHash = MutableStateFlow(if (isPreview) "" else app.secretsManager.getTelegramApiHash())
+    val telegramLastMessageAtMs = MutableStateFlow(if (isPreview) 0L else app.secretsManager.getTelegramLastMessageAtMs())
     val telegramStatus = MutableStateFlow(if (isPreview) "Not configured" else app.secretsManager.getTelegramConnectionStatus())
     val telegramNotificationsEnabled = MutableStateFlow(if (isPreview) false else app.secretsManager.getTelegramNotificationsEnabled())
     val telegramTestMessageResult = MutableStateFlow<String?>(null)
     val isTelegramLoading = MutableStateFlow(false)
+
+    /** Save phone-entered Telegram values locally; never send API ID/hash to the Bot API. */
+    fun saveTelegramQuickInfo(appName: String, apiId: String, apiHash: String, botToken: String): Boolean {
+        if (isPreview) return false
+        val saved = app.secretsManager.saveTelegramQuickInfo(appName, apiId, apiHash, botToken)
+        if (saved) {
+            telegramAppName.value = app.secretsManager.getTelegramAppName()
+            telegramApiId.value = app.secretsManager.getTelegramApiId()
+            telegramApiHash.value = app.secretsManager.getTelegramApiHash()
+            telegramBotToken.value = app.secretsManager.getTelegramToken()
+            telegramChatId.value = ""
+            telegramStatus.value = "Not tested"
+            telegramNotificationsEnabled.value = false
+            telegramLastMessageAtMs.value = 0L
+            telegramTestMessageResult.value = "Saved in encrypted Android Keystore-backed storage on this phone."
+        }
+        return saved
+    }
 
     fun connectTelegram(
         botToken: String,
@@ -720,6 +742,9 @@ open class DestinedFXViewModel(
                     app.secretsManager.saveTelegramNotificationsEnabled(false)
                     telegramStatus.value = "Connected"
                     telegramNotificationsEnabled.value = false
+                    val sentAt = System.currentTimeMillis()
+                    app.secretsManager.saveTelegramLastMessageAtMs(sentAt)
+                    telegramLastMessageAtMs.value = sentAt
                     telegramTestMessageResult.value = "SUCCESS: DestinedFX Telegram Connected"
                 } else {
                     app.secretsManager.saveTelegramConnectionStatus("Connection failed")
@@ -776,10 +801,11 @@ open class DestinedFXViewModel(
         onResult?.invoke(false, "CONFIGURATION_REQUIRED: a broker-authenticated demo account is required; local demo balances are not connected MT5 accounts.")
     }
     fun unlinkTelegram() {
-        app.secretsManager.saveTelegramToken("")
-        app.secretsManager.saveTelegramChatId("")
-        app.secretsManager.saveTelegramConnectionStatus("Not configured")
-        app.secretsManager.saveTelegramNotificationsEnabled(false)
+        app.secretsManager.clearTelegramQuickInfo()
+        telegramAppName.value = ""
+        telegramApiId.value = ""
+        telegramApiHash.value = ""
+        telegramLastMessageAtMs.value = 0L
         telegramBotToken.value = ""
         telegramChatId.value = ""
         telegramStatus.value = "Not configured"
@@ -788,6 +814,7 @@ open class DestinedFXViewModel(
     }
 
     fun refreshTelegramStatus() {
+        telegramLastMessageAtMs.value = app.secretsManager.getTelegramLastMessageAtMs()
         val token = app.secretsManager.getTelegramToken()
         val chatId = app.secretsManager.getTelegramChatId()
         val configured = token.isNotBlank() && chatId.isNotBlank() && app.secretsManager.isSecureStorageAvailable
@@ -870,6 +897,48 @@ open class DestinedFXViewModel(
     )
     val managementServiceState = MutableStateFlow("")
     val managementOwnerSetupToken = MutableStateFlow("")
+    val quickHostHealth = MutableStateFlow("NOT READY")
+    val quickHostError = MutableStateFlow("Management API /health has not been verified.")
+
+    /** GET /health is required before managed MT5 broker credentials may be submitted. */
+    suspend fun requireManagementApiHealth() {
+        try {
+            val body = withContext(Dispatchers.IO) { managementClient.healthCheck() }
+            val status = body.optString("status")
+            if (status != "ok") {
+                throw com.example.data.management.ManagementException(
+                    com.example.data.management.ManagementFailure.SERVICE_UNAVAILABLE,
+                    "GET /health returned HTTP 200 with status '$status'."
+                )
+            }
+            quickHostHealth.value = "READY"
+            quickHostError.value = ""
+            managementServiceState.value = "READY · GET /health returned status=ok"
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            quickHostHealth.value = "NOT READY"
+            quickHostError.value = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+            managementServiceState.value = "NOT READY · ${quickHostError.value}"
+            throw e
+        }
+    }
+
+    fun checkManagementApiHealth() {
+        if (isPreview) {
+            quickHostHealth.value = "NOT READY"
+            quickHostError.value = "Management API health checks are disabled in preview mode."
+            return
+        }
+        viewModelScope.launch {
+            try {
+                requireManagementApiHealth()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The precise safe error is retained in quickHostError.
+            }
+        }
+    }
 
     fun discoverCodespacesManagementApi() = managementAction {
         check(com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY) {
@@ -1951,6 +2020,10 @@ open class DestinedFXViewModel(
     fun getMT5Password(): String = "••••••••"
     fun getMT5BrokerServer(): String = if (isPreview) "" else app.secretsManager.getMT5BrokerServer()
     fun getMT5InvestorPassword(): String = "••••••••"
+    fun getTelegramAppName(): String = if (isPreview) "" else app.secretsManager.getTelegramAppName()
+    fun getTelegramApiId(): String = if (isPreview) "" else app.secretsManager.getTelegramApiId()
+    fun getTelegramApiHash(): String = if (isPreview) "" else app.secretsManager.getTelegramApiHash()
+    fun getTelegramLastMessageAtMs(): Long = if (isPreview) 0L else app.secretsManager.getTelegramLastMessageAtMs()
     fun getTelegramBotToken(): String = if (isPreview) "" else app.secretsManager.getTelegramToken()
     fun getTelegramChatId(): String = if (isPreview) "" else app.secretsManager.getTelegramChatId()
     fun hasLiveBrokerKeys(): Boolean = if (isPreview) false else {

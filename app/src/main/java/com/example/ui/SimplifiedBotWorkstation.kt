@@ -632,7 +632,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         val brand = spec.id.removeSuffix("_MT5")
                         val mode = form.mode.name
                         val client = mt5Client("${brand}_${mode}", mode, brand)
-                        ConnectUseCase(MT5BridgeConnectBackend(client)).connect(spec, form, onStage)
+                        ConnectUseCase(MT5BridgeConnectBackend(client) { viewModel.requireManagementApiHealth() }).connect(spec, form, onStage)
                     }
                 }
             },

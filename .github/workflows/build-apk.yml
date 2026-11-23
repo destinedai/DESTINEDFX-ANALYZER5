@@ -627,7 +627,7 @@ jobs:
       - name: Upload verified debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: DestinedFX-debug-apk
+          name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
   codespaces-bootstrap-apk:
@@ -726,7 +726,7 @@ jobs:
       - name: Upload locked Codespaces bootstrap APK
         uses: actions/upload-artifact@v4
         with:
-          name: DestinedFX-Codespaces-bootstrap-apk
+          name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-Codespaces-bootstrap
           path: |
             app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk
             app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk.sha256
@@ -770,7 +770,7 @@ jobs:
       - name: Upload standard debug APK independently of JVM tests
         uses: actions/upload-artifact@v4
         with:
-          name: DestinedFX-debug-apk-independent
+          name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-independent
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/verified/app-debug.apk.sha256
@@ -899,8 +899,8 @@ jobs:
           if-no-files-found: error
 
   package-host-v1-prerelease:
-    name: Package host-v1 prerelease
-    if: startsWith(github.ref, 'refs/tags/host-v')
+    name: Package host-v1 prerelease (HOLD — acceptance gates not wired)
+    if: false # No GitHub Release until JVM PASS + emulator PASS + real DEMO pairing PASS.
     needs: [mt5-ea-windows-compile, android-build-and-unit-tests, package-windows-worker-kit]
     runs-on: ubuntu-24.04
     steps:
@@ -910,7 +910,7 @@ jobs:
           path: dist/incoming/ea
       - uses: actions/download-artifact@v4
         with:
-          name: DestinedFX-debug-apk
+          name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY
           path: dist/incoming/apk
       - uses: actions/download-artifact@v4
         with:

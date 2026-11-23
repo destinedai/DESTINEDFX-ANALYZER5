@@ -70,6 +70,8 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        item { QuickInfoDashboard(viewModel) }
+
         item {
             Column(
                 modifier = Modifier

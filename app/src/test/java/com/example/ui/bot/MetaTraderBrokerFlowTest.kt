@@ -101,7 +101,7 @@ class MetaTraderBrokerFlowTest {
         listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
             composeRule.onNodeWithTag("broker_list").performScrollToNode(hasTestTag("broker_${brand}_MT5"))
             composeRule.onNodeWithTag("broker_${brand}_MT5").performClick()
-            composeRule.onNodeWithText("Test and verify an existing MT5 broker login").performScrollTo().assertIsDisplayed()
+            composeRule.onNodeWithText("MT5 account sign-in").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_login_fields_help").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("mt5_server_field_help").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithText("Copy from Broker Dashboard > MT5 account details > Server. Enter the exact account-issued value only; do NOT add :port.")
@@ -110,13 +110,6 @@ class MetaTraderBrokerFlowTest {
             composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
             composeRule.onNodeWithTag("server_field").performScrollTo().performTextInput("Fixture-Demo")
             composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
-            if (brand == "HFM") {
-                composeRule.onNodeWithTag("hfm_mt5_port_reference").performScrollTo().assertIsDisplayed()
-                composeRule.onNodeWithText("HFM Europe1 reference: DEMO service port 1950. Enter the exact server name issued to this account; do not append the port.").assertIsDisplayed()
-                composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
-                composeRule.onNodeWithText("HFM Europe1 reference: Live1 service port 1951. Enter the exact server name issued to this account; do not append the port.").assertIsDisplayed()
-                composeRule.onNodeWithTag("login_mode_demo").performScrollTo().performClick()
-            }
             composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
             composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
             composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()

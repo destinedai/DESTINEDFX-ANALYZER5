@@ -14,10 +14,20 @@ import org.json.JSONObject
  * Adapter over the actual managed bridge. The owner bootstrap code is passed only to the first
  * pairing request; it is never stored with the broker password or retained for observation.
  */
-class MT5BridgeConnectBackend(private val client: MT5ManagedAccountGateway) : ConnectBackend {
+class MT5BridgeConnectBackend(
+    private val client: MT5ManagedAccountGateway,
+    private val managementHealthCheck: suspend () -> Unit = {},
+) : ConnectBackend {
     private var requestedForm: LoginForm? = null
 
     override suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm): String? {
+        try {
+            managementHealthCheck()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return "MANAGEMENT_SERVICE_UNAVAILABLE"
+        }
         if (form.mode == LoginMode.LIVE && form.type == AccessType.TRADE) {
             // /v1/app/state requires an app bearer and cannot be called before a new profile is paired.
             // /health is deliberately public and reports only the host's configured profile.
