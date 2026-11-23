@@ -495,7 +495,7 @@ jobs:
               fi
               attempt=$((attempt + 1))
             done
-            echo "Robolectric dependencies remained HTTP 429 for '$suite_name'." >&2
+            echo "JVM acceptance is NOT PASSED: Robolectric dependencies remained HTTP 429 for '$suite_name'." >&2
             tail -n 80 "$last_log" >&2
             return 1
           }
@@ -503,14 +503,14 @@ jobs:
           echo "=== Focused Android broker login regression classes ==="
           if ! run_suite focused-broker-login --tests 'com.example.BrokerLoginSpecTest' --tests 'com.example.ui.bot.MetaTraderBrokerFlowTest'; then
             echo "status=failed" >> "$GITHUB_OUTPUT"
-            echo "Focused Android broker login tests did not pass." >&2
+            echo "JVM acceptance is NOT PASSED: focused Android broker login tests did not pass." >&2
             exit 1
           fi
 
           echo "=== Complete Android JVM suite ==="
           if ! run_suite full-jvm; then
             echo "status=failed" >> "$GITHUB_OUTPUT"
-            echo "Complete Android JVM suite did not pass." >&2
+            echo "JVM acceptance is NOT PASSED: complete Android JVM suite did not pass." >&2
             exit 1
           fi
           echo "status=passed" >> "$GITHUB_OUTPUT"
