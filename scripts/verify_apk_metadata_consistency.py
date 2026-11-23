@@ -140,7 +140,7 @@ def build_report(metadata_by_name: dict[str, dict[str, Any]], expected_source_sh
         "source_sha": expected_source_sha.lower(),
         "artifacts": {
             name: {
-                field: validated[name][field]
+                field: validated[name].get(field)
                 for field in (
                     "apk_file", "package_name", "version_name", "version_code",
                     "minimum_sdk", "target_sdk", "abis", "size_bytes", "sha256",
