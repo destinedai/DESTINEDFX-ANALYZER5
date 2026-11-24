@@ -714,7 +714,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     val dailyClose = currentBrokerSnapshot?.brokerCandles.orEmpty()
                                         .filter { it.symbol.equals(quote.symbol, ignoreCase = true) && it.timeframe == "D1" && it.complete }
                                         .maxByOrNull { it.timestampMs }?.close
-                                    val spread = quote.ask - quote.bid
                                     val change = dailyClose?.takeIf { it.isFinite() && it > 0.0 }
                                         ?.let { ((quote.bid + quote.ask) / 2.0 - it) / it * 100.0 }
                                         ?.takeIf { it.isFinite() }

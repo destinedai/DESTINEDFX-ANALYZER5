@@ -601,6 +601,16 @@ class MT5RemoteBridgeClient(
 
     suspend fun hostStatus(): JSONObject = request("GET", "/v1/app/host/status")
 
+    /**
+     * Marks authenticated, explicit phone activity for the Codespaces idle supervisor.
+     * Passive state/health polling must never call this endpoint.
+     */
+    suspend fun touchHostActivity() {
+        if (!hasPairing()) return
+        // request() attaches this profile's app bearer token by default.
+        request("POST", "/v1/app/host/activity", JSONObject())
+    }
+
     data class TradePage(val cursor: Int, val watermark: Double, val trades: List<JSONObject>)
 
     suspend fun tradeHistory(cursor: Int = 0, updatedAfter: Double = 0.0): TradePage {
