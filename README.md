@@ -1,9 +1,25 @@
 # DestinedFX Analyzer 5
 
-# ZERO-COST SETUP — NO VPS PURCHASE REQUIRED — Use old laptop + free DuckDNS
+INSIDE GITHUB ONLY - Open Codespaces, run 1 command, test DEMO APK - No laptop, No VPS, ₦0
 
-**₦0 new hosting fees. ₦0 domain purchase.** Use your existing home laptop/PC for the persistent Ubuntu 24.04 host, with two free DuckDNS subdomains. GitHub Codespaces remains DEMO-only. Start with [the zero-cost home-host guide](scripts/linux-host/README.md).
+LIVE needs persistent host, Codespaces = DEMO ONLY
 
+## GitHub Codespaces DEMO quick start
+
+1. Open the [DestinedFX Codespaces branch](https://github.com/destinedai/DESTINEDFX-ANALYZER5/tree/feat/self-hosted-linux-host-runtime), choose **Code → Codespaces → Create codespace on feat/self-hosted-linux-host-runtime**, and let the automatic container setup finish.
+2. Codespaces automatically starts the supervised Bridge, Management API, host agent and isolated MT5 worker when the container opens. To start or verify the same host from the Codespaces terminal, run this **one command**:
+
+   ```bash
+   bash deploy/codespaces/start-demo.sh
+   ```
+
+3. Wait for **PASS: Codespaces DEMO host is ready**. Ports 8000 (Bridge) and 8010 (Management API) are forwarded by the devcontainer; after the security and HTTPS checks pass, the startup script makes them public automatically. Do not use the Ports tab, copy URLs, or run a port-forward command.
+4. In the DestinedFX APK, open **Bot → Codespaces Host**. Tap **AUTHORIZE GITHUB** once and approve the one-time GitHub device request, then tap **START HOST**. The app starts/reuses the Codespace, discovers the verified Bridge URL and Management API URL, and saves the Bridge connection automatically.
+5. Select a broker **DEMO** account in Bot and enter that account's own broker-issued credentials. A connected Bridge is not a broker login: DEMO terminal identity and a fresh EA heartbeat must be verified before the app reports the account as ready.
+
+Get the **DEBUG APK — DEMO test only** from the [Build APK GitHub Actions workflow](https://github.com/destinedai/DESTINEDFX-ANALYZER5/actions/workflows/build-apk.yml). Use its verified artifact; CI builds do not prove a real broker login or a filled order.
+
+Codespaces runs with the EPHEMERAL profile. Public ports remain private until the Bridge K3 hardening tests, unauthenticated-request rejection, Management API/PostgreSQL readiness, EdDSA key check, forwarded HTTPS checks and GitHub port inventory all pass. Failed checks leave ports private.
 
 DestinedFX is a native Android application built with Kotlin and Jetpack Compose. It combines market-data analysis, account and risk monitoring, and broker-specific automated execution paths. The Android app, Python analysis module, FastAPI Bridge, managed worker, and MT5 Expert Advisor are separate parts of the system. A file or CI test in this repository does not mean that a public Bridge, terminal, broker account, or trading session is running.
 

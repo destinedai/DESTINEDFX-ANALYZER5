@@ -13,6 +13,7 @@ on:
       - 'scripts/test_linux_slot_worker.py'
       - 'bridge/app.py'
       - 'bridge/test_app.py'
+      - 'bridge/test_codespaces_controller.py'
       - 'app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt'
       - 'app/src/main/java/com/example/ui/workstations/BotWorkstation.kt'
       - 'app/src/main/java/com/example/ui/SimplifiedAnalyzerTab.kt'
@@ -66,13 +67,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify
       - name: Validate deployment shell syntax
         run: |
-          bash -n .devcontainer/postCreate.sh deploy/codespaces/start.sh \
+          bash -n .devcontainer/postCreate.sh deploy/codespaces/start-demo.sh deploy/codespaces/start.sh \
             deploy/codespaces/stop.sh deploy/codespaces/gui.sh \
             deploy/codespaces/first-run-check.sh scripts/linux-host/install-mt5.sh \
             scripts/linux-host/launch-mt5.sh scripts/linux-host/check-wine-mt5-compat.sh \
             scripts/linux-host/wine-guard.sh scripts/linux-host/wine-probe.sh
       - name: Run DestinedFX source audit and offline Bridge probe tests
         run: |
+          python3 -m pytest -q bridge/test_codespaces_controller.py
           python3 scripts/test_destinedfx_readiness_audit.py
           python3 scripts/destinedfx_readiness_audit.py
       - name: Run offline MT5 diagnostic tests

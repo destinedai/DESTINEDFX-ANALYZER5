@@ -1,35 +1,47 @@
-# DestinedFX Codespaces kit (K1)
+# DestinedFX inside GitHub Codespaces — DEMO only
 
-Open the repository in Codespaces: [Create a Codespace](https://codespaces.new/destinedai/DESTINEDFX-ANALYZER5?quickstart=1). GitHub documents `codespaces/new` as the page for creating a Codespace and supports repository links for quick creation [Creating a codespace for a repository](https://docs.github.com/en/codespaces/developing-in-a-codespace/creating-a-codespace-for-a-repository).
+**Owner workflow: GitHub Codespaces only. No separate computer, VPS, DNS setup or manual port-forwarding step is part of this DEMO path.**
 
-The devcontainer uses Ubuntu 24.04, requests a 2-core host and runs no prebuild. The isolated MT5 slot worker requires at least 3 GiB of currently available RAM per terminal; if measured available memory is below that floor, `start.sh` fails before any broker account can be provisioned. Its idempotent post-create command installs Python dependencies, verifies the current official Linux wrapper and setup executable against `deploy/codespaces/installer-pins.env`, and runs MetaQuotes `mt5setup.exe` with the documented `/auto /path` switches under Xvfb. CI downloads both official artifacts on schedule and when installer files change, then fails with the newly observed hash if either pin changes.
+Open the [DestinedFX branch in GitHub](https://github.com/destinedai/DESTINEDFX-ANALYZER5/tree/feat/self-hosted-linux-host-runtime), choose **Code → Codespaces → Create codespace on feat/self-hosted-linux-host-runtime**, and wait for the devcontainer to finish its automatic setup. The devcontainer installs the pinned Ubuntu/Wine/Android prerequisites, installs and verifies the official MetaTrader terminal/MetaEditor/EA template, and runs its post-start hook on each Codespace open.
 
-Run `deploy/codespaces/start.sh` to start Xvfb, the host agent, bridge, and an installed MT5 terminal as tracked foreground processes. Run `deploy/codespaces/stop.sh` to stop the tracked processes. Runtime state, bridge database, and generated bridge credentials are kept under `$HOME/.local/share/destinedfx-codespaces` with directory mode 0700 and credential file mode 0600. Do not copy that state into the repository or print its contents. The Android app obtains the one-use, ten-minute public-pairing bootstrap using a signed DestinedFX management identity; the raw code is not displayed or saved on the device. The CLI-issued code remains an owner-operated recovery path.
+## One command
 
-## Android Bridge URL discovery
+From the repository root in the Codespaces terminal:
 
-After GitHub owner authorization, the Android **START HOST** action starts the repository Codespace and then discovers the port-8000 HTTPS origin automatically. It probes `/health/live`, `/health` and `/health/config`, checks that the Bridge reports `public_exposure=true`, `host_profile=EPHEMERAL` and the exact forwarded hostname, and saves the origin only when durable Bridge configuration and the per-user isolation contract pass. **DISCOVER BRIDGE URL** repeats this check for an already-running Codespace. The GitHub OAuth token is used only with the GitHub API; it is never sent to the forwarded Bridge.
+```bash
+bash deploy/codespaces/start-demo.sh
+```
 
-The phone derives candidate port-8000 origins from the GitHub-returned Codespace name and probes the supported forwarding domains in order: `app.github.dev` (current documented form), `preview.app.github.dev` (legacy transition form), and `githubpreview.dev` (older compatibility form). The Bridge `/health` response must report the exact candidate as `expected_forwarded_host`, `host_profile=EPHEMERAL`, and `public_exposure=true`; otherwise the candidate is rejected and the next allow-listed domain is tried. The GitHub OAuth token is never sent to the forwarded Bridge. GitHub documents `GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN` as the runtime domain source and recommends using it instead of hard-coding. The start script sets `EXPECTED_FORWARDED_HOST` from that value. The phone does not treat `/health/ready` as its URL-discovery check because that endpoint must remain blocked until a real terminal pairing and fresh EA heartbeat exist.
+This command reuses the existing PID-attested Codespaces supervisor. It starts or adopts the Bridge, Management API with local PostgreSQL, root host agent, isolated Linux MT5 slot worker and verified terminal template. It waits for local service health and the actual GitHub-forwarded HTTPS endpoints, then prints **PASS: Codespaces DEMO host is ready** and the two verified origins. If it cannot verify both public endpoints, it fails instead of reporting a usable host.
 
-## Management API and endpoint wiring
+The same host supervisor is also launched automatically by `.devcontainer/devcontainer.json` when the Codespace opens. Its background post-start invocation is non-blocking; the command above is the owner-facing readiness check and safe restart/recovery entry point.
 
-The Codespaces devcontainer now runs two separate local services: the MT5 Bridge on loopback port 8000, and the existing broker-free Management API on loopback port 8010 with a local PostgreSQL 16 cluster. The root host agent remains loopback-only on 8787 and private noVNC remains on 6080. `.devcontainer/devcontainer.json` forwards 8000, 8010 and 6080; both API ports start private.
+## No manual port forwarding
 
-`deploy/codespaces/start-management-api.sh` provisions the local PostgreSQL role/database, applies the existing Alembic migrations, creates a persistent Ed25519 signing key and one-time owner setup token in the Codespace's private state directory, and starts Uvicorn on 127.0.0.1:8010. The host supervisor starts this service before Bridge startup, passes only the public Ed25519 key to the Bridge, and requires /health, /ready and the public-key contract to pass before it attempts to expose port 8010. Bridge port 8000 remains guarded by the existing K3 public-exposure and token-rejection tests. If either public port fails its forwarded HTTPS checks, the startup script returns both ports to private.
+The devcontainer automatically forwards source ports **8000 (Bridge)** and **8010 (Management API)**. Port 6080 remains private and is not part of phone pairing. Ports 8000/8010 start private. The Codespaces startup script changes them to public only after all of these checks pass:
 
-The phone's authenticated GitHub Codespaces flow discovers the exact repository/branch Codespace, starts it if stopped, and derives ports 8000 and 8010 from `CODESPACE_NAME` plus `GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN`. It verifies the Bridge's exact forwarded Host/EPHEMERAL profile/config and the Management API's PostgreSQL readiness/EdDSA key before saving either origin in Android encrypted storage. The locked Codespaces APK is the only build variant allowed to use those verified saved origins; ordinary locked persistent-host APKs continue to use only their embedded manifest origins.
+- Bridge K3 hardening tests and the code-hash marker pass.
+- Bridge HTTPS health succeeds, and both invalid-token and missing-token requests are rejected.
+- Management API HTTPS health and PostgreSQL readiness succeed.
+- The Management API publishes the expected EdDSA verification key.
+- GitHub reports the exact forwarded port inventory, URLs and public visibility for this Codespace.
 
-The one-time owner setup token is not printed by the host supervisor or written to the APK. The phone sends its short-lived GitHub App user token to the Management API's owner-bootstrap endpoint; the API calls GitHub /user, compares the returned login to the account that owns the running Codespace, applies a five-per-minute rate limit and returns the token with Cache-Control: no-store. The first admin enters it into the masked registration field. Once the first admin exists, the endpoint refuses further retrieval. Standard persistent Linux deployments retain their host-encrypted owner token path.
+The manifest is generated from GitHub's live port inventory and the Codespace forwarding-domain environment variable. The app discovers those endpoints itself; do not paste a URL into APK settings and do not run `gh codespace ports visibility` yourself. If any verification fails, the startup path returns both service ports to private and the readiness command reports the failure.
 
-A public forwarded port is reachable by anyone who knows its URL. Keep the K3 checks enabled; port 8000 must remain private unless the Bridge host-header, unauthenticated-state, bad-token and optional access-policy tests pass. A public health response is not a broker login or DEMO order acceptance.
+## Connect the DestinedFX phone app
 
-**Public exposure is guarded.** The bridge binds only to `127.0.0.1`; `verify-public-ready.sh` runs the K3 tests before the guarded start path can request public port visibility. GitHub’s CLI documentation says, “private - Visible only to you,” and documents `gh codespace ports visibility CODESPACE-PORT:private|org|public -c CODESPACE-NAME` [Using GitHub Codespaces with GitHub CLI](https://docs.github.com/en/codespaces/developing-in-a-codespace/using-github-codespaces-with-github-cli). The forwarding assumption is **UNVERIFIED** until the owner runs the real external diagnostic and returns `public-forwarding-diagnostic.txt`; it records only status, presence, and shape of `X-Forwarded-For`, never the header value or a token.
+1. Install the **DestinedFX DEBUG APK — FOR DEMO TEST ONLY** from the successful Build APK workflow artifact.
+2. In the Bot workspace, open **CODESPACES HOST · PHONE CONTROL**.
+3. Tap **AUTHORIZE GITHUB** and approve the one-time device request at GitHub. The app polls approval and stores its expiring GitHub App token in Android encrypted storage. This is owner authorization; it is not a broker credential.
+4. Tap **START HOST**. The app starts/reuses the Codespace on `feat/self-hosted-linux-host-runtime`, discovers port 8000 and port 8010, verifies Bridge configuration/EPHEMERAL profile and Management API readiness, then saves the Bridge origin automatically.
+5. Choose the broker DEMO profile and enter the exact DEMO login, password and broker-issued server. Wait for MT5 to report the matching account identity and a fresh authenticated EA heartbeat before treating the pairing as ready.
 
-GitHub documents the Codespaces port visibility model and forwarding behavior in [Forwarding ports in your codespace](https://docs.github.com/en/codespaces/developing-in-a-codespace/forwarding-ports-in-your-codespace). The local service URL format shown by the start script is `https://$CODESPACE_NAME-8000.app.github.dev`; it contains no token and is not a public exposure authorization.
+The app's **START HOST** action and the terminal command use the same Codespaces lifecycle; neither launches a second Bridge or worker. The phone never sends its GitHub token to the forwarded Bridge.
 
-If the headless installer fails, run `deploy/codespaces/gui.sh` once from the Codespaces terminal. It starts Xvfb, x11vnc, and noVNC on loopback, marks port 6080 private through the owner's authenticated Codespaces session, and prints the private phone-browser URL. Complete the MetaTrader wizard there, then run `deploy/codespaces/start.sh`. The GUI route never makes port 6080 public and never prints or stores a broker credential.
+## What this DEMO host proves
 
-Set the Codespaces idle timeout in GitHub Settings to 240 minutes for the maximum permitted session. `DESTINEDFX_IDLE_TIMEOUT_MINUTES` may be set from 5 to 240 before running `start.sh`; it controls only the app's estimate. GitHub resets the actual idle timer after user activity, so the countdown is not a guaranteed stop time.
+The Codespace is an **EPHEMERAL, supervised DEMO test host**, not an always-on execution service. The Bridge is durable only for the lifetime of this Codespace and its preserved state volume. The worker provisions isolated per-pairing Unix identities, Wine prefixes and terminal data. A running process, public health response, saved Bridge origin or generated pairing code is not proof of broker authentication or an executed order. A real DEMO login, identity-matched terminal snapshot, fresh EA heartbeat, broker-reported order result and reconciliation are separate acceptance checks.
 
-GitHub's [Codespaces terms](https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features) state: “Any other activity unrelated to the development or testing of the software project associated with the repository where GitHub Codespaces is initiated.” This kit is only for owner-operated development and DEMO testing of this repository. It is not a production or unattended 24/7 host.
+LIVE needs persistent host, Codespaces = DEMO ONLY
+
+The Codespaces supervisor keeps the existing safe stop/backup checks and the two-minute idle policy. GitHub's own Codespaces timeout and monthly included quota still apply; this is not an unattended 24/7 host.

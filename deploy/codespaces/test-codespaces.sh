@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/vnc-up.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/launch-mt5.sh" "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" "$ROOT/scripts/linux-host/wine-guard.sh" "$ROOT/scripts/linux-host/wine-probe.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" "$ROOT/scripts/linux-host/finalize-mt5-install.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
+for f in "$ROOT/.devcontainer/postCreate.sh" "$ROOT/deploy/codespaces/post-create.sh" "$ROOT/deploy/codespaces/start-demo.sh" "$ROOT/deploy/codespaces/start.sh" "$ROOT/deploy/codespaces/stop.sh" "$ROOT/deploy/codespaces/vnc-up.sh" "$ROOT/deploy/codespaces/verify-public-ready.sh" "$ROOT/deploy/codespaces/gui.sh" "$ROOT/deploy/codespaces/first-run-check.sh" "$ROOT/scripts/linux-host/install-mt5.sh" "$ROOT/scripts/linux-host/launch-mt5.sh" "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" "$ROOT/scripts/linux-host/wine-guard.sh" "$ROOT/scripts/linux-host/wine-probe.sh" "$ROOT/scripts/linux-host/verify-mt5-signature.sh" "$ROOT/scripts/linux-host/test-verify-mt5-signature.sh" "$ROOT/scripts/linux-host/finalize-mt5-install.sh"; do bash -n "$f" || fail "bash syntax: ${f#$ROOT/}"; done
 [[ -x "$ROOT/scripts/linux-host/check-wine-mt5-compat.sh" ]] || fail 'Wine MT5 compatibility gate missing or not executable'
 [[ -x "$ROOT/scripts/linux-host/wine-guard.sh" ]] || fail 'Wine version guard missing or not executable'
 [[ -x "$ROOT/scripts/linux-host/wine-probe.sh" ]] || fail 'Wine startup probe missing or not executable'
@@ -80,7 +80,11 @@ grep -Fq 'not_loopback_only' "$ROOT/deploy/codespaces/vnc-selfcheck.py" || fail 
 python3 -m pytest -q "$ROOT/deploy/codespaces/test_display_processes.py" || fail 'display process identity tests failed'
 python3 -m pytest -q "$ROOT/scripts/linux-host/test_check_slot_worker.py" || fail 'slot worker process identity tests failed'
 python3 -m pytest -q "$ROOT/scripts/host/test_destinedfx_trigger_host.py" || fail 'host trigger lifecycle tests failed'
-grep -Fq 'destinedfx_trigger_host.py start_all' "$ROOT/.devcontainer/devcontainer.json" || fail 'postStart must use the shared host trigger adapter'
+grep -Fq 'start-demo.sh --background' "$ROOT/.devcontainer/devcontainer.json" || fail 'postStart must invoke the single Codespaces DEMO start wrapper'
+grep -Fq 'destinedfx_trigger_host.py' "$ROOT/deploy/codespaces/start-demo.sh" || fail 'DEMO wrapper must reuse the shared host trigger adapter'
+grep -Fq 'public-endpoints.json' "$ROOT/deploy/codespaces/start-demo.sh" || fail 'DEMO wrapper must wait for the verified forwarded-port manifest'
+grep -Fq 'last-activity' "$ROOT/deploy/codespaces/start-demo.sh" || fail 'readiness polling must keep the startup activity timer current'
+python3 -m pytest -q "$ROOT/bridge/test_codespaces_controller.py" || fail 'Codespaces start/discovery contract tests failed'
 grep -Fq 'ensure_started()' "$ROOT/scripts/host/destinedfx_trigger_host.py" || fail 'host adapter must reuse the existing host supervisor'
 grep -Fq 'STOP_SCRIPT' "$ROOT/deploy/codespaces/host_controller.py" || fail 'host supervisor must retain the existing stop.sh path'
 grep -Fq -- '--preflight' "$ROOT/deploy/codespaces/stop.sh" || fail 'safe host shutdown must require local stop.sh preflight'

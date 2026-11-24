@@ -1,5 +1,5 @@
 {
-  "name": "DestinedFX Linux host (Ubuntu 24.04 x86_64)",
+  "name": "DestinedFX Codespaces DEMO host (Ubuntu 24.04 x86_64)",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."
@@ -8,22 +8,26 @@
     "cpus": 2
   },
   "postCreateCommand": "bash deploy/codespaces/post-create.sh",
-  "postStartCommand": "python3 scripts/host/destinedfx_trigger_host.py start_all",
-  "forwardPorts": [8000, 8010, 6080],
+  "postStartCommand": "bash deploy/codespaces/start-demo.sh --background",
+  "forwardPorts": [
+    8000,
+    8010,
+    6080
+  ],
   "portsAttributes": {
+    "6080": {
+      "label": "DestinedFX private noVNC (owner diagnostics only)",
+      "onAutoForward": "ignore",
+      "visibility": "private"
+    },
     "8000": {
-      "label": "DestinedFX bridge (private; K3 public guard required)",
-      "onAutoForward": "notify",
+      "label": "DestinedFX Bridge (private until guarded DEMO readiness passes)",
+      "onAutoForward": "silent",
       "visibility": "private"
     },
     "8010": {
-      "label": "DestinedFX Management API (private until startup readiness checks pass)",
-      "onAutoForward": "notify",
-      "visibility": "private"
-    },
-    "6080": {
-      "label": "DestinedFX private noVNC",
-      "onAutoForward": "notify",
+      "label": "DestinedFX Management API (private until guarded DEMO readiness passes)",
+      "onAutoForward": "silent",
       "visibility": "private"
     }
   },
