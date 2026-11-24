@@ -214,7 +214,11 @@ class MT5RemoteBridgeClient(
     data class ServiceReadiness(
         val httpReachable: Boolean, val httpStatus: Int?, val serviceStatus: String,
         val database: String, val managedExecution: String, val errorCode: String = "",
-        val perUserTerminalIsolation: String = "unknown"
+        val perUserTerminalIsolation: String = "unknown",
+        val hostProfile: String = "UNKNOWN",
+        val backupStatus: String = "NOT_VERIFIED",
+        val isolatedSlots: Int = 0,
+        val maxIsolatedSlots: Int = 0
     ) {
         /**
          * /health/ready reports infrastructure, not account readiness.
@@ -287,7 +291,11 @@ class MT5RemoteBridgeClient(
                     database = body.optString("database", "unknown"),
                     managedExecution = body.optString("managed_execution", "unknown"),
                     errorCode = detail?.optString("code").orEmpty(),
-                    perUserTerminalIsolation = body.optString("per_user_terminal_isolation", "unknown")
+                    perUserTerminalIsolation = body.optString("per_user_terminal_isolation", "unknown"),
+                    hostProfile = body.optString("host_profile", "UNKNOWN"),
+                    backupStatus = body.optJSONObject("backup")?.optString("status", "NOT_VERIFIED") ?: "NOT_VERIFIED",
+                    isolatedSlots = body.optInt("isolated_slots", 0),
+                    maxIsolatedSlots = body.optInt("max_isolated_slots", 0)
                 )
             }
         } catch (e: BridgeGatewayException) {
@@ -311,7 +319,11 @@ class MT5RemoteBridgeClient(
                     serviceStatus = body.optString("status", if (response.isSuccessful) "unknown" else "not_ready"),
                     database = body.optString("database", "unknown"),
                     managedExecution = body.optString("managed_execution", "unknown"),
-                    errorCode = detail?.optString("code").orEmpty()
+                    errorCode = detail?.optString("code").orEmpty(),
+                    perUserTerminalIsolation = body.optString("per_user_terminal_isolation", "unknown"),
+                    hostProfile = body.optString("host_profile", "UNKNOWN"),
+                    isolatedSlots = body.optInt("isolated_slots", 0),
+                    maxIsolatedSlots = body.optInt("max_isolated_slots", 0)
                 )
             }
         } catch (e: BridgeGatewayException) {

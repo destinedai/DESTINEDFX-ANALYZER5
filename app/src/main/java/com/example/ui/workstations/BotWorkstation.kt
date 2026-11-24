@@ -578,7 +578,14 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 bridgeProbeInProgress = true
                                 try {
                                     val readiness = bridgeClient.checkServiceReadiness()
-                                    bridgeServiceReadiness = readiness
+                                    val configuration = bridgeClient.checkServiceConfiguration()
+                                    bridgeServiceReadiness = readiness.copy(
+                                        perUserTerminalIsolation = configuration.perUserTerminalIsolation,
+                                        hostProfile = configuration.hostProfile,
+                                        backupStatus = configuration.backupStatus,
+                                        isolatedSlots = configuration.isolatedSlots,
+                                        maxIsolatedSlots = configuration.maxIsolatedSlots
+                                    )
                                     if (!readiness.httpReachable) {
                                         bridgeSnapshot = null
                                         bridgeMessage = "Bridge did not return an HTTP response. Host, pairing and terminal state remain unverified."
@@ -618,6 +625,42 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val supportedStrategy = selectedStrategyId in StrategyRegistry.managedStrategyIds
                     val validBridgeRisk = MT5RemoteBridgeClient.isValidRiskPercent(riskPercent)
                     if (selectedAccountMode == "LIVE") {
+                        val liveHostHealthy = bridgeServiceReadiness?.hostRuntimeReady == true &&
+                            bridgeServiceReadiness?.hostProfile.equals("PERSISTENT", ignoreCase = true) &&
+                            bridgeServiceReadiness?.perUserTerminalIsolation.equals("VERIFIED", ignoreCase = true) &&
+                            (bridgeServiceReadiness?.isolatedSlots ?: 0) >= 2 &&
+                            (bridgeServiceReadiness?.maxIsolatedSlots ?: 0) >= 2 &&
+                            cardSnapshot?.hostProfile == com.example.data.broker.HostProfile.PERSISTENT
+                        val liveBackupVerified = bridgeServiceReadiness?.backupStatus.equals("PASS", ignoreCase = true)
+                        val liveBrokerVerified = bridgeIdentityFresh &&
+                            cardSnapshot?.actualAccountMode == "LIVE" &&
+                            cardSnapshot?.accessType.equals("MASTER", ignoreCase = true)
+                        val liveRiskAccepted = cardSnapshot?.liveAuthorized == true
+                        val liveChecklist = listOf(
+                            "Emulator" to com.example.BuildConfig.DESTINEDFX_EMULATOR_ACCEPTED,
+                            "Host Healthy" to liveHostHealthy,
+                            "Backup" to liveBackupVerified,
+                            "Broker" to liveBrokerVerified,
+                            "RISK" to liveRiskAccepted
+                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth()
+                                .border(1.dp, if (liveChecklist.all { it.second }) ProfitGreen else LossRed, RoundedCornerShape(10.dp))
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("LIVE READINESS CHECKLIST", color = if (liveChecklist.all { it.second }) ProfitGreen else LossRed, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                            liveChecklist.forEach { (label, passed) ->
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(label, color = if (passed) ProfitGreen else LossRed, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                                    Text(if (passed) "✅ PASS" else "❌ BLOCKED", color = if (passed) ProfitGreen else LossRed, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                                }
+                            }
+                            Text("Isolated terminals active: ${bridgeServiceReadiness?.isolatedSlots ?: 0}/${bridgeServiceReadiness?.maxIsolatedSlots ?: 0} · two separate DEMO/LIVE slots required.",
+                                color = if ((bridgeServiceReadiness?.isolatedSlots ?: 0) >= 2) ProfitGreen else LossRed, fontSize = 9.sp)
+                            Text("Any red item blocks LIVE. Codespaces remains DEMO-only; the server rechecks every gate before issuing a 15-minute LIVE lease.",
+                                color = LossRed, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
                         if (observedHostProfile != "PERSISTENT") {
                             Text(
                                 "LIVE IS BLOCKED: host profile is $observedHostProfile. A persistent, independently verified host is required; an ephemeral Codespaces host remains DEMO-only. This is an active safety gate, not a missing button.",
@@ -625,8 +668,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             )
                         }
                         Text("LIVE authorization: ${if (bridgeSnapshot?.liveAuthorized == true) "ACTIVE (server-verified, short-lived)" else "NOT AUTHORIZED"}", color = if (bridgeSnapshot?.liveAuthorized == true) WarningAmber else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Button(enabled = !bridgeBusy && bridgeProfileReady && bridgeSnapshot?.liveAuthorized != true, onClick = { showLiveAuthorizationDialog = true }) {
-                            Text("AUTHORIZE LIVE SESSION (15 MIN)")
+                        Button(enabled = !bridgeBusy && bridgeProfileReady && liveChecklist.dropLast(1).all { it.second } && bridgeSnapshot?.liveAuthorized != true, onClick = { showLiveAuthorizationDialog = true }) {
+                            Text("OPEN LIVE RISK CONFIRMATION")
                         }
                         if (bridgeSnapshot?.liveAuthorized == true) {
                             OutlinedButton(enabled = !bridgeBusy, onClick = { coroutineScope.launch { bridgeBusy = true; try { bridgeClient.clearLiveAuthorization(); bridgeSnapshot = bridgeClient.state(); bridgeMessage = "LIVE authorization revoked; new START/RESUME is blocked." } catch (_: Exception) { bridgeMessage = "LIVE authorization revocation not confirmed." }; bridgeBusy = false } }) { Text("REVOKE LIVE AUTHORIZATION") }

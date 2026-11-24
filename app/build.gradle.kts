@@ -97,6 +97,13 @@ require(codespacesGithubClientId.isBlank() || codespacesGithubClientId.matches(R
   "CODESPACES_GITHUB_CLIENT_ID must be the public Client ID of your GitHub OAuth App."
 }
 val codespacesGithubClientIdBuildValue = codespacesGithubClientId.replace("\\", "\\\\").replace("\"", "\\\"")
+val emulatorAcceptedRaw = providers.gradleProperty("destinedfxEmulatorAccepted").orNull?.trim()
+  ?: System.getenv("DESTINEDFX_EMULATOR_ACCEPTED")?.trim().orEmpty()
+val destinedFxEmulatorAccepted = when (emulatorAcceptedRaw.lowercase()) {
+  "", "false" -> false
+  "true" -> true
+  else -> error("destinedfxEmulatorAccepted must be true or false.")
+}
 
 android {
   namespace = "com.example"
@@ -108,7 +115,6 @@ android {
     targetSdk = 36
     versionCode = 14
     versionName = "1.0.14"
-    buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - DEMO DEFAULT - LIVE REQUIRES VERIFIED PERSISTENT HOST AND BACKUP\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")
@@ -116,6 +122,7 @@ android {
     buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
     buildConfigField("boolean", "DESTINEDFX_ENDPOINTS_LOCKED", destinedFxEndpointsLocked.toString())
     buildConfigField("boolean", "DESTINEDFX_CODESPACES_HOST_DISCOVERY", destinedFxCodespacesHostDiscovery.toString())
+    buildConfigField("boolean", "DESTINEDFX_EMULATOR_ACCEPTED", destinedFxEmulatorAccepted.toString())
     ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
   }
 
@@ -139,6 +146,7 @@ android {
 
   buildTypes {
     release {
+      buildConfigField("String", "APK_BUILD_LABEL", "\"RELEASE APK - DEMO DEFAULT - LIVE REQUIRES VERIFIED PERSISTENT HOST AND BACKUP\"")
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
       buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
       buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
@@ -148,6 +156,7 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - DEMO DEFAULT - LIVE REQUIRES VERIFIED PERSISTENT HOST AND BACKUP\"")
       if (destinedFxDebugKeystorePath.isNotBlank()) {
         signingConfig = signingConfigs.getByName("destinedfxCiDebug")
       }
@@ -159,6 +168,14 @@ android {
 
   gradle.taskGraph.whenReady {
     if (allTasks.any { it.name.contains("Release", ignoreCase = true) }) {
+      require(destinedFxEmulatorAccepted) {
+        "Production release APKs require successful Android emulator acceptance in the same CI run."
+      }
+      val uploadKeystorePath = System.getenv("KEYSTORE_PATH")?.trim().orEmpty()
+      require(uploadKeystorePath.isNotBlank() && file(uploadKeystorePath).isFile &&
+        !System.getenv("STORE_PASSWORD").isNullOrBlank() && !System.getenv("KEY_PASSWORD").isNullOrBlank()) {
+        "Production release signing is blocked: configure KEYSTORE_PATH, STORE_PASSWORD and KEY_PASSWORD with the owner upload key."
+      }
       require(!destinedFxCodespacesHostDiscovery) {
         "Codespaces discovery bootstrap APKs are debug-only; release APKs must embed the persistent production endpoints."
       }

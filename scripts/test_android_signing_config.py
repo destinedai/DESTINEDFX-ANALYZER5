@@ -13,3 +13,19 @@ def test_ci_debug_signer_is_explicit_and_default_developer_signing_is_preserved(
     assert 'if (destinedFxDebugKeystorePath.isNotBlank())' in build
     assert 'DESTINEDFX_DEBUG_KEYSTORE_PATH=$GITHUB_WORKSPACE/debug.keystore' in workflow
     assert 'keyAlias = "androiddebugkey"' in build
+
+ 
+def test_production_release_requires_owner_upload_key_endpoints_and_emulator_acceptance():
+    build = (ROOT / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "build-apk.yml").read_text(encoding="utf-8")
+    ui = (ROOT / "app" / "src" / "main" / "java" / "com" / "example" / "ui" / "workstations" / "BotWorkstation.kt").read_text(encoding="utf-8")
+    assert "KEYSTORE_PATH" in build and "STORE_PASSWORD" in build and "KEY_PASSWORD" in build
+    assert "destinedFxEmulatorAccepted" in build
+    assert "RELEASE APK - DEMO DEFAULT" in build
+    assert "android-release-apk:" in workflow
+    assert "DESTINEDFX_UPLOAD_KEYSTORE_B64" in workflow
+    assert "assembleRelease" in workflow
+    assert "live_emulator_accepted" in workflow
+    for label in ('"Emulator"', '"Host Healthy"', '"Backup"', '"Broker"', '"RISK"'):
+        assert label in ui
+    assert "DESTINEDFX_EMULATOR_ACCEPTED" in ui
