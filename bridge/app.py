@@ -326,6 +326,13 @@ def require_live_host_isolation(minimum_active_slots=2):
                 'active_slots': active if valid_active else 0,
                 'max_slots': maximum if valid_maximum else 0,
             })
+        backup = host.get('backup') if isinstance(host, dict) else None
+        if not isinstance(backup, dict) or backup.get('status') != 'PASS':
+            raise HTTPException(503, detail={
+                'code': 'LIVE_BACKUP_NOT_VERIFIED',
+                'message': 'LIVE requires recent checksum-verified Bridge and Management database backups on the persistent Linux host',
+                'backup_status': backup.get('status', 'NOT_VERIFIED') if isinstance(backup, dict) else 'NOT_VERIFIED',
+            })
         return isolation
     if not _isolation_evidence_verified():
         raise HTTPException(409, detail={
@@ -2192,6 +2199,9 @@ def configuration_health():
         except HTTPException:
             host = None
     isolation = linux_slot_isolation(host)
+    backup = (host or {}).get('backup') if isinstance(host, dict) else None
+    if not isinstance(backup, dict):
+        backup = {'status': 'NOT_VERIFIED'}
     isolation_verified = bool(
         LINUX_HOST_MODE and isolation.get('enabled') and isolation.get('ready')
     )
@@ -2215,6 +2225,7 @@ def configuration_health():
         'linux_host_mode': LINUX_HOST_MODE,
         'isolated_slots': int(isolation.get('active_slots', 0)) if isolation_verified else 0,
         'max_isolated_slots': int(isolation.get('max_slots', 0)) if isolation_verified else 0,
+        'backup': backup,
         **host_lifecycle_state(),
     }
 @app.get('/health/ready')

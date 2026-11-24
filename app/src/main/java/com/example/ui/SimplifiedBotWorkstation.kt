@@ -2252,6 +2252,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             title = { Text("Arm MT5 LIVE for this account?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("I ACCEPT REAL MONEY RISK. Real-money trades can lose some or all funds in this broker account. The persistent-host, verified-backup, broker-login, account-identity, EA and risk gates must all pass; Codespaces stays DEMO-only.", color = LossRed, fontWeight = FontWeight.Bold)
                     Text("This creates an explicit link between the independently paired $selectedMt5Broker DEMO and LIVE profiles. The Bridge checks that both belong to the same signed management tenant and broker, validates both account identities and credential/worker/host generations, and requires the current DEMO PASS acceptance. Authorization itself does not place an order.", color = WarningAmber)
                     Text("DEMO: " + secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_DEMO") + " @ " + secrets.getManagedMT5AccountServer("${selectedMt5Broker}_DEMO"), color = TextSecondary)
                     Text("LIVE: " + secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_LIVE") + " @ " + secrets.getManagedMT5AccountServer("${selectedMt5Broker}_LIVE"), color = TextSecondary)
@@ -2407,7 +2408,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             busy = false
                         }
                     }
-                }) { Text("ARM LIVE · 15 MIN") }
+                }) { Text("I ACCEPT REAL MONEY RISK") }
             },
             dismissButton = {
                 TextButton(onClick = {

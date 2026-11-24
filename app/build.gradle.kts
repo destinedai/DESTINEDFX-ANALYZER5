@@ -106,9 +106,9 @@ android {
     applicationId = "com.aistudio.destinedfx.qwvzxp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 13
-    versionName = "1.0.13"
-    buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - FOR DEMO TEST ONLY - LIVE LOCKED FOR SAFETY\"")
+    versionCode = 14
+    versionName = "1.0.14"
+    buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - DEMO DEFAULT - LIVE REQUIRES VERIFIED PERSISTENT HOST AND BACKUP\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"__CONFIGURATION_REQUIRED__\"")

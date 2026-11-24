@@ -62,7 +62,7 @@ import org.json.JSONObject
 @Composable
 fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
     val bridgeSecrets = viewModel.app.secretsManager
-    var selectedAccountMode by remember { mutableStateOf(bridgeSecrets.getManagedMT5SelectedProfile()) }
+    var selectedAccountMode by remember { mutableStateOf("DEMO") }
     var selectedBrokerBrand by remember { mutableStateOf(bridgeSecrets.getSelectedMT5BrokerBrand()) }
     val bridgeProfileKey = "${selectedBrokerBrand}_${selectedAccountMode}"
     val selectedBrokerCompanyName = com.example.data.broker.BrokerDirectory.byBrandId(selectedBrokerBrand)?.name
@@ -468,6 +468,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             }
                         }
                     }
+                    Text("DEMO is the default. LIVE requires a persistent host and verified backups; Codespaces is DEMO-only.", color = WarningAmber, fontSize = 10.sp, modifier = Modifier.testTag("live_host_rule"))
                     val cardSnapshot = bridgeSnapshot
                     Text("Bridge: $bridgeReachabilityLabel · Host runtime: $bridgeHostRuntimeLabel",
                         color = TextPrimary, fontSize = 11.sp, modifier = Modifier.testTag("mt5_bridge_health_state"))

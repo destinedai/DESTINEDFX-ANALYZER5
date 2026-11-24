@@ -19,7 +19,7 @@ def fixture_responses():
             "managed_execution":"configured", "news_provider_configured":True,
             "news_provider_kind":"showmytrades-public-calendar", "multi_user_terminal_isolation":"VERIFIED",
             "isolated_slots":2, "max_isolated_slots":2,
-            "linux_host_mode":False, "management_step_up_key_fingerprint_sha256":FP,
+            "linux_host_mode":False, "backup":{"status":"PASS","bridge_sqlite":{"status":"PASS"},"management_postgres":{"status":"PASS"}}, "management_step_up_key_fingerprint_sha256":FP,
             "management_step_up_issuer":preflight.ISSUER, "management_step_up_audience":preflight.AUDIENCE}),
         "https://bridge.owner.ts.net/health/ready": (200, {"status":"ready", "verified_terminal_pairing":"healthy"}),
     }
@@ -30,6 +30,21 @@ def test_preflight_accepts_matching_persistent_bridge(monkeypatch):
     assert result["overall_status"] == "INFRASTRUCTURE_AND_TERMINAL_READY_LIVE_GATES_STILL_APPLY"
     assert all(row["status"] == "PASS" for row in result["checks"])
     assert result["checks"][-1]["brokers"] == ["FBS","EXNESS","HFM","DERIV"]
+
+def test_preflight_blocks_when_persistent_host_backup_is_missing_or_unverified(monkeypatch):
+    data=fixture_responses()
+    data["https://bridge.owner.ts.net/health/config"][1]["backup"] = {
+        "status":"BLOCKED",
+        "bridge_sqlite":{"status":"PASS"},
+        "management_postgres":{"status":"FAIL","reason":"BACKUP_STALE"},
+    }
+    monkeypatch.setattr(preflight,"get_json",lambda url:data[url])
+    result=preflight.run("https://management.owner.ts.net","https://bridge.owner.ts.net")
+    row=next(x for x in result["checks"] if x["name"]=="verified_database_backups")
+    assert row["status"] == "BLOCKED"
+    assert row["code"] == "LIVE_BACKUP_NOT_VERIFIED"
+    assert result["overall_status"] == "BLOCKED"
+
 
 def test_preflight_blocks_key_mismatch(monkeypatch):
     data=fixture_responses(); data["https://bridge.owner.ts.net/health/config"][1]["management_step_up_key_fingerprint_sha256"]="0"*64

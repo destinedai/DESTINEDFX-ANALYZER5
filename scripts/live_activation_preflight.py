@@ -133,6 +133,9 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
             "code":"PERSISTENT_ISOLATED_LINUX_HOST" if linux_mode and persistent_live_host else "PERSISTENT_WINDOWS_OR_MANAGED_HOST" if persistent_live_host else "EPHEMERAL_HOST_OR_UNVERIFIED_LINUX_ISOLATION",
         })
         checks.append({"name":"multi_user_terminal_isolation","status":"PASS" if isolation_ready else "BLOCKED","code":"PER_USER_ISOLATION_VERIFIED" if isolation_ready else "MULTI_USER_OS_ISOLATION_NOT_VERIFIED"})
+        backup = config.get("backup") if isinstance(config.get("backup"), dict) else {}
+        backup_ready = backup.get("status") == "PASS" and (backup.get("bridge_sqlite") or {}).get("status") == "PASS" and (backup.get("management_postgres") or {}).get("status") == "PASS"
+        checks.append({"name":"verified_database_backups","status":"PASS" if backup_ready else "BLOCKED","code":"BACKUP_CHECKSUMS_VERIFIED" if backup_ready else "LIVE_BACKUP_NOT_VERIFIED"})
         active_slots = config.get("isolated_slots")
         max_slots = config.get("max_isolated_slots")
         dual_capacity = (
@@ -152,7 +155,7 @@ def run(management_url: str, bridge_url: str, *, key_file: Path | None = None,
         issuer_match = bool(issuer and audience and config.get("management_step_up_issuer") == issuer and config.get("management_step_up_audience") == audience)
         checks.append({"name":"management_bridge_issuer_audience","status":"PASS" if issuer_match else "BLOCKED","code":"ISSUER_AUDIENCE_MATCH" if issuer_match else "ISSUER_AUDIENCE_MISMATCH"})
     except PreflightError as e:
-        for name in ("bridge_config", "persistent_host", "durable_storage", "news_calendar_provider", "persistent_live_host_type", "multi_user_terminal_isolation", "live_demo_and_live_terminal_capacity", "management_bridge_trust", "management_bridge_issuer_audience"):
+        for name in ("bridge_config", "persistent_host", "durable_storage", "news_calendar_provider", "persistent_live_host_type", "multi_user_terminal_isolation", "verified_database_backups", "live_demo_and_live_terminal_capacity", "management_bridge_trust", "management_bridge_issuer_audience"):
             checks.append({"name":name,"status":"BLOCKED","code":str(e) if name == "bridge_config" else "BRIDGE_CONFIG_UNAVAILABLE"})
     try:
         code, data = get_json(bridge + "/health/ready")

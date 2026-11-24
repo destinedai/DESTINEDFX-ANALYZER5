@@ -2,6 +2,7 @@
 """Linux MT5 host health agent. No credentials are read or emitted."""
 import argparse
 import hmac
+import hashlib
 import json
 import os
 import re
@@ -259,6 +260,60 @@ def _internal_slot_action(path, payload):
     return 404, {"verified": False, "code": "NOT_FOUND"}
 
 
+
+_BACKUP_DIGEST_CACHE = {}
+
+
+def _backup_file_check(directory, pattern, now_epoch, maximum_age_seconds=36 * 60 * 60):
+    root = Path(directory)
+    try:
+        candidates = list(root.glob(pattern))
+        if not candidates:
+            return {"status": "FAIL", "reason": "BACKUP_MISSING"}
+        newest = max(candidates, key=lambda item: item.stat().st_mtime)
+        info = newest.stat()
+        age = now_epoch - info.st_mtime
+        if age < 0 or age > maximum_age_seconds:
+            return {"status": "FAIL", "reason": "BACKUP_STALE", "age_seconds": max(0, int(age))}
+        sidecar = Path(str(newest) + ".sha256")
+        side_info = sidecar.stat()
+        expected = sidecar.read_text(encoding="ascii").strip().split()[0].lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected):
+            return {"status": "FAIL", "reason": "BACKUP_CHECKSUM_INVALID", "age_seconds": int(age)}
+        signature = (info.st_ino, info.st_size, info.st_mtime_ns, side_info.st_mtime_ns, expected)
+        cache_key = str(newest)
+        cached = _BACKUP_DIGEST_CACHE.get(cache_key)
+        if cached and cached[0] == signature:
+            matches = cached[1]
+        else:
+            digest = hashlib.sha256()
+            with newest.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            matches = digest.hexdigest() == expected
+            _BACKUP_DIGEST_CACHE[cache_key] = (signature, matches)
+        return {
+            "status": "PASS" if matches else "FAIL",
+            "reason": "CHECKSUM_VERIFIED" if matches else "BACKUP_CHECKSUM_MISMATCH",
+            "age_seconds": max(0, int(age)),
+        }
+    except (OSError, IndexError, UnicodeError, ValueError, TypeError):
+        return {"status": "FAIL", "reason": "BACKUP_UNREADABLE"}
+
+
+def backup_report(now_epoch=None):
+    now = time.time() if now_epoch is None else float(now_epoch)
+    bridge = _backup_file_check("/var/lib/destinedfx/backups", "destinedfx-*.sqlite3", now)
+    management = _backup_file_check("/var/backups/destinedfx-management", "destinedfx-management-*.dump", now)
+    passed = bridge.get("status") == "PASS" and management.get("status") == "PASS"
+    return {
+        "status": "PASS" if passed else "BLOCKED",
+        "bridge_sqlite": bridge,
+        "management_postgres": management,
+        "maximum_age_seconds": 36 * 60 * 60,
+    }
+
+
 def report():
     import time
 
@@ -300,6 +355,7 @@ def report():
         "account_ready": account_ready,
         "healthy": host_ready if SLOT_ISOLATION_ENABLED else account_ready,
         "slot_isolation": isolated,
+        "backup": backup_report(),
     }
 
 
