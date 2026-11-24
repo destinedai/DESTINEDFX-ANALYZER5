@@ -33,7 +33,11 @@ class BrokerLoginModelTest {
         private var index = 0
         override suspend fun submit(spec: BrokerLoginSpec, form: LoginForm) { failSubmit?.let { throw it }; submitted++ }
         override suspend fun observe(): ConnectObservation = script[minOf(index++, script.lastIndex)]
-        override suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm): String? = preflightFailure
+        override suspend fun preflight(
+            spec: BrokerLoginSpec,
+            form: LoginForm,
+            onStage: (ConnectStage) -> Unit,
+        ): String? = preflightFailure
     }
 
     private fun useCase(backend: ConnectBackend, timeoutMs: Long = 120_000, clockStep: Long = 0): ConnectUseCase {
