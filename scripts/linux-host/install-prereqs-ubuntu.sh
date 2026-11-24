@@ -50,7 +50,7 @@ run_install 'install README baseline packages and repository tooling' apt-get in
   apt-transport-https ca-certificates curl gnupg software-properties-common \
   build-essential git sudo python3 python3-venv python3-pip sqlite3 openssl \
   xvfb xauth x11-utils dbus-x11 fontconfig fonts-liberation fonts-dejavu-core \
-  procps psmisc lsof iproute2 iputils-ping dnsutils jq unzip zip rsync \
+  procps psmisc lsof ufw iproute2 iputils-ping dnsutils jq unzip zip rsync \
   netcat-openbsd util-linux xz-utils tar gzip gawk sed grep findutils passwd
 
 run_install 'enable Ubuntu universe and 32-bit Wine dependencies' add-apt-repository -y universe

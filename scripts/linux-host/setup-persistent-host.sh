@@ -35,6 +35,7 @@ CURRENT_STEP=''
 BRIDGE_DOMAIN=''
 APP_DOMAIN=''
 BRIDGE_BASE_URL=''
+DDNS_PROVIDER='none'
 
 summary() {
   local rc=$?
@@ -55,7 +56,7 @@ summary() {
   else
     printf '\nFAIL: setup stopped at the first failing step (exit %s). Fix that step and rerun the same command.\n' "$rc"
   fi
-  printf 'DNS next step: keep two separate hostnames pointed at this VPS and allow inbound TCP 80/443.\n'
+  printf 'DNS next step: keep two separate hostnames pointed at this home computer public IP; forward TCP 80/443 from the router.\n'
   printf '========================================================\n'
   exit "$rc"
 }
@@ -135,36 +136,42 @@ PY
 }
 
 configure_domains() {
-  local default_bridge default_app default_caddy default_admin bridge_ips api_ips
+  local default_bridge default_app default_caddy default_admin duckdns_token
   default_bridge="$(env_default BRIDGE_HOST)"
   default_app="$(env_default APP_DOMAIN)"
   default_caddy="$(env_default CADDY_EMAIL)"
   default_admin="$(env_default ADMIN_EMAILS)"
-  printf 'Before continuing, create two different DNS A/AAAA records pointing to this same VPS.\n'
-  read -r -p "Bridge hostname [${default_bridge:-bridge.your-domain.tld}]: " BRIDGE_DOMAIN </dev/tty || return 1
-  read -r -p "Management API hostname [${default_app:-api.your-domain.tld}]: " APP_DOMAIN </dev/tty || return 1
-  read -r -p "Caddy TLS contact email [${default_caddy:-owner@your-domain.tld}]: " CADDY_EMAIL </dev/tty || return 1
-  read -r -p "Initial administrator email [${default_admin:-owner@your-domain.tld}]: " ADMIN_EMAILS </dev/tty || return 1
+  printf 'ZERO-COST DNS: create two free DuckDNS names for this home Internet connection.\n'
+  printf 'Example: bridge.mydomain.duckdns.org and api.mydomain.duckdns.org\n'
+  read -r -p "Bridge hostname [${default_bridge:-bridge.mydomain.duckdns.org}]: " BRIDGE_DOMAIN </dev/tty || return 1
+  read -r -p "Management API hostname [${default_app:-api.mydomain.duckdns.org}]: " APP_DOMAIN </dev/tty || return 1
+  read -r -p "Caddy TLS contact email: " CADDY_EMAIL </dev/tty || return 1
+  read -r -p "Initial administrator email: " ADMIN_EMAILS </dev/tty || return 1
 
   python3 - "$BRIDGE_DOMAIN" "$APP_DOMAIN" "$CADDY_EMAIL" "$ADMIN_EMAILS" <<'PY' || return $?
 import re, sys
 bridge, api, caddy, admins = sys.argv[1:]
-host = re.compile(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+host = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.duckdns\.org$")
 email = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
-for label, value in (("Bridge", bridge), ("Management API", api)):
-    if not host.fullmatch(value) or value.lower().endswith(".example.com") or value.lower() == "example.com":
-        raise SystemExit(f"BLOCKED: enter a real public DNS hostname for {label}.")
-if bridge.lower().rstrip(".") == api.lower().rstrip("."):
-    raise SystemExit("BLOCKED: Bridge and Management API need separate hostnames.")
-if not email.fullmatch(caddy) or any(not email.fullmatch(value.strip()) for value in admins.split(",")):
-    raise SystemExit("BLOCKED: enter valid Caddy and administrator email addresses.")
+if not host.fullmatch(bridge.lower()) or not host.fullmatch(api.lower()):
+    raise SystemExit("BLOCKED: use two free DuckDNS names, each one label under duckdns.org.")
+if bridge.lower() == api.lower():
+    raise SystemExit("BLOCKED: Bridge and Management API need different DuckDNS subdomains.")
+if not email.fullmatch(caddy) or any(not email.fullmatch(item.strip()) for item in admins.split(",")):
+    raise SystemExit("BLOCKED: enter valid email addresses for Caddy and the first administrator.")
 PY
 
-  bridge_ips="$(getent ahosts "$BRIDGE_DOMAIN" | awk '{print $1}' | sort -u)" || true
-  api_ips="$(getent ahosts "$APP_DOMAIN" | awk '{print $1}' | sort -u)" || true
-  [[ -n "$bridge_ips" ]] || { echo "BLOCKED: $BRIDGE_DOMAIN does not resolve. Add its DNS A/AAAA record and retry." >&2; return 1; }
-  [[ -n "$api_ips" ]] || { echo "BLOCKED: $APP_DOMAIN does not resolve. Add its DNS A/AAAA record and retry." >&2; return 1; }
-  [[ "$bridge_ips" == "$api_ips" ]] || { echo 'BLOCKED: both hostnames must resolve to the same VPS address set.' >&2; return 1; }
+  read -r -s -p 'DuckDNS account token (input hidden): ' duckdns_token </dev/tty || return 1
+  printf '\n'
+  [[ -n "$duckdns_token" ]] || { echo 'BLOCKED: DuckDNS token cannot be empty.' >&2; return 1; }
+  if ! printf '%s\n' "$duckdns_token" | python3 "$STAGED/scripts/linux-host/ddns-update.py" \
+      --configure --hostnames "$BRIDGE_DOMAIN,$APP_DOMAIN" --config /etc/destinedfx/ddns.json; then
+    unset duckdns_token
+    return 1
+  fi
+  unset duckdns_token
+  python3 "$STAGED/scripts/linux-host/ddns-update.py" --update --config /etc/destinedfx/ddns.json || return 1
+  DDNS_PROVIDER='duckdns'
 
   python3 - "$BRIDGE_ENV" "$BRIDGE_DOMAIN" "$APP_DOMAIN" "$CADDY_EMAIL" "$ADMIN_EMAILS" <<'PY' || return $?
 import os, sys, tempfile
@@ -205,8 +212,25 @@ finally:
 PY
   chown root:caddy "$BRIDGE_ENV" || return 1
   chmod 0640 "$BRIDGE_ENV" || return 1
+
+  printf 'Waiting up to 3 minutes for both free DuckDNS records to resolve to this home Internet connection...\n'
+  local attempt bridge_ips api_ips
+  bridge_ips=''
+  api_ips=''
+  for attempt in $(seq 1 36); do
+    bridge_ips="$(getent ahostsv4 "$BRIDGE_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u || true)"
+    api_ips="$(getent ahostsv4 "$APP_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u || true)"
+    if [[ -n "$bridge_ips" && "$bridge_ips" == "$api_ips" ]]; then
+      break
+    fi
+    sleep 5
+  done
+  [[ -n "$bridge_ips" && "$bridge_ips" == "$api_ips" ]] || {
+    echo 'BLOCKED: DuckDNS names did not resolve to the same public IPv4. Check both subdomains and the DuckDNS token, then rerun this command.' >&2
+    return 1
+  }
   BRIDGE_BASE_URL="https://$BRIDGE_DOMAIN"
-  printf 'Configured two HTTPS origins: %s and https://%s\n' "$BRIDGE_BASE_URL" "$APP_DOMAIN"
+  printf 'PASS: both free DuckDNS hostnames resolve to the current home Internet address.\n'
 }
 
 install_mt5() {
@@ -276,15 +300,20 @@ check_timers() {
     printf 'PASS: %s enabled and active\n' "$timer"
   done
   systemctl list-timers --all --no-pager "$BRIDGE_TIMER" "$PG_TIMER"
+  if [[ "$DDNS_PROVIDER" == "duckdns" ]]; then
+    systemctl is-enabled --quiet destinedfx-ddns-update.timer || { echo 'FAIL: DuckDNS refresh timer is not enabled.' >&2; return 1; }
+    systemctl is-active --quiet destinedfx-ddns-update.timer || { echo 'FAIL: DuckDNS refresh timer is not active.' >&2; return 1; }
+    printf 'PASS: destinedfx-ddns-update.timer enabled and active\n'
+  fi
 }
 
 check_health() {
-  curl --fail --silent --show-error --max-time 15 "$BRIDGE_BASE_URL/health/ready" -o /dev/null || {
-    echo "FAIL: $BRIDGE_BASE_URL/health/ready did not return HTTP 2xx; check DNS, ports 80/443 and Caddy/Bridge." >&2
+  curl --fail --silent --show-error --max-time 15 --resolve "$BRIDGE_DOMAIN:443:127.0.0.1" "https://$BRIDGE_DOMAIN/health/ready" -o /dev/null || {
+    echo "FAIL: $BRIDGE_BASE_URL/health/ready did not return HTTP 2xx. Check router TCP 80/443 forwarding, Ubuntu firewall, DuckDNS, public-IP access and CGNAT. DuckDNS cannot bypass CGNAT." >&2
     return 1
   }
-  curl --fail --silent --show-error --max-time 15 "https://$APP_DOMAIN/ready" -o /dev/null || {
-    echo "FAIL: https://$APP_DOMAIN/ready did not return HTTP 2xx; check Caddy, PostgreSQL and Management API." >&2
+  curl --fail --silent --show-error --max-time 15 --resolve "$APP_DOMAIN:443:127.0.0.1" "https://$APP_DOMAIN/ready" -o /dev/null || {
+    echo "FAIL: https://$APP_DOMAIN/ready did not return HTTP 2xx through local Caddy; check router forwarding, Caddy, PostgreSQL and Management API." >&2
     return 1
   }
   echo 'PASS: Bridge /health/ready and Management API /ready returned HTTP 2xx.'

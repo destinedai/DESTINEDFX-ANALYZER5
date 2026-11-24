@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep DestinedFX DuckDNS hostnames synced with the home Internet IP
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=5min
+AccuracySec=1min
+Persistent=true
+Unit=destinedfx-ddns-update.service
+
+[Install]
+WantedBy=timers.target

@@ -10,13 +10,19 @@ This is an implemented deployment path, **not a claim that an owner host has alr
 
 The production target does not rely on Azure, Oracle, Railway, Render, Cloudflare Workers, Codespaces, or a third-party hosted MT5 execution vendor. PostgreSQL runs locally on the same operator-controlled Linux machine.
 
+
+
+### Zero-cost hosting rule
+
+No paid VPS, paid domain, or paid cloud account is part of the supported setup. Use the existing home computer and two free DuckDNS subdomains for persistent hosting. GitHub Codespaces is retained for EPHEMERAL DEMO testing only and must not unlock LIVE. No-IP Free is not suitable for this two-hostname architecture because its free tier is limited to one hostname. Oracle and Google Cloud free tiers are not deployment options for this project because their signup/billing requirements do not provide a guaranteed no-card, persistent zero-cost host. See the detailed [zero-cost laptop + DuckDNS instructions](scripts/linux-host/README.md).
+
 ## Supported hosting paths
 
 ### Persistent self-hosted Linux runtime — production target
 
-The currently supported baseline is Ubuntu 22.04 or 24.04 on x86-64, systemd 250+, a genuine x86-64 MT5 terminal and MetaEditor under the reviewed Wine setup, Xvfb/xauth, Caddy, Python, Docker Engine for the local PostgreSQL container, and persistent storage. ARM MT5/EA execution is not accepted by the installer.
+The currently supported zero-cost home-host baseline is Ubuntu 24.04 on existing x86-64 hardware, systemd 250+, a genuine x86-64 MT5 terminal and MetaEditor under the reviewed Wine setup, Xvfb/xauth, Caddy, Python, Docker Engine for the local PostgreSQL container, and persistent storage. ARM MT5/EA execution is not accepted by the installer.
 
-The machine must have two operator-controlled DNS names: one for the Bridge and a separate one for the Management API. Both point to the same host. Caddy terminates public HTTPS on ports 80/443; do not expose the Bridge loopback listener, host agent, database, Wine display, or MT5 terminal ports publicly. See the Linux host guide for exact sizing, installation, endpoint manifest, systemd credential, backup, recovery, and two-user acceptance commands.
+The machine must use two free DuckDNS names: one for the Bridge and a separate one for the Management API. Both point to the same home public IPv4 address. The installed DuckDNS updater refreshes both records every five minutes, so a static IP is not required. The router must forward TCP 80/443 to the home computer; DuckDNS does not bypass ISP CGNAT. Caddy terminates public HTTPS on ports 80/443; do not expose the Bridge loopback listener, host agent, database, Wine display, or MT5 terminal ports publicly. See the Linux host guide for exact sizing, installation, endpoint manifest, systemd credential, backup, recovery, and two-user acceptance commands.
 
 Each pairing is provisioned under its own locked Unix identity and private terminal runtime. LIVE is not enabled by host selection or login; it remains subject to the existing account authentication, exact broker identity, DEMO/LIVE pairing, fresh host-attestation, risk/news/session, explicit confirmation, and order-reconciliation gates. A persistent host configuration or passing CI test is not proof that these gates have been satisfied.
 

@@ -37,7 +37,7 @@ def test_one_command_persistent_host_setup_covers_required_sequence():
     for item in (
         "Ubuntu 24.04", "x86_64", "systemd 250", "/run", "tmpfs",
         "docker-ce", "caddy", "wine-guard.sh", "--report",
-        "command -v", "wine32:i386",
+        "command -v", "wine32:i386", "ufw",
     ):
         assert item in prereqs
 
@@ -300,8 +300,8 @@ def test_self_hosted_installer_deploys_both_apis_and_local_postgres():
     assert "destinedfx-postgres.service" in installer
     assert "destinedfx-management-api.service" in installer
     assert 'systemctl enable --now docker.service' in installer
-    assert "https://$APP_DOMAIN/ready" in installer
-    assert '$BRIDGE_BASE_URL/health/ready' in installer
+    assert '--resolve "$APP_DOMAIN:443:127.0.0.1" "https://$APP_DOMAIN/ready"' in installer
+    assert '--resolve "$BRIDGE_HOST:443:127.0.0.1" "https://$BRIDGE_HOST/health/ready"' in installer
     assert "bridge-verification-key" in installer
     assert "destinedfx-linux-slot-worker.service" in installer
     assert "accept_two_user_runtime.py" in installer
@@ -444,3 +444,58 @@ def test_local_postgres_backup_is_atomic_scheduled_and_retained():
     assert "OnCalendar=*-*-* 02:25:00 UTC" in timer
     assert "Persistent=true" in timer
     assert "RandomizedDelaySec=15min" in timer
+
+
+def test_zero_cost_home_host_uses_two_duckdns_names_and_dynamic_refresh():
+    guide = (LINUX_HOST / "README.md").read_text(encoding="utf-8")
+    setup = (LINUX_HOST / "setup-persistent-host.sh").read_text(encoding="utf-8")
+    installer = (LINUX_HOST / "install-self-hosted.sh").read_text(encoding="utf-8")
+    helper = (LINUX_HOST / "ddns-update.py").read_text(encoding="utf-8")
+    service = (LINUX_HOST / "systemd" / "destinedfx-ddns-update.service").read_text(encoding="utf-8")
+    timer = (LINUX_HOST / "systemd" / "destinedfx-ddns-update.timer").read_text(encoding="utf-8")
+
+    assert guide.startswith("# ZERO-COST SETUP - NO VPS PURCHASE REQUIRED - Use old laptop + free DuckDNS")
+    assert "GitHub Codespaces (DEMO ONLY)" in guide
+    assert "old laptop or desktop at home" in guide
+    assert "bridge.mydomain.duckdns.org" in guide and "api.mydomain.duckdns.org" in guide
+    assert "CGNAT" in guide and "port forwarding" in guide.lower()
+    assert "No-IP Free" in guide and "one hostname" in guide
+    assert "Oracle Cloud requires payment-card verification" in guide
+    assert "Google Cloud requires an active billing account" in guide
+
+    assert "duckdns.org" in setup and "--configure" in setup
+    assert "DDNS_UPDATE_OK" in helper
+    assert "sys.stdin.readline()" in helper
+    assert "ProtectSystem=strict" in service
+    assert "OnUnitActiveSec=5min" in timer
+    assert "ddns-update.py" in installer
+    assert "destinedfx-ddns-update.timer" in installer
+
+
+def test_duckdns_helper_validates_two_distinct_names_and_never_prints_token():
+    import importlib.util
+
+    module_path = LINUX_HOST / "ddns-update.py"
+    spec = importlib.util.spec_from_file_location("destinedfx_ddns_update", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+
+    assert module.validate_hostnames([
+        "bridge.mydomain.duckdns.org",
+        "api.mydomain.duckdns.org",
+    ]) == ["bridge.mydomain.duckdns.org", "api.mydomain.duckdns.org"]
+    assert module.parse_update_response("OK") is True
+    assert module.parse_update_response("KO") is False
+    for names in (
+        ["bridge.mydomain.duckdns.org"],
+        ["bridge.mydomain.duckdns.org", "bridge.mydomain.duckdns.org"],
+        ["bridge.example.com", "api.example.com"],
+        ["bad_label!.duckdns.org", "api.mydomain.duckdns.org"],
+    ):
+        try:
+            module.validate_hostnames(names)
+        except module.DDNSError:
+            pass
+        else:
+            raise AssertionError(f"invalid DuckDNS pair unexpectedly accepted: {names}")

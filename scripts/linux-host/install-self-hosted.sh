@@ -28,6 +28,7 @@ for rel in \
   scripts/linux-host/backup-management-postgres.sh scripts/linux-host/show-owner-setup-token.sh \
   scripts/linux-host/public-endpoints.py scripts/linux-host/build-self-hosted-apk.sh \
   scripts/linux-host/host-doctor.sh scripts/linux-host/setup-unattended-upgrades.sh scripts/linux-host/wine-guard.sh \
+  scripts/linux-host/ddns-update.py \
   scripts/linux-host/Caddyfile \
   scripts/linux-host/systemd/destinedfx-host-agent.service scripts/linux-host/systemd/destinedfx-bridge.service \
   scripts/linux-host/systemd/destinedfx-linux-slot-worker.service \
@@ -35,7 +36,8 @@ for rel in \
   scripts/linux-host/systemd/destinedfx-postgres.service scripts/linux-host/systemd/destinedfx-management-api.service \
   scripts/linux-host/systemd/destinedfx-management-postgres-backup.service \
   scripts/linux-host/systemd/destinedfx-management-postgres-backup.timer \
-  scripts/linux-host/systemd/destinedfx-bridge-backup.service scripts/linux-host/systemd/destinedfx-bridge-backup.timer; do
+  scripts/linux-host/systemd/destinedfx-bridge-backup.service scripts/linux-host/systemd/destinedfx-bridge-backup.timer \
+  scripts/linux-host/systemd/destinedfx-ddns-update.service scripts/linux-host/systemd/destinedfx-ddns-update.timer; do
   [[ -f "$SOURCE_ROOT/$rel" && ! -L "$SOURCE_ROOT/$rel" ]] || block "required source file missing or symlinked: $rel"
 done
 
@@ -54,7 +56,7 @@ for item in [
     "managed-worker/worker.py", "managed-worker/mt5_journal.py",
     "scripts/linux-host/host-agent.py", "scripts/linux-host/linux-slot-worker.py",
     "scripts/linux-host/linux_isolation.py", "scripts/linux-host/host_lifecycle.py",
-    "scripts/linux-host/accept_two_user_runtime.py", "scripts/linux-host/public-endpoints.py",
+    "scripts/linux-host/accept_two_user_runtime.py", "scripts/linux-host/public-endpoints.py", "scripts/linux-host/ddns-update.py",
 ]:
     path = root / item
     ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -70,6 +72,7 @@ units = {
     "caddy": (base / "destinedfx-caddy.service").read_text(),
     "bridge_backup": (base / "destinedfx-bridge-backup.service").read_text(),
     "bridge_backup_timer": (base / "destinedfx-bridge-backup.timer").read_text(),
+    "ddns": (base / "destinedfx-ddns-update.service").read_text(),
 }
 for name, text in units.items():
     if not text.startswith("[Unit]\n") or "[Service]\n" not in text:
@@ -97,6 +100,11 @@ assert "OnCalendar=*-*-* 02:45:00 UTC" in units["bridge_backup_timer"]
 assert "ReadWritePaths=/var/backups/destinedfx-management /run/docker.sock" in units["pg_backup"]
 assert "backup-management-postgres.sh" in units["pg_backup"]
 assert "User=caddy" in units["caddy"] and "CAP_NET_BIND_SERVICE" in units["caddy"]
+assert "User=root" in units["ddns"] and "ddns-update.py --update" in units["ddns"]
+assert "/etc/destinedfx/ddns.json" in units["ddns"]
+ddns_timer = (base / "destinedfx-ddns-update.timer").read_text()
+if not ddns_timer.startswith("[Unit]\\n") or "[Timer]\\n" not in ddns_timer or "OnUnitActiveSec=5min" not in ddns_timer:
+    raise SystemExit("invalid DuckDNS update timer: must refresh every five minutes")
 timer = (base / "destinedfx-management-postgres-backup.timer").read_text()
 if not timer.startswith("[Unit]\n") or "[Timer]\n" not in timer or "OnCalendar=*-*-* 02:25:00 UTC" not in timer:
     raise SystemExit("invalid PostgreSQL backup timer: must have the daily persistent schedule")
@@ -113,7 +121,9 @@ PY
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-management-postgres-backup.timer" \
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-caddy.service" \
       "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-bridge-backup.service" \
-      "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-bridge-backup.timer"
+      "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-bridge-backup.timer" \
+      "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-ddns-update.service" \
+      "$SOURCE_ROOT/scripts/linux-host/systemd/destinedfx-ddns-update.timer"
   fi
   say SELF_HOSTED_INSTALL_CHECK_OK
   exit 0
@@ -273,7 +283,7 @@ chmod -R a+rX,go-w "$DEST_ROOT/management"
 for rel in host-agent.py linux-slot-worker.py linux_isolation.py host_lifecycle.py accept_two_user_runtime.py; do
   install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
 done
-for rel in backup.sh restore-test.sh show-owner-setup-token.sh host-doctor.sh setup-unattended-upgrades.sh wine-guard.sh; do
+for rel in backup.sh restore-test.sh show-owner-setup-token.sh host-doctor.sh setup-unattended-upgrades.sh wine-guard.sh ddns-update.py; do
   install -o root -g root -m 0755 "$SCRIPT_DIR/$rel" "$DEST_ROOT/scripts/linux-host/$rel"
 done
 install -o root -g root -m 0755 "$SCRIPT_DIR/provision-worker-token.sh" "$DEST_ROOT/scripts/linux-host/provision-worker-token.sh"
@@ -289,14 +299,15 @@ chmod 0640 "$BRIDGE_ENV"
 chown root:root "$HOST_ENV"
 chmod 0600 "$HOST_ENV"
 
-for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx-management-api.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service destinedfx-management-postgres-backup.service destinedfx-management-postgres-backup.timer destinedfx-bridge-backup.service destinedfx-bridge-backup.timer; do
+for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx-management-api.service destinedfx-bridge.service destinedfx-provision-linux-worker.service destinedfx-linux-slot-worker.service destinedfx-caddy.service destinedfx-management-postgres-backup.service destinedfx-management-postgres-backup.timer destinedfx-bridge-backup.service destinedfx-bridge-backup.timer destinedfx-ddns-update.service destinedfx-ddns-update.timer; do
   install -o root -g root -m 0644 "$SCRIPT_DIR/systemd/$unit" "$UNIT_DIR/$unit"
 done
 systemd-analyze verify "$UNIT_DIR/destinedfx-host-agent.service" "$UNIT_DIR/destinedfx-postgres.service" \
   "$UNIT_DIR/destinedfx-management-api.service" "$UNIT_DIR/destinedfx-bridge.service" \
   "$UNIT_DIR/destinedfx-provision-linux-worker.service" "$UNIT_DIR/destinedfx-linux-slot-worker.service" \
   "$UNIT_DIR/destinedfx-management-postgres-backup.service" "$UNIT_DIR/destinedfx-management-postgres-backup.timer" \
-  "$UNIT_DIR/destinedfx-caddy.service" "$UNIT_DIR/destinedfx-bridge-backup.service" "$UNIT_DIR/destinedfx-bridge-backup.timer" || block "systemd unit validation failed."
+  "$UNIT_DIR/destinedfx-caddy.service" "$UNIT_DIR/destinedfx-bridge-backup.service" "$UNIT_DIR/destinedfx-bridge-backup.timer" \
+  "$UNIT_DIR/destinedfx-ddns-update.service" "$UNIT_DIR/destinedfx-ddns-update.timer" || block "systemd unit validation failed."
 systemctl daemon-reload
 systemctl enable --now docker.service
 for attempt in $(seq 1 30); do
@@ -313,24 +324,27 @@ for unit in destinedfx-host-agent.service destinedfx-postgres.service destinedfx
 done
 systemctl enable --now destinedfx-management-postgres-backup.timer >/dev/null
 systemctl enable --now destinedfx-bridge-backup.timer >/dev/null
+if [[ -f /etc/destinedfx/ddns.json ]]; then
+  systemctl enable --now destinedfx-ddns-update.timer >/dev/null
+fi
 for attempt in $(seq 1 30); do
   if curl --fail --silent --max-time 3 -H 'X-Forwarded-Proto: https' -H "Host: $BRIDGE_HOST" http://127.0.0.1:8000/health/live >/dev/null 2>&1; then break; fi
   sleep 2
 done
 curl --fail --silent --max-time 5 -H 'X-Forwarded-Proto: https' -H "Host: $BRIDGE_HOST" http://127.0.0.1:8000/health/live >/dev/null || block "Bridge liveness failed; inspect journalctl -u destinedfx-bridge.service."
 for attempt in $(seq 1 45); do
-  if curl --fail --silent --max-time 5 "$BRIDGE_BASE_URL/health/live" >/dev/null 2>&1; then break; fi
+  if curl --fail --silent --max-time 5 --resolve "$BRIDGE_HOST:443:127.0.0.1" "https://$BRIDGE_HOST/health/live" >/dev/null 2>&1; then break; fi
   sleep 2
 done
-curl --fail --silent --max-time 10 "$BRIDGE_BASE_URL/health/live" >/dev/null || block "public HTTPS failed; check DNS, TCP 80/443 and Caddy certificate issuance."
-READY_CODE="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "$BRIDGE_BASE_URL/health/ready" || true)"
-[[ "$READY_CODE" == "200" ]] || block "Bridge /health/ready returned HTTP $READY_CODE; inspect host-agent, Wine, Xvfb, xauth, memory and journals."
+curl --fail --silent --max-time 10 --resolve "$BRIDGE_HOST:443:127.0.0.1" "https://$BRIDGE_HOST/health/live" >/dev/null || block "local Caddy HTTPS failed; check free DuckDNS, router TCP 80/443 forwarding and public-IP/CGNAT status."
+READY_CODE="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 --resolve "$BRIDGE_HOST:443:127.0.0.1" "https://$BRIDGE_HOST/health/ready" || true)"
+[[ "$READY_CODE" == "200" ]] || block "Bridge /health/ready returned HTTP $READY_CODE through local Caddy; inspect DNS/ACME forwarding, host-agent, Wine, Xvfb, xauth, memory and journals."
 for attempt in $(seq 1 30); do
-  if curl --fail --silent --max-time 5 "https://$APP_DOMAIN/ready" >/dev/null 2>&1; then break; fi
+  if curl --fail --silent --max-time 5 --resolve "$APP_DOMAIN:443:127.0.0.1" "https://$APP_DOMAIN/ready" >/dev/null 2>&1; then break; fi
   sleep 2
 done
-curl --fail --silent --max-time 10 "https://$APP_DOMAIN/health" >/dev/null || block "Management API liveness failed; inspect destinedfx-management-api.service."
-curl --fail --silent --max-time 10 "https://$APP_DOMAIN/ready" >/dev/null || block "Management API database readiness failed; inspect destinedfx-postgres.service."
+curl --fail --silent --max-time 10 --resolve "$APP_DOMAIN:443:127.0.0.1" "https://$APP_DOMAIN/health" >/dev/null || block "Management API liveness failed; inspect destinedfx-management-api.service."
+curl --fail --silent --max-time 10 --resolve "$APP_DOMAIN:443:127.0.0.1" "https://$APP_DOMAIN/ready" >/dev/null || block "Management API database readiness failed; inspect destinedfx-postgres.service."
 KEY_JSON="$(curl --fail --silent --show-error --max-time 10 "https://$APP_DOMAIN/api/v1/auth/bridge-verification-key")" || block "Management API cannot publish its Bridge verification key."
 "$PYTHON" - "$KEY_JSON" <<'PY'
 import json, sys

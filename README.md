@@ -1,5 +1,10 @@
 # DestinedFX Analyzer 5
 
+# ZERO-COST SETUP — NO VPS PURCHASE REQUIRED — Use old laptop + free DuckDNS
+
+**₦0 new hosting fees. ₦0 domain purchase.** Use your existing home laptop/PC for the persistent Ubuntu 24.04 host, with two free DuckDNS subdomains. GitHub Codespaces remains DEMO-only. Start with [the zero-cost home-host guide](scripts/linux-host/README.md).
+
+
 DestinedFX is a native Android application built with Kotlin and Jetpack Compose. It combines market-data analysis, account and risk monitoring, and broker-specific automated execution paths. The Android app, Python analysis module, FastAPI Bridge, managed worker, and MT5 Expert Advisor are separate parts of the system. A file or CI test in this repository does not mean that a public Bridge, terminal, broker account, or trading session is running.
 
 ## What the Android app does

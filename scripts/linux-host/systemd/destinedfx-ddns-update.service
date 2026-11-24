@@ -1,0 +1,19 @@
+[Unit]
+Description=Update DestinedFX DuckDNS home-host IPv4 records
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/destinedfx/scripts/linux-host/ddns-update.py --update --config /etc/destinedfx/ddns.json
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
