@@ -233,6 +233,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var cloudflareClientId by remember { mutableStateOf("") }
     var cloudflareClientSecret by remember { mutableStateOf("") }
     var serviceReadiness by remember { mutableStateOf<MT5RemoteBridgeClient.ServiceReadiness?>(null) }
+    var hostReadinessBusy by remember { mutableStateOf(false) }
     var showAdvancedConnection by remember { mutableStateOf(false) }
     var showModernBrokerFlow by remember { mutableStateOf(true) }
     var mt5Snapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
@@ -376,6 +377,49 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             mt5Client(mt5Profile, mt5Mode, selectedMt5Broker)
         } else null
     }
+
+    suspend fun refreshManagedHostReadiness(client: MT5RemoteBridgeClient): MT5RemoteBridgeClient.ServiceReadiness {
+        val runtime = client.checkServiceReadiness()
+        val configuration = client.checkServiceConfiguration()
+        val merged = runtime.copy(
+            perUserTerminalIsolation = configuration.perUserTerminalIsolation
+                .takeIf { it.isNotBlank() && it != "unknown" } ?: runtime.perUserTerminalIsolation,
+            hostProfile = configuration.hostProfile
+                .takeIf { it.isNotBlank() && it != "UNKNOWN" } ?: runtime.hostProfile,
+            backupStatus = configuration.backupStatus,
+            isolatedSlots = maxOf(runtime.isolatedSlots, configuration.isolatedSlots),
+            maxIsolatedSlots = maxOf(runtime.maxIsolatedSlots, configuration.maxIsolatedSlots)
+        )
+        serviceReadiness = merged
+        return merged
+    }
+
+    LaunchedEffect(bridge?.baseUrl(), mt5Profile) {
+        val client = bridge ?: return@LaunchedEffect
+        if (!client.managedConfigured()) {
+            serviceReadiness = null
+            return@LaunchedEffect
+        }
+        hostReadinessBusy = true
+        try {
+            refreshManagedHostReadiness(client)
+        } finally {
+            hostReadinessBusy = false
+        }
+    }
+
+    val persistentHostCapacityVerified = serviceReadiness?.let {
+        it.hostRuntimeReady &&
+            it.hostProfile.equals("PERSISTENT", ignoreCase = true) &&
+            it.perUserTerminalIsolation.equals("VERIFIED", ignoreCase = true) &&
+            it.database == "ok" &&
+            it.managedExecution == "configured" &&
+            it.maxIsolatedSlots >= 2
+    } == true
+    val liveLoginHostProfile = if (
+        persistentHostCapacityVerified &&
+        serviceReadiness?.backupStatus.equals("PASS", ignoreCase = true)
+    ) com.example.data.broker.HostProfile.PERSISTENT else com.example.data.broker.HostProfile.EPHEMERAL
     val githubCodespacesClient = remember(secrets) { GitHubCodespacesClient(secrets) }
     // Shares the same Keystore-backed GitHub App token pair, but performs
     // verified forwarded Bridge discovery after GitHub reports the Codespace Available.
@@ -475,15 +519,15 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             secrets.getManagedMT5CredentialGeneration(brand + "_DEMO")
         )
         val storedDemoPass = secrets.getPathDemoAcceptance(storedDemoIdentity) != null
-        if (mode == "LIVE" && !storedDemoPass && !canSelectMt5Mode(mode, brand, demoPassDigests)) {
-            message = "LIVE is locked. Import and accept a matching broker-specific DEMO PASS from the verified DEMO slot first."
-        } else {
         val changed = selectedMt5Broker != brand || mt5Mode != mode
         val previousBridge = bridge
         val applySelection = {
             selectedMt5Broker = brand; mt5Mode = mode
             secrets.saveSelectedMT5BrokerBrand(brand)
-            broker = BrokerType.FBS; viewModel.selectBroker(BrokerType.FBS); message = null
+            broker = BrokerType.FBS; viewModel.selectBroker(BrokerType.FBS)
+            message = if (mode == "LIVE" && !storedDemoPass) {
+                "LIVE profile selected. LIVE authorization remains blocked until the matching broker-specific DEMO PASS is verified and accepted."
+            } else null
         }
         if (changed && broker.usesManagedMt5Terminal && mt5Mode == "LIVE" && previousBridge?.hasPairing() == true) {
             scope.launch {
@@ -494,7 +538,6 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 finally { busy = false }
             }
         } else applySelection()
-        }
     }
     val selectBrokerType: (BrokerType) -> Unit = { type ->
         val previousBridge = bridge
@@ -586,7 +629,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         MetaTraderBrokerFlow(
             secrets = secrets,
             context = context,
-            hostProfile = mt5Snapshot?.hostProfile ?: com.example.data.broker.HostProfile.EPHEMERAL,
+            hostProfile = liveLoginHostProfile,
             initialMode = LoginMode.valueOf(mt5Mode),
             onGrantAccess = { _, form ->
                 if (!secrets.isSecureStorageAvailable) {
@@ -1670,10 +1713,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         scope.launch {
                             busy = true
                             try {
-                                val probe = bridge?.checkServiceReadiness()
-                                    ?: MT5RemoteBridgeClient(secrets, "FBS_DEMO", accountMode = "DEMO", brokerBrand = "FBS").checkServiceReadiness()
-                                serviceReadiness = probe
-                                message = if (probe.serviceStatus == "ready" && probe.database == "ok" && probe.managedExecution == "configured") "Service readiness confirmed; broker/worker readiness is still checked separately." else "Bridge reachable or configured status is incomplete; trading readiness is NOT confirmed."
+                                val client = bridge
+                                    ?: MT5RemoteBridgeClient(secrets, "FBS_DEMO", accountMode = "DEMO", brokerBrand = "FBS")
+                                val probe = refreshManagedHostReadiness(client)
+                                message = if (probe.hostRuntimeReady && probe.database == "ok" && probe.managedExecution == "configured") "Host readiness checked; broker account identity and terminal readiness are still checked separately." else "Bridge host readiness is incomplete; LIVE remains blocked."
                             } finally { busy = false }
                         }
                     }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("CHECK CONNECTION") }
@@ -1715,11 +1758,43 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 }
                 if (broker.usesManagedMt5Terminal) {
                     Text("MT5 ACCOUNTS", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Host: ${serviceReadiness?.hostProfile ?: "NOT CHECKED"} · Backup: ${serviceReadiness?.backupStatus ?: "NOT CHECKED"}",
+                            color = if (liveLoginHostProfile == com.example.data.broker.HostProfile.PERSISTENT) ProfitGreen else LossRed,
+                            fontSize = 9.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedButton(
+                            enabled = !hostReadinessBusy && bridge?.managedConfigured() == true,
+                            onClick = {
+                                scope.launch {
+                                    hostReadinessBusy = true
+                                    try {
+                                        val probe = refreshManagedHostReadiness(requireNotNull(bridge))
+                                        message = if (probe.hostRuntimeReady && probe.backupStatus == "PASS") {
+                                            "Persistent host and verified backup reported healthy."
+                                        } else {
+                                            "LIVE blocked: persistent profile, isolated capacity or verified backup is not ready."
+                                        }
+                                    } catch (error: Exception) {
+                                        message = error.message ?: "Host health could not be verified."
+                                    } finally {
+                                        hostReadinessBusy = false
+                                    }
+                                }
+                            }
+                        ) { Text(if (hostReadinessBusy) "CHECKING…" else "CHECK HOST", fontSize = 9.sp) }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedButton(onClick = { demoPassLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }, enabled = mt5Mode == "DEMO" && secrets.getManagedMT5AccountLogin("${selectedMt5Broker}_DEMO").isNotBlank() && secrets.getManagedMT5AccountServer("${selectedMt5Broker}_DEMO").isNotBlank()) {
                             Text("IMPORT DEMO PASS FILE")
                         }
-                        Text(if (selectedMt5Broker in demoPassDigests) "OWNER ACCEPTED · ${demoPassDigests[selectedMt5Broker]?.take(12)}" else "LIVE LOCKED", color = if (selectedMt5Broker in demoPassDigests) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                        Text(if (selectedMt5Broker in demoPassDigests) "DEMO PASS ACCEPTED · ${demoPassDigests[selectedMt5Broker]?.take(12)}" else "DEMO PASS REQUIRED", color = if (selectedMt5Broker in demoPassDigests) ProfitGreen else WarningAmber, fontSize = 9.sp)
                     }
                     if (pendingMt5DemoPassDigest != null && mt5Mode == "DEMO") {
                         Text("Read-only PASS evidence validated for the current saved DEMO identity/generation. Confirming records that this owner accepts this exact account; it does not authorize LIVE.", color = WarningAmber, fontSize = 9.sp)
@@ -1783,7 +1858,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     connected -> "Connected"
                                     else -> "Authenticating"
                                 } else if (secrets.getMT5BridgeAccountAppToken(slot).isNotBlank()) "Paired" else if (saved) "Registered" else "Not configured"
-                                FilterChip(selected = selected, enabled = canSelectMt5Mode(mode, brand, demoPassDigests), onClick = { selectMt5Slot(brand, mode) }, label = { Text(if (!canSelectMt5Mode(mode, brand, demoPassDigests)) "$mode · DEMO PASS REQUIRED" else "$mode · $status", fontSize = 9.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
+                                FilterChip(selected = selected, enabled = !busy, onClick = { selectMt5Slot(brand, mode) }, label = { Text(if (mode == "LIVE" && !canSelectMt5Mode(mode, brand, demoPassDigests)) "LIVE · DEMO PASS REQUIRED" else "$mode · $status", fontSize = 9.sp) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (mode == "LIVE") WarningAmber else ElectricCyan, selectedLabelColor = DarkBackground, containerColor = DarkSurfaceVariant, labelColor = TextSecondary))
                             }
                         }
                     }
@@ -1819,12 +1894,65 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     }
                     if (mt5Mode == "LIVE") {
                         val snapshot = mt5Snapshot
+                        val liveHostHealthy = persistentHostCapacityVerified &&
+                            (serviceReadiness?.isolatedSlots ?: 0) >= 2
+                        val liveBackupVerified = serviceReadiness?.backupStatus.equals("PASS", ignoreCase = true)
                         val liveIdentityReady = snapshot?.let {
                             it.actualAccountMode == "LIVE" && it.actualLogin == secrets.getManagedMT5AccountLogin(mt5Profile) &&
                                 it.actualServer == secrets.getManagedMT5AccountServer(mt5Profile) && it.accountVerified &&
                                 it.workerStatus == "READY" && it.brokerIdentityVerified && it.heartbeatFresh && it.terminalConnected && it.tradeAllowed &&
                                 it.managedState == "READY" && it.accessType == "MASTER"
                         } == true
+                        val liveDemoProfileKey = "${selectedMt5Broker}_DEMO"
+                        val liveDemoPassAccepted = runCatching {
+                            val demoIdentity = com.example.data.broker.ModeAccountIdentity(
+                                com.example.data.broker.ModePath.valueOf("${selectedMt5Broker}_MT5"),
+                                selectedMt5Broker,
+                                secrets.getManagedMT5AccountLogin(liveDemoProfileKey),
+                                secrets.getManagedMT5AccountServer(liveDemoProfileKey),
+                                com.example.data.broker.AccountMode.DEMO,
+                                secrets.getManagedMT5CredentialGeneration(liveDemoProfileKey)
+                            )
+                            secrets.getPathDemoAcceptance(demoIdentity) != null
+                        }.getOrDefault(false)
+                        val liveRiskAccepted = snapshot?.liveAuthorized == true
+                        val liveChecklist = listOf(
+                            "Host Healthy" to liveHostHealthy,
+                            "Backup" to liveBackupVerified,
+                            "Broker Login" to liveIdentityReady,
+                            "RISK" to liveRiskAccepted
+                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth()
+                                .border(1.dp, if (liveChecklist.all { it.second }) ProfitGreen else LossRed, RoundedCornerShape(10.dp))
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("LIVE READINESS", color = if (liveChecklist.all { it.second }) ProfitGreen else LossRed, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            liveChecklist.forEach { (label, passed) ->
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(label, color = if (passed) ProfitGreen else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Text(if (passed) "✅ PASS" else "❌ BLOCKED", color = if (passed) ProfitGreen else LossRed, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                }
+                            }
+                            Text(
+                                "Host: ${serviceReadiness?.hostProfile ?: "UNKNOWN"} · isolated terminals: ${serviceReadiness?.isolatedSlots ?: 0}/${serviceReadiness?.maxIsolatedSlots ?: 0}",
+                                color = if (liveHostHealthy) ProfitGreen else LossRed,
+                                fontSize = 9.sp
+                            )
+                            Text(
+                                if (liveDemoPassAccepted) "DEMO PASS: ACCEPTED · separate DEMO/LIVE pairings remain required"
+                                else "DEMO PASS: REQUIRED · accept the verified DEMO profile before arming LIVE",
+                                color = if (liveDemoPassAccepted) ProfitGreen else LossRed,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "Debug APK can request LIVE; Codespaces is DEMO-only. The Bridge checks persistent host, backup and identity before issuing a lease.",
+                                color = LossRed,
+                                fontSize = 9.sp
+                            )
+                        }
                         val serverLiveExpiry = snapshot?.raw?.optJSONObject("managed_execution")?.optString("live_authorized_until")?.takeIf { it.isNotBlank() }.orEmpty()
                         Text("Selected LIVE account: ${secrets.getManagedMT5AccountLogin(mt5Profile).ifBlank { "not registered" }} @ ${secrets.getManagedMT5AccountServer(mt5Profile).ifBlank { "server not configured" }}", color = TextPrimary, fontSize = 10.sp)
                         Text("Terminal identity: ${snapshot?.actualLogin ?: "unverified"} @ ${snapshot?.actualServer ?: "unverified"} · mode ${snapshot?.actualAccountMode ?: "unverified"}", color = TextSecondary, fontSize = 10.sp)
@@ -1837,9 +1965,17 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             if (snapshot?.liveAuthorized == true) OutlinedButton(onClick = {
                                 scope.launch { busy = true; try { bridge?.clearLiveAuthorization(); mt5Snapshot = bridge?.state(); liveAuthorizationExpiry = ""; message = "LIVE authorization revoked; new entries require a new explicit lease." } catch (e: Exception) { message = e.message ?: "LIVE revocation not confirmed." } finally { busy = false } }
                             }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("REVOKE LIVE") }
-                            else Button(onClick = { showLiveAuthorizationDialog = true }, enabled = !busy && liveIdentityReady, modifier = Modifier.weight(1f)) { Text("AUTHORIZE LIVE · 15 MIN") }
+                            else Button(
+                                onClick = { showLiveAuthorizationDialog = true },
+                                enabled = !busy && liveHostHealthy && liveBackupVerified && liveIdentityReady &&
+                                    liveDemoPassAccepted && snapshot?.liveAuthorized != true,
+                                modifier = Modifier.weight(1f)
+                            ) { Text("I ACCEPT REAL MONEY RISK") }
                         }
-                        if (!liveIdentityReady) Text("LIVE authorization is unavailable until this exact registered account is verified by a fresh broker-authenticated terminal heartbeat.", color = WarningAmber, fontSize = 9.sp)
+                        if (!liveHostHealthy) Text("LIVE blocked: persistent host must be healthy with two independently attested MT5 terminal slots.", color = LossRed, fontSize = 9.sp)
+                        if (!liveBackupVerified) Text("LIVE blocked: recent checksum-verified Bridge and Management backups are not PASS.", color = LossRed, fontSize = 9.sp)
+                        if (!liveIdentityReady) Text("LIVE blocked: connect the exact registered LIVE MASTER account and wait for a fresh broker-authenticated heartbeat.", color = LossRed, fontSize = 9.sp)
+                        if (!liveDemoPassAccepted) Text("LIVE blocked: the exact broker-specific DEMO PASS must be accepted first.", color = LossRed, fontSize = 9.sp)
                     }
                     if (selectedMt5Broker == "EXNESS") Text("Connection method: Exness MT5 via its genuine desktop terminal. The separate Exness Trader API route is not implemented in this release; standard MT5 accounts are not eligible for that API. No API keys are requested here.", color = WarningAmber, fontSize = 9.sp)
                 } else {

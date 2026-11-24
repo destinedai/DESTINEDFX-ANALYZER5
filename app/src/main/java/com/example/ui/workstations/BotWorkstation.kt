@@ -637,7 +637,6 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             cardSnapshot?.accessType.equals("MASTER", ignoreCase = true)
                         val liveRiskAccepted = cardSnapshot?.liveAuthorized == true
                         val liveChecklist = listOf(
-                            "Emulator" to com.example.BuildConfig.DESTINEDFX_EMULATOR_ACCEPTED,
                             "Host Healthy" to liveHostHealthy,
                             "Backup" to liveBackupVerified,
                             "Broker" to liveBrokerVerified,
