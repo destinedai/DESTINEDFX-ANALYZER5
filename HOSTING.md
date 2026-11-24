@@ -1,5 +1,9 @@
 # DestinedFX hosting and execution policy
 
+## Production target
+
+The production target remains an owner-operated, persistent Ubuntu Linux host; GitHub Codespaces remains the current supervised DEMO-only environment.
+
 ## Current owner workflow — inside GitHub
 
 The immediate owner workflow is **GitHub Codespaces for supervised DEMO testing**. The repository's `.devcontainer` installs the pinned Linux/Wine/MetaTrader prerequisites, starts the existing Codespaces host supervisor when the container opens, and forwards the Bridge and Management API ports automatically. The one-command readiness check is:
