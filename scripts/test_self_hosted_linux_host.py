@@ -29,6 +29,42 @@ def test_self_hosted_installer_shell_syntax():
         assert result.returncode == 0, f"{path.name}: {result.stderr}"
 
 
+def test_one_command_persistent_host_setup_covers_required_sequence():
+    prereqs = (LINUX_HOST / "install-prereqs-ubuntu.sh").read_text(encoding="utf-8")
+    setup = (LINUX_HOST / "setup-persistent-host.sh").read_text(encoding="utf-8")
+    guide = (LINUX_HOST / "README.md").read_text(encoding="utf-8")
+
+    for item in (
+        "Ubuntu 24.04", "x86_64", "systemd 250", "/run", "tmpfs",
+        "docker-ce", "caddy", "wine-guard.sh", "--report",
+        "command -v", "wine32:i386",
+    ):
+        assert item in prereqs
+
+    sequence = (
+        "run_step 'Ubuntu prerequisites'",
+        "run_step 'Encrypted host bootstrap'",
+        "run_step 'Two-domain and email configuration'",
+        "run_step 'MetaQuotes MT5 install'",
+        "run_step 'Self-hosted source validation'",
+        "run_step 'Persistent host installation'",
+        "run_step 'Systemd service checks'",
+        "run_step 'Backup timer checks'",
+        "run_step 'HTTPS readiness checks'",
+    )
+    positions = [setup.index(item) for item in sequence]
+    assert positions == sorted(positions)
+    assert "--print-script-sha256" in setup and "--expected-sha256" in setup
+    assert "destinedfx-bridge-backup.timer" in setup
+    assert "destinedfx-management-postgres-backup.timer" in setup
+    assert "/health/ready" in setup
+    assert "git clone --branch feat/self-hosted-linux-host-runtime" in guide
+    assert "git checkout --detach" in guide
+    assert "sudo bash scripts/linux-host/setup-persistent-host.sh" in guide
+    assert "8 GiB RAM" in guide and "2 CPU cores" in guide
+
+
+
 
 def test_host_endpoint_manifest_is_public_only_and_rejects_placeholders(tmp_path):
     import json

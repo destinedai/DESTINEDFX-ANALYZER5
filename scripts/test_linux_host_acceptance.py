@@ -202,3 +202,18 @@ def test_acceptance_terminal_executable_rejects_symlink_and_non_absolute_path(tm
         assert str(error) == "MT5_TERMINAL_EXECUTABLE_PATH_NOT_ABSOLUTE"
     else:
         raise AssertionError("A relative terminal path must not pass owner-host acceptance.")
+
+
+def test_acceptance_cli_status_is_plain_and_actionable():
+    assert acceptance.acceptance_status_line(True) == "ACCEPTED: true - LIVE UNLOCKED"
+    failed = acceptance.acceptance_status_line(False, "NOT_ENOUGH_ACTIVE_USER_SLOTS")
+    assert failed == (
+        "FAILED: NOT_ENOUGH_ACTIVE_USER_SLOTS - fix: "
+        "sudo systemctl status destinedfx-linux-slot-worker.service --no-pager --full"
+    )
+    assert acceptance.acceptance_status_line(False, "HOST_AGENT_HEALTH_PROBE_FAILED").endswith(
+        "sudo systemctl status destinedfx-host-agent.service --no-pager --full"
+    )
+    assert acceptance.acceptance_status_line(False, "UNCLASSIFIED").endswith(
+        "sudo /opt/destinedfx/scripts/linux-host/host-doctor.sh"
+    )

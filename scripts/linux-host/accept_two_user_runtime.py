@@ -442,6 +442,26 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+
+def acceptance_fix_command(reason: str) -> str:
+    """Return a safe, explicit diagnostic command for the reported failure."""
+    reason = (reason or "ACCEPTANCE_CHECK_FAILED").strip()
+    if "HOST_AGENT" in reason:
+        return "sudo systemctl status destinedfx-host-agent.service --no-pager --full"
+    if any(token in reason for token in ("SLOT", "TERMINAL", "WINE", "XAUTHORITY", "CROSS_USER")):
+        return "sudo systemctl status destinedfx-linux-slot-worker.service --no-pager --full"
+    if any(token in reason for token in ("BRIDGE", "PERSISTENT_HOST", "LINUX_HOST", "ISOLATION")):
+        return "sudo systemctl status destinedfx-bridge.service --no-pager --full"
+    return "sudo /opt/destinedfx/scripts/linux-host/host-doctor.sh"
+
+
+def acceptance_status_line(accepted: bool, reason: str = "") -> str:
+    if accepted:
+        return "ACCEPTED: true - LIVE UNLOCKED"
+    exact_reason = reason.strip() or "ACCEPTANCE_CHECK_FAILED"
+    return f"FAILED: {exact_reason} - fix: {acceptance_fix_command(exact_reason)}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-users", type=int, default=2)
@@ -452,6 +472,7 @@ def main() -> int:
     parser.add_argument("--bridge-url", default="http://127.0.0.1:8000")
     args = parser.parse_args()
     if args.expected_users < 2 or args.expected_users > 8:
+        print(acceptance_status_line(False, "EXPECTED_USERS_OUT_OF_RANGE"))
         print(json.dumps({"accepted": False, "error": "EXPECTED_USERS_OUT_OF_RANGE"}))
         return 2
     try:
@@ -460,8 +481,10 @@ def main() -> int:
         code = exc.args[0] if isinstance(exc, AcceptanceError) and exc.args else "ACCEPTANCE_CHECK_FAILED"
         if isinstance(exc, IsolationError):
             code = exc.code
+        print(acceptance_status_line(False, str(code)))
         print(json.dumps({"accepted": False, "error": str(code)}, sort_keys=True))
         return 1
+    print(acceptance_status_line(True))
     print(json.dumps(result, sort_keys=True))
     return 0
 
