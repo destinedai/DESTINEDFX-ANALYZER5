@@ -170,7 +170,7 @@ class BrokerLoginModelTest {
         assertEquals(
             ConnectOutcome.Failed(
                 "EPHEMERAL_HOST_LIVE_BLOCKED",
-                "LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.",
+                "LIVE REQUIRES PERSISTENT LINUX HOST - Install via scripts/linux-host/README.md - Codespace is DEMO ONLY",
             ),
             outcome,
         )
