@@ -587,6 +587,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             secrets = secrets,
             context = context,
             hostProfile = mt5Snapshot?.hostProfile ?: com.example.data.broker.HostProfile.EPHEMERAL,
+            initialMode = LoginMode.valueOf(mt5Mode),
             onGrantAccess = { _, form ->
                 if (!secrets.isSecureStorageAvailable) {
                     "Secure storage is unavailable; cTrader authorization is blocked."

@@ -85,6 +85,7 @@ fun MetaTraderBrokerFlow(
     secrets: SecretsManager,
     context: Context,
     hostProfile: HostProfile,
+    initialMode: LoginMode = LoginMode.DEMO,
     onGrantAccess: (BrokerLoginSpec, LoginForm) -> String?,
     onConnect: suspend (BrokerLoginSpec, LoginForm, (ConnectStage) -> Unit) -> ConnectOutcome,
     onRefreshAccount: suspend (BrokerLoginSpec, LoginForm) -> VerifiedAccountDetails?,
@@ -102,7 +103,7 @@ fun MetaTraderBrokerFlow(
     var serverSearch by remember { mutableStateOf("") }
     var manualDialog by remember { mutableStateOf(false) }
     var manualName by remember { mutableStateOf("") }
-    var form by remember { mutableStateOf(LoginForm()) }
+    var form by remember(initialMode) { mutableStateOf(LoginForm(mode = initialMode)) }
     var serverSaveStatus by remember(selected?.id, form.mode) { mutableStateOf("") }
     var modeHintChosen by remember { mutableStateOf(false) }
     var stage by remember { mutableStateOf<ConnectStage?>(null) }

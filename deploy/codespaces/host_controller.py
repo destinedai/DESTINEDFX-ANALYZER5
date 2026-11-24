@@ -32,6 +32,8 @@ START_PID = RUNTIME / "start-manager.json"
 STATUS_FILE = RUNTIME / "host-status.json"
 STOP_REQUEST = RUNTIME / "stop.request"
 ACTIVITY_FILE = RUNTIME / "last-activity"
+USAGE_FILE = STATE / "codespaces-usage.json"
+AUTO_IDLE_TIMEOUT_SECONDS = max(120, min(86_400, int(os.environ.get("DESTINEDFX_AUTO_SLEEP_IDLE_SECONDS", "120"))))
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -52,6 +54,26 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def _record_usage_stop() -> bool:
+    """Close the local Codespaces estimate only after the engine safely stops."""
+    try:
+        data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("sessions"), list):
+            return False
+    except (OSError, ValueError):
+        return False
+    codespace = os.environ.get("CODESPACE_NAME", "unknown")
+    now = time.time()
+    active = next((row for row in reversed(data["sessions"])
+                   if isinstance(row, dict) and row.get("codespace") == codespace
+                   and row.get("stopped_at") is None), None)
+    if active is None:
+        return False
+    active["stopped_at"] = max(float(active.get("started_at", now)), now)
+    _atomic_json(USAGE_FILE, data)
+    return True
 
 
 def _proc_start_ticks(pid: int) -> int | None:
@@ -330,6 +352,7 @@ def _graceful_stop(
     inspect_shutdown_safety,
     *,
     reason: str,
+    require_ea_stopped: bool = False,
 ) -> bool:
     """Recheck live and backed-up broker state before stopping owned services."""
     if child.poll() is not None:
@@ -340,13 +363,16 @@ def _graceful_stop(
         _write_status("STOP_BLOCKED", reason=reason, safety_reasons=["START_PROCESS_IDENTITY_MISMATCH"])
         return False
     try:
-        safety = inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15)
+        safety = inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15,
+                                         require_ea_stopped=require_ea_stopped)
         if not safety["safe"]:
             _write_status("STOP_BLOCKED", reason=reason, safety_reasons=safety["reasons"])
             return False
         backup = backup_database(DB_PATH, STATE / "backups")
-        backup_safety = inspect_shutdown_safety(backup, heartbeat_stale_seconds=15)
-        current_safety = inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15)
+        backup_safety = inspect_shutdown_safety(backup, heartbeat_stale_seconds=15,
+                                                require_ea_stopped=require_ea_stopped)
+        current_safety = inspect_shutdown_safety(DB_PATH, heartbeat_stale_seconds=15,
+                                                 require_ea_stopped=require_ea_stopped)
         if not backup_safety["safe"] or not current_safety["safe"]:
             reasons = sorted(set(backup_safety["reasons"]) | set(current_safety["reasons"]))
             _write_status("STOP_BLOCKED", reason=reason, safety_reasons=reasons)
@@ -445,6 +471,7 @@ def supervise() -> int:
         child = _start_command()
         ACTIVITY_FILE.touch(mode=0o600, exist_ok=True)
         _write_status("STARTING", start_pid=child.pid)
+        last_idle_check = 0.0
         while True:
             if stop_requested:
                 return 0 if _graceful_stop(
@@ -457,10 +484,53 @@ def supervise() -> int:
                               exit_code=child.returncode)
                 return int(child.returncode or 1)
 
-            # The Android owner's explicit stop uses the GitHub Codespaces API.
-            # Local inactivity never stops a trading terminal or consumes a
-            # shutdown signal; GitHub's configured idle timeout is the fallback.
-            _write_status("RUNNING", start_pid=child.pid)
+            now = time.time()
+            try:
+                last_activity = ACTIVITY_FILE.stat().st_mtime
+            except OSError:
+                last_activity = now
+            idle_seconds = max(0.0, now - last_activity)
+            status_written = False
+            if idle_seconds >= AUTO_IDLE_TIMEOUT_SECONDS:
+                if now - last_idle_check >= 10.0:
+                    last_idle_check = now
+                    safety = inspect_shutdown_safety(
+                        DB_PATH, heartbeat_stale_seconds=15, require_ea_stopped=True
+                    )
+                    if not safety.get("safe"):
+                        reasons = safety.get("reasons") or ["BROKER_STATE_UNVERIFIED"]
+                        _write_status("SLEEP_BLOCKED", reason="AUTO_IDLE",
+                                      safety_reasons=reasons,
+                                      idle_seconds=int(idle_seconds),
+                                      idle_timeout_seconds=AUTO_IDLE_TIMEOUT_SECONDS)
+                        status_written = True
+                    else:
+                        _write_status("AUTO_SLEEP_CHECKING", reason="AUTO_IDLE",
+                                      idle_seconds=int(idle_seconds),
+                                      idle_timeout_seconds=AUTO_IDLE_TIMEOUT_SECONDS)
+                        stopped = _graceful_stop(
+                            child, backup_database, inspect_shutdown_safety,
+                            reason="AUTO_IDLE", require_ea_stopped=True,
+                        )
+                        if stopped:
+                            final_status = _read_json(STATUS_FILE) or {}
+                            usage_saved = _record_usage_stop()
+                            _write_status(
+                                "ENGINE_ASLEEP", reason="AUTO_IDLE",
+                                backup=final_status.get("backup"),
+                                backup_verified=bool(final_status.get("backup_verified")),
+                                daily_usage_saved=usage_saved,
+                                idle_timeout_seconds=AUTO_IDLE_TIMEOUT_SECONDS,
+                            )
+                            return 0
+                        status_written = True
+                elif idle_seconds >= AUTO_IDLE_TIMEOUT_SECONDS:
+                    # Keep the blocker visible; retry the safety check every 10 seconds.
+                    status_written = (_read_json(STATUS_FILE) or {}).get("status") == "SLEEP_BLOCKED"
+            if not status_written:
+                _write_status("RUNNING", start_pid=child.pid,
+                              idle_timeout_seconds=AUTO_IDLE_TIMEOUT_SECONDS,
+                              idle_seconds=int(idle_seconds))
             time.sleep(2)
     except Exception as exc:
         # Only the exception type is recorded; never persist command output,

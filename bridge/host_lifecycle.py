@@ -40,6 +40,7 @@ def inspect_shutdown_safety(
     *,
     heartbeat_stale_seconds: int = 15,
     now_epoch: float | None = None,
+    require_ea_stopped: bool = False,
 ) -> dict[str, Any]:
     """Check broker and worker state without liquidating or mutating any account."""
     path = Path(db_path)
@@ -83,6 +84,8 @@ def inspect_shutdown_safety(
                 reasons.add("EA_ACTIVE")
             elif ea_state not in {"READY", "PAUSED", "STOPPED"}:
                 reasons.add("EA_STATE_UNVERIFIED")
+            if require_ea_stopped and ea_state != "STOPPED":
+                reasons.add("EA_NOT_STOPPED")
             claimed_mode = str(claimed.get("account_mode", "")).upper()
             observed_mode = str(observed.get("account_mode", "")).upper() if isinstance(observed, dict) else ""
             requires_broker_check = (

@@ -2165,6 +2165,7 @@ def health():
         # The mobile app compares this non-secret value with the URL host before saving it.
         'expected_forwarded_host':EXPECTED_PUBLIC_HOST if PUBLIC_EXPOSURE else '',
         'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,
+        'auto_sleep_idle_seconds':max(120,min(86400,int(os.getenv('DESTINEDFX_AUTO_SLEEP_IDLE_SECONDS','120')))),
         'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,
         **host_lifecycle_state(),
     }
@@ -2474,7 +2475,8 @@ def fresh_terminal_broker_candles(beat, now_ms=None):
 
 @app.get('/v1/app/state')
 def state(authorization:str|None=Header(default=None)):
-    p=auth(authorization,'app'); touch_activity(HOST_CONTROL_DIR); beat=json.loads(p['heartbeat']) if p['heartbeat'] else None
+    # Passive state polling must not keep an idle engine awake indefinitely.
+    p=auth(authorization,'app'); beat=json.loads(p['heartbeat']) if p['heartbeat'] else None
     age=max(0,int(time.time()-datetime.fromisoformat(beat['timestamp'].replace('Z','+00:00')).timestamp())) if beat else None
     online=bool(beat and age is not None and age<=STALE)
     with tx() as c: cmd=c.execute('SELECT * FROM commands WHERE pairing_id=? ORDER BY id DESC LIMIT 1',(p['id'],)).fetchone()
@@ -2608,6 +2610,13 @@ def revoke_github_app_authorization(
     except Exception:
         raise HTTPException(503,detail={'code':'GITHUB_REVOCATION_FAILED','message':'GitHub revocation service is unavailable'}) from None
     return {'revoked':True}
+
+
+@app.post('/v1/app/host/activity')
+def app_host_activity(authorization:str|None=Header(default=None)):
+    auth(authorization,'app')
+    touch_activity(HOST_CONTROL_DIR)
+    return {'status':'ACTIVE','host_profile':HOST_PROFILE}
 
 
 @app.get('/host-status')

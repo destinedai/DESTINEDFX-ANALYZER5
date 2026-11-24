@@ -614,6 +614,7 @@ class MT5RemoteBridgeClient(
     /** Creates one profile-scoped idempotency key; UNKNOWN is retained for reconciliation, never retried here. */
     suspend fun command(requestId: String, action: String, config: JSONObject = JSONObject()): CommandResult {
         require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + COMMAND_TRADE_ACTIONS)
+        touchHostActivity()
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
         if (action in COMMAND_TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
             return CommandResult(requestId, false, "REAUTHENTICATION_REQUIRED: authenticate again before this trading action", rejected = true)

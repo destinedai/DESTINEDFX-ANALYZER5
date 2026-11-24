@@ -100,7 +100,7 @@ enum class AccessType(val label: String, val wireValue: String) {
 
 data class LoginForm(
     val type: AccessType = AccessType.INVESTOR,
-    val mode: LoginMode = LoginMode.LIVE,
+    val mode: LoginMode = LoginMode.DEMO,
     val accountId: String? = null,
     val login: String = "",
     val password: String = "",
@@ -212,7 +212,8 @@ object ConnectFailures {
         "OWNER_BOOTSTRAP_REQUIRED" to "Enter the one-time owner bootstrap code for this first public bridge pairing. It expires after 10 minutes.",
         "MANAGEMENT_SIGN_IN_REQUIRED" to "Sign in to your DestinedFX management account before connecting this managed MT5 broker. Secure account pairing requires that identity.",
         "MANAGEMENT_SERVICE_UNAVAILABLE" to "The DestinedFX management service is not reachable. Broker credentials were not submitted.",
-        "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.",
+        "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE REQUIRES PERSISTENT LINUX HOST - Install via scripts/linux-host/README.md - Codespace is DEMO ONLY",
+        "HOST_WAKE_FAILED" to "The execution host could not be awakened and verified. Broker credentials were not submitted.",
         "WAITING_FOR_SPOTWARE_APPROVAL" to "WAITING FOR SPOTWARE APPROVAL",
         "PROVIDER_AUTH_FAILED" to "Provider authorization failed. Check the grant and try again.",
         "ACCOUNT_IDENTITY_MISMATCH" to "Provider account identity did not match the selected authorized account.",
@@ -231,6 +232,9 @@ object ConnectFailures {
 }
 
 enum class ConnectStage(val label: String) {
+    WAKING_ENGINE("WAKING ENGINE"),
+    ENGINE_READY("ENGINE READY"),
+    PAIRING("PAIRING"),
     SENT("Sent"),
     HOST_QUEUED("Waiting for an isolated MT5 slot"),
     TERMINAL_LOGGING_IN("MT5 terminal logging in"),
@@ -292,7 +296,7 @@ interface ConnectBackend {
     suspend fun submit(spec: BrokerLoginSpec, form: LoginForm)
     suspend fun observe(): ConnectObservation
     /** A rejection happens before any credentials are submitted. */
-    suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm): String? = null
+    suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm, onStage: (ConnectStage) -> Unit = {}): String? = null
 }
 
 sealed interface ConnectOutcome {
@@ -333,7 +337,7 @@ class ConnectUseCase(
     suspend fun connect(spec: BrokerLoginSpec, form: LoginForm, onStage: (ConnectStage) -> Unit = {}): ConnectOutcome {
         if (!LoginRules.loginEnabled(spec, form)) return failed("FORM_INCOMPLETE")
         try {
-            backend.preflight(spec, form)?.let { return failed(it) }
+            backend.preflight(spec, form, onStage)?.let { return failed(it) }
             backend.submit(spec, form)
             onStage(ConnectStage.SENT)
             var reached = ConnectStage.SENT

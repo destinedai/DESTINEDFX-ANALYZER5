@@ -703,8 +703,11 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             ) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(quote.symbol, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                    Text("BID ${String.format(java.util.Locale.US, priceFormat, quote.bid)}  ·  ASK ${String.format(java.util.Locale.US, priceFormat, quote.ask)}",
+                                    val spread = quote.ask - quote.bid
+                                    Text("BID ${String.format(java.util.Locale.US, priceFormat, quote.bid)}  ·  ASK ${String.format(java.util.Locale.US, priceFormat, quote.ask)}  ·  SPREAD ${String.format(java.util.Locale.US, priceFormat, spread)}",
                                         color = ProfitGreen, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                    Text("LAST UPDATE ${quote.ageMs / 1_000L}s ago · source MT5 TERMINAL",
+                                        color = TextSecondary, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
                                     val quoteMid = (quote.bid + quote.ask) / 2.0
                                     Text("MID ${String.format(java.util.Locale.US, priceFormat, quoteMid)}  ·  same MT5 Bridge midpoint used by the chart",
                                         color = ElectricCyan, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
@@ -756,7 +759,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                 Text("PHONE → MT5 MARKET ORDER", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 Text(
                                     if (phoneOrderQuote != null)
-                                        "${phoneOrderSymbol} · BID ${String.format(java.util.Locale.US, "%.${phoneOrderQuote.digits}f", phoneOrderQuote.bid)} · ASK ${String.format(java.util.Locale.US, "%.${phoneOrderQuote.digits}f", phoneOrderQuote.ask)} · ${phoneOrderQuote.ageMs} ms"
+                                        "${phoneOrderSymbol} · BID ${String.format(java.util.Locale.US, "%.${phoneOrderQuote.digits}f", phoneOrderQuote.bid)} · ASK ${String.format(java.util.Locale.US, "%.${phoneOrderQuote.digits}f", phoneOrderQuote.ask)} · SPREAD ${String.format(java.util.Locale.US, "%.${phoneOrderQuote.digits}f", phoneOrderQuote.ask - phoneOrderQuote.bid)} · LAST UPDATE ${phoneOrderQuote.ageMs / 1_000L}s ago"
                                     else
                                         "Waiting for a fresh quote for the first EA-configured symbol (${phoneOrderSymbol}).",
                                     color = if (phoneOrderQuote != null) ProfitGreen else WarningAmber,

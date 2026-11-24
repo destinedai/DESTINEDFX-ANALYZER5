@@ -278,6 +278,15 @@ open class DestinedFXViewModel(
     val scanProgressStage = MutableStateFlow("")
     val riskPercent = MutableStateFlow(0.25)
     val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
+    val selectedMt5Mode = MutableStateFlow(if (isPreview) "DEMO" else app.secretsManager.getSelectedMT5Mode())
+
+    fun selectMt5Mode(mode: String): Boolean {
+        val normalized = mode.trim().uppercase()
+        if (normalized !in setOf("DEMO", "LIVE")) return false
+        if (!isPreview && !app.secretsManager.saveSelectedMT5Mode(normalized)) return false
+        selectedMt5Mode.value = normalized
+        return true
+    }
 
     fun selectScreen(screen: DestinedFXScreen) {
         selectedScreen.value = screen

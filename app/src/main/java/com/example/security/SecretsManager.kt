@@ -102,6 +102,7 @@ class SecretsManager internal constructor(
         private const val BOT_TIMEFRAME = "bot_timeframe_encrypted"
         private const val BOT_RISK_PERCENT = "bot_risk_percent_encrypted"
         private const val BOT_THEME_MODE = "bot_theme_mode_encrypted"
+        private const val MT5_SELECTED_MODE = "mt5_selected_mode"
         private const val DERIV_BOT_SYMBOL = "deriv_bot_symbol_v1"
         private const val DERIV_BOT_STRATEGY = "deriv_bot_strategy_v1"
         private const val DERIV_BOT_TIMEFRAME = "deriv_bot_timeframe_v1"
@@ -1059,6 +1060,16 @@ class SecretsManager internal constructor(
         }
     }
     
+    fun getSelectedMT5Mode(): String =
+        (prefs.getString(MT5_SELECTED_MODE, "DEMO") ?: "DEMO").uppercase()
+            .takeIf { it in setOf("DEMO", "LIVE") } ?: "DEMO"
+
+    fun saveSelectedMT5Mode(mode: String): Boolean {
+        val normalized = mode.trim().uppercase()
+        if (!isSecureStorageAvailable || normalized !in setOf("DEMO", "LIVE")) return false
+        return prefs.edit().putString(MT5_SELECTED_MODE, normalized).commit()
+    }
+
     fun getSelectedMT5BrokerBrand(): String =
         (prefs.getString("mt5_selected_broker_brand", "FBS") ?: "FBS").uppercase()
             .takeIf { it in setOf("FBS", "EXNESS", "HFM", "DERIV") } ?: "FBS"

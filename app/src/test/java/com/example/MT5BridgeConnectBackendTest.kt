@@ -10,6 +10,7 @@ import com.example.ui.bot.AccessType
 import com.example.ui.bot.LoginForm
 import com.example.ui.bot.MT5BridgeConnectBackend
 import com.example.ui.bot.ConnectSubmissionFailure
+import com.example.ui.bot.ConnectStage
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -43,6 +44,33 @@ class MT5BridgeConnectBackendTest {
             stateCalls++
             return currentSnapshot
         }
+    }
+
+    @Test
+    fun engineWakeAndHealthVerificationFinishBeforePairingBegins() = runBlocking {
+        val gateway = FakeGateway()
+        val events = mutableListOf<String>()
+        val backend = MT5BridgeConnectBackend(
+            gateway,
+            managementHealthCheck = { events += "MANAGEMENT_HEALTH" },
+            wakeHost = { reportStage ->
+                events += "HOST_WAKE"
+                reportStage(ConnectStage.ENGINE_READY)
+            },
+        )
+        val spec = requireNotNull(BrokerLoginSpecs.byId("FBS_MT5"))
+        val form = LoginForm(
+            type = AccessType.TRADE, mode = LoginMode.DEMO, login = "123456",
+            password = "fixture-broker-password", server = "Fixture-Demo",
+        )
+
+        assertNull(backend.preflight(spec, form) { events += it.name })
+        backend.submit(spec, form)
+
+        assertTrue(events.indexOf("HOST_WAKE") >= 0)
+        assertTrue(events.indexOf("HOST_WAKE") < events.indexOf("MANAGEMENT_HEALTH"))
+        assertTrue(events.indexOf("MANAGEMENT_HEALTH") < events.indexOf(ConnectStage.PAIRING.name))
+        assertEquals("123456", gateway.submitted?.login)
     }
 
     @Test

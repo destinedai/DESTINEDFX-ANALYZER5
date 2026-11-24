@@ -20,7 +20,12 @@ import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,7 +36,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import com.destinedfx.core.strategy.StrategyRegistry
+import com.example.data.broker.HostProfile
+import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.ui.chart.TradingChartContainer
 import com.example.ui.components.GoldGradientButton
 import com.example.ui.components.QuoteFreshnessIndicator
@@ -48,6 +56,29 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
     val selectedStrategyId by viewModel.selectedStrategyId.collectAsStateWithLifecycle()
     val selectedMtfTimeframes by viewModel.selectedMtfTimeframes.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
+    val selectedMt5Mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
+    val secrets = viewModel.app.secretsManager
+    val mt5Brand = remember { secrets.getSelectedMT5BrokerBrand() }
+    val demoGateClient = remember(mt5Brand) {
+        MT5RemoteBridgeClient(secrets, "${mt5Brand}_DEMO", accountMode = "DEMO", brokerBrand = mt5Brand)
+    }
+    var persistentLinuxLiveAccepted by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    LaunchedEffect(demoGateClient) {
+        while (true) {
+            persistentLinuxLiveAccepted = runCatching {
+                if (!demoGateClient.hasPairing() || demoGateClient.hostProfile() != HostProfile.PERSISTENT) return@runCatching false
+                val host = demoGateClient.hostStatus()
+                val isolation = host.optJSONObject("slot_isolation") ?: return@runCatching false
+                isolation.optBoolean("enabled", false) && isolation.optBoolean("ready", false) &&
+                    isolation.optInt("max_slots", 0) >= 2 && isolation.optInt("active_slots", 0) >= 2
+            }.getOrDefault(false)
+            delay(5_000L)
+        }
+    }
+    LaunchedEffect(persistentLinuxLiveAccepted, selectedMt5Mode) {
+        if (!persistentLinuxLiveAccepted && selectedMt5Mode == "LIVE") viewModel.selectMt5Mode("DEMO")
+    }
     val activeTicker = tickers[activeSymbol]
     val implementedCount = StrategyRegistry.allStrategies.count { it.isImplemented }
     val feedReady = marketDataStatus.startsWith("READY", ignoreCase = true)
@@ -71,6 +102,35 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item { QuickInfoDashboard(viewModel) }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, CardBorder),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("EXECUTION MODE", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        FilterChip(selected = selectedMt5Mode == "DEMO", onClick = { viewModel.selectMt5Mode("DEMO") }, label = { Text("DEMO") })
+                        FilterChip(selected = selectedMt5Mode == "LIVE", enabled = persistentLinuxLiveAccepted,
+                            onClick = { if (persistentLinuxLiveAccepted) viewModel.selectMt5Mode("LIVE") }, label = { Text("LIVE") })
+                        Spacer(Modifier.weight(1f))
+                        Text(if (persistentLinuxLiveAccepted) "PERSISTENT LINUX · ISOLATION ACCEPTED" else "DEMO ONLY",
+                            color = if (persistentLinuxLiveAccepted) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                    }
+                    if (!persistentLinuxLiveAccepted) {
+                        Text("LIVE REQUIRES PERSISTENT LINUX HOST - Install via scripts/linux-host/README.md - Codespace is DEMO ONLY",
+                            color = WarningAmber, fontSize = 10.sp)
+                        OutlinedButton(onClick = {
+                            runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse("https://github.com/destinedai/DESTINEDFX-ANALYZER5/blob/feat/self-hosted-linux-host-runtime/scripts/linux-host/README.md"))) }
+                        }) { Text("VIEW PERSISTENT LINUX INSTALL STEPS") }
+                    }
+                }
+            }
+        }
 
         item {
             Column(

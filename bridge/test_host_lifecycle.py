@@ -91,6 +91,31 @@ def test_fresh_empty_demo_account_can_be_stopped(tmp_path):
     assert result == {"safe": True, "reasons": []}
 
 
+def test_idle_sleep_requires_ea_stopped_not_merely_ready(tmp_path):
+    ready_path = tmp_path / "ready.sqlite3"
+    ready = _make_db(ready_path)
+    ready.close()
+    blocked = inspect_shutdown_safety(ready_path, require_ea_stopped=True)
+    assert blocked["safe"] is False
+    assert "EA_NOT_STOPPED" in blocked["reasons"]
+
+    stopped_path = tmp_path / "stopped.sqlite3"
+    stopped = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "state": "STOPPED",
+        "account": {
+            "login": "700001", "server": "Broker-Demo", "company": "Broker",
+            "currency": "USD", "account_mode": "DEMO",
+        },
+        "open_positions": [],
+        "active_orders": [],
+    }
+    connection = _make_db(stopped_path, heartbeat=stopped)
+    connection.close()
+    allowed = inspect_shutdown_safety(stopped_path, require_ea_stopped=True)
+    assert allowed == {"safe": True, "reasons": []}
+
+
 def test_open_positions_block_host_stop(tmp_path):
     path = tmp_path / "bridge.sqlite3"
     connection = _make_db(path, heartbeat={

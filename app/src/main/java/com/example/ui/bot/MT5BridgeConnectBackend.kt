@@ -17,10 +17,23 @@ import org.json.JSONObject
 class MT5BridgeConnectBackend(
     private val client: MT5ManagedAccountGateway,
     private val managementHealthCheck: suspend () -> Unit = {},
+    private val wakeHost: (suspend ((ConnectStage) -> Unit) -> Unit)? = null,
 ) : ConnectBackend {
     private var requestedForm: LoginForm? = null
+    private var stageListener: (ConnectStage) -> Unit = {}
 
-    override suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm): String? {
+    override suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm, onStage: (ConnectStage) -> Unit): String? {
+        stageListener = onStage
+        onStage(ConnectStage.WAKING_ENGINE)
+        try {
+            wakeHost?.invoke(onStage)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: ConnectSubmissionFailure) {
+            return failure.code
+        } catch (_: Exception) {
+            return "HOST_WAKE_FAILED"
+        }
         try {
             managementHealthCheck()
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -28,6 +41,7 @@ class MT5BridgeConnectBackend(
         } catch (_: Exception) {
             return "MANAGEMENT_SERVICE_UNAVAILABLE"
         }
+        onStage(ConnectStage.ENGINE_READY)
         if (form.mode == LoginMode.LIVE && form.type == AccessType.TRADE) {
             // /v1/app/state requires an app bearer and cannot be called before a new profile is paired.
             // /health is deliberately public and reports only the host's configured profile.
@@ -43,6 +57,7 @@ class MT5BridgeConnectBackend(
         try {
             // A phone may stop waiting while a one-slot Codespace is still provisioning. Reuse
             // the exact queued/active request instead of posting the password a second time.
+            stageListener(ConnectStage.PAIRING)
             if (client.hasPairing()) {
                 val current = client.state()
                 val managed = current.raw.optJSONObject("managed_execution")
@@ -55,7 +70,10 @@ class MT5BridgeConnectBackend(
                         managed?.optString("access_type").equals(form.type.wireValue, true) &&
                         managed?.optString("requested_login") == form.login.trim() &&
                         managed?.optString("requested_server") == form.server.trim()
-                    if (sameAccount) return
+                    if (sameAccount) {
+                        (client as? MT5RemoteBridgeClient)?.touchHostActivity()
+                        return
+                    }
                     throw ConnectSubmissionFailure("PAIRING_TERMINAL_ALREADY_ACTIVE")
                 }
             }
@@ -71,6 +89,7 @@ class MT5BridgeConnectBackend(
                     ownerBootstrapCode = form.ownerBootstrapCode.trim(),
                 )
             )
+            (client as? MT5RemoteBridgeClient)?.touchHostActivity()
         } catch (e: MT5RemoteBridgeClient.BridgeHttpException) {
             if (e.safeDescription in ConnectFailures.knownCodes) throw ConnectSubmissionFailure(e.safeDescription)
             throw e
