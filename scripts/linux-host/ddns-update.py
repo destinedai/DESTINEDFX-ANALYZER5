@@ -33,8 +33,8 @@ def validate_hostnames(hostnames: str | list[str]) -> list[str]:
     for name in names:
         if not name.endswith(DUCKDNS_SUFFIX):
             raise DDNSError("HOSTNAME_MUST_END_IN_DUCKDNS_ORG")
-        label = name[:-len(DUCKDNS_SUFFIX)]
-        if not LABEL_RE.fullmatch(label):
+        labels = name[:-len(DUCKDNS_SUFFIX)].split(".")
+        if len(labels) not in (1, 2) or any(not LABEL_RE.fullmatch(label) for label in labels):
             raise DDNSError("DUCKDNS_SUBDOMAIN_LABEL_INVALID")
     return names
 
