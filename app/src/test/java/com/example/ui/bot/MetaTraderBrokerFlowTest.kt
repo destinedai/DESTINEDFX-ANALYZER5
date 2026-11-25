@@ -241,10 +241,12 @@ class MetaTraderBrokerFlowTest {
             equity = 1_240.0,
             freeMargin = 1_100.0,
             marginLevel = 250.0,
+            margin = 140.0,
             leverage = 100,
             retrievedAtMs = now - 5_000L,
         )
         assertEquals(1_250.0, displayableVerifiedAccountMetric(details.balance, details, now)!!, 0.0)
+        assertEquals(140.0, displayableVerifiedAccountMetric(details.margin, details, now)!!, 0.0)
         assertNull(displayableVerifiedAccountMetric(details.balance, details, now + 16_000L))
         assertNull(displayableVerifiedAccountMetric(details.balance, details.copy(retrievedAtMs = now + 1L), now))
         assertNull(displayableVerifiedAccountMetric(Double.NaN, details, now))

@@ -133,6 +133,9 @@ class MT5BridgeConnectBackend(
         } == true
         val balanceUnavailable = s.managedState == "READY" &&
             (s.balance == null || s.balance <= 0.0 || s.equity == null || s.margin == null || s.freeMargin == null)
+        val terminalConnectionExpected = s.managedState == "READY" || s.workerStatus in setOf("FAILED", "ERROR")
+        val mt5NotConnected = terminalConnectionExpected &&
+            (!s.terminalOnline || !s.terminalConnected || !s.heartbeatFresh)
         val stage = when {
             s.managedState == "READY" && s.connected && s.accountVerified && s.brokerIdentityVerified && s.heartbeatFresh -> ConnectStage.VERIFIED
             modeMismatchEvidence -> ConnectStage.VERIFIED
@@ -152,6 +155,7 @@ class MT5BridgeConnectBackend(
             balance = s.balance,
             equity = s.equity,
             freeMargin = s.freeMargin,
+            margin = s.margin,
             marginLevel = s.marginLevel,
             leverage = s.leverage,
             retrievedAtMs = retrievedAtMs,
@@ -163,10 +167,14 @@ class MT5BridgeConnectBackend(
         ) else null
         return ConnectObservation(
             stage = stage,
-            failureCode = code.takeUnless { modeMismatchEvidence }
-                ?: if (balanceUnavailable) "ACCOUNT_BALANCE_UNAVAILABLE" else null,
+            failureCode = code.takeUnless { modeMismatchEvidence } ?: when {
+                mt5NotConnected -> "MT5_NOT_CONNECTED"
+                balanceUnavailable -> "ACCOUNT_BALANCE_UNAVAILABLE"
+                else -> null
+            },
             accountMode = s.actualAccountMode.takeIf { verified },
-            failureMessage = managed?.optString("error_message")?.takeIf { !it.isNullOrBlank() && code != null },
+            failureMessage = managed?.optString("error_message")?.takeIf { !it.isNullOrBlank() && code != null }
+                ?: if (mt5NotConnected) ConnectFailures.sentence("MT5_NOT_CONNECTED") else null,
             account = account,
         )
     }

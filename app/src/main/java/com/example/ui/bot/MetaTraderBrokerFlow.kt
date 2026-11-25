@@ -901,6 +901,7 @@ private fun AccountSummary(
             // Never keep a last-known balance looking current after the verified heartbeat ages out.
             MetricLine("Balance", details.balance.takeIf { !stale }, details.currency.takeIf { !stale })
             MetricLine("Equity", details.equity.takeIf { !stale }, details.currency.takeIf { !stale })
+            MetricLine("Margin", details.margin.takeIf { !stale }, details.currency.takeIf { !stale })
             MetricLine("Free margin", details.freeMargin.takeIf { !stale }, details.currency.takeIf { !stale })
             MetricLine("Leverage", details.leverage?.toDouble().takeIf { !stale }, "x")
             MetricLine("Margin level", details.marginLevel.takeIf { !stale }, "%")

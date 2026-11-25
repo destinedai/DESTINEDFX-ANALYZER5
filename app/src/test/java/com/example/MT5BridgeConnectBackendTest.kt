@@ -159,6 +159,57 @@ class MT5BridgeConnectBackendTest {
     }
 
     @Test
+    fun readyTerminalWithoutFreshConnectionReportsMt5NotConnected() = runBlocking {
+        val gateway = FakeGateway()
+        gateway.currentSnapshot = snapshot().copy(
+            managedState = "READY",
+            workerStatus = "READY",
+            terminalOnline = false,
+            terminalConnected = false,
+            heartbeatFresh = false,
+        )
+
+        val observation = MT5BridgeConnectBackend(gateway).observe()
+
+        assertEquals("MT5_NOT_CONNECTED", observation.failureCode)
+        assertEquals(
+            com.example.ui.bot.ConnectFailures.sentence("MT5_NOT_CONNECTED"),
+            observation.failureMessage,
+        )
+    }
+
+    @Test
+    fun verifiedAccountCarriesTheBrokerReportedMargin() = runBlocking {
+        val gateway = FakeGateway()
+        gateway.currentSnapshot = snapshot().copy(
+            managedState = "READY",
+            workerStatus = "READY",
+            connected = true,
+            terminalOnline = true,
+            heartbeatFresh = true,
+            state = "RUNNING",
+            account = "123456 @ FBS-Live",
+            actualLogin = "123456",
+            actualServer = "FBS-Live",
+            actualAccountMode = "LIVE",
+            terminalConnected = true,
+            accountVerified = true,
+            brokerIdentityVerified = true,
+            currency = "USD",
+            balance = 1.0,
+            equity = 1.0,
+            margin = 0.35,
+            freeMargin = 0.65,
+            marginLevel = 285.71,
+            raw = JSONObject().put("heartbeat_age_seconds", 1),
+        )
+
+        val observation = MT5BridgeConnectBackend(gateway).observe()
+
+        assertEquals(0.35, requireNotNull(observation.account).margin!!, 0.0)
+    }
+
+    @Test
     fun liveTradeCredentialsCanBeSubmittedOnEphemeralHostForReadOnlyVerification() = runBlocking {
         val gateway = FakeGateway(HostProfile.EPHEMERAL)
         val backend = MT5BridgeConnectBackend(gateway)

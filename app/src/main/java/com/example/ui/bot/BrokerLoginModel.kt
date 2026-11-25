@@ -194,6 +194,7 @@ object ConnectFailures {
         "NO_CONNECTION" to "The test host could not reach the broker. Check the server name and try again.",
         "SERVER_NOT_FOUND" to "That server name was not found. Enter it exactly as your broker issued it.",
         "TERMINAL_OFFLINE" to "The MetaTrader terminal on the test host is offline.",
+        "MT5_NOT_CONNECTED" to "MT5 NOT CONNECTED. The real broker terminal has no fresh authenticated connection; account figures are unavailable.",
         "EA_OFFLINE" to "The EA on the test host is not sending heartbeats.",
         "ALGO_TRADING_DISABLED" to "Algo trading is disabled in the terminal.",
         "WEBREQUEST_NOT_ALLOWED" to "The terminal is blocking the bridge address (WebRequest not allowed).",
@@ -258,6 +259,7 @@ data class VerifiedAccountDetails(
     val deals: List<JSONObject>? = null,
     val hostProfile: HostProfile? = null,
     val engineState: String? = null,
+    val margin: Double? = null,
 ) {
     fun isFreshAt(nowMs: Long, maxAgeMs: Long = 15_000L): Boolean =
         retrievedAtMs > 0L && retrievedAtMs <= nowMs && nowMs - retrievedAtMs <= maxAgeMs

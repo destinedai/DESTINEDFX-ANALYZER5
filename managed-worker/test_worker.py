@@ -264,6 +264,7 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("InpExpectedLogin=123456", text)
         self.assertIn("InpExpectedServer=Demo-Server", text)
         self.assertIn("InpExpectedAccountMode=DEMO", text)
+        self.assertIn("InpPollSeconds=1", text)
 
     def test_unverified_registration_does_not_pin_a_mode(self):
         account = {**self.job["account"], "account_mode": "UNVERIFIED"}
