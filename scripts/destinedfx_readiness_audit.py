@@ -120,7 +120,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
 
     refresh_ok = (
         vm.count("withTimeoutOrNull(8_000L)") >= 2
-        and "MT5_BRIDGE" in market
+        and 'override val selectedApiSource = MutableStateFlow("DERIV_PUBLIC")' in market
         and "verifiedMt5Snapshot" in market
         and "withTimeout(65_000)" in signal
     )
@@ -128,7 +128,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         checks,
         "Analyzer outer refresh and MTF budgets",
         refresh_ok,
-        "Analyzer quote and OHLC refreshes use bounded MT5 Bridge requests; multi-timeframe loads retain their 65-second outer ceiling.",
+        "Analyzer public quotes and OHLC use DERIV_PUBLIC with bounded outer waits; MT5 account snapshot verification remains separate and multi-timeframe loads retain their 65-second ceiling.",
     )
 
     diagnostics_ok = (
