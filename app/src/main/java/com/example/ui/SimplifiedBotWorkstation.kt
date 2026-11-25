@@ -66,6 +66,8 @@ import com.example.data.codespaces.GitHubCodespacesClient
 import com.example.data.codespaces.CodespacesLifecycleClient
 import com.example.data.codespaces.isSafeHostStopPreflight
 import com.example.data.broker.BrokerType
+import com.example.data.broker.BrokerEndpointVerifier
+import com.example.data.broker.BrokerEndpointStatus
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginMode
 import com.example.data.ctrader.CTraderAccountOption
@@ -218,6 +220,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var login by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var server by remember { mutableStateOf("") }
+    var endpointVerification by remember(selectedMt5Broker, mt5Mode, server) { mutableStateOf<com.example.data.broker.BrokerEndpointVerification?>(null) }
+    var endpointVerificationBusy by remember { mutableStateOf(false) }
     var accessType by remember { mutableStateOf("MASTER") }
     var derivToken by remember { mutableStateOf("") }
     var derivSaveToken by remember { mutableStateOf(false) }
@@ -1867,6 +1871,47 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     LoginField("Login", login, { login = it.filter(Char::isDigit) }, KeyboardType.Number)
                     LoginField("Password", password, { password = it }, KeyboardType.Password, true)
                     LoginField("Exact broker server", server, { server = it }, KeyboardType.Text)
+                    if (mt5Mode == "LIVE") {
+                        Text("OFFICIAL MT5 SERVER REFERENCES", color = ElectricCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
+                            Text("$brand: ${BrokerEndpointVerifier.officialServerReference(brand, mt5Mode)}", color = TextSecondary, fontSize = 8.sp, lineHeight = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    endpointVerificationBusy = true
+                                    try {
+                                        endpointVerification = BrokerEndpointVerifier.verify(selectedMt5Broker, mt5Mode, server)
+                                    } finally {
+                                        endpointVerificationBusy = false
+                                    }
+                                }
+                            },
+                            enabled = !busy && !endpointVerificationBusy && server.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(if (endpointVerificationBusy) "VERIFYING BROKER ENDPOINT..." else "VERIFY BROKER ENDPOINT") }
+                        endpointVerification?.let { verification ->
+                            val endpointOk = verification.status == BrokerEndpointStatus.DNS_TCP_VERIFIED
+                            Text(
+                                if (endpointOk) "GREEN · OFFICIAL DNS + TCP VERIFIED" else "RED · ${verification.status.name.replace('_', ' ')}",
+                                color = if (endpointOk) ProfitGreen else LossRed,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                            Text(
+                                "Host: ${verification.host.ifBlank { "not published" }} · Port: ${verification.port?.toString() ?: "—"}",
+                                color = TextSecondary,
+                                fontSize = 9.sp
+                            )
+                            Text(
+                                "Resolved IP: ${verification.resolvedIps.joinToString().ifBlank { "not resolved / not publicly published" }}",
+                                color = TextSecondary,
+                                fontSize = 9.sp
+                            )
+                            Text(verification.detail, color = if (endpointOk) WarningAmber else LossRed, fontSize = 9.sp, lineHeight = 13.sp)
+                            Text("TLS certificate identity and transparent-proxy absence are NOT attested by this pre-login MT5 probe.", color = WarningAmber, fontSize = 9.sp)
+                        }
+                    }
                     val savedServerSuggestions = listOf("FBS", "EXNESS", "HFM", "DERIV").flatMap { brand ->
                         listOf("DEMO", "LIVE").map { mode -> secrets.getManagedMT5AccountServer("${brand}_${mode}").trim() }
                     }.filter { it.isNotBlank() && !it.equals(server.trim(), ignoreCase = true) }.distinct().take(6)

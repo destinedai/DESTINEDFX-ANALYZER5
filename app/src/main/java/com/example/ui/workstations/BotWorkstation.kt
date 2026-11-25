@@ -1288,6 +1288,16 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                     val equity = verifiedBridgeMetrics?.equity ?: verifiedLocalMetrics?.equity
                     val freeMargin = verifiedBridgeMetrics?.freeMargin ?: verifiedLocalMetrics?.freeMargin
                     val positionCount = if (bridgeMode) verifiedBridgeMetrics?.positions?.size else openPositions.size.takeIf { isConnected }
+                    val liveMt5MetricsAvailable = verifiedBridgeMetrics?.let { snapshot ->
+                        snapshot.actualAccountMode == "LIVE" && snapshot.terminalConnected && snapshot.heartbeatFresh &&
+                            listOf(snapshot.balance, snapshot.equity, snapshot.margin, snapshot.freeMargin, snapshot.marginLevel)
+                                .all { value -> value?.isFinite() == true } && snapshot.positions != null
+                    } == true
+                    if (bridgeMode && selectedAccountMode == "LIVE" && !liveMt5MetricsAvailable) {
+                        Text("MT5 NOT CONNECTED — balance/margin data is not confirmed by the live MT5 terminal.",
+                            color = LossRed, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.testTag("live_mt5_metrics_unavailable"))
+                    }
                     if (bridgeMode && bridgeBalanceBeforeAction != null && bridgeBalanceAfterAction != null) {
                         val before = bridgeBalanceBeforeAction!!
                         val after = bridgeBalanceAfterAction!!
@@ -1295,7 +1305,7 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             color = ElectricCyan, fontSize = 9.sp, modifier = Modifier.testTag("mt5_balance_before_after"))
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                        StatChip("BALANCE", balance?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
+                        StatChip(if (bridgeMode && selectedAccountMode == "LIVE") "REAL BALANCE" else "BALANCE", balance?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
                             Modifier.weight(1f), TextPrimary)
                         StatChip("EQUITY", equity?.let { "$currency ${String.format(java.util.Locale.US, "%.2f", it)}" } ?: "—",
                             Modifier.weight(1f), TextPrimary)
@@ -1304,6 +1314,12 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                             Modifier.weight(1f), TextPrimary)
                         StatChip("POSITIONS", positionCount?.toString() ?: "—",
                             Modifier.weight(0.8f), ElectricCyan)
+                    }
+                    if (bridgeMode && selectedAccountMode == "LIVE") {
+                        val marginLevel = verifiedBridgeMetrics?.marginLevel?.takeIf { it.isFinite() }
+                        Text("MARGIN LEVEL: ${marginLevel?.let { String.format(java.util.Locale.US, "%.2f%%", it) } ?: "—"} · OPEN POSITIONS: ${positionCount?.toString() ?: "—"}",
+                            color = if (liveMt5MetricsAvailable) TextSecondary else LossRed, fontSize = 9.sp,
+                            modifier = Modifier.testTag("live_mt5_margin_level"))
                     }
                 }
             }
