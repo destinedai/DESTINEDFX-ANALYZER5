@@ -177,7 +177,7 @@ class MyApplication : Application() {
             _authUseCase = AuthUseCaseImpl(dbInstance, secrets)
             _marketDataUseCase = GetMarketDataUseCaseImpl(marketDataRepository)
             _signalGenerationUseCase = SignalGenerationUseCaseImpl(
-                marketDataRepository, analyzerNewsRepository,
+                marketDataRepository, newsRepository,
                 pythonAnalyzer = ChaquopyPythonAnalyzer(this@MyApplication)
             )
             
@@ -221,7 +221,7 @@ class MyApplication : Application() {
             initStatus.value = InitState.Ready
             
             // No public Deriv market-data socket is started at app launch.
-            // The Analyzer is bound to the selected authenticated MT5 Bridge profile.
+            // The Analyzer uses the unauthenticated public Deriv market feed; MT5 account state remains separate.
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             // The repository starts polling workers from its constructor. Stop those workers if

@@ -59,6 +59,14 @@ import com.example.ui.DestinedFXScreen
 import com.example.ui.export.RealAnalysisExporter
 import com.example.security.AppSecurityGuard
 
+data class BotStartConfiguration(
+    val symbol: String,
+    val timeframe: String,
+    val strategyId: String,
+    val riskPercent: Double,
+    val lot: Double,
+)
+
 data class BacktestTrade(
     val dateString: String,
     val type: String, // "BUY" or "SELL"
@@ -275,6 +283,7 @@ open class DestinedFXViewModel(
     val botSelectedTimeframe = MutableStateFlow(if (isPreview) "M15" else app.secretsManager.getBotTimeframe())
     val botSelectedStrategyId = MutableStateFlow(if (isPreview) "smc-confluence-1.0.0" else app.secretsManager.getBotStrategy())
     val botRiskPercent = MutableStateFlow(if (isPreview) 0.25 else app.secretsManager.getBotRiskPercent())
+    val botLot = MutableStateFlow(if (isPreview) 0.01 else app.secretsManager.getBotLot())
     val scanProgressStage = MutableStateFlow("")
     val riskPercent = MutableStateFlow(0.25)
     val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
@@ -329,6 +338,13 @@ open class DestinedFXViewModel(
         if (!com.destinedfx.core.risk.RiskEngine.isValidRiskPercent(value)) return false
         botRiskPercent.value = value
         if (!isPreview && !app.secretsManager.saveBotRiskPercent(value)) return false
+        return true
+    }
+
+    fun setBotLot(value: Double): Boolean {
+        if (!value.isFinite() || value < 0.01 || value > 100.0) return false
+        if (!isPreview && !app.secretsManager.saveBotLot(value)) return false
+        botLot.value = value
         return true
     }
 
@@ -1803,24 +1819,34 @@ open class DestinedFXViewModel(
     val botActive: StateFlow<Boolean> = _botActive.asStateFlow()
 
     /**
-     * Finds the strongest currently qualified opportunity from the real provider universe.
-     * No fallback symbol or fabricated plan is used; an empty result means no setup passed
-     * the existing signal and RiskEngine gates.
+     * Returns the persisted Bot configuration only. Analyzer symbols, timeframes,
+     * selectedStrategyId and generated Analyzer opportunities are deliberately not read here.
      */
-    suspend fun findBestBotOpportunity(): com.example.domain.model.TradeSignal? = withContext(Dispatchers.Default) {
-        val candidates = com.example.data.market.SymbolRegistry.getBackgroundSymbols()
-        candidates.mapNotNull { symbol ->
-            runCatching {
-                app.signalGenerationUseCase.generateSignal(
-                    symbol = symbol,
-                    timeframe = "H1",
-                    strategyId = selectedStrategyId.value
-                )
-            }.getOrNull()?.takeIf {
-                it.executable && it.direction != com.example.domain.model.SignalDirection.WAIT &&
-                    it.entryPrice > 0.0 && it.stopLoss > 0.0 && it.takeProfit > 0.0
-            }
-        }.maxWithOrNull(compareBy<com.example.domain.model.TradeSignal> { it.confidenceScore }.thenBy { it.symbol })
+    suspend fun findBestBotOpportunity(): BotStartConfiguration = withContext(Dispatchers.Default) {
+        val symbol = botSelectedTicker.value.trim()
+        val timeframe = botSelectedTimeframe.value.trim().uppercase()
+        val strategyId = botSelectedStrategyId.value.trim()
+        val riskPercent = botRiskPercent.value
+        val lot = botLot.value
+        require(symbol.isNotBlank() && !symbol.any { it.isWhitespace() }) {
+            "Bot symbol is not configured."
+        }
+        require(com.destinedfx.core.marketdata.Timeframe.parse(timeframe) != null) {
+            "Bot timeframe is not supported."
+        }
+        require(com.destinedfx.core.strategy.StrategyRegistry.managedStrategyIds.contains(strategyId) &&
+            com.destinedfx.core.strategy.StrategyRegistry.allStrategies.any {
+                it.id == strategyId && it.botExecutionEligible
+            }) {
+            "Bot strategy is not enabled for managed execution."
+        }
+        require(com.destinedfx.core.risk.RiskEngine.isValidRiskPercent(riskPercent)) {
+            "Bot risk must be greater than 0 and no more than 1 percent."
+        }
+        require(lot.isFinite() && lot >= 0.01 && lot <= 100.0) {
+            "Bot lot must be between 0.01 and 100.00."
+        }
+        BotStartConfiguration(symbol, timeframe, strategyId, riskPercent, lot)
     }
 
     fun setBotStatus(active: Boolean, onResult: ((Boolean, String?) -> Unit)? = null) {

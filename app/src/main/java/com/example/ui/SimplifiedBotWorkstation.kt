@@ -202,7 +202,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val gateway by viewModel.activeBrokerGateway.collectAsStateWithLifecycle()
     val connectionStatus by gateway.connectionStatus.collectAsStateWithLifecycle()
     val accountMetrics by gateway.accountMetrics.collectAsStateWithLifecycle()
-    val botSummary by viewModel.botStatusSummary.collectAsStateWithLifecycle()
+    val botSymbol by viewModel.botSelectedTicker.collectAsStateWithLifecycle()
+    val botTimeframe by viewModel.botSelectedTimeframe.collectAsStateWithLifecycle()
+    val botStrategyId by viewModel.botSelectedStrategyId.collectAsStateWithLifecycle()
+    val botRiskPercent by viewModel.botRiskPercent.collectAsStateWithLifecycle()
+    val botLot by viewModel.botLot.collectAsStateWithLifecycle()
     val botActive by viewModel.botActive.collectAsStateWithLifecycle()
     val derivAccount by viewModel.app.derivBrokerGateway.accountInfo.collectAsStateWithLifecycle()
     val derivState by viewModel.app.derivBrokerGateway.connectionState.collectAsStateWithLifecycle()
@@ -253,7 +257,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var derivLiveTypedConfirmation by remember { mutableStateOf("") }
     var derivMinimumStake by remember { mutableStateOf("") }
     var liveAuthorizationExpiry by remember(mt5Profile) { mutableStateOf("") }
-    var selectedOpportunity by remember { mutableStateOf<com.example.domain.model.TradeSignal?>(null) }
+    var verifyMessage by remember { mutableStateOf("Tap VERIFY to retrieve the latest MT5 account and trade details.") }
     var commandPending by remember { mutableStateOf(false) }
     var demoPassDigests by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var pendingMt5DemoPassDigest by remember { mutableStateOf<String?>(null) }
@@ -630,7 +634,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         error = message?.contains("failed", ignoreCase = true) == true,
     )
 
-    if (showModernBrokerFlow) {
+    if (broker.usesManagedMt5Terminal && !connected) {
+        Text("MT5 NOT CONNECTED", color = LossRed, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+    }
+
+    if (showModernBrokerFlow && !connected) {
         MetaTraderBrokerFlow(
             secrets = secrets,
             context = context,
@@ -810,17 +818,19 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             "${decision.status}: ${decision.reason}"
                         }
                         "START" -> {
-                            val opportunity = viewModel.findBestBotOpportunity()
-                                ?: return@MetaTraderBrokerFlow "START_BLOCKED: no qualified setup is available"
+                            val botConfig = viewModel.findBestBotOpportunity()
                             val config = JSONObject()
-                                .put("strategy", viewModel.selectedStrategyId.value)
-                                .put("symbols", JSONArray().put(opportunity.symbol))
-                                .put("timeframes", JSONArray().put("H1"))
-                                .put("risk_percent", 1.0)
+                                .put("strategy", botConfig.strategyId)
+                                .put("symbols", JSONArray().put(botConfig.symbol))
+                                .put("timeframes", JSONArray().put(botConfig.timeframe))
+                                .put("risk_percent", botConfig.riskPercent)
+                                .put("initial_volume", botConfig.lot)
+                                .put("max_volume", botConfig.lot)
+                                .put("scaling_enabled", false)
                                 .put("max_daily_loss_percent", 2.0)
                                 .put("max_concurrent_positions", 2)
                             val result = client.command(UUID.randomUUID().toString(), "START", config)
-                            if (result.queued) "Start requested for ${opportunity.symbol}; waiting for fresh broker acknowledgement." else result.detail
+                            if (result.queued) "Bot start requested for ${botConfig.symbol} ${botConfig.timeframe}." else result.detail
                         }
                         "CLOSE_POSITION_SELECTED", "CANCEL_PENDING_SELECTED" -> {
                             val target = ticket?.takeIf { it.isNotBlank() }
@@ -926,10 +936,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     if (android.os.Build.VERSION.SDK_INT >= 33) permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     return@MetaTraderBrokerFlow reason
                                 }
-                                val opportunity = viewModel.findBestBotOpportunity()
-                                    ?: return@MetaTraderBrokerFlow "START_BLOCKED: no qualified setup is available"
-                                DerivDemoBotService.start(context, opportunity.symbol, viewModel.selectedStrategyId.value, "H1")
-                                "DEMO start requested for ${opportunity.symbol}; the foreground service will re-verify session, risk data and reconciliation."
+                                val botConfig = viewModel.findBestBotOpportunity()
+                                DerivDemoBotService.start(context, botConfig.symbol, botConfig.strategyId, botConfig.timeframe, botConfig.riskPercent)
+                                "DEMO Bot start requested for ${botConfig.symbol} ${botConfig.timeframe}; the foreground service will re-verify session, risk data and reconciliation."
                             }
                         }
                         "PAUSE" -> {
@@ -1173,6 +1182,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         return
     }
 
+    if (!connected) {
     Column(modifier = Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Text("LEGACY BOT TOOLS", color = Color(0xFFE5B85C), fontSize = 22.sp, fontWeight = FontWeight.Black)
@@ -2261,28 +2271,42 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             }
         }
 
-        if (connected) {
+    }
+
+        if (connected || broker.usesManagedMt5Terminal) {
             ConnectedBotDashboard(
                 broker = broker,
                 mt5Snapshot = mt5Snapshot,
                 derivAccount = derivAccount,
                 accountMetrics = accountMetrics,
-                botSummary = botSummary,
+                botSymbol = botSymbol,
+                botTimeframe = botTimeframe,
+                botStrategyId = botStrategyId,
+                botRiskPercent = botRiskPercent,
+                botLot = botLot,
                 running = running,
-                selectedOpportunity = selectedOpportunity,
                 commandPending = commandPending,
+                verifyMessage = verifyMessage,
+                statusMessage = message,
                 onStart = {
                     scope.launch {
-                        busy = true; commandPending = true; message = "Scanning eligible markets…"
+                        busy = true; commandPending = true; message = "Starting Bot from its saved settings…"
                         try {
-                            val opportunity = viewModel.findBestBotOpportunity()
-                            selectedOpportunity = opportunity
-                            require(opportunity != null) { "No qualified setup yet. Scanning continues." }
+                            val botConfig = viewModel.findBestBotOpportunity()
                             if (broker.usesManagedMt5Terminal) {
                                 require(mt5Mode != "LIVE" || mt5Snapshot?.liveAuthorized == true) { "LIVE START blocked: explicitly authorize this exact LIVE profile first." }
-                                val config = JSONObject().put("strategy", viewModel.selectedStrategyId.value).put("symbols", JSONArray().put(opportunity.symbol)).put("timeframes", JSONArray().put("H1")).put("risk_percent", 1.0).put("max_daily_loss_percent", 2.0).put("max_concurrent_positions", 2)
+                                val config = JSONObject()
+                                    .put("strategy", botConfig.strategyId)
+                                    .put("symbols", JSONArray().put(botConfig.symbol))
+                                    .put("timeframes", JSONArray().put(botConfig.timeframe))
+                                    .put("risk_percent", botConfig.riskPercent)
+                                    .put("initial_volume", botConfig.lot)
+                                    .put("max_volume", botConfig.lot)
+                                    .put("scaling_enabled", false)
+                                    .put("max_daily_loss_percent", 2.0)
+                                    .put("max_concurrent_positions", 2)
                                 val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "START", config)
-                                message = if (result.queued) "Scanning started for ${opportunity.symbol}; waiting for broker acknowledgement." else result.detail
+                                message = if (result.queued) "Bot START requested: ${botConfig.symbol} ${botConfig.timeframe}." else result.detail
                             } else {
                                 val account = requireNotNull(derivAccount) { "Deriv account is not authenticated." }
                                 require(derivMode.equals("demo", true) && account.mode.equals("demo", true) && account.accountType.equals("demo", true)) {
@@ -2298,8 +2322,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     if (android.os.Build.VERSION.SDK_INT >= 33) permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     return@launch
                                 }
-                                DerivDemoBotService.start(context, opportunity.symbol, viewModel.selectedStrategyId.value, "H1")
-                                message = "DEMO start requested for ${opportunity.symbol}. The foreground service will re-verify the session, fresh risk data, and reconciliation before any entry."
+                                DerivDemoBotService.start(context, botConfig.symbol, botConfig.strategyId, botConfig.timeframe, botConfig.riskPercent)
+                                message = "DEMO Bot start requested for ${botConfig.symbol} ${botConfig.timeframe}. The service re-verifies account, risk and reconciliation before entries."
                             }
                         } catch (e: Exception) {
                             val detail = listOf(derivToken, cTraderClientSecret).filter { it.isNotBlank() }
@@ -2310,30 +2334,77 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         } finally { busy = false; commandPending = false }
                     }
                 },
-                onPause = {
-                    scope.launch {
-                        commandPending = true
-                        try {
-                            if (broker == BrokerType.DERIV) {
-                                if (derivBotServiceState == "PAUSED") DerivDemoBotService.resume(context) else DerivDemoBotService.pause(context)
-                                message = if (derivBotServiceState == "PAUSED") "DEMO resume requested; the service will continue only after its safety checks." else "DEMO paused; monitoring continues and no new entries will be submitted."
-                            } else {
-                                val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "PAUSE")
-                                message = if (result.queued) "Pause requested; waiting for fresh broker state." else result.detail
-                            }
-                        } catch (e: Exception) { message = e.message?.take(240) ?: "Pause was not confirmed." }
-                        finally { commandPending = false }
-                    }
-                },
                 onStop = {
                     scope.launch {
                         busy = true; commandPending = true
                         try {
                             if (broker.usesManagedMt5Terminal) {
-                                val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "STOP")
-                                message = if (result.queued) "Stop requested; waiting for fresh broker state. Existing positions remain protected." else result.detail
-                            } else { DerivDemoBotService.stop(context); viewModel.setBotStatus(false); message = "Stop requested. Existing positions remain broker-tracked." }
-                        } catch (e: Exception) { message = e.message?.take(240) ?: "Stop was not confirmed." } finally { busy = false; commandPending = false }
+                                val client = requireNotNull(bridge)
+                                val result = client.command(UUID.randomUUID().toString(), "STOP")
+                                if (!result.queued) {
+                                    message = result.detail.ifBlank { "BOT STOPPED - MT5 close-out was not confirmed." }
+                                } else {
+                                    var lastSnapshot: MT5RemoteBridgeClient.Snapshot? = null
+                                    var confirmed = false
+                                    for (attempt in 0 until 12) {
+                                        delay(1_000L)
+                                        val fresh = client.state()
+                                        mt5Snapshot = fresh
+                                        lastSnapshot = fresh
+                                        val botPositions = fresh.positions.orEmpty().filter { it.optBoolean("managed_by_ea", false) }
+                                        val botOrders = fresh.activeOrders.orEmpty().filter { it.optBoolean("managed_by_ea", false) }
+                                        if (fresh.connected && fresh.snapshotsValid && fresh.state == "STOPPED" &&
+                                            botPositions.isEmpty() && botOrders.isEmpty()) {
+                                            confirmed = true
+                                            break
+                                        }
+                                    }
+                                    val finalState = lastSnapshot
+                                    if (confirmed) {
+                                        message = "BOT STOPPED - All Bot trades closed"
+                                        verifyMessage = "Verified MT5 balance: ${finalState?.balance} ${finalState?.currency}; Bot open trades: 0."
+                                    } else {
+                                        val remaining = finalState?.positions.orEmpty().count { it.optBoolean("managed_by_ea", false) } +
+                                            finalState?.activeOrders.orEmpty().count { it.optBoolean("managed_by_ea", false) }
+                                        message = "BOT STOPPED - close-out not confirmed; $remaining Bot trade/order(s) remain. Check MT5."
+                                    }
+                                }
+                            } else {
+                                DerivDemoBotService.stop(context)
+                                viewModel.setBotStatus(false)
+                                message = "BOT STOPPED - Deriv service stopped; existing broker contracts remain protected and must be verified."
+                            }
+                        } catch (e: Exception) {
+                            message = e.message?.take(240) ?: "BOT STOPPED - MT5 close-out was not confirmed."
+                        } finally { busy = false; commandPending = false }
+                    }
+                },
+                onVerify = {
+                    scope.launch {
+                        commandPending = true
+                        try {
+                            if (broker.usesManagedMt5Terminal) {
+                                val fresh = requireNotNull(bridge).state()
+                                mt5Snapshot = fresh
+                                val botPositions = fresh.positions.orEmpty().filter { it.optBoolean("managed_by_ea", false) }
+                                val lastClosed = fresh.closedDeals.orEmpty().firstOrNull()
+                                val lastOpen = botPositions.firstOrNull()
+                                val lastTicket = lastOpen?.optString("ticket")?.takeIf { it.isNotBlank() }
+                                    ?: lastClosed?.optString("ticket")?.takeIf { it.isNotBlank() } ?: "—"
+                                val lastProfit = lastOpen?.optDouble("floating_profit", Double.NaN)
+                                    ?.takeIf { it.isFinite() } ?: lastClosed?.optDouble("profit", Double.NaN)
+                                    ?.takeIf { it.isFinite() }
+                                verifyMessage = if (fresh.connected && fresh.snapshotsValid && fresh.balance != null) {
+                                    "MT5 VERIFIED · Balance ${fresh.balance} ${fresh.currency} · Open Bot trades ${botPositions.size} · Last ticket $lastTicket · Last trade profit ${lastProfit?.toString() ?: "—"}"
+                                } else {
+                                    "MT5 NOT CONNECTED · ${fresh.connectionWarning}"
+                                }
+                            } else {
+                                verifyMessage = "Verify is available for the selected MT5 terminal account."
+                            }
+                        } catch (e: Exception) {
+                            verifyMessage = "MT5 NOT CONNECTED · ${e.message?.take(140) ?: "No fresh broker snapshot."}"
+                        } finally { commandPending = false }
                     }
                 }
             )
@@ -2616,42 +2687,133 @@ private fun ConnectedBotDashboard(
     mt5Snapshot: MT5RemoteBridgeClient.Snapshot?,
     derivAccount: com.example.data.deriv.DerivAccountInfo?,
     accountMetrics: com.example.domain.repository.AccountMetrics?,
-    botSummary: com.destinedfx.core.bot.BotStatusSummary,
+    botSymbol: String,
+    botTimeframe: String,
+    botStrategyId: String,
+    botRiskPercent: Double,
+    botLot: Double,
     running: Boolean,
-    selectedOpportunity: com.example.domain.model.TradeSignal?,
     commandPending: Boolean,
+    verifyMessage: String,
+    statusMessage: String?,
     onStart: () -> Unit,
-    onPause: () -> Unit,
-    onStop: () -> Unit
- ) {
-    val nowMs = System.currentTimeMillis()
-    val freshHostBalance = mt5Snapshot
-        ?.takeIf { snapshot -> snapshot.heartbeatFresh && snapshot.brokerQuotes?.any { quote ->
-            quote.timestampMs > 0L && (nowMs - quote.timestampMs) in 0L..15_000L
-        } == true }
-        ?.balance
-    Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, ProfitGreen.copy(alpha = 0.5f))) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("VERIFIED CONNECTED ACCOUNT", color = ProfitGreen, fontSize = 10.sp, fontWeight = FontWeight.Black)
-            Text(if (broker.usesManagedMt5Terminal) "MetaTrader 5 · ${mt5Snapshot?.actualAccountMode ?: "unverified"}" else "Deriv · ${derivAccount?.mode?.uppercase() ?: "unverified"}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            val accountId = if (broker.usesManagedMt5Terminal) mt5Snapshot?.actualLogin else derivAccount?.loginId
-            Text("Account: ${maskAccountId(accountId)}", color = TextSecondary, fontSize = 11.sp)
-            if (broker.usesManagedMt5Terminal) {
-                Text("Server: ${mt5Snapshot?.actualServer ?: "unverified"} · Currency: ${mt5Snapshot?.currency ?: "unverified"}", color = TextSecondary, fontSize = 11.sp)
-                Text("Balance: ${freshHostBalance?.toString() ?: "STALE"} · Equity: ${if (freshHostBalance != null) mt5Snapshot?.equity?.toString() ?: "unavailable" else "STALE"}", color = if (freshHostBalance != null) TextSecondary else WarningAmber, fontSize = 11.sp)
-                Text("Free margin: ${if (freshHostBalance != null) mt5Snapshot?.freeMargin?.toString() ?: "unavailable" else "STALE"} · Leverage: ${mt5Snapshot?.leverage?.toString() ?: "unavailable"}", color = if (freshHostBalance != null) TextSecondary else WarningAmber, fontSize = 11.sp)
-                Text("Terminal: ${if (mt5Snapshot?.terminalConnected == true) "CONNECTED" else "OFFLINE"} · EA heartbeat: ${if (mt5Snapshot?.heartbeatFresh == true) "FRESH" else "STALE"} · Trade permission: ${if (mt5Snapshot?.tradeAllowed == true) "ALLOWED" else "BLOCKED"}", color = TextSecondary, fontSize = 10.sp)
-            } else {
-                Text("Balance: ${derivAccount?.balance?.toString() ?: "unavailable"} · Currency: ${derivAccount?.currency ?: "unverified"}", color = TextSecondary, fontSize = 11.sp)
+    onStop: () -> Unit,
+    onVerify: () -> Unit
+) {
+    val mt5Ready = broker.usesManagedMt5Terminal && mt5Snapshot?.let {
+        it.connected && it.terminalConnected && it.heartbeatFresh && it.snapshotsValid &&
+            it.actualLogin.isNotBlank() && it.actualServer.isNotBlank() &&
+            it.balance != null && it.equity != null && it.margin != null && it.freeMargin != null
+    } == true
+    val botPositions = if (mt5Ready) mt5Snapshot?.positions.orEmpty().filter { it.optBoolean("managed_by_ea", false) } else emptyList()
+    val botOrders = if (mt5Ready) mt5Snapshot?.activeOrders.orEmpty().filter { it.optBoolean("managed_by_ea", false) } else emptyList()
+    val closedDeals = if (mt5Ready) mt5Snapshot?.closedDeals.orEmpty().take(10) else emptyList()
+    val accountType = if (broker.usesManagedMt5Terminal) {
+        mt5Snapshot?.actualAccountMode?.takeIf { mt5Ready } ?: "MT5 NOT CONNECTED"
+    } else derivAccount?.mode?.uppercase() ?: "NOT CONNECTED"
+    val displayBalance = if (broker.usesManagedMt5Terminal) {
+        if (mt5Ready) "${mt5Snapshot?.balance} ${mt5Snapshot?.currency}" else "—"
+    } else derivAccount?.balance?.toString() ?: "—"
+    val displayEquity = if (broker.usesManagedMt5Terminal) {
+        if (mt5Ready) "${mt5Snapshot?.equity} ${mt5Snapshot?.currency}" else "—"
+    } else accountMetrics?.equity?.toString() ?: "—"
+    val displayProfit = if (broker.usesManagedMt5Terminal && mt5Ready) {
+        mt5Snapshot?.profitToday?.let { "$it ${mt5Snapshot?.currency.orEmpty()}" } ?: "—"
+    } else "—"
+    val canStart = if (broker.usesManagedMt5Terminal) mt5Ready else derivAccount != null
+    val strategyName = com.destinedfx.core.strategy.StrategyRegistry.allStrategies
+        .firstOrNull { it.id == botStrategyId }?.name ?: botStrategyId
+    Column(
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(14.dp)) {
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("ACCOUNT · $accountType", color = if (accountType == "MT5 NOT CONNECTED") LossRed else ElectricCyan,
+                    fontSize = 12.sp, fontWeight = FontWeight.Black)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(Modifier.weight(1f)) {
+                        Text("BALANCE", color = TextSecondary, fontSize = 9.sp)
+                        Text(displayBalance, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("EQUITY", color = TextSecondary, fontSize = 9.sp)
+                        Text(displayEquity, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("PROFIT TODAY", color = TextSecondary, fontSize = 9.sp)
+                        Text(displayProfit, color = if (mt5Snapshot?.profitToday?.let { it >= 0.0 } == true) ProfitGreen else TextPrimary,
+                            fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                }
+                if (broker.usesManagedMt5Terminal) {
+                    if (mt5Ready) {
+                        Text("Account: ${mt5Snapshot?.actualLogin} · Server: ${mt5Snapshot?.actualServer} · Currency: ${mt5Snapshot?.currency}",
+                            color = TextSecondary, fontSize = 10.sp)
+                        Text("Margin: ${mt5Snapshot?.margin} · Free margin: ${mt5Snapshot?.freeMargin}",
+                            color = TextSecondary, fontSize = 10.sp)
+                    } else {
+                        Text("MT5 NOT CONNECTED", color = LossRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                } else {
+                    Text("Account: ${derivAccount?.loginId ?: "—"} · Currency: ${derivAccount?.currency ?: "—"}",
+                        color = TextSecondary, fontSize = 10.sp)
+                }
             }
-            Text(if (running) "Scanning eligible markets" else "Connected and ready", color = if (running) ElectricCyan else ProfitGreen, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            selectedOpportunity?.let { Text("Selected opportunity: ${it.symbol} · ${userFacingSignalLabel(it.signalState, it.direction)}", color = TextPrimary, fontSize = 11.sp) }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onStart, enabled = !running && !commandPending, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen, contentColor = DarkBackground)) { Icon(Icons.Default.PlayArrow, contentDescription = null); Text("START", fontWeight = FontWeight.Black) }
-                OutlinedButton(onClick = onPause, enabled = running && !commandPending, modifier = Modifier.weight(1f)) { Text("PAUSE / RESUME", fontWeight = FontWeight.Black) }
-                Button(onClick = onStop, enabled = running && !commandPending, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)) { Icon(Icons.Default.Stop, contentDescription = null); Text("STOP", fontWeight = FontWeight.Black) }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = DarkSurface), shape = RoundedCornerShape(14.dp)) {
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("BOT", color = ElectricCyan, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                Text("Symbol: $botSymbol · $botTimeframe", color = TextPrimary, fontSize = 13.sp)
+                Text("Strategy: $strategyName", color = TextPrimary, fontSize = 12.sp)
+                Text(if (broker.usesManagedMt5Terminal) "Lot: ${botLot} · Risk: ${botRiskPercent}%" else "Deriv cash stake · Risk: ${botRiskPercent}%", color = TextPrimary, fontSize = 12.sp)
+                val statusText = if (broker.usesManagedMt5Terminal && !mt5Ready) "MT5 NOT CONNECTED" else if (running) "RUNNING" else "STOPPED"
+                Text("Status: $statusText", color = if (statusText == "RUNNING") ProfitGreen else TextSecondary,
+                    fontSize = 15.sp, fontWeight = FontWeight.Black)
             }
-            Text("No qualified setup means no order. RiskEngine, account permissions, fresh data, duplicate prevention and broker confirmation remain required.", color = WarningAmber, fontSize = 10.sp, lineHeight = 15.sp)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onStart, enabled = canStart && !running && !commandPending,
+                modifier = Modifier.weight(1.2f).height(54.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ProfitGreen, contentColor = DarkBackground)) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Text("START", fontWeight = FontWeight.Black)
+            }
+            Button(onClick = onStop, enabled = !commandPending && (broker.usesManagedMt5Terminal || running || botPositions.isNotEmpty() || botOrders.isNotEmpty()),
+                modifier = Modifier.weight(1.2f).height(54.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)) {
+                Icon(Icons.Default.Stop, contentDescription = null)
+                Text("STOP", fontWeight = FontWeight.Black)
+            }
+            OutlinedButton(onClick = onVerify, enabled = !commandPending,
+                modifier = Modifier.weight(1f).height(54.dp)) {
+                Text("VERIFY", fontWeight = FontWeight.Black, fontSize = 11.sp)
+            }
+        }
+        statusMessage?.takeIf { it.isNotBlank() }?.let { Text(it, color = if (it.contains("NOT CONNECTED") || it.contains("not confirmed")) LossRed else TextSecondary, fontSize = 11.sp, lineHeight = 15.sp) }
+        Text(verifyMessage, color = if (verifyMessage.contains("NOT CONNECTED")) LossRed else TextSecondary,
+            fontSize = 10.sp, lineHeight = 14.sp)
+        Text("OPEN TRADES (${botPositions.size})", color = TextPrimary, fontWeight = FontWeight.Black, fontSize = 12.sp)
+        if (botPositions.isEmpty()) {
+            Text("No open Bot trades.", color = TextSecondary, fontSize = 11.sp)
+        } else {
+            botPositions.forEach { position ->
+                Text(
+                    "${position.optString("symbol")} · ${position.optString("direction")} · Lot ${position.optDouble("volume", 0.0)} · Profit ${position.optDouble("floating_profit", 0.0)}",
+                    color = TextPrimary, fontSize = 11.sp
+                )
+            }
+        }
+        Text("CLOSED TRADES", color = TextPrimary, fontWeight = FontWeight.Black, fontSize = 12.sp)
+        if (closedDeals.isEmpty()) {
+            Text("No closed Bot trades reported by MT5.", color = TextSecondary, fontSize = 11.sp)
+        } else {
+            closedDeals.forEach { deal ->
+                Text(
+                    "${deal.optString("symbol")} · ${deal.optString("direction")} · Profit ${deal.optDouble("profit", 0.0)} · Ticket ${deal.optString("ticket")}",
+                    color = TextPrimary, fontSize = 11.sp
+                )
+            }
         }
     }
 }

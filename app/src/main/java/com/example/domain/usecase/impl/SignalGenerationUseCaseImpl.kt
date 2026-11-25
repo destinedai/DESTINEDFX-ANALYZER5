@@ -90,15 +90,17 @@ class SignalGenerationUseCaseImpl(
                 val refreshed = market.refreshSymbol(symbol)
                 if (refreshed != null) ticker = refreshed
             }
-            // Analyzer prices are accepted only from the selected, verified MT5 Bridge quote.
-            // Historical OHLC close values are never substituted for a missing bid/ask.
+            // Analyzer uses the unauthenticated public Deriv feed; no broker login is required.
+            // Historical OHLC close values are never substituted for a missing two-sided quote.
             if (ticker?.kind == "DAILY_REFERENCE") ticker = null
             val cls = AssetClassifier.of(symbol)
-            val quote: MarketQuote? = ticker?.takeIf { it.isLive && it.kind == "STREAM" && it.source.endsWith(" MT5 Bridge", ignoreCase = true) }?.let { toQuote(it) }
+            val quote: MarketQuote? = ticker?.takeIf {
+                it.isLive && it.kind == "STREAM" && it.source.equals("Deriv public WebSocket", ignoreCase = true)
+            }?.let { toQuote(it) }
             if (quote == null) {
                 return unavailable(
                     symbol, timeframe,
-                    "DISCONNECTED - Price stale. No fresh two-sided MT5 Bridge quote is available for $symbol.",
+                    "PUBLIC FEED UNAVAILABLE - No fresh two-sided public market quote is available for $symbol.",
                     "DISCONNECTED"
                 )
             }
@@ -112,7 +114,7 @@ class SignalGenerationUseCaseImpl(
             if (health != MarketDataHealth.LIVE) {
                 return unavailable(
                     symbol, timeframe,
-                    "DISCONNECTED - Price stale. MT5 Bridge quote health is ${health.name}.",
+                    "PUBLIC FEED PRICE HEALTH: ${health.name}.",
                     health.name
                 )
             }
@@ -130,7 +132,7 @@ class SignalGenerationUseCaseImpl(
                     return emptyList()
                 }
                 val candleSource = market.candleSources[com.example.data.market.candleSourceKey(symbol, t.label)].orEmpty()
-                if (!candleSource.endsWith(" MT5 Bridge", ignoreCase = true)) {
+                if (!candleSource.startsWith("Deriv public", ignoreCase = true)) {
                     failedFetches[cacheKey] = clock()
                     return emptyList()
                 }
@@ -170,8 +172,7 @@ class SignalGenerationUseCaseImpl(
                     async {
                         try {
                             withTimeout(65_000) {
-                                // MTF bars are retrieved only from the selected account's MT5 Bridge
-                                // snapshot. No provider discovery or alternate-feed fallback is allowed.
+                                // MTF bars are retrieved from the same unauthenticated public market feed.
                                 t to load(t, if (t == Timeframe.W1) 80 else 150)
                             }
                         } catch (e: TimeoutCancellationException) {
@@ -209,7 +210,7 @@ class SignalGenerationUseCaseImpl(
 
             var state = report.state
             val blockers = report.blockers.toMutableList()
-            // Analyzer quote/candle inputs have already been restricted to the same fresh MT5 Bridge snapshot.
+            // Analyzer quote and OHLC inputs must belong to the same public market-data venue.
             val primaryCandleSource = market.candleSources[candleSourceKey(symbol, tf.label)].orEmpty()
             if (ticker != null &&
                 (primaryCandleSource.isBlank() || !canMergeQuoteIntoCandle(primaryCandleSource, ticker.source))

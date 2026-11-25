@@ -101,6 +101,7 @@ class SecretsManager internal constructor(
         private const val BOT_STRATEGY = "bot_strategy_encrypted"
         private const val BOT_TIMEFRAME = "bot_timeframe_encrypted"
         private const val BOT_RISK_PERCENT = "bot_risk_percent_encrypted"
+        private const val BOT_LOT = "bot_lot_encrypted"
         private const val BOT_THEME_MODE = "bot_theme_mode_encrypted"
         private const val MT5_SELECTED_MODE = "mt5_selected_mode"
         private const val DERIV_BOT_SYMBOL = "deriv_bot_symbol_v1"
@@ -795,6 +796,14 @@ class SecretsManager internal constructor(
         prefs.getString(BOT_RISK_PERCENT, "0.25")?.toDoubleOrNull()
             ?.takeIf { it.isFinite() && it > 0.0 && it <= 1.0 } ?: 0.25
     } else 0.25
+    fun saveBotLot(value: Double): Boolean = isSecureStorageAvailable &&
+        value.isFinite() && value >= 0.01 && value <= 100.0 &&
+        prefs.edit().putString(BOT_LOT, value.toString()).commit()
+    fun getBotLot(): Double = if (isSecureStorageAvailable) {
+        prefs.getString(BOT_LOT, "0.01")?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it >= 0.01 && it <= 100.0 } ?: 0.01
+    } else 0.01
+
     fun getThemeMode(): String = if (isSecureStorageAvailable) {
         prefs.getString(BOT_THEME_MODE, "System")?.takeIf { it in setOf("System", "Light", "Dark") } ?: "System"
     } else "System"

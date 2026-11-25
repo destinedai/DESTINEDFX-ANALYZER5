@@ -66,7 +66,7 @@ internal fun canMergeQuoteIntoCandle(candleSource: String, quoteSource: String):
     }
 }
 
-/** Legacy explicit-feed detector. Analyzer defaults to MT5_BRIDGE; Deriv remains retained for other consumers. */
+/** Explicit-feed detector; the Analyzer defaults to the unauthenticated public Deriv feed. */
 internal fun isExplicitDerivPublicSource(source: String): Boolean =
     source.trim().uppercase(java.util.Locale.ROOT) == "DERIV_PUBLIC"
 
@@ -112,7 +112,7 @@ class MarketDataRepositoryImpl(
     private val dataSourceMap = mutableMapOf<String, String>()
     private val _candleSources = ConcurrentHashMap<String, String>()
     private val _candleRetrievedAtMs = ConcurrentHashMap<String, Long>()
-    // Legacy Deriv symbol cache retained for non-Analyzer consumers; Analyzer routes through MT5_BRIDGE.
+    // Public Deriv symbol cache powers Analyzer prices and candles without broker login.
     private val dynamicCanonicalByDerivSymbol = ConcurrentHashMap<String, String>()
     override val candleSources: Map<String, String> get() = _candleSources
     override val candleRetrievedAtMs: Map<String, Long> get() = _candleRetrievedAtMs
@@ -123,7 +123,7 @@ class MarketDataRepositoryImpl(
     override val quoteDiagnostics: StateFlow<Map<String, String>> = _quoteDiagnostics.asStateFlow()
     @Volatile private var bridgeSnapshotFailure: String = "MT5_BRIDGE_ACCOUNT_SNAPSHOT_UNAVAILABLE"
 
-    override val selectedApiSource = MutableStateFlow("MT5_BRIDGE")
+    override val selectedApiSource = MutableStateFlow("DERIV_PUBLIC")
 
     private val activeSource = ConcurrentHashMap<String, String>()
     private val lastSourceLog = ConcurrentHashMap<String, Long>()
@@ -512,7 +512,7 @@ class MarketDataRepositoryImpl(
     private val lastSourceUpdate = ConcurrentHashMap<String, Long>()
 
     private fun startLiveStreams() {
-        // Legacy OANDA/Deriv adapters are retained for explicit non-Analyzer use; the Analyzer source is MT5_BRIDGE.
+        // OANDA remains optional; Analyzer defaults to the unauthenticated Deriv public WebSocket feed.
         scope.launch {
             val oandaSymbols = listOf(
                 "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",

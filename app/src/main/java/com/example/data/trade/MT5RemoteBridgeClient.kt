@@ -263,7 +263,8 @@ class MT5RemoteBridgeClient(
         val brokerCandles: List<VerifiedBrokerCandle>? = null,
         val actualCompany: String = "",
         val connectionWarning: String = "MT5 terminal state is not verified.",
-        val connectionErrorCode: String = ""
+        val connectionErrorCode: String = "",
+        val profitToday: Double? = null
     )
 
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
@@ -475,6 +476,7 @@ class MT5RemoteBridgeClient(
         val equity = account?.let { finite(it, "equity") }
         val margin = account?.let { finite(it, "margin") }
         val freeMargin = account?.let { finite(it, "free_margin") }
+        val profitToday = account?.let { finite(it, "profit_today") }
         val financialSnapshotValid = balance != null && balance > 0.0 && equity != null && equity > 0.0 &&
             margin != null && freeMargin != null
         val expectedLogin = secrets.getManagedMT5AccountLogin(profile)
@@ -566,7 +568,7 @@ class MT5RemoteBridgeClient(
             array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
             obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes, brokerCandles,
-            actualCompany, connectionWarning, connectionErrorCode
+            actualCompany, connectionWarning, connectionErrorCode, profitToday
         )
     }
 

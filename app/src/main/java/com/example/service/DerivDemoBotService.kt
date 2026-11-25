@@ -400,6 +400,7 @@ class DerivDemoBotService : Service() {
         const val EXTRA_SYMBOL = "symbol"
         const val EXTRA_STRATEGY = "strategy"
         const val EXTRA_TIMEFRAME = "timeframe"
+        const val EXTRA_RISK_PERCENT = "risk_percent"
         private const val CHANNEL_ID = "deriv_demo_bot"
         private const val NOTIFICATION_ID = 1701
         private const val STATUS_STATE = "service_status_state"
@@ -452,7 +453,8 @@ class DerivDemoBotService : Service() {
             secureStore(context)?.saveDerivBotServiceStatus(state, reason, disableRecovery)
         }
 
-        fun start(context: android.content.Context, symbol: String, strategy: String, timeframe: String) {
+        fun start(context: android.content.Context, symbol: String, strategy: String, timeframe: String, riskPercent: Double = 0.25) {
+            require(riskPercent.isFinite() && riskPercent > 0.0 && riskPercent <= 1.0) { "Bot risk must be greater than 0 and no more than 1 percent." }
             if (!hasNotificationPermission(context)) {
                 val reason = "BOT NOT RUNNING — enable DestinedFX notifications, then tap Start again."
                 recordStartBlocked(context, reason)
@@ -463,6 +465,7 @@ class DerivDemoBotService : Service() {
                 putExtra(EXTRA_SYMBOL, symbol)
                 putExtra(EXTRA_STRATEGY, strategy)
                 putExtra(EXTRA_TIMEFRAME, timeframe)
+                putExtra(EXTRA_RISK_PERCENT, riskPercent)
             }
             try {
                 ContextCompat.startForegroundService(context, intent)
@@ -522,10 +525,12 @@ class DerivDemoBotService : Service() {
                 val symbol = intent.getStringExtra(EXTRA_SYMBOL)?.trim().orEmpty()
                 val strategy = intent.getStringExtra(EXTRA_STRATEGY)?.trim().orEmpty()
                 val timeframe = intent.getStringExtra(EXTRA_TIMEFRAME)?.trim().orEmpty()
+                val startApp = application as? MyApplication
+                val riskPercent = intent.getDoubleExtra(EXTRA_RISK_PERCENT, startApp?.secretsManager?.getBotRiskPercent() ?: 0.25)
                 if (symbol.isBlank() || strategy.isBlank() || timeframe.isBlank() ||
                     !DerivMultiplierRules.isSupportedUnderlying(symbol) ||
                     strategy !in StrategyRegistry.managedStrategyIds ||
-                    Timeframe.parse(timeframe) == null) {
+                    Timeframe.parse(timeframe) == null || !riskPercent.isFinite() || riskPercent <= 0.0 || riskPercent > 1.0) {
                     (application as? MyApplication)?.secretsManager?.setDerivBotRecoveryEnabled(false)
                     stopSafely("BOT NOT RUNNING — incomplete or unsupported start intent; trading remains stopped")
                     return START_NOT_STICKY
@@ -534,7 +539,6 @@ class DerivDemoBotService : Service() {
                     stopSafely("BOT NOT RUNNING — notification permission is denied; allow notifications and tap Start again")
                     return START_NOT_STICKY
                 }
-                val startApp = application as? MyApplication
                 val currentMode = startApp?.secretsManager?.getDerivAccountMode().orEmpty()
                 val accepted = startApp?.secretsManager?.hasCurrentDerivDemoAcceptance() == true
                 val policyReady = runCatching { startApp?.modeArmingPolicy }.getOrNull() != null
@@ -553,7 +557,7 @@ class DerivDemoBotService : Service() {
                     return START_NOT_STICKY
                 }
                 update("STARTING — verifying selected account; no order requests will be sent")
-                loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
+                loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe, riskPercent) }
             }
             null -> {
                 // Recovery is deliberately DEMO-only. A process restart must never turn a
@@ -564,6 +568,7 @@ class DerivDemoBotService : Service() {
                 val symbol = secure?.getDerivBotRecoverySymbol().orEmpty()
                 val strategy = secure?.getDerivBotRecoveryStrategy().orEmpty()
                 val timeframe = secure?.getDerivBotRecoveryTimeframe().orEmpty()
+                val riskPercent = secure?.getBotRiskPercent() ?: 0.25
                 val hasCredentials = app?.secretsManager?.getDerivApiToken("demo")?.isNotBlank() == true &&
                     app?.secretsManager?.getDerivAppId()?.isNotBlank() == true &&
                     app?.secretsManager?.getDerivCredentialGeneration("demo")?.isNotBlank() == true &&
@@ -575,7 +580,7 @@ class DerivDemoBotService : Service() {
                     )) {
                     stopRequested = false
                     loopJob?.cancel()
-                    loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe) }
+                    loopJob = serviceScope.launch { runBot(symbol, strategy, timeframe, riskPercent) }
                 } else {
                     stopSafely(if (mode == "real") "BOT NOT RUNNING — persisted REAL configuration is never restarted automatically" else "BOT NOT RUNNING — saved DEMO configuration, current acceptance, credentials, or notifications are unavailable")
                     return START_NOT_STICKY
@@ -589,7 +594,7 @@ class DerivDemoBotService : Service() {
         return if (intent?.action == ACTION_START || intent == null) START_STICKY else START_NOT_STICKY
     }
 
-    private suspend fun runBot(symbol: String, strategyId: String, timeframe: String) {
+    private suspend fun runBot(symbol: String, strategyId: String, timeframe: String, riskPercent: Double) {
         val app = application as MyApplication
         val gateway = app.derivBrokerGateway
         if (!DerivMultiplierRules.isSupportedUnderlying(symbol)) {
@@ -885,12 +890,14 @@ class DerivDemoBotService : Service() {
                     delay(5_000L)
                     continue
                 }
-                val stake = DerivMultiplierRules.safeStakeForBalance(balance)
+                val maximumSafeStake = DerivMultiplierRules.safeStakeForBalance(balance)
+                val configuredRiskStake = balance * (riskPercent / 100.0)
+                val stake = minOf(configuredRiskStake, maximumSafeStake)
                 val minimumStake = com.destinedfx.core.broker.DerivContractLimits.getMinimumStake(
                     symbol, DerivMultiplierProduct.MULTUP.contractType
                 )
                 if (stake < minimumStake) {
-                    stopSafely("Safety blocked — 1% risk cap permits $stake, below broker minimum $minimumStake; no order was sent")
+                    stopSafely("Safety blocked — configured ${riskPercent}% Bot risk permits $stake, below broker minimum $minimumStake; no order was sent")
                     return
                 }
                 // syncKnownContracts() is already performed by reconcileWithRecovery()
