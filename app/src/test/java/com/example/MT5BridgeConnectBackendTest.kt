@@ -159,7 +159,7 @@ class MT5BridgeConnectBackendTest {
     }
 
     @Test
-    fun liveTradePreflightReadsPublicHostMetadataWithoutAppPairingState() = runBlocking {
+    fun liveTradeCredentialsCanBeSubmittedOnEphemeralHostForReadOnlyVerification() = runBlocking {
         val gateway = FakeGateway(HostProfile.EPHEMERAL)
         val backend = MT5BridgeConnectBackend(gateway)
         val spec = requireNotNull(BrokerLoginSpecs.byId("FBS_MT5"))
@@ -171,10 +171,13 @@ class MT5BridgeConnectBackendTest {
             server = "Fixture-Live",
         )
 
-        assertEquals("EPHEMERAL_HOST_LIVE_BLOCKED", backend.preflight(spec, form))
-        assertEquals(1, gateway.hostProfileCalls)
+        assertNull(backend.preflight(spec, form))
+        backend.submit(spec, form)
+        assertEquals(0, gateway.hostProfileCalls)
         assertEquals(0, gateway.stateCalls)
-        assertNull(gateway.submitted)
+        assertEquals("LIVE", gateway.submitted?.accountMode)
+        assertEquals("MASTER", gateway.submitted?.accessType)
+        assertEquals("123456", gateway.submitted?.login)
     }
 
     companion object {

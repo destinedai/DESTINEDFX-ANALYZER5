@@ -1741,16 +1741,19 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
         isolation=linux_slot_isolation(host)
         if isolation.get('enabled') is not True or isolation.get('ready') is not True:
             raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user terminal slot capacity'})
-        # Ephemeral Codespaces remain DEMO-only. Persistent Linux may enrol a
-        # LIVE profile only when it can host the separate DEMO and LIVE slots.
+        # LIVE credentials may be paired on EPHEMERAL for account verification only.
+        # Root-attested isolation is still mandatory; worker disables MT5 algo trading on EPHEMERAL.
+        # LIVE authorization, START/RESUME and order routes remain persistent-host-only.
         if x.account_mode == 'LIVE':
-            if HOST_PROFILE != 'PERSISTENT':
-                raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE account provisioning is unavailable on ephemeral hosts'})
             maximum=isolation.get('max_slots')
             active=isolation.get('active_slots',0)
-            if (not isinstance(maximum,int) or isinstance(maximum,bool) or maximum < 2 or
+            required_slots = 2 if HOST_PROFILE == 'PERSISTENT' else 1
+            if (not isinstance(maximum,int) or isinstance(maximum,bool) or maximum < required_slots or
                     not isinstance(active,int) or isinstance(active,bool) or active >= maximum):
-                raise HTTPException(409,detail={'code':'LIVE_REQUIRES_TWO_ISOLATED_TERMINALS','message':'A persistent isolated Linux host needs capacity for separate DEMO and LIVE MT5 terminals','active_slots':active if isinstance(active,int) and not isinstance(active,bool) else 0,'max_slots':maximum if isinstance(maximum,int) and not isinstance(maximum,bool) else 0})
+                code = 'LIVE_REQUIRES_TWO_ISOLATED_TERMINALS' if HOST_PROFILE == 'PERSISTENT' else 'LIVE_LOGIN_SLOT_CAPACITY_NOT_READY'
+                message = ('A persistent host needs capacity for separate DEMO and LIVE MT5 terminals'
+                           if HOST_PROFILE == 'PERSISTENT' else 'An ephemeral account-verification login needs one isolated MT5 terminal slot')
+                raise HTTPException(409,detail={'code':code,'message':message,'active_slots':active if isinstance(active,int) and not isinstance(active,bool) else 0,'max_slots':maximum if isinstance(maximum,int) and not isinstance(maximum,bool) else 0})
     p=auth(authorization,'app')
     if not x_management_identity:
         raise HTTPException(401,detail={'code':'MANAGEMENT_IDENTITY_REQUIRED','message':'Re-authenticate to the DestinedFX management account before registering broker credentials'})

@@ -239,6 +239,24 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("Expert=DestinedFXTraderEA", text)
         self.assertIn("ExpertParameters=DestinedFXTraderEA.set", text)
 
+    def test_ephemeral_live_master_login_keeps_terminal_algo_trading_disabled(self):
+        live_job = {**self.job, "account": {**self.job["account"], "account_mode": "LIVE"}}
+        with patch.dict(os.environ, {"BRIDGE_HOST_PROFILE": "EPHEMERAL"}):
+            text = worker.ini_text(live_job, "MASTER", "EURUSD")
+        self.assertIn("Login=123456", text)
+        self.assertIn("AllowLiveTrading=0", text)
+
+    def test_persistent_live_master_can_enable_terminal_algo_trading(self):
+        live_job = {**self.job, "account": {**self.job["account"], "account_mode": "LIVE"}}
+        with patch.dict(os.environ, {"BRIDGE_HOST_PROFILE": "PERSISTENT"}):
+            text = worker.ini_text(live_job, "MASTER", "EURUSD")
+        self.assertIn("AllowLiveTrading=1", text)
+
+    def test_ephemeral_demo_master_keeps_demo_algo_trading_enabled(self):
+        with patch.dict(os.environ, {"BRIDGE_HOST_PROFILE": "EPHEMERAL"}):
+            text = worker.ini_text(self.job, "MASTER", "EURUSD")
+        self.assertIn("AllowLiveTrading=1", text)
+
     def test_set_contains_pairing_and_bridge(self):
         text = worker.make_set_file("https://bridge.destinedfx.internal", "abcdefgh1234", self.job["account"])
         self.assertIn("InpBridgeBaseURL=https://bridge.destinedfx.internal", text)

@@ -578,14 +578,12 @@ def _prepare_and_launch(job: dict, reservation: SlotReservation) -> dict[str, in
     account_mode = account.get("account_mode")
     if account_mode not in ("DEMO", "LIVE"):
         raise SlotWorkerError("UNSUPPORTED_ACCOUNT_MODE")
-    # Codespaces stays ephemeral and DEMO-only. LIVE may run through this
-    # worker only when an operator has explicitly provisioned a persistent
-    # Linux Bridge with the root-attested per-pairing slot runtime.
-    if account_mode == "LIVE" and (
-        os.environ.get("BRIDGE_HOST_PROFILE", "EPHEMERAL").strip().upper() != "PERSISTENT"
-        or os.environ.get("BRIDGE_HOST_MODE", "").strip().lower() != "linux-host"
-    ):
-        raise SlotWorkerError("EPHEMERAL_HOST_LIVE_BLOCKED")
+    host_profile = os.environ.get("BRIDGE_HOST_PROFILE", "EPHEMERAL").strip().upper()
+    host_mode = os.environ.get("BRIDGE_HOST_MODE", "").strip().lower()
+    if host_profile not in {"EPHEMERAL", "PERSISTENT"} or host_mode != "linux-host":
+        raise SlotWorkerError("LINUX_HOST_PROFILE_UNVERIFIED")
+    # EPHEMERAL_HOST_LIVE_BLOCKED remains enforced by Bridge LIVE authorization,
+    # START/RESUME and order routes. This worker only provisions account login.
     _copy_clean_terminal(reservation)
     _MANAGER.run_as_slot(reservation, ["wineboot", "-u"], timeout=180)
     _copy_ea_and_compile(reservation)

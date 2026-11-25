@@ -145,15 +145,17 @@ class BrokerLoginModelTest {
         assertEquals(LoginMode.LIVE, LoginRules.modeForServer("Broker-Real"))
         assertEquals(LoginMode.LIVE, LoginRules.modeForServer(""))
         val live = LoginRules.withMode(goodForm, LoginMode.LIVE)
-        assertEquals(AccessType.INVESTOR, live.type)
+        assertEquals(AccessType.TRADE, live.type)
+        val investorLive = LoginRules.withMode(goodForm.copy(type = AccessType.INVESTOR), LoginMode.LIVE)
+        assertEquals(AccessType.INVESTOR, investorLive.type)
         assertEquals(LoginMode.DEMO, LoginRules.withMode(live, LoginMode.DEMO).mode)
         assertEquals(AccessType.TRADE, LoginRules.withMode(live, LoginMode.DEMO).type)
     }
 
-    @Test fun liveTradeAccountIsOnlySelectableOnPersistentHost() {
+    @Test fun ephemeralLiveTradeAccessTypeRemainsSelectable() {
         assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR),
             LoginRules.availableTypes(mt5, LoginMode.DEMO, HostProfile.EPHEMERAL))
-        assertEquals(listOf(AccessType.INVESTOR),
+        assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR),
             LoginRules.availableTypes(mt5, LoginMode.LIVE, HostProfile.EPHEMERAL))
         assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR),
             LoginRules.availableTypes(mt5, LoginMode.LIVE, HostProfile.PERSISTENT))
@@ -161,20 +163,11 @@ class BrokerLoginModelTest {
             LoginRules.availableTypes(derivOptions, LoginMode.LIVE, HostProfile.PERSISTENT))
     }
 
-    @Test fun ephemeralLiveMasterPasswordIsRejectedBeforeSubmit() = runBlocking {
-        val backend = FakeBackend(
-            listOf(ConnectObservation(ConnectStage.VERIFIED, accountMode = "LIVE")),
-            preflightFailure = "EPHEMERAL_HOST_LIVE_BLOCKED",
-        )
-        val outcome = useCase(backend).connect(mt5, goodForm.copy(mode = LoginMode.LIVE))
-        assertEquals(
-            ConnectOutcome.Failed(
-                "EPHEMERAL_HOST_LIVE_BLOCKED",
-                "LIVE REQUIRES PERSISTENT LINUX HOST - Install via scripts/linux-host/README.md - Codespace is DEMO ONLY",
-            ),
-            outcome,
-        )
-        assertEquals(0, backend.submitted)
+    @Test fun ephemeralLiveMasterCredentialsCanBeSubmittedForAccountVerification() = runBlocking {
+        val backend = FakeBackend(listOf(ConnectObservation(ConnectStage.VERIFIED, accountMode = "LIVE")))
+        val outcome = useCase(backend).connect(mt5, goodForm.copy(mode = LoginMode.LIVE, type = AccessType.TRADE))
+        assertTrue(outcome is ConnectOutcome.Verified)
+        assertEquals(1, backend.submitted)
     }
 
     @Test fun serverDropdownNeverGuessesAndEndsWithTypeServerName() {

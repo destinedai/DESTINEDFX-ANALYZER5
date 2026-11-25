@@ -159,8 +159,12 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
         composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
 
-        // No REAL value exists yet. Preserve the typed value but do not count it as saved for REAL.
+        // LIVE Trade on EPHEMERAL requires acknowledgement before credentials can be entered.
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
+        composeRule.onNodeWithTag("ephemeral_live_trade_warning").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("field_login").assertIsNotEnabled()
+        composeRule.onNodeWithTag("ephemeral_live_trade_continue").performScrollTo().performClick()
+        composeRule.onNodeWithTag("field_login").assertIsEnabled()
         composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "FBS-Demo-Exact")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag("mt5_server_save_status").assertIsDisplayed()
@@ -178,7 +182,35 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "FBS-Demo-Exact")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
+        composeRule.onNodeWithTag("ephemeral_live_trade_continue").performScrollTo().performClick()
         composeRule.onNodeWithTag("server_field").assertTextEquals("Exact MT5 Server", "FBS-Real-Exact")
+        composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
+    }
+
+    @Test
+    fun ephemeralLiveTradeFieldsUnlockAfterWarningAndEndpointVerifierIsOnLoginScreen() {
+        openFlow()
+        composeRule.onNodeWithTag("add_account").performClick()
+        composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
+        composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
+        composeRule.onNodeWithTag("ephemeral_live_trade_warning").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("field_login").assertIsNotEnabled()
+        composeRule.onNodeWithTag("field_password").assertIsNotEnabled()
+        composeRule.onNodeWithTag("server_field").assertIsNotEnabled()
+        composeRule.onNodeWithTag("login_button").assertIsNotEnabled()
+
+        composeRule.onNodeWithTag("ephemeral_live_trade_continue").performScrollTo().performClick()
+        composeRule.onNodeWithTag("field_login").assertIsEnabled().performScrollTo().performTextInput("123456")
+        composeRule.onNodeWithTag("field_password").assertIsEnabled().performScrollTo().performTextInput("fixture-password")
+        composeRule.onNodeWithTag("server_field").assertIsEnabled().performTextInput("FBS-Real")
+        composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
+        composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("verify_broker_endpoint").performScrollTo().assertIsEnabled().performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("broker_endpoint_result").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("broker_endpoint_result").performScrollTo()
+            .assertTextEquals("RED · NOT PUBLICLY PUBLISHED")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
     }
 

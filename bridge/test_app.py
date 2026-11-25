@@ -408,12 +408,14 @@ def test_ephemeral_linux_host_allows_isolated_demo_registration(monkeypatch):
     assert job['status'] == 'AWAITING_ATTESTATION' and job['requested_account_mode'] == 'DEMO'
 
 
-def test_ephemeral_linux_host_rejects_live_before_storage_or_job(monkeypatch):
+def test_ephemeral_linux_host_allows_live_login_enrolment_for_read_only_verification(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
     monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
     monkeypatch.setattr(app, 'linux_host_report', lambda: {
-        'healthy': True, 'slot_isolation': {'enabled': True, 'ready': True},
+        'healthy': True, 'slot_isolation': {
+            'enabled': True, 'ready': True, 'active_slots': 0, 'max_slots': 1,
+        },
     })
     monkeypatch.setattr(app, 'durable_execution_enabled', lambda: True)
     p, ah = managed_pair()
@@ -422,11 +424,14 @@ def test_ephemeral_linux_host_rejects_live_before_storage_or_job(monkeypatch):
         'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS',
         'consent':True,
     })
-    assert response.status_code == 409
-    assert response.json()['detail']['code'] == 'EPHEMERAL_HOST_LIVE_BLOCKED'
+    assert response.status_code == 202, response.text
+    assert response.json()['status'] == 'AWAITING_WORKER_ATTESTATION'
     with app.tx() as c:
-        assert c.execute('SELECT COUNT(*) FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
-        assert c.execute('SELECT COUNT(*) FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+        account = c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
+        job = c.execute('SELECT status,requested_account_mode FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
+    assert account is not None and account['account_mode'] == 'LIVE' and account['access_type'] == 'MASTER'
+    assert 'live-secret' not in str(dict(account))
+    assert job['status'] == 'AWAITING_ATTESTATION' and job['requested_account_mode'] == 'LIVE'
 
 
 def test_persistent_linux_host_allows_live_enrollment_with_two_slot_capacity(monkeypatch):

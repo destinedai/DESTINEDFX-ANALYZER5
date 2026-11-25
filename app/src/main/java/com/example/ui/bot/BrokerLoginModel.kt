@@ -134,24 +134,13 @@ object LoginRules {
         spec: BrokerLoginSpec,
         mode: LoginMode = LoginMode.DEMO,
         hostProfile: HostProfile = HostProfile.PERSISTENT,
-    ): List<AccessType> = when {
-        !spec.investorAccess -> listOf(AccessType.TRADE)
-        mode == LoginMode.LIVE && hostProfile != HostProfile.PERSISTENT -> listOf(AccessType.INVESTOR)
-        else -> AccessType.values().toList()
-    }
+    ): List<AccessType> = if (spec.investorAccess) AccessType.values().toList() else listOf(AccessType.TRADE)
 
     fun modeForServer(server: String): LoginMode =
         if (server.contains("demo", ignoreCase = true) || server.contains("trial", ignoreCase = true)) LoginMode.DEMO
         else LoginMode.LIVE
 
-    fun withMode(form: LoginForm, mode: LoginMode): LoginForm = form.copy(
-        mode = mode,
-        type = when {
-            mode == LoginMode.LIVE -> AccessType.INVESTOR
-            form.type == AccessType.INVESTOR -> AccessType.TRADE
-            else -> form.type
-        },
-    )
+    fun withMode(form: LoginForm, mode: LoginMode): LoginForm = form.copy(mode = mode)
 
     /** Save password is ON by default only with a secure lock screen or biometrics; otherwise OFF, disabled, and says why. */
     fun savePasswordPolicy(secureLockAvailable: Boolean): SavePasswordPolicy =
@@ -212,7 +201,7 @@ object ConnectFailures {
         "OWNER_BOOTSTRAP_REQUIRED" to "Enter the one-time owner bootstrap code for this first public bridge pairing. It expires after 10 minutes.",
         "MANAGEMENT_SIGN_IN_REQUIRED" to "Sign in to your DestinedFX management account before connecting this managed MT5 broker. Secure account pairing requires that identity.",
         "MANAGEMENT_SERVICE_UNAVAILABLE" to "The DestinedFX management service is not reachable. Broker credentials were not submitted.",
-        "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE REQUIRES PERSISTENT LINUX HOST - Install via scripts/linux-host/README.md - Codespace is DEMO ONLY",
+        "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE account login is available for verification, but LIVE trading is blocked on an EPHEMERAL host. Use a persistent host before arming or placing orders.",
         "HOST_WAKE_FAILED" to "The execution host could not be awakened and verified. Broker credentials were not submitted.",
         "WAITING_FOR_SPOTWARE_APPROVAL" to "WAITING FOR SPOTWARE APPROVAL",
         "PROVIDER_AUTH_FAILED" to "Provider authorization failed. Check the grant and try again.",

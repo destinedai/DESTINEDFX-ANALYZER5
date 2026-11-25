@@ -1,7 +1,6 @@
 package com.example.ui.bot
 
 import com.example.data.broker.BrokerLoginSpec
-import com.example.data.broker.HostProfile
 import com.example.data.broker.LoginMode
 import com.example.data.management.ManagementException
 import com.example.data.management.ManagementFailure
@@ -42,12 +41,8 @@ class MT5BridgeConnectBackend(
             return "MANAGEMENT_SERVICE_UNAVAILABLE"
         }
         onStage(ConnectStage.ENGINE_READY)
-        if (form.mode == LoginMode.LIVE && form.type == AccessType.TRADE) {
-            // /v1/app/state requires an app bearer and cannot be called before a new profile is paired.
-            // /health is deliberately public and reports only the host's configured profile.
-            val hostProfile = client.hostProfile()
-            if (hostProfile != HostProfile.PERSISTENT) return "EPHEMERAL_HOST_LIVE_BLOCKED"
-        }
+        // LIVE MASTER credentials may be submitted for account verification.
+        // Persistent-host requirements remain enforced by LIVE arming and execution routes.
         return null
     }
 

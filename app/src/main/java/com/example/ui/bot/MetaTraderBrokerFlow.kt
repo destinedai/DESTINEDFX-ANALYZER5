@@ -59,12 +59,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.broker.BrokerLoginSpec
 import com.example.data.broker.BrokerLoginSpecs
+import com.example.data.broker.BrokerEndpointStatus
+import com.example.data.broker.BrokerEndpointVerification
+import com.example.data.broker.BrokerEndpointVerifier
 import com.example.data.broker.LoginConnector
 import com.example.data.broker.LoginMode
 import com.example.data.broker.HostProfile
 import com.example.security.SecretsManager
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.LossRed
+import com.example.ui.theme.ProfitGreen
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmber
@@ -134,6 +138,14 @@ fun MetaTraderBrokerFlow(
     val activeMt5ProfileKey = "${selected?.id?.removeSuffix("_MT5")}_${form.mode.name}"
     val activeMt5ServerValid = form.server == form.server.trim() && Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(form.server)
     val activeMt5ServerSaved = activeMt5ServerValid && secrets.getManagedMT5AccountServer(activeMt5ProfileKey) == form.server
+    var ephemeralLiveTradeAcknowledged by remember(selected?.id, form.mode, form.type, hostProfile) { mutableStateOf(false) }
+    val ephemeralLiveTradeWarningRequired = form.mode == LoginMode.LIVE &&
+        form.type == AccessType.TRADE && hostProfile != HostProfile.PERSISTENT
+    val mt5CredentialFieldsEnabled = !ephemeralLiveTradeWarningRequired || ephemeralLiveTradeAcknowledged
+    var endpointVerification by remember(selected?.id, form.mode, form.server) {
+        mutableStateOf<BrokerEndpointVerification?>(null)
+    }
+    var endpointVerificationBusy by remember { mutableStateOf(false) }
     val openUrl: (String) -> Unit = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     val connect: (BrokerLoginSpec, LoginForm) -> Unit = { spec, candidate ->
         busy = true
@@ -458,19 +470,39 @@ fun MetaTraderBrokerFlow(
                     Text("Type: ${form.type.label}", color = TextPrimary, modifier = Modifier.fillMaxWidth().height(48.dp).clickable { typeMenu = true }.padding(12.dp).testTag("type_dropdown"))
                     DropdownMenu(typeMenu, { typeMenu = false }) { LoginRules.availableTypes(spec, form.mode, hostProfile).forEach { type -> DropdownMenuItem(text = { Text(type.label) }, onClick = { form = form.copy(type = type); typeMenu = false }) } }
                     if (form.mode == LoginMode.LIVE && form.type == AccessType.INVESTOR) {
-                        Text("Investor access cannot trade", color = WarningAmber, fontSize = 14.sp)
+                        Text("Investor access is read-only and cannot place trades.", color = WarningAmber, fontSize = 14.sp)
                     }
-                    if (form.mode == LoginMode.LIVE && hostProfile != HostProfile.PERSISTENT) {
-                        Text("LIVE Trade account passwords are blocked on an EPHEMERAL host; choose Investor access.", color = WarningAmber, fontSize = 14.sp)
+                    if (ephemeralLiveTradeWarningRequired) {
+                        Card(colors = CardDefaults.cardColors(containerColor = BrokerSurfaceVariant), shape = RoundedCornerShape(8.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                Text("WARNING: Host is EPHEMERAL (Codespaces). For LIVE, use persistent host for best safety.",
+                                    color = WarningAmber, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                    modifier = Modifier.testTag("ephemeral_live_trade_warning"))
+                                if (!ephemeralLiveTradeAcknowledged) {
+                                    Button(onClick = { ephemeralLiveTradeAcknowledged = true },
+                                        modifier = Modifier.fillMaxWidth().testTag("ephemeral_live_trade_continue"),
+                                        colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
+                                        Text("I UNDERSTAND, CONTINUE WITH TRADE ACCESS")
+                                    }
+                                } else {
+                                    Text("Acknowledged. This LIVE account can be verified only; MT5 algo trading, LIVE arming and orders remain disabled on an EPHEMERAL host.",
+                                        color = LossRed, fontSize = 10.sp,
+                                        modifier = Modifier.testTag("ephemeral_live_trade_acknowledged"))
+                                }
+                            }
+                        }
                     }
-                    LoginInput("Login", form.login, { form = form.copy(login = it.filter(Char::isDigit)) }, KeyboardType.Number)
-                    LoginInput("Password", form.password, { form = form.copy(password = it) }, KeyboardType.Password, true, ImeAction.Next)
+                    LoginInput("Login", form.login, { form = form.copy(login = it.filter(Char::isDigit)) },
+                        KeyboardType.Number, enabled = mt5CredentialFieldsEnabled)
+                    LoginInput("Password", form.password, { form = form.copy(password = it) },
+                        KeyboardType.Password, true, ImeAction.Next, enabled = mt5CredentialFieldsEnabled)
                     var serverMenu by remember { mutableStateOf(false) }
                     OutlinedTextField(
                         value = form.server,
                         onValueChange = { server -> form = form.copy(server = server); serverSaveStatus = "" },
                         modifier = Modifier.fillMaxWidth().testTag("server_field"),
-                        trailingIcon = { TextButton(onClick = { serverSearch = ""; serverMenu = true }) { Text("SEARCH") } },
+                        enabled = mt5CredentialFieldsEnabled,
+                        trailingIcon = { TextButton(enabled = mt5CredentialFieldsEnabled, onClick = { serverSearch = ""; serverMenu = true }) { Text("SEARCH") } },
                         label = { Text("Exact MT5 Server") },
                         placeholder = { Text("Copy the server from your broker's MT5 account details") },
                         singleLine = true,
@@ -479,6 +511,37 @@ fun MetaTraderBrokerFlow(
                         keyboardActions = loginKeyboardActions(),
                     )
                     val mt5Brand = spec.id.removeSuffix("_MT5")
+                    if (form.mode == LoginMode.LIVE) {
+                        Text("OFFICIAL MT5 SERVER REFERENCE · $mt5Brand", color = ElectricCyan, fontSize = 9.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        Text(BrokerEndpointVerifier.officialServerReference(mt5Brand, form.mode.name),
+                            color = TextSecondary, fontSize = 10.sp, lineHeight = 14.sp)
+                        Button(onClick = {
+                            scope.launch {
+                                endpointVerificationBusy = true
+                                try { endpointVerification = BrokerEndpointVerifier.verify(mt5Brand, form.mode.name, form.server) }
+                                finally { endpointVerificationBusy = false }
+                            }
+                        }, enabled = !busy && !endpointVerificationBusy && form.server.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth().testTag("verify_broker_endpoint"),
+                            colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
+                            Text(if (endpointVerificationBusy) "VERIFYING BROKER ENDPOINT..." else "VERIFY BROKER ENDPOINT")
+                        }
+                        endpointVerification?.let { verification ->
+                            val verified = verification.status == BrokerEndpointStatus.DNS_TCP_VERIFIED
+                            Text(if (verified) "GREEN · OFFICIAL DNS/TCP VERIFIED" else "RED · ${verification.status.name.replace('_', ' ')}",
+                                color = if (verified) ProfitGreen else LossRed, fontSize = 10.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Black,
+                                modifier = Modifier.testTag("broker_endpoint_result"))
+                            Text("Host: ${verification.host.ifBlank { "not publicly mapped" }} · Port: ${verification.port?.toString() ?: "—"}",
+                                color = TextSecondary, fontSize = 9.sp)
+                            Text("Resolved IP: ${verification.resolvedIps.joinToString().ifBlank { "not resolved / not publicly mapped" }}",
+                                color = TextSecondary, fontSize = 9.sp)
+                            Text(verification.detail, color = if (verified) WarningAmber else LossRed, fontSize = 9.sp)
+                            Text("Pre-login DNS/TCP does not verify MT5 login, TLS certificate identity or absence of a transparent proxy.",
+                                color = WarningAmber, fontSize = 9.sp)
+                        }
+                    }
                     val serverHint = ServerOptions.fieldHint(spec)
                     Text(serverHint, color = TextSecondary, fontSize = 10.sp, lineHeight = 14.sp,
                         modifier = Modifier.testTag("mt5_server_field_help"))
@@ -492,7 +555,7 @@ fun MetaTraderBrokerFlow(
                                 else -> "Server could not be saved to encrypted storage."
                             }
                         },
-                        enabled = !busy && activeMt5ServerValid,
+                        enabled = !busy && activeMt5ServerValid && mt5CredentialFieldsEnabled,
                         modifier = Modifier.fillMaxWidth().testTag("save_mt5_server")
                     ) { Text("SAVE SERVER") }
                     Row(
@@ -599,7 +662,7 @@ fun MetaTraderBrokerFlow(
                 }
                 if (spec.connector != LoginConnector.CTRADER) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                        androidx.compose.material3.Checkbox(checked = form.savePassword, enabled = securePolicy.enabled, onCheckedChange = { form = form.copy(savePassword = it) })
+                        androidx.compose.material3.Checkbox(checked = form.savePassword, enabled = securePolicy.enabled && mt5CredentialFieldsEnabled, onCheckedChange = { form = form.copy(savePassword = it) })
                         Text(if (spec.connector == LoginConnector.DERIV_OPTIONS) "Save token" else "Save password", color = TextPrimary)
                     }
                     if (!securePolicy.enabled) Text(securePolicy.reason.orEmpty(), color = WarningAmber, fontSize = 11.sp)
@@ -609,7 +672,8 @@ fun MetaTraderBrokerFlow(
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
                 Button(
                     enabled = !busy && LoginRules.canSubmitLogin(spec, form, modeHintChosen) &&
-                        (spec.connector != LoginConnector.MT5_TERMINAL || activeMt5ServerSaved),
+                        (spec.connector != LoginConnector.MT5_TERMINAL || activeMt5ServerSaved) &&
+                        (spec.connector != LoginConnector.MT5_TERMINAL || mt5CredentialFieldsEnabled),
                     onClick = { connect(spec, form) },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White)
@@ -669,7 +733,8 @@ fun MetaTraderBrokerFlow(
                             AccountTab.TRADE -> AccountTradeList(
                                 modifier = Modifier.weight(1f),
                                 details = details,
-                                enabled = spec.connector == LoginConnector.MT5_TERMINAL && !accountBusy,
+                                enabled = spec.connector == LoginConnector.MT5_TERMINAL && !accountBusy &&
+                                    (details.mode != "LIVE" || details.hostProfile == HostProfile.PERSISTENT),
                                 onClose = { ticket, symbol -> pendingAction = PendingBrokerAction("CLOSE_POSITION_SELECTED", ticket, "Close $symbol position $ticket?") },
                                 onCancel = { ticket, symbol -> pendingAction = PendingBrokerAction("CANCEL_PENDING_SELECTED", ticket, "Cancel $symbol pending order $ticket?") },
                             )
@@ -839,7 +904,10 @@ private fun AccountSummary(
             MetricLine("Free margin", details.freeMargin.takeIf { !stale }, details.currency.takeIf { !stale })
             MetricLine("Leverage", details.leverage?.toDouble().takeIf { !stale }, "x")
             MetricLine("Margin level", details.marginLevel.takeIf { !stale }, "%")
-            if (details.hostProfile == HostProfile.EPHEMERAL) {
+            if (details.hostProfile == HostProfile.EPHEMERAL && details.mode.equals("LIVE", true)) {
+                Text("EPHEMERAL HOST · LIVE ACCOUNT VERIFIED FOR VIEWING ONLY · TRADING DISABLED",
+                    color = LossRed, fontSize = 11.sp, modifier = Modifier.testTag("ephemeral_host_notice"))
+            } else if (details.hostProfile == HostProfile.EPHEMERAL) {
                 Text("Test host, DEMO only, stops when idle", color = WarningAmber, fontSize = 12.sp, modifier = Modifier.testTag("ephemeral_host_notice"))
             }
         }
@@ -963,20 +1031,26 @@ private fun AccountBotControls(
     onOpenArming: () -> Unit,
 ) {
     val canControl = connector in setOf(LoginConnector.MT5_TERMINAL, LoginConnector.DERIV_OPTIONS)
-    val canStart = canControl && (connector != LoginConnector.DERIV_OPTIONS || details.mode == "DEMO")
+    val liveExecutionHostReady = !details.mode.equals("LIVE", true) || details.hostProfile == HostProfile.PERSISTENT
+    val canExecute = canControl && liveExecutionHostReady
+    val canStart = canExecute && (connector != LoginConnector.DERIV_OPTIONS || details.mode == "DEMO")
     val running = details.engineState in setOf("RUNNING", "PAUSED")
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("ModeArmingPolicy: $policyMessage", color = WarningAmber, fontSize = 12.sp, modifier = Modifier.testTag("mode_arming_state"))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
             Button(onClick = onStart, enabled = canStart && !busy && !running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { Text("START") }
-            Button(onClick = onPauseResume, enabled = canControl && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant)) { Text(if (details.engineState == "PAUSED") "RESUME" else "PAUSE") }
-            Button(onClick = onStop, enabled = canControl && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = LossRed)) { Text("STOP") }
+            Button(onClick = onPauseResume, enabled = canExecute && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant)) { Text(if (details.engineState == "PAUSED") "RESUME" else "PAUSE") }
+            Button(onClick = onStop, enabled = canExecute && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = LossRed)) { Text("STOP") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = onCheckPolicy, enabled = canControl && !busy, modifier = Modifier.weight(1f).height(48.dp)) { Text("CHECK POLICY") }
             TextButton(onClick = onOpenArming, enabled = !busy, modifier = Modifier.weight(1f).height(48.dp)) { Text("MODE ARMING") }
         }
         if (!canControl) Text("This verified provider connection is read-only.", color = TextSecondary, fontSize = 12.sp)
+        if (details.mode.equals("LIVE", true) && !liveExecutionHostReady) {
+            Text("LIVE account login is available for verification, but START and order execution remain blocked on an EPHEMERAL host.",
+                color = LossRed, fontSize = 11.sp, modifier = Modifier.testTag("ephemeral_live_execution_blocked"))
+        }
         message?.let { Text(it, color = if (it.contains("BLOCKED", true) || it.contains("FAILED", true)) LossRed else TextSecondary, fontSize = 12.sp) }
         Spacer(Modifier.weight(1f))
         Button(
@@ -1037,10 +1111,12 @@ private fun LoginInput(
     keyboard: KeyboardType,
     secret: Boolean = false,
     imeAction: ImeAction = ImeAction.Next,
+    enabled: Boolean = true,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValue,
+        enabled = enabled,
         modifier = Modifier.fillMaxWidth().height(56.dp)
             .testTag("field_${label.replace(" ", "_").lowercase()}"),
         label = { Text(label) },
