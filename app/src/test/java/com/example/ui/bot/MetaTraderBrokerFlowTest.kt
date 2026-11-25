@@ -160,6 +160,9 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
         composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
 
+        // The broker login defaults to read-only Investor; select Trade for this LIVE warning flow.
+        composeRule.onNodeWithTag("type_dropdown").performScrollTo().performClick()
+        composeRule.onNodeWithText("Trade account").performClick()
         // LIVE Trade on EPHEMERAL requires acknowledgement before credentials can be entered.
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
         composeRule.onNodeWithTag("ephemeral_live_trade_warning").performScrollTo().assertIsDisplayed()
@@ -193,6 +196,9 @@ class MetaTraderBrokerFlowTest {
         openFlow()
         composeRule.onNodeWithTag("add_account").performClick()
         composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
+        // The broker login defaults to read-only Investor; select Trade for this LIVE warning flow.
+        composeRule.onNodeWithTag("type_dropdown").performScrollTo().performClick()
+        composeRule.onNodeWithText("Trade account").performClick()
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
         composeRule.onNodeWithTag("ephemeral_live_trade_warning").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("field_login").assertIsNotEnabled()

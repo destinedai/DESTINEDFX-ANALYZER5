@@ -289,7 +289,7 @@ class BrokerLoginModelTest {
         val outcome = useCase(backend).connect(mt5, liveForm)
         assertEquals(ConnectOutcome.Verified("DEMO", modeMismatch = true), outcome)
         assertEquals(LoginMode.DEMO, LoginRules.withMode(liveForm, LoginMode.DEMO).mode)
-        assertEquals(AccessType.TRADE, LoginRules.withMode(liveForm, LoginMode.DEMO).type)
+        assertEquals(AccessType.INVESTOR, LoginRules.withMode(liveForm, LoginMode.DEMO).type)
     }
 
     @Test fun mt5ModeMismatchRequiresFreshExactIdentityAndBrokerEvidence() {
