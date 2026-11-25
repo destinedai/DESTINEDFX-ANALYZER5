@@ -171,6 +171,13 @@ def test_trade_report_fields_come_from_ea_owned_broker_history():
 
 def test_ticket_operation_safety_contracts():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    workstation = (Path(__file__).resolve().parents[1] / "app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt").read_text()
+    stop_start = source.index("void StopAndCloseBotTrades(")
+    stop_end = source.index("void ProcessCommands()", stop_start)
+    stop_logic = source[stop_start:stop_end]
+    ui_stop_start = workstation.index("onStop = {")
+    ui_stop_end = workstation.index("onVerify = {", ui_stop_start)
+    ui_stop = workstation[ui_stop_start:ui_stop_end]
     checks = {
         "bridge operation actions": all(
             action in source
@@ -263,7 +270,31 @@ def test_ticket_operation_safety_contracts():
                 "ReconcileOperations();",
             )
         ),
-        "stop does not liquidate or remove protection": 'g_state="STOPPED";msg="New entries stopped; open positions and broker SL/TP left untouched"' in source,
+        "STOP closes Bot-owned positions and pending orders and confirms a fresh empty snapshot": (
+            all(
+                term in stop_logic
+                for term in (
+                    "OrderGetInteger(ORDER_MAGIC)!=InpMagic",
+                    "trade.OrderDelete(ticket)",
+                    "PositionGetInteger(POSITION_MAGIC)!=InpMagic",
+                    "trade.PositionClose(ticket)",
+                    "remainingPositions==0&&remainingOrders==0&&closeFailures==0",
+                    'outcome="APPLIED"',
+                    'message="BOT STOPPED - All Bot trades closed"',
+                )
+            )
+            and all(
+                term in ui_stop
+                for term in (
+                    'client.command(UUID.randomUUID().toString(), "STOP")',
+                    "for (attempt in 0 until 12)",
+                    "val fresh = client.state()",
+                    'fresh.connected && fresh.snapshotsValid && fresh.state == "STOPPED"',
+                    "botPositions.isEmpty() && botOrders.isEmpty()",
+                    'message = "BOT STOPPED - All Bot trades closed"',
+                )
+            )
+        ),
     }
     failed = [name for name, ok in checks.items() if not ok]
     assert not failed, "Ticket operation source checks failed: " + ", ".join(failed)

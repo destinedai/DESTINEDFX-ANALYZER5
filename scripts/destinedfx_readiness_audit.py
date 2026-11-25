@@ -132,17 +132,19 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     )
 
     diagnostics_ok = (
-        "candleFetchErrors" in analyzer_ui
-        and "candleDiagnostic" in analyzer_ui
-        and "OHLC PROVIDER:" in analyzer_ui
-        and "REFRESH VERIFIED QUOTE & OHLC DATA" in analyzer_ui
+        'override val selectedApiSource = MutableStateFlow("DERIV_PUBLIC")' in market
+        and "Deriv public WebSocket" in analyzer_ui
+        and "PUBLIC MARKET FEED · NO LOGIN NEEDED" in analyzer_ui
+        and "PUBLIC FEED CONNECTING · NO LOGIN NEEDED" in analyzer_ui
+        and "REFRESH PRICE & SIGNAL" in analyzer_ui
+        and "candleFetchErrors" in market
         and "Provider detail:" in market
     )
     add_check(
         checks,
         "Analyzer provider diagnostics",
         diagnostics_ok,
-        "The Analyzer exposes the stored OHLC failure reason and an explicit refresh action.",
+        "The Analyzer defaults to DERIV_PUBLIC without login, shows public-feed status and refresh, and retains OHLC provider errors in the market repository.",
     )
 
     ephemeral_live_risk_acceptance = "I UNDERSTAND, I ACCEPT RISK, CONTINUE WITH LIVE TRADE"
