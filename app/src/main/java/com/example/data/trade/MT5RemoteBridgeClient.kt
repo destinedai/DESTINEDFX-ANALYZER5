@@ -764,7 +764,6 @@ class MT5RemoteBridgeClient(
         }
         return when (action) {
             "TIGHTEN_POSITION_SL" -> {
-                if (snapshot.hostProfile != HostProfile.PERSISTENT) return "A persistent owner host is required for a position protection edit."
                 val ticket = config.optString("ticket")
                 val newStop = config.optDouble("new_stop_loss", Double.NaN)
                 val expectedStop = config.optDouble("expected_stop_loss", Double.NaN)
@@ -790,7 +789,6 @@ class MT5RemoteBridgeClient(
                 null
             }
             "PLACE_MARKET_ORDER" -> {
-                if (snapshot.hostProfile != HostProfile.PERSISTENT) return "A persistent owner host is required for a new MT5 market order."
                 val symbol = config.optString("symbol")
                 val side = config.optString("side").uppercase()
                 val risk = config.optDouble("risk_percent", Double.NaN)
@@ -1029,7 +1027,6 @@ class MT5RemoteBridgeClient(
         require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
         require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
         val fresh = state()
-        require(fresh.hostProfile == HostProfile.PERSISTENT) { "MODE_ARMING_BLOCKED: EPHEMERAL_HOST_LIVE_BLOCKED" }
         val reason = gateFailure(fresh, requireLiveAuthorization = false)
         require(reason == null) { reason ?: "LIVE profile is not ready." }
         val result = request("POST", "/v1/app/live-challenge")
@@ -1076,7 +1073,6 @@ class MT5RemoteBridgeClient(
         val expectedLogin = secrets.getManagedMT5AccountLogin(profile)
         val expectedServer = secrets.getManagedMT5AccountServer(profile)
         return when {
-            snapshot.hostProfile != HostProfile.PERSISTENT && accountMode == "LIVE" -> "EPHEMERAL_HOST_LIVE_BLOCKED"
             accountMode !in setOf("DEMO", "LIVE") -> "Selected account mode is not DEMO or LIVE."
             snapshot.profileMode != accountMode -> "Selected $brokerBrand $accountMode profile does not match the server-managed account mode."
             snapshot.accessType != "MASTER" -> "INVESTOR access is read-only and cannot execute trading commands."

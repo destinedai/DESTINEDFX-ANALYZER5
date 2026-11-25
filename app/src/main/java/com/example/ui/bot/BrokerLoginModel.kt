@@ -202,7 +202,7 @@ object ConnectFailures {
         "OWNER_BOOTSTRAP_REQUIRED" to "Enter the one-time owner bootstrap code for this first public bridge pairing. It expires after 10 minutes.",
         "MANAGEMENT_SIGN_IN_REQUIRED" to "Sign in to your DestinedFX management account before connecting this managed MT5 broker. Secure account pairing requires that identity.",
         "MANAGEMENT_SERVICE_UNAVAILABLE" to "The DestinedFX management service is not reachable. Broker credentials were not submitted.",
-        "EPHEMERAL_HOST_LIVE_BLOCKED" to "LIVE account login is available for verification, but LIVE trading is blocked on an EPHEMERAL host. Use a persistent host before arming or placing orders.",
+        "EPHEMERAL_HOST_LIVE_BLOCKED" to "The EPHEMERAL Codespaces host can disconnect during LIVE use. Reconnect the host and verify the MT5 account again.",
         "HOST_WAKE_FAILED" to "The execution host could not be awakened and verified. Broker credentials were not submitted.",
         "WAITING_FOR_SPOTWARE_APPROVAL" to "WAITING FOR SPOTWARE APPROVAL",
         "PROVIDER_AUTH_FAILED" to "Provider authorization failed. Check the grant and try again.",

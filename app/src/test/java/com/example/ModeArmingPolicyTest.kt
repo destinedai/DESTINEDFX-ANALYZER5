@@ -110,11 +110,11 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(demoIdentity = demo.copy(accountId = "600002")))).isSuccess)
     }
 
-    @Test fun ephemeralHostCannotArmOrDecideLiveButDemoPolicyRemainsAvailable() {
+    @Test fun ephemeralHostCanArmAndDecideLiveWhenAccountEvidenceAndRiskChecksPass() {
         val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
-        val req = request()
-        assertFalse(policy.armLive(req.copy(hostProfile = HostProfile.EPHEMERAL)).isSuccess)
-        assertEquals("EPHEMERAL_HOST_LIVE_BLOCKED", policy.liveDecision(req.identity, hostProfile = HostProfile.EPHEMERAL).reason)
+        val req = request().copy(hostProfile = HostProfile.EPHEMERAL)
+        assertTrue(policy.armLive(req).isSuccess)
+        assertTrue(policy.liveDecision(req.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
         val demo = identity()
         assertTrue(policy.demoDecision(demo, verified(demo), accepted(demo), "cred-demo").allowed)
     }

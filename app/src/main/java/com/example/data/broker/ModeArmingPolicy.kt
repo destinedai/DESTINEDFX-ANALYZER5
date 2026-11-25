@@ -156,7 +156,6 @@ class ModeArmingPolicy(
         val identity = request.identity
         val now = nowMs()
         val reason = when {
-            request.hostProfile != HostProfile.PERSISTENT -> "EPHEMERAL_HOST_LIVE_BLOCKED"
             identity.mode != AccountMode.LIVE -> "LIVE_PROFILE_REQUIRED"
             identity.path == ModePath.CTRADER_ACCOUNT -> "CTRADER_TRADING_NOT_IMPLEMENTED"
             identity.path.leaseDurationMs <= 0L -> "LIVE_PATH_NOT_SUPPORTED"
@@ -194,8 +193,7 @@ class ModeArmingPolicy(
         return Result.success(lease)
     }
 
-    fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs(), hostProfile: HostProfile = HostProfile.PERSISTENT): ModeDecision {
-        if (hostProfile != HostProfile.PERSISTENT) return ModeDecision(false, "LIVE_LOCKED", "EPHEMERAL_HOST_LIVE_BLOCKED")
+    fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs(), @Suppress("UNUSED_PARAMETER") hostProfile: HostProfile = HostProfile.PERSISTENT): ModeDecision {
         if (identity.mode != AccountMode.LIVE) return ModeDecision(false, "BLOCKED", "LIVE_PROFILE_REQUIRED")
         val lease = liveLeases[identity.fingerprint()]
             ?: return ModeDecision(false, "LIVE_LOCKED", "LIVE_LEASE_MISSING_OR_PROCESS_RESTARTED")

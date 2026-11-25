@@ -475,17 +475,17 @@ fun MetaTraderBrokerFlow(
                     if (ephemeralLiveTradeWarningRequired) {
                         Card(colors = CardDefaults.cardColors(containerColor = BrokerSurfaceVariant), shape = RoundedCornerShape(8.dp)) {
                             Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                Text("WARNING: Host is EPHEMERAL (Codespaces). For LIVE, use persistent host for best safety.",
+                                Text("WARNING: You are on EPHEMERAL host (Codespaces - 120 core-hours/month = ~60 hours/month / ~2 hours per day). LIVE trading on EPHEMERAL host can disconnect.",
                                     color = WarningAmber, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                                     modifier = Modifier.testTag("ephemeral_live_trade_warning"))
                                 if (!ephemeralLiveTradeAcknowledged) {
                                     Button(onClick = { ephemeralLiveTradeAcknowledged = true },
                                         modifier = Modifier.fillMaxWidth().testTag("ephemeral_live_trade_continue"),
                                         colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
-                                        Text("I UNDERSTAND, CONTINUE WITH TRADE ACCESS")
+                                        Text("I UNDERSTAND, I ACCEPT RISK, CONTINUE WITH LIVE TRADE")
                                     }
                                 } else {
-                                    Text("Acknowledged. This LIVE account can be verified only; MT5 algo trading, LIVE arming and orders remain disabled on an EPHEMERAL host.",
+                                    Text("Risk accepted. LIVE Trade access is available on this EPHEMERAL host; Codespaces can disconnect or stop.",
                                         color = LossRed, fontSize = 10.sp,
                                         modifier = Modifier.testTag("ephemeral_live_trade_acknowledged"))
                                 }
@@ -734,7 +734,7 @@ fun MetaTraderBrokerFlow(
                                 modifier = Modifier.weight(1f),
                                 details = details,
                                 enabled = spec.connector == LoginConnector.MT5_TERMINAL && !accountBusy &&
-                                    (details.mode != "LIVE" || details.hostProfile == HostProfile.PERSISTENT),
+                                    (!details.mode.equals("LIVE", true) || details.hostProfile != HostProfile.EPHEMERAL || ephemeralLiveTradeAcknowledged),
                                 onClose = { ticket, symbol -> pendingAction = PendingBrokerAction("CLOSE_POSITION_SELECTED", ticket, "Close $symbol position $ticket?") },
                                 onCancel = { ticket, symbol -> pendingAction = PendingBrokerAction("CANCEL_PENDING_SELECTED", ticket, "Cancel $symbol pending order $ticket?") },
                             )
@@ -746,6 +746,8 @@ fun MetaTraderBrokerFlow(
                                 busy = accountBusy,
                                 message = accountMessage,
                                 policyMessage = policyMessage,
+                                riskAccepted = !details.mode.equals("LIVE", true) || details.hostProfile != HostProfile.EPHEMERAL || ephemeralLiveTradeAcknowledged,
+                                onAcceptRisk = { ephemeralLiveTradeAcknowledged = true },
                                 onStart = { runAccountAction("START", null) },
                                 onPauseResume = { runAccountAction(if (details.engineState == "PAUSED") "RESUME" else "PAUSE", null) },
                                 onStop = { runAccountAction("STOP", null) },
@@ -906,7 +908,7 @@ private fun AccountSummary(
             MetricLine("Leverage", details.leverage?.toDouble().takeIf { !stale }, "x")
             MetricLine("Margin level", details.marginLevel.takeIf { !stale }, "%")
             if (details.hostProfile == HostProfile.EPHEMERAL && details.mode.equals("LIVE", true)) {
-                Text("EPHEMERAL HOST · LIVE ACCOUNT VERIFIED FOR VIEWING ONLY · TRADING DISABLED",
+                Text("EPHEMERAL HOST · LIVE trading can disconnect when Codespaces stops",
                     color = LossRed, fontSize = 11.sp, modifier = Modifier.testTag("ephemeral_host_notice"))
             } else if (details.hostProfile == HostProfile.EPHEMERAL) {
                 Text("Test host, DEMO only, stops when idle", color = WarningAmber, fontSize = 12.sp, modifier = Modifier.testTag("ephemeral_host_notice"))
@@ -1022,6 +1024,8 @@ private fun AccountBotControls(
     details: VerifiedAccountDetails,
     connector: LoginConnector,
     busy: Boolean,
+    riskAccepted: Boolean,
+    onAcceptRisk: () -> Unit,
     message: String?,
     policyMessage: String,
     onStart: () -> Unit,
@@ -1032,8 +1036,8 @@ private fun AccountBotControls(
     onOpenArming: () -> Unit,
 ) {
     val canControl = connector in setOf(LoginConnector.MT5_TERMINAL, LoginConnector.DERIV_OPTIONS)
-    val liveExecutionHostReady = !details.mode.equals("LIVE", true) || details.hostProfile == HostProfile.PERSISTENT
-    val canExecute = canControl && liveExecutionHostReady
+    val liveOnEphemeral = details.mode.equals("LIVE", true) && details.hostProfile == HostProfile.EPHEMERAL
+    val canExecute = canControl && (!liveOnEphemeral || riskAccepted)
     val canStart = canExecute && (connector != LoginConnector.DERIV_OPTIONS || details.mode == "DEMO")
     val running = details.engineState in setOf("RUNNING", "PAUSED")
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1048,9 +1052,18 @@ private fun AccountBotControls(
             TextButton(onClick = onOpenArming, enabled = !busy, modifier = Modifier.weight(1f).height(48.dp)) { Text("MODE ARMING") }
         }
         if (!canControl) Text("This verified provider connection is read-only.", color = TextSecondary, fontSize = 12.sp)
-        if (details.mode.equals("LIVE", true) && !liveExecutionHostReady) {
-            Text("LIVE account login is available for verification, but START and order execution remain blocked on an EPHEMERAL host.",
-                color = LossRed, fontSize = 11.sp, modifier = Modifier.testTag("ephemeral_live_execution_blocked"))
+        if (liveOnEphemeral) {
+            Text("WARNING: LIVE trading on this EPHEMERAL Codespaces host can disconnect when the host stops.",
+                color = WarningAmber, fontSize = 11.sp, modifier = Modifier.testTag("ephemeral_live_execution_warning"))
+            if (!riskAccepted) {
+                Button(onClick = onAcceptRisk, enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().testTag("ephemeral_live_trade_accept_bot"),
+                    colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
+                    Text("I UNDERSTAND, I ACCEPT RISK, CONTINUE WITH LIVE TRADE")
+                }
+            } else {
+                Text("RISK ACCEPTED · LIVE controls enabled on EPHEMERAL host", color = WarningAmber, fontSize = 10.sp)
+            }
         }
         message?.let { Text(it, color = if (it.contains("BLOCKED", true) || it.contains("FAILED", true)) LossRed else TextSecondary, fontSize = 12.sp) }
         Spacer(Modifier.weight(1f))

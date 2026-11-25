@@ -425,7 +425,7 @@ def test_ephemeral_linux_host_allows_live_login_enrolment_for_read_only_verifica
         'consent':True,
     })
     assert response.status_code == 202, response.text
-    assert response.json()['status'] == 'AWAITING_WORKER_ATTESTATION'
+    assert response.json()['status'] == 'QUEUED'
     with app.tx() as c:
         account = c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
         job = c.execute('SELECT status,requested_account_mode FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
@@ -2415,16 +2415,22 @@ def test_host_profile_health_and_state_contract(monkeypatch):
     assert state['host_started_at_epoch_seconds']==health['host_started_at_epoch_seconds']
 
 
-def test_ephemeral_blocks_live_auth_and_start_with_stable_reason(monkeypatch):
+def test_ephemeral_codespaces_allows_live_authorization_and_start_with_one_isolated_slot(monkeypatch):
     p,ah,wh,job,th,actual=live_ready(monkeypatch)
     monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
-    auth_response=client.post('/v1/app/live-challenge',headers=ah)
-    assert auth_response.status_code==409
-    assert auth_response.json()['detail']['code']=='EPHEMERAL_HOST_LIVE_BLOCKED'
+    monkeypatch.setattr(app,'LINUX_HOST_MODE',True)
+    monkeypatch.setattr(app,'linux_host_report',lambda:{
+        'healthy':True,'slot_isolation':{'enabled':True,'ready':True,'active_slots':1,'max_slots':1}
+    })
+    monkeypatch.setattr(app,'durable_execution_enabled',lambda:True)
+    authorization=authorize_live_fixture(p,ah,job,actual)
+    assert authorization.status_code==200, authorization.text
     for action in ('START','RESUME'):
         response=client.post('/v1/app/commands',headers=ah,json=command_req(action))
-        assert response.status_code==409
-        assert response.json()['detail']['code']=='EPHEMERAL_HOST_LIVE_BLOCKED'
+        assert response.status_code==202, response.text
+    delivered=client.get('/v1/terminal/commands?cursor=0',headers=th)
+    assert delivered.status_code==200
+    assert {row['action'] for row in delivered.json()['commands']} >= {'START','RESUME'}
     assert client.get('/v1/app/state',headers=ah).json()['host_profile']=='EPHEMERAL'
 
 
@@ -3086,6 +3092,24 @@ def test_phone_market_order_rejects_volume_above_fresh_ea_ceiling(monkeypatch):
     })
     assert response.status_code == 422, response.text
     assert response.json()['detail']['code'] == 'MARKET_ORDER_VOLUME_CAP_EXCEEDED'
+
+
+def test_live_phone_market_order_runs_on_ephemeral_codespaces_after_live_authorization(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = _market_order_ready_profile(monkeypatch, 'LIVE')
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
+    monkeypatch.setattr(app,'LINUX_HOST_MODE',True)
+    monkeypatch.setattr(app,'linux_host_report',lambda:{
+        'healthy':True,'slot_isolation':{'enabled':True,'ready':True,'active_slots':1,'max_slots':1}
+    })
+    monkeypatch.setattr(app,'durable_execution_enabled',lambda:True)
+    config = _publish_market_order_quote(terminal_headers, actual)
+    authorization = authorize_live_fixture(pairing, headers, job, actual)
+    assert authorization.status_code == 200, authorization.text
+    response = client.post('/v1/app/commands', headers=headers, json={
+        'request_id':str(uuid.uuid4()),'action':'PLACE_MARKET_ORDER','config':config,
+    })
+    assert response.status_code == 202, response.text
+    assert response.json()['config']['account_mode'] == 'LIVE'
 
 
 def test_live_phone_market_order_requires_current_account_bound_live_lease(monkeypatch):

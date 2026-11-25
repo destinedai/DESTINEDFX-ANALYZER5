@@ -296,17 +296,12 @@ def linux_slot_isolation(host):
 
 
 def require_live_host_isolation(minimum_active_slots=2):
-    """Require a persistent host and verified independent OS slots for LIVE.
+    """Require root-attested per-user Linux process isolation for LIVE.
 
-    Linux LIVE is admitted only through the root-attested per-pairing Unix slot
-    runtime. The current Windows owner worker has not proved distinct Windows
-    security principals, so its production result remains fail-closed.
+    EPHEMERAL Codespaces can run LIVE after explicit owner risk acceptance; it
+    needs one isolated terminal slot. Persistent Linux retains its two-slot and
+    verified-backup requirements.
     """
-    if HOST_PROFILE != 'PERSISTENT':
-        raise HTTPException(409, detail={
-            'code': 'EPHEMERAL_HOST_LIVE_BLOCKED',
-            'message': 'LIVE authorization requires a persistent execution host',
-        })
     if LINUX_HOST_MODE:
         host = linux_host_report()
         isolation = linux_slot_isolation(host)
@@ -314,20 +309,21 @@ def require_live_host_isolation(minimum_active_slots=2):
         maximum = isolation.get('max_slots')
         valid_active = isinstance(active, int) and not isinstance(active, bool)
         valid_maximum = isinstance(maximum, int) and not isinstance(maximum, bool)
+        required_slots = 1 if HOST_PROFILE == 'EPHEMERAL' else max(1, minimum_active_slots)
         if isolation.get('enabled') is not True or isolation.get('ready') is not True:
             raise HTTPException(503, detail={
                 'code': 'PER_USER_TERMINAL_ISOLATION_REQUIRED',
                 'message': 'The root host agent has not verified isolated per-user MT5 terminals',
             })
-        if not valid_maximum or maximum < 2 or not valid_active or active < minimum_active_slots:
+        if not valid_maximum or maximum < required_slots or not valid_active or active < required_slots:
             raise HTTPException(409, detail={
                 'code': 'LIVE_ISOLATION_CAPACITY_NOT_READY',
-                'message': 'LIVE requires two simultaneously active, root-attested MT5 terminal slots for the linked DEMO and LIVE profiles',
+                'message': f'LIVE requires {required_slots} active root-attested MT5 terminal slot(s) on this host',
                 'active_slots': active if valid_active else 0,
                 'max_slots': maximum if valid_maximum else 0,
             })
         backup = host.get('backup') if isinstance(host, dict) else None
-        if not isinstance(backup, dict) or backup.get('status') != 'PASS':
+        if HOST_PROFILE == 'PERSISTENT' and (not isinstance(backup, dict) or backup.get('status') != 'PASS'):
             raise HTTPException(503, detail={
                 'code': 'LIVE_BACKUP_NOT_VERIFIED',
                 'message': 'LIVE requires recent checksum-verified Bridge and Management database backups on the persistent Linux host',
@@ -1909,8 +1905,6 @@ def worker_attestation(x:WorkerAttestation, authorization:str|None=Header(defaul
         raise HTTPException(422,'Worker attestation expiry is invalid')
     if x.host_generation != HOST_GENERATION:
         raise HTTPException(409,detail={'code':'HOST_GENERATION_MISMATCH','message':'Worker attestation belongs to a different host generation'})
-    if x.account_mode == 'LIVE' and HOST_PROFILE == 'EPHEMERAL':
-        raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE isolation attestations are unavailable on ephemeral hosts'})
     with tx(True) as c:
         if not c.execute('SELECT 1 FROM pairings WHERE id=? AND expires>?',(x.pairing_id,now_epoch)).fetchone():
             raise HTTPException(404,'Pairing not found or expired')
@@ -3290,8 +3284,8 @@ def issue_market_order_command(x,p):
     require_durable_execution()
     managed,beat=destructive_context(p)
     if managed['account_mode']=='LIVE':
-        # LIVE orders remain on the persistent independently isolated host.
-        require_live_host_isolation(minimum_active_slots=2)
+        # LIVE can execute on an EPHEMERAL Codespaces slot after owner risk acceptance.
+        require_live_host_isolation(minimum_active_slots=1)
     elif managed['account_mode']!='DEMO':
         raise HTTPException(409,detail={'code':'ACCOUNT_MODE_NOT_SUPPORTED','message':'Phone market orders require a verified DEMO profile or separately authorized LIVE profile'})
     require_terminal_trade_outcome_resolved(beat)
@@ -3428,9 +3422,9 @@ def issue_position_stop_command(x,p):
                 'config':json.loads(prior['config']),'status':'acknowledged' if prior['ack'] else 'queued'}
 
     require_durable_execution()
-    if HOST_PROFILE!='PERSISTENT':
-        raise HTTPException(409,detail={'code':'PERSISTENT_HOST_REQUIRED','message':'Position protection edits require the persistent owner host'})
     managed,beat=destructive_context(p)
+    if managed['account_mode']=='LIVE':
+        require_live_host_isolation(minimum_active_slots=1)
     require_terminal_trade_outcome_resolved(beat)
     if managed['account_mode']=='LIVE' and not live_authorization_valid(p,managed,beat):
         raise HTTPException(409,detail={'code':'LIVE_AUTHORIZATION_REQUIRED','message':'A current account-bound LIVE lease is required before changing a real-money position stop'})
@@ -3559,8 +3553,6 @@ def command(x:Command,authorization:str|None=Header(default=None)):
     with tx() as c:
         m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
     if x.action in ('START','RESUME'):
-        if HOST_PROFILE=='EPHEMERAL' and m and m['account_mode']=='LIVE':
-            raise HTTPException(409,detail={'code':'EPHEMERAL_HOST_LIVE_BLOCKED','message':'LIVE START and RESUME are unavailable on ephemeral hosts'})
         if not m: raise HTTPException(409,'Managed account provisioning is required before trading can be enabled')
         beat=fresh_heartbeat(p)
         with tx() as c: job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
@@ -3594,7 +3586,7 @@ def poll(cursor:int=Query(default=0,ge=0),authorization:str|None=Header(default=
             rows=c.execute("SELECT * FROM commands WHERE pairing_id=? AND action IN ('STOP','PAUSE','EMERGENCY_STOP') AND (id>? OR ack IS NULL) AND (expires_at IS NULL OR expires_at>?) ORDER BY id",(p['id'],cursor,time.time())).fetchall()
         if HOST_PROFILE=='EPHEMERAL':
             rows=[r for r in rows if r['action'] not in ('START','RESUME') or
-                  (r['host_generation']==HOST_GENERATION and mode=='DEMO')]
+                  (r['host_generation']==HOST_GENERATION and mode in ('DEMO','LIVE'))]
     commands=[{'id':r['id'],'request_id':r['request_id'],'action':r['action'],'config':json.loads(r['config']),**({'expires_at':r['config'] and json.loads(r['config']).get('expires_at')} if r['expires_at'] is not None else {})} for r in rows]
     return {'cursor':max([cursor]+[r['id'] for r in rows]),'commands':commands}
 @app.post('/v1/terminal/commands/{command_id}/ack')

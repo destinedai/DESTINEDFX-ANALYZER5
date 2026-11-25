@@ -780,9 +780,7 @@ def make_set_file(bridge_url: str, pairing_code: str, account: dict) -> str:
 
 def ini_text(job: dict, access_type: str, symbol: str) -> str:
     account = job["account"]
-    host_profile = os.environ.get("BRIDGE_HOST_PROFILE", "EPHEMERAL").strip().upper()
-    ephemeral_live = account.get("account_mode") == "LIVE" and host_profile != "PERSISTENT"
-    allow_trade = "1" if access_type == "MASTER" and not ephemeral_live else "0"
+    allow_trade = "1" if access_type == "MASTER" else "0"
     return ("[Common]\n"
             f"Login={account['login']}\nServer={account['server']}\nPassword={login_password(account)}\n"
             "KeepPrivate=1\nNewsEnable=0\nProxyEnable=0\n"
