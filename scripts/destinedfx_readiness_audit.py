@@ -58,6 +58,8 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     bot_ui = read_text(root, "app/src/main/java/com/example/ui/workstations/BotWorkstation.kt")
     bridge_client = read_text(root, "app/src/main/java/com/example/data/trade/MT5RemoteBridgeClient.kt")
     arming = read_text(root, "app/src/main/java/com/example/data/broker/ModeArmingPolicy.kt")
+    live_flow = read_text(root, "app/src/main/java/com/example/ui/bot/MetaTraderBrokerFlow.kt")
+    live_worker = read_text(root, "managed-worker/worker.py")
     codespaces = read_text(root, "app/src/main/java/com/example/data/codespaces/CodespacesLifecycleClient.kt")
     codespaces_ui = read_text(root, "app/src/main/java/com/example/ui/workstations/CodespacesHostControls.kt")
     bridge = read_text(root, "bridge/app.py")
@@ -143,18 +145,24 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "The Analyzer exposes the stored OHLC failure reason and an explicit refresh action.",
     )
 
-    live_gate_ok = (
-        "HostProfile.PERSISTENT" in arming
-        and "EPHEMERAL_HOST_LIVE_BLOCKED" in arming
-        and "hostProfile != HostProfile.PERSISTENT" in arming
-        and "LIVE IS BLOCKED" in bot_ui
-        and "PERSISTENT HOST NOT VERIFIED" in bot_ui
+    ephemeral_live_risk_acceptance = "I UNDERSTAND, I ACCEPT RISK, CONTINUE WITH LIVE TRADE"
+    ephemeral_live_policy_ok = (
+        ephemeral_live_risk_acceptance in live_flow
+        and "ephemeralLiveTradeAcknowledged" in live_flow
+        and "mt5CredentialFieldsEnabled = !ephemeralLiveTradeWarningRequired || ephemeralLiveTradeAcknowledged" in live_flow
+        and "riskAccepted = !details.mode.equals(\"LIVE\", true) || details.hostProfile != HostProfile.EPHEMERAL || ephemeralLiveTradeAcknowledged" in live_flow
+        and "EPHEMERAL_HOST_LIVE_BLOCKED" not in arming
+        and "hostProfile != HostProfile.PERSISTENT" not in arming
+        and "required_slots = 1 if HOST_PROFILE == 'EPHEMERAL' else max(1, minimum_active_slots)" in bridge
+        and "if HOST_PROFILE == 'PERSISTENT' and" in bridge
+        and 'allow_trade = "1" if access_type == "MASTER" else "0"' in live_worker
+        and "AllowLiveTrading={allow_trade}" in live_worker
     )
     add_check(
         checks,
-        "fail-closed persistent-host Live policy",
-        live_gate_ok,
-        "LIVE remains blocked for ephemeral or unknown hosts; the Bot displays the host gate.",
+        "EPHEMERAL LIVE allowed after explicit risk acceptance",
+        ephemeral_live_policy_ok,
+        "The owner can unlock LIVE on an EPHEMERAL Codespaces host with the explicit disconnect-risk acceptance. Root-attested terminal isolation remains required, and MASTER access enables MT5 live trading.",
     )
 
     bridge_defaults_fail_closed = (

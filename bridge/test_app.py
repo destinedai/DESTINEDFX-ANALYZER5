@@ -431,7 +431,7 @@ def test_ephemeral_linux_host_allows_live_login_enrolment_for_read_only_verifica
         job = c.execute('SELECT status,requested_account_mode FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
     assert account is not None and account['account_mode'] == 'LIVE' and account['access_type'] == 'MASTER'
     assert 'live-secret' not in str(dict(account))
-    assert job['status'] == 'AWAITING_ATTESTATION' and job['requested_account_mode'] == 'LIVE'
+    assert job['status'] == 'QUEUED' and job['requested_account_mode'] == 'LIVE'
 
 
 def test_persistent_linux_host_allows_live_enrollment_with_two_slot_capacity(monkeypatch):

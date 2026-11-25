@@ -54,7 +54,8 @@ class ReadinessAuditTests(unittest.TestCase):
         names = {item["name"] for item in report["checks"]}
         self.assertIn("MT5 EA order and management path", names)
         self.assertIn("phone MT5 orders and position protection route through the Windows EA", names)
-        self.assertIn("fail-closed persistent-host Live policy", names)
+        self.assertIn("EPHEMERAL LIVE allowed after explicit risk acceptance", names)
+        self.assertNotIn("fail-closed persistent-host Live policy", names)
         self.assertIn("Analyzer provider diagnostics", names)
         self.assertIn("automatic Codespaces Bridge discovery", names)
         self.assertIn("automatic Codespaces Management API discovery and owner bootstrap", names)
