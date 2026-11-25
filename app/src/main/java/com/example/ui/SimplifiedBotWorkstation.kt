@@ -2372,7 +2372,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             } else {
                                 DerivDemoBotService.stop(context)
                                 viewModel.setBotStatus(false)
-                                message = "BOT STOPPED - Deriv service stopped; existing broker contracts remain protected and must be verified."
+                                message = "BOT STOP REQUESTED — Deriv is stopping new entries and checking closure of Bot-owned contracts. Broker confirmation is required."
                             }
                         } catch (e: Exception) {
                             message = e.message?.take(240) ?: "BOT STOPPED - MT5 close-out was not confirmed."

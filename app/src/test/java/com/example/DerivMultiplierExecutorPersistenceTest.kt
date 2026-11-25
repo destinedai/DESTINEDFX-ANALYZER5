@@ -16,7 +16,9 @@ import com.example.data.deriv.DerivMultiplierProduct
 import com.example.data.deriv.DerivPortfolioSnapshot
 import com.example.data.deriv.DerivReconciliationStatus
 import com.example.data.deriv.DerivSubmissionStage
+import com.example.service.cancelDerivEntriesAndCloseBotContracts
 import com.example.domain.model.Position
+import kotlinx.coroutines.isActive
 import com.example.domain.model.SignalDirection
 import com.example.domain.repository.AccountMetrics
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,6 +133,25 @@ class DerivMultiplierExecutorPersistenceTest {
         assertEquals(9001L, restored!!.contractId)
         assertEquals(7001L, restored.buyTransactionId)
         assertEquals(1.25, restored.purchasePrice!!, 0.0)
+    }
+
+    @Test
+    fun stopCancelsEntryLoopAndClosesOnlyBrokerConfirmedBotOwnedContracts() = runBlocking {
+        val openContract = contract()
+        database.derivExecutionDao().insertIfAbsent(
+            storedExecution("stop-close", status = DerivExecutionStatus.CONTRACT_OPEN)
+        )
+        gateway.active.value = mapOf(openContract.contractId to openContract)
+        gateway.portfolioContracts = listOf(openContract)
+        val entryLoop = kotlinx.coroutines.Job()
+
+        val closed = cancelDerivEntriesAndCloseBotContracts(entryLoop, executor)
+
+        assertFalse(entryLoop.isActive)
+        assertTrue(closed)
+        assertEquals(listOf(openContract.contractId), gateway.sellRequests)
+        assertTrue(database.derivExecutionDao().knownContracts("D123", "DEMO").isEmpty())
+        assertTrue(database.derivExecutionDao().unresolved("D123", "DEMO").isEmpty())
     }
 
     @Test
@@ -267,6 +288,7 @@ class DerivMultiplierExecutorPersistenceTest {
         )
         override val connectionState: StateFlow<DerivConnectionState> = MutableStateFlow(DerivConnectionState.READY)
         var historical: DerivContractInfo? = null
+        val sellRequests = mutableListOf<Long>()
         var buyResult: Result<DerivBuyResult> = Result.success(DerivBuyResult(9001L, 7001L, 1.0, "proposal-1", 88))
         var purchaseAttempts = 0
             private set
@@ -291,7 +313,21 @@ class DerivMultiplierExecutorPersistenceTest {
             return buyResult
         }
 
-        override suspend fun sellContract(contractId: Long): Result<com.example.data.deriv.DerivSellResult> =
-            Result.failure(UnsupportedOperationException("not used by persistence tests"))
+        override suspend fun sellContract(contractId: Long): Result<com.example.data.deriv.DerivSellResult> {
+            sellRequests += contractId
+            val current = active.value[contractId]
+                ?: return Result.failure(IllegalStateException("contract is not active"))
+            val sold = current.copy(
+                bidPrice = 1.5,
+                profit = 0.5,
+                isSold = true,
+                isValidToSell = false,
+                status = "sold"
+            )
+            historical = sold
+            active.value = active.value - contractId
+            portfolioContracts = portfolioContracts.filterNot { it.contractId == contractId }
+            return Result.success(com.example.data.deriv.DerivSellResult(contractId, 7002L, 1.5))
+        }
     }
 }

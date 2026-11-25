@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -38,6 +39,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+
+
+internal suspend fun cancelDerivEntriesAndCloseBotContracts(
+    entryLoop: Job?,
+    executor: DerivMultiplierExecutor?
+): Boolean {
+    entryLoop?.cancelAndJoin()
+    return executor?.closeBotOwnedContracts() == true
+}
 
 
 /** A Bot-owned signal contract. It deliberately does not depend on Analyzer TradeSignal. */
@@ -492,6 +502,8 @@ class DerivDemoBotService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var loopJob: Job? = null
     private var healthJob: Job? = null
+    private var stopJob: Job? = null
+    private var activeExecutor: DerivMultiplierExecutor? = null
     @Volatile private var stopRequested = false
     @Volatile private var pauseRequested = false
 
@@ -505,7 +517,23 @@ class DerivDemoBotService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                stopSafely()
+                // Stop entries first, then wait for the loop and reconcile every persisted
+                // Bot-owned contract through the authenticated broker before reporting STOPPED.
+                stopRequested = true
+                if (stopJob?.isActive != true) {
+                    stopJob = serviceScope.launch {
+                        val closed = runCatching {
+                            cancelDerivEntriesAndCloseBotContracts(loopJob, activeExecutor)
+                        }.getOrDefault(false)
+                        loopJob = null
+                        activeExecutor = null
+                        stopSafely(if (closed) {
+                            "Stopped — Deriv broker confirms all DestinedFX Bot contracts are closed"
+                        } else {
+                            "BOT NOT RUNNING — STOP requested; Deriv did not confirm every Bot-owned contract closed. Check the broker account immediately."
+                        })
+                    }
+                }
                 return START_NOT_STICKY
             }
             ACTION_PAUSE -> {
@@ -519,8 +547,13 @@ class DerivDemoBotService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START -> {
+                if (stopJob?.isActive == true) {
+                    stopSafely("BOT NOT RUNNING — a previous Deriv STOP close-out is still being verified")
+                    return START_NOT_STICKY
+                }
                 stopRequested = false
                 pauseRequested = false
+                activeExecutor = null
                 loopJob?.cancel()
                 val symbol = intent.getStringExtra(EXTRA_SYMBOL)?.trim().orEmpty()
                 val strategy = intent.getStringExtra(EXTRA_STRATEGY)?.trim().orEmpty()
@@ -767,13 +800,14 @@ class DerivDemoBotService : Service() {
             app.db.derivExecutionDao(),
             sensitiveActionAuthorized = { com.example.security.AppSecurityGuard.authorizeSensitiveAction() },
             dailyRiskEntryAllowed = { accountId, mode ->
-                mode.equals("demo", ignoreCase = true) && accountId == acceptedAccount.loginId &&
+                !stopRequested && mode.equals("demo", ignoreCase = true) && accountId == acceptedAccount.loginId &&
                     app.secretsManager.hasCurrentDerivDemoAcceptance(
                         acceptedAccount.loginId, acceptedAccount.currency, credentialGeneration = acceptedAccount.credentialGeneration
                     ) &&
                     verifyDerivDailyRiskAtEntryBoundary(accountId, mode)
             }
         )
+        activeExecutor = executor
         if (!reconcileWithRecovery(executor, gateway)) return
         update("Running — scanning $symbol; no order is assumed confirmed")
         while (currentCoroutineContext().isActive && !stopRequested) {
