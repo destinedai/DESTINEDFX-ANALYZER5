@@ -243,6 +243,9 @@ android {
         // observes the host's very high CPU count and can spawn dozens of worker threads.
         testTask.maxHeapSize = "1536m"
         testTask.maxParallelForks = 1
+        // Robolectric can leave Compose roots/animations registered after an ActivityScenario
+        // test. Isolate each class so one class cannot keep later Compose tests non-idle.
+        testTask.forkEvery = 1
         testTask.jvmArgs("-XX:ActiveProcessorCount=2")
         // The CI job seeds this directory with the exact instrumented Android SDK jar
         // so Robolectric does not perform one independent Maven download per test class.
