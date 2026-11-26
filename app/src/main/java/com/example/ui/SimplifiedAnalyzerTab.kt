@@ -135,7 +135,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                             color = when (insight.trend) { "BUY" -> ProfitGreen; "SELL" -> LossRed; else -> WarningAmber },
                             fontSize = 27.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
                         Spacer(Modifier.weight(1f))
-                        Text("\${insight.confidence}%", color = TextPrimary, fontSize = 21.sp,
+                        Text("${insight.confidence}%", color = TextPrimary, fontSize = 21.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                     }
                     Text(insight.reason, color = TextSecondary, fontSize = 12.sp)
@@ -200,8 +200,8 @@ private fun AnalyzerTradingViewChart(ticker: String?, timeframe: String, modifie
     val url = remember(ticker, timeframe) {
         ticker?.let {
             "https://www.tradingview.com/widgetembed/?frameElementId=destinedfx_analyzer" +
-                "&symbol=\${URLEncoder.encode(it, "UTF-8")}" +
-                "&interval=\${analyzerTradingViewInterval(timeframe)}" +
+                "&symbol=${URLEncoder.encode(it, "UTF-8")}" +
+                "&interval=${analyzerTradingViewInterval(timeframe)}" +
                 "&hidesidetoolbar=1&hide_top_toolbar=1&symboledit=0&saveimage=0" +
                 "&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=0&hideideas=1&locale=en"
         }
@@ -362,8 +362,8 @@ private fun analyzerCountdown(targetMillis: Long, nowMillis: Long): String {
     val hours = TimeUnit.MILLISECONDS.toHours(remaining)
     val minutes = TimeUnit.MILLISECONDS.toMinutes(remaining) % 60
     return when {
-        hours > 0 -> "in \${hours}h \${minutes}m"
-        minutes > 0 -> "in \${minutes}m"
+        hours > 0 -> "in ${hours}h ${minutes}m"
+        minutes > 0 -> "in ${minutes}m"
         else -> "in less than 1m"
     }
 }
@@ -433,7 +433,7 @@ private fun EconomicCalendarCard(symbol: String) {
             Text("ECONOMIC CALENDAR", color = ElectricCyan, fontSize = 11.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
             if (nextEvent != null) {
-                Text("NEXT: \${nextEvent.title} · \${analyzerCountdown(nextEvent.timeMillis, nowMillis)}",
+                Text("NEXT: ${nextEvent.title} · ${analyzerCountdown(nextEvent.timeMillis, nowMillis)}",
                     color = TextPrimary, fontSize = 12.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
             }
@@ -444,7 +444,15 @@ private fun EconomicCalendarCard(symbol: String) {
                     color = TextSecondary, fontSize = 12.sp
                 )
             } else {
+                var lastDisplayedDate: String? = null
                 visibleEvents.forEach { event ->
+                    val eventDateKey = analyzerLocalDateKey(event.timeMillis)
+                    if (eventDateKey != lastDisplayedDate) {
+                        Text(if (eventDateKey == todayKey) "TODAY" else "TOMORROW",
+                            color = ElectricCyan, fontSize = 9.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        lastDisplayedDate = eventDateKey
+                    }
                     val impactColor = when (event.impact.uppercase(Locale.ROOT)) {
                         "HIGH" -> LossRed
                         "MEDIUM" -> WarningAmber
@@ -463,7 +471,7 @@ private fun EconomicCalendarCard(symbol: String) {
                 }
             }
             if (lastUpdated > 0L) {
-                Text("Last updated: \${analyzerLocalTime(lastUpdated, "dd MMM, HH:mm")}",
+                Text("Last updated: ${analyzerLocalTime(lastUpdated, "dd MMM, HH:mm")}",
                     color = TextSecondary, fontSize = 9.sp)
             }
         }
