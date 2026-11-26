@@ -61,6 +61,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val insight = remember(quote, candles) { MT5AnalyzerMath.analyze(quote, candles) }
     val price = quote?.let { (it.bid + it.ask) / 2.0 }
     val spread = quote?.let { it.ask - it.bid }
+    val tradingViewSymbol = if (connected && symbol.isNotBlank()) tradingViewSymbolForMt5(symbol) else null
 
     if (!connected || quote == null) {
         Box(Modifier.fillMaxSize().background(DarkBackground)) {
@@ -108,7 +109,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                     Spacer(Modifier.weight(1f))
                     Text(if (connected) "$symbol · $timeframe" else "Waiting for MT5...", color = TextSecondary, fontSize = 9.sp)
                 }
-                TradingViewEmbedChart(symbol.takeIf { connected && it.isNotBlank() }, timeframe,
+                TradingViewEmbedChart(tradingViewSymbol, timeframe,
                     Modifier.fillMaxWidth().height(270.dp))
             }
         }
