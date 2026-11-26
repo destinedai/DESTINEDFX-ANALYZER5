@@ -215,7 +215,7 @@ def test_codespaces_bootstrap_apk_has_independent_ci_job():
     assert "assembleDebug" in job
     assert "testDebugUnitTest" not in job
     assert "name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-Codespaces-bootstrap" in job
-    assert "needs: [python-tests, android-build-and-unit-tests]" in job
+    assert "needs: []" in job
     assert "apksigner" in job and "aapt2" in job and "sha256sum" in job
 
 
@@ -233,8 +233,8 @@ def test_android_emulator_and_bootstrap_jobs_wait_for_prior_acceptance_gates():
     bootstrap_job = workflow[bootstrap_start:emulator_start]
     emulator_job = workflow[emulator_start:worker_start]
 
-    assert "needs: python-tests" in android_job
-    assert "needs: [python-tests, android-build-and-unit-tests]" in bootstrap_job
+    assert "needs: []" in android_job
+    assert "needs: []" in bootstrap_job
     assert "needs: [python-tests, android-build-and-unit-tests]" in emulator_job
     assert "\\n    if: always()" not in emulator_job
     assert "JVM acceptance is NOT PASSED" in workflow

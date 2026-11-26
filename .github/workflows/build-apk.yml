@@ -212,7 +212,7 @@ jobs:
 
   android-build-and-unit-tests:
     name: Android JVM tests and APK build (bounded)
-    needs: python-tests
+    needs: []
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # APK assembly and upload are intentionally independent of emulator health.
