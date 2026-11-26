@@ -23,13 +23,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkSurface
 import com.example.ui.theme.ElectricCyan
@@ -66,6 +65,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val snapshot by viewModel.managedMt5BridgeSnapshot.collectAsStateWithLifecycle()
     val mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
     val brand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
+    val analyzerState: AnalyzerViewModel = viewModel()
 
     LaunchedEffect(brand, mode) { viewModel.startSelectedMt5AnalyzerBridgeMonitor() }
 
@@ -74,72 +74,94 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             it.accountVerified && it.brokerIdentityVerified && it.actualAccountMode == mode
     } == true
     val symbol = snapshot?.activeChartSymbol?.takeIf { it.isNotBlank() }
-        ?: snapshot?.brokerQuotes?.firstOrNull()?.symbol.orEmpty()
+        ?: snapshot?.brokerQuotes?.firstOrNull()?.symbol?.takeIf { it.isNotBlank() }
+        ?: "EURUSD"
     val timeframe = snapshot?.activeChartTimeframe?.takeIf { it.isNotBlank() } ?: "M15"
-    val quote = if (connected && symbol.isNotBlank()) snapshot?.brokerQuotes?.firstOrNull {
-        it.symbol.equals(symbol, true) && it.source == "MT5_TERMINAL"
+
+    val quote = if (connected) snapshot?.brokerQuotes?.firstOrNull {
+        it.symbol.equals(symbol, true) && it.source == "MT5_TERMINAL" &&
+            it.bid.isFinite() && it.ask.isFinite() && it.bid > 0.0 && it.ask >= it.bid
     } else null
-    val candles = if (connected && symbol.isNotBlank()) snapshot?.brokerCandles.orEmpty().filter {
+    val candles = if (connected) snapshot?.brokerCandles.orEmpty().filter {
         it.symbol.equals(symbol, true) && it.timeframe.equals(timeframe, true) &&
             it.source == "MT5_TERMINAL" && it.complete
     } else emptyList()
-    val insight = remember(quote, candles) { MT5AnalyzerMath.analyze(quote, candles) }
-    val price = quote?.let { (it.bid + it.ask) / 2.0 }
-    val spread = quote?.let { it.ask - it.bid }
-    val chartTicker = if (connected && symbol.isNotBlank()) analyzerTradingViewTicker(symbol) else null
 
-    if (!connected || quote == null) {
-        Column(
-            Modifier.fillMaxSize().background(DarkBackground).padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(symbol.ifBlank { "—" }, color = TextPrimary, fontSize = 21.sp,
+    val price = quote?.let { ((it.bid + it.ask) / 2.0).takeIf { value -> value.isFinite() && value > 0.0 } }
+    val spread = quote?.let { (it.ask - it.bid).takeIf { value -> value.isFinite() && value >= 0.0 } }
+    val priceQuoteAvailable = price != null
+    val priceQuoteFresh = priceQuoteAvailable && connected && snapshot?.heartbeatFresh == true
+    LaunchedEffect(priceQuoteAvailable, priceQuoteFresh) {
+        analyzerState.updatePriceState(priceQuoteAvailable, priceQuoteFresh)
+    }
+
+    val insight = remember(quote, candles) { MT5AnalyzerMath.analyze(quote, candles) }
+    val support = insight.support
+    val resistance = insight.resistance
+    val stopLoss = insight.stopLoss
+    val takeProfit = insight.takeProfit
+    val trendValidated = when (insight.trend) {
+        "BUY" -> insight.reason.startsWith("Price above MA20")
+        "SELL" -> insight.reason.startsWith("Price below MA20")
+        else -> false
+    }
+    val levelsValidated = support?.let { it.isFinite() && it > 0.0 } == true &&
+        resistance?.let { it.isFinite() && it >= (support ?: Double.POSITIVE_INFINITY) } == true &&
+        stopLoss?.let { it.isFinite() && it > 0.0 } == true &&
+        takeProfit?.let { it.isFinite() && it > 0.0 } == true &&
+        when (insight.trend) {
+            "BUY" -> stopLoss!! < (price ?: 0.0) && takeProfit!! > (price ?: 0.0)
+            "SELL" -> stopLoss!! > (price ?: 0.0) && takeProfit!! < (price ?: 0.0)
+            else -> false
+        }
+    val analysisValidated = trendValidated && levelsValidated
+    val showAnalysis = analyzerState.priceAvailable && analyzerState.priceFresh && analysisValidated
+    val chartTicker = analyzerTradingViewTicker(symbol) ?: "FX:EURUSD"
+
+    Column(
+        Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(symbol, color = TextPrimary, fontSize = 21.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    Box(Modifier.size(10.dp).background(if (connected) ProfitGreen else Color.Gray, CircleShape))
+                }
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("PRICE", color = TextSecondary, fontSize = 9.sp)
+                        Text(if (analyzerState.priceAvailable && analyzerState.priceFresh) {
+                            price?.let { formatPrice(it, symbol) } ?: "--"
+                        } else "--", color = TextPrimary, fontSize = 29.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                        Box(Modifier.size(10.dp).background(if (connected) ProfitGreen else Color.Gray, CircleShape))
                     }
-                    Text("Waiting for MT5...", color = TextSecondary, fontSize = 14.sp)
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("SPREAD", color = TextSecondary, fontSize = 9.sp)
+                        Text(if (analyzerState.priceAvailable && analyzerState.priceFresh) {
+                            spread?.let { formatPrice(it, symbol) } ?: "--"
+                        } else "--", color = TextPrimary, fontSize = 15.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    }
                 }
             }
         }
-    } else {
-        Column(Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(symbol, color = TextPrimary, fontSize = 21.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                        Box(Modifier.size(10.dp).background(if (connected) ProfitGreen else Color.Gray, CircleShape))
-                    }
-                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text("PRICE", color = TextSecondary, fontSize = 9.sp)
-                            Text(price?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 29.sp,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("SPREAD", color = TextSecondary, fontSize = 9.sp)
-                            Text(spread?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 15.sp,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-                Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    AnalyzerTradingViewChart(chartTicker, timeframe, Modifier.fillMaxWidth().height(270.dp))
-                }
-            }
+
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+            AnalyzerTradingViewChart(chartTicker, timeframe, analyzerState,
+                Modifier.fillMaxWidth().height(270.dp))
+        }
+
+        if (showAnalysis) {
             Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text("SIGNAL", color = ElectricCyan, fontSize = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    Text("SIGNAL", color = ElectricCyan, fontSize = 11.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(insight.trend,
                             color = when (insight.trend) { "BUY" -> ProfitGreen; "SELL" -> LossRed; else -> WarningAmber },
@@ -156,14 +178,15 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text("LEVELS", color = ElectricCyan, fontSize = 11.sp,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                    AnalyzerLevelValue("Support", insight.support, symbol)
-                    AnalyzerLevelValue("Resistance", insight.resistance, symbol)
-                    AnalyzerLevelValue("SL suggestion", insight.stopLoss, symbol)
-                    AnalyzerLevelValue("TP suggestion", insight.takeProfit, symbol)
+                    AnalyzerLevelValue("Support", support, symbol)
+                    AnalyzerLevelValue("Resistance", resistance, symbol)
+                    AnalyzerLevelValue("SL suggestion", stopLoss, symbol)
+                    AnalyzerLevelValue("TP suggestion", takeProfit, symbol)
                 }
             }
-            EconomicCalendarCard(symbol)
         }
+
+        EconomicCalendarCard(symbol)
     }
 }
 
@@ -206,104 +229,96 @@ private fun analyzerTradingViewInterval(timeframe: String): String = when (timef
 }
 
 @Composable
-private fun AnalyzerTradingViewChart(ticker: String?, timeframe: String, modifier: Modifier = Modifier) {
+private fun AnalyzerTradingViewChart(
+    ticker: String,
+    timeframe: String,
+    analyzerState: AnalyzerViewModel,
+    modifier: Modifier = Modifier
+) {
     val url = remember(ticker, timeframe) {
-        ticker?.let {
-            "https://www.tradingview.com/widgetembed/?frameElementId=destinedfx_analyzer" +
-                "&symbol=${URLEncoder.encode(it, "UTF-8")}" +
-                "&interval=${analyzerTradingViewInterval(timeframe)}" +
-                "&hidesidetoolbar=1&hide_top_toolbar=1&symboledit=0&saveimage=0" +
-                "&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=0&hideideas=1&locale=en"
-        }
-    }
-    var retry by remember(url) { mutableStateOf(0) }
-    var loadState by remember(url, retry) { mutableStateOf(AnalyzerChartState.LOADING) }
-    val stateSetter = rememberUpdatedState<(AnalyzerChartState) -> Unit> { loadState = it }
-    val loadKey = "$url#$retry"
-
-    LaunchedEffect(loadKey) {
-        if (url != null) {
-            loadState = AnalyzerChartState.LOADING
-            delay(25_000L)
-            if (loadState == AnalyzerChartState.LOADING) loadState = AnalyzerChartState.FAILED
-        }
+        "https://www.tradingview.com/widgetembed/?frameElementId=destinedfx_analyzer" +
+            "&symbol=${URLEncoder.encode(ticker, "UTF-8")}" +
+            "&interval=${analyzerTradingViewInterval(timeframe)}" +
+            "&hidesidetoolbar=1&hide_top_toolbar=1&symboledit=0&saveimage=0" +
+            "&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=0&hideideas=1&locale=en"
     }
 
     Box(modifier.background(Color(0xFF171B27))) {
-        if (url == null) {
-            Text("Waiting for MT5...", color = TextSecondary, fontSize = 12.sp,
-                modifier = Modifier.align(Alignment.Center))
-        } else {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { context ->
-                    WebView(context).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.databaseEnabled = true
-                        settings.loadsImagesAutomatically = true
-                        settings.blockNetworkLoads = false
-                        settings.allowFileAccess = false
-                        settings.allowContentAccess = false
-                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                        overScrollMode = android.view.View.OVER_SCROLL_NEVER
-                        setBackgroundColor(android.graphics.Color.rgb(23, 27, 39))
-                        webChromeClient = WebChromeClient()
-                        webViewClient = object : WebViewClient() {
-                            private var mainFrameFailed = false
-
-                            override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
-                                super.onPageStarted(view, pageUrl, favicon)
-                                mainFrameFailed = false
-                                stateSetter.value(AnalyzerChartState.LOADING)
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { context ->
+                WebView(context).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.databaseEnabled = true
+                    settings.loadsImagesAutomatically = true
+                    settings.blockNetworkLoads = false
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
+                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                    overScrollMode = android.view.View.OVER_SCROLL_NEVER
+                    setBackgroundColor(android.graphics.Color.rgb(23, 27, 39))
+                    webChromeClient = WebChromeClient()
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
+                            super.onPageStarted(view, pageUrl, favicon)
+                            if (pageUrl?.startsWith("https://www.tradingview.com/widgetembed/") == true) {
+                                analyzerState.onChartPageStarted()
                             }
+                        }
 
-                            override fun onPageFinished(view: WebView?, pageUrl: String?) {
-                                super.onPageFinished(view, pageUrl)
-                                if (!mainFrameFailed) stateSetter.value(AnalyzerChartState.LOADED)
+                        override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                            super.onPageFinished(view, pageUrl)
+                            if (pageUrl?.startsWith("https://www.tradingview.com/widgetembed/") == true && view != null) {
+                                analyzerState.onChartPageLoaded()
+                                pollAnalyzerChartRendered(view, analyzerState)
                             }
+                        }
 
-                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                super.onReceivedError(view, request, error)
-                                if (request?.isForMainFrame == true) {
-                                    mainFrameFailed = true
-                                    stateSetter.value(AnalyzerChartState.FAILED)
-                                }
-                            }
+                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                            super.onReceivedError(view, request, error)
+                            if (request?.isForMainFrame == true) analyzerState.onChartPageFailed()
+                        }
 
-                            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, error: android.webkit.WebResourceResponse?) {
-                                super.onReceivedHttpError(view, request, error)
-                                if (request?.isForMainFrame == true && (error?.statusCode ?: 200) >= 400) {
-                                    mainFrameFailed = true
-                                    stateSetter.value(AnalyzerChartState.FAILED)
-                                }
+                        override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, error: android.webkit.WebResourceResponse?) {
+                            super.onReceivedHttpError(view, request, error)
+                            if (request?.isForMainFrame == true && (error?.statusCode ?: 200) >= 400) {
+                                analyzerState.onChartPageFailed()
                             }
                         }
                     }
-                },
-                update = { webView ->
-                    if (webView.tag != loadKey) {
-                        webView.tag = loadKey
-                        loadState = AnalyzerChartState.LOADING
-                        webView.stopLoading()
-                        webView.loadUrl(url)
-                    }
                 }
-            )
-            if (loadState == AnalyzerChartState.LOADING) {
-                Text("Loading chart...", color = TextSecondary, fontSize = 11.sp,
-                    modifier = Modifier.align(Alignment.Center))
-            } else if (loadState == AnalyzerChartState.FAILED) {
-                Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Loading chart...", color = TextSecondary, fontSize = 12.sp)
-                    TextButton(onClick = { retry++ }) { Text("Retry", color = ElectricCyan) }
+            },
+            update = { webView ->
+                if (webView.tag != url) {
+                    analyzerState.onChartPageStarted()
+                    webView.tag = url
+                    webView.stopLoading()
+                    webView.loadUrl(url)
                 }
             }
-        }
+        )
     }
 }
 
-private enum class AnalyzerChartState { LOADING, LOADED, FAILED }
+private fun pollAnalyzerChartRendered(
+    webView: WebView,
+    analyzerState: AnalyzerViewModel,
+    attempt: Int = 0
+) {
+    val script = "(function(){var nodes=document.querySelectorAll('iframe,canvas,svg');" +
+        "for(var i=0;i<nodes.length;i++){var r=nodes[i].getBoundingClientRect();" +
+        "if(r.width>0&&r.height>0)return true;}return false;})();"
+    webView.evaluateJavascript(script) { result ->
+        val rendered = result == "true"
+        analyzerState.onChartRendered(rendered)
+        if (!rendered && attempt < 40) {
+            webView.postDelayed({
+                if (webView.isAttachedToWindow) pollAnalyzerChartRendered(webView, analyzerState, attempt + 1)
+            }, 500L)
+        }
+    }
+}
 
 private data class AnalyzerEconomicEvent(
     val title: String,
