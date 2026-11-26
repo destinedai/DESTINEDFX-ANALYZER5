@@ -39,8 +39,16 @@ class AnalyzerViewModel : ViewModel() {
         chartRendered = false
     }
 
+    fun onChartUnavailable() {
+        pageLoaded = false
+        chartRendered = false
+    }
+
     fun updatePriceState(available: Boolean, fresh: Boolean) {
         priceAvailable = available
         priceFresh = available && fresh
     }
 }
+
+internal fun analyzerTradingViewTicker(mt5Symbol: String): String? =
+    tradingViewSymbolForMt5(mt5Symbol)

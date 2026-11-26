@@ -3,6 +3,7 @@ package com.example
 import com.example.data.trade.VerifiedBrokerCandle
 import com.example.data.trade.VerifiedBrokerQuote
 import com.example.ui.MT5AnalyzerMath
+import com.example.ui.analyzerTradingViewTicker
 import com.example.ui.tradingViewIntervalForMt5
 import com.example.ui.tradingViewSymbolForMt5
 import org.junit.Assert.*
@@ -31,5 +32,12 @@ class MT5AnalyzerMathTest{
         assertEquals("TVC:GOLD",tradingViewSymbolForMt5("XAUUSDm"))
         assertEquals("TVC:GOLD",tradingViewSymbolForMt5("GOLD"))
         assertEquals("60",tradingViewIntervalForMt5("H1"));assertEquals("1D",tradingViewIntervalForMt5("D1"))
+    }
+
+    @Test fun unsupportedTradingViewSymbolReturnsNullAndCannotRenderChart() {
+        val ticker = analyzerTradingViewTicker("FAKEPAIR")
+        assertNull(ticker)
+        assertNotEquals("FX:EURUSD", ticker)
+        assertFalse(ticker != null)
     }
 }

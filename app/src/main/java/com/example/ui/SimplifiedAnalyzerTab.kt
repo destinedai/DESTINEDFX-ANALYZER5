@@ -117,8 +117,11 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val analysisValidated = trendValidated && levelsValidated
     val showPrice = priceQuoteAvailable && priceQuoteFresh &&
         analyzerState.priceAvailable && analyzerState.priceFresh
-    val showAnalysis = showPrice && analysisValidated
-    val chartTicker = tradingViewSymbolForMt5(symbol) ?: "FX:EURUSD"
+    val chartTicker = analyzerTradingViewTicker(symbol)
+    val showAnalysis = showPrice && analysisValidated && chartTicker != null
+    LaunchedEffect(chartTicker) {
+        if (chartTicker == null) analyzerState.onChartUnavailable()
+    }
 
     Column(
         Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
@@ -154,8 +157,12 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
 
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-            AnalyzerTradingViewChart(chartTicker, timeframe, analyzerState,
-                Modifier.fillMaxWidth().height(270.dp))
+            if (chartTicker != null) {
+                AnalyzerTradingViewChart(chartTicker, timeframe, analyzerState,
+                    Modifier.fillMaxWidth().height(270.dp))
+            } else {
+                Box(Modifier.fillMaxWidth().height(270.dp).background(Color(0xFF171B27)))
+            }
         }
 
         if (showAnalysis) {
