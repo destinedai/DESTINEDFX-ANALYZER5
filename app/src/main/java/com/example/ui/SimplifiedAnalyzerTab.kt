@@ -1,5 +1,10 @@
 package com.example.ui
 
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,20 +17,26 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkSurface
@@ -35,6 +46,19 @@ import com.example.ui.theme.ProfitGreen
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarningAmber
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.TimeUnit
 
 @Composable
 fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {}) {
@@ -61,7 +85,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val insight = remember(quote, candles) { MT5AnalyzerMath.analyze(quote, candles) }
     val price = quote?.let { (it.bid + it.ask) / 2.0 }
     val spread = quote?.let { it.ask - it.bid }
-    val tradingViewSymbol = if (connected && symbol.isNotBlank()) tradingViewSymbolForMt5(symbol) else null
+    val chartTicker = if (connected && symbol.isNotBlank()) analyzerTradingViewTicker(symbol) else null
 
     if (!connected || quote == null) {
         Box(Modifier.fillMaxSize().background(DarkBackground)) {
@@ -71,76 +95,65 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     } else {
         Column(Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("MT5 MARKET", color = TextSecondary, fontSize = 10.sp)
-                        Text(symbol.ifBlank { "Waiting for MT5..." }, color = TextPrimary, fontSize = 21.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Box(Modifier.size(9.dp).background(if (connected) ProfitGreen else TextSecondary, CircleShape))
-                        Text(if (connected) "MT5 CONNECTED · ${snapshot?.actualAccountMode}" else "Waiting for MT5...",
-                            color = if (connected) ProfitGreen else TextSecondary, fontSize = 10.sp)
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text(symbol, color = TextPrimary, fontSize = 21.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("PRICE", color = TextSecondary, fontSize = 9.sp)
+                            Text(price?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 29.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("SPREAD", color = TextSecondary, fontSize = 9.sp)
+                            Text(spread?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 15.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        }
                     }
                 }
-                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                    Column(Modifier.weight(1f)) {
-                        Text("LIVE PRICE · MT5", color = TextSecondary, fontSize = 9.sp)
-                        Text(price?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 29.sp,
+            }
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+                Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("TRADINGVIEW CHART", color = ElectricCyan, fontSize = 11.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                        Spacer(Modifier.weight(1f))
+                        Text("$symbol · $timeframe", color = TextSecondary, fontSize = 9.sp)
                     }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("SPREAD", color = TextSecondary, fontSize = 9.sp)
-                        Text(spread?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 15.sp,
+                    AnalyzerTradingViewChart(chartTicker, timeframe, Modifier.fillMaxWidth().height(270.dp))
+                }
+            }
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text("SIGNAL", color = ElectricCyan, fontSize = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(insight.trend,
+                            color = when (insight.trend) { "BUY" -> ProfitGreen; "SELL" -> LossRed; else -> WarningAmber },
+                            fontSize = 27.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                        Spacer(Modifier.weight(1f))
+                        Text("\${insight.confidence}%", color = TextPrimary, fontSize = 21.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                     }
+                    Text(insight.reason, color = TextSecondary, fontSize = 12.sp)
                 }
             }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-            Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("TRADINGVIEW CHART", color = ElectricCyan, fontSize = 11.sp,
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("LEVELS", color = ElectricCyan, fontSize = 11.sp,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                    Spacer(Modifier.weight(1f))
-                    Text(if (connected) "$symbol · $timeframe" else "Waiting for MT5...", color = TextSecondary, fontSize = 9.sp)
+                    AnalyzerLevelValue("Support", insight.support, symbol)
+                    AnalyzerLevelValue("Resistance", insight.resistance, symbol)
+                    AnalyzerLevelValue("SL suggestion", insight.stopLoss, symbol)
+                    AnalyzerLevelValue("TP suggestion", insight.takeProfit, symbol)
                 }
-                TradingViewEmbedChart(tradingViewSymbol, timeframe,
-                    Modifier.fillMaxWidth().height(270.dp))
             }
+            EconomicCalendarCard(symbol)
         }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text("SIGNAL", color = ElectricCyan, fontSize = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(if (connected) insight.trend else "NEUTRAL",
-                        color = when { !connected -> TextSecondary; insight.trend=="BUY" -> ProfitGreen
-                            insight.trend=="SELL" -> LossRed; else -> WarningAmber },
-                        fontSize = 27.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                    Spacer(Modifier.weight(1f))
-                    Text("${if (connected) insight.confidence else 0}%", color = TextPrimary, fontSize = 21.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                }
-                Text(if (connected) insight.reason else "Waiting for MT5...", color = TextSecondary, fontSize = 12.sp)
-            }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Text("LEVELS · MT5 CANDLES", color = ElectricCyan, fontSize = 11.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                AnalyzerLevelValue("Support", insight.support, symbol)
-                AnalyzerLevelValue("Resistance", insight.resistance, symbol)
-                AnalyzerLevelValue("SL suggestion", insight.stopLoss, symbol)
-                AnalyzerLevelValue("TP suggestion", insight.takeProfit, symbol)
-            }
-        }
-    }
     }
 }
 
@@ -150,5 +163,309 @@ private fun AnalyzerLevelValue(label: String, value: Double?, symbol: String) {
         Text(label, color = TextSecondary, fontSize = 12.sp)
         Text(value?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 13.sp,
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+    }
+}
+
+private val analyzerCalendarCurrencies = setOf(
+    "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK",
+    "DKK", "SGD", "HKD", "CNH", "CNY", "MXN", "ZAR", "TRY", "PLN", "HUF", "CZK"
+)
+
+private fun analyzerTradingViewTicker(mt5Symbol: String): String? {
+    val raw = mt5Symbol.trim().uppercase(Locale.ROOT).substringAfterLast(':').substringBefore('.')
+    val compact = raw.filter { it in 'A'..'Z' }
+    if (compact.length < 6) return null
+    val pair = compact.take(6)
+    if (pair.startsWith("XAU") && pair.endsWith("USD")) return "TVC:GOLD"
+    if (pair.startsWith("XAG") && pair.endsWith("USD")) return "TVC:SILVER"
+    val base = pair.substring(0, 3)
+    val quote = pair.substring(3, 6)
+    return if (base in analyzerCalendarCurrencies && quote in analyzerCalendarCurrencies) "FX:$pair" else null
+}
+
+private fun analyzerTradingViewInterval(timeframe: String): String = when (timeframe.trim().uppercase(Locale.ROOT)) {
+    "M1" -> "1"
+    "M5" -> "5"
+    "M15" -> "15"
+    "M30" -> "30"
+    "H1" -> "60"
+    "H4" -> "240"
+    "D1" -> "1D"
+    "W1" -> "1W"
+    else -> "15"
+}
+
+@Composable
+private fun AnalyzerTradingViewChart(ticker: String?, timeframe: String, modifier: Modifier = Modifier) {
+    val url = remember(ticker, timeframe) {
+        ticker?.let {
+            "https://www.tradingview.com/widgetembed/?frameElementId=destinedfx_analyzer" +
+                "&symbol=\${URLEncoder.encode(it, "UTF-8")}" +
+                "&interval=\${analyzerTradingViewInterval(timeframe)}" +
+                "&hidesidetoolbar=1&hide_top_toolbar=1&symboledit=0&saveimage=0" +
+                "&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=0&hideideas=1&locale=en"
+        }
+    }
+    var retry by remember(url) { mutableStateOf(0) }
+    var loadState by remember(url, retry) { mutableStateOf(AnalyzerChartState.LOADING) }
+    val stateSetter = rememberUpdatedState<(AnalyzerChartState) -> Unit> { loadState = it }
+    val loadKey = "$url#$retry"
+
+    LaunchedEffect(loadKey) {
+        if (url != null) {
+            loadState = AnalyzerChartState.LOADING
+            delay(25_000L)
+            if (loadState == AnalyzerChartState.LOADING) loadState = AnalyzerChartState.FAILED
+        }
+    }
+
+    Box(modifier.background(Color(0xFF171B27))) {
+        if (url == null) {
+            Text("Waiting for MT5...", color = TextSecondary, fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.Center))
+        } else {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
+                        settings.loadsImagesAutomatically = true
+                        settings.blockNetworkLoads = false
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        overScrollMode = android.view.View.OVER_SCROLL_NEVER
+                        setBackgroundColor(android.graphics.Color.rgb(23, 27, 39))
+                        webChromeClient = WebChromeClient()
+                        webViewClient = object : WebViewClient() {
+                            private var mainFrameFailed = false
+
+                            override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
+                                super.onPageStarted(view, pageUrl, favicon)
+                                mainFrameFailed = false
+                                stateSetter.value(AnalyzerChartState.LOADING)
+                            }
+
+                            override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                                super.onPageFinished(view, pageUrl)
+                                if (!mainFrameFailed) stateSetter.value(AnalyzerChartState.LOADED)
+                            }
+
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                super.onReceivedError(view, request, error)
+                                if (request?.isForMainFrame == true) {
+                                    mainFrameFailed = true
+                                    stateSetter.value(AnalyzerChartState.FAILED)
+                                }
+                            }
+
+                            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, error: android.webkit.WebResourceResponse?) {
+                                super.onReceivedHttpError(view, request, error)
+                                if (request?.isForMainFrame == true && (error?.statusCode ?: 200) >= 400) {
+                                    mainFrameFailed = true
+                                    stateSetter.value(AnalyzerChartState.FAILED)
+                                }
+                            }
+                        }
+                    }
+                },
+                update = { webView ->
+                    if (webView.tag != loadKey) {
+                        webView.tag = loadKey
+                        loadState = AnalyzerChartState.LOADING
+                        webView.stopLoading()
+                        webView.loadUrl(url)
+                    }
+                }
+            )
+            if (loadState == AnalyzerChartState.LOADING) {
+                Text("Loading chart...", color = TextSecondary, fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.Center))
+            } else if (loadState == AnalyzerChartState.FAILED) {
+                Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Loading chart...", color = TextSecondary, fontSize = 12.sp)
+                    TextButton(onClick = { retry++ }) { Text("Retry", color = ElectricCyan) }
+                }
+            }
+        }
+    }
+}
+
+private enum class AnalyzerChartState { LOADING, LOADED, FAILED }
+
+private data class AnalyzerEconomicEvent(
+    val title: String,
+    val currency: String,
+    val impact: String,
+    val timeMillis: Long
+)
+
+private const val ANALYZER_CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+private const val ANALYZER_CALENDAR_PREFS = "destinedfx_economic_calendar"
+private const val ANALYZER_CALENDAR_PAYLOAD = "weekly_payload"
+private const val ANALYZER_CALENDAR_UPDATED = "last_updated"
+private const val ANALYZER_CALENDAR_REFRESH_MS = 15 * 60 * 1000L
+
+private fun downloadAnalyzerCalendar(): String {
+    val connection = (URL(ANALYZER_CALENDAR_URL).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 12_000
+        readTimeout = 12_000
+        setRequestProperty("Accept", "application/json")
+        setRequestProperty("User-Agent", "DestinedFX-Android")
+    }
+    return try {
+        val status = connection.responseCode
+        if (status !in 200..299) throw IllegalStateException("Calendar HTTP $status")
+        connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun parseAnalyzerCalendar(raw: String): List<AnalyzerEconomicEvent> {
+    val json = JSONArray(raw)
+    val parser = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).apply { isLenient = false }
+    return buildList {
+        for (index in 0 until json.length()) {
+            val item = json.optJSONObject(index) ?: continue
+            val title = item.optString("title").takeIf { it.isNotBlank() && it != "null" } ?: continue
+            val currency = item.optString("country").uppercase(Locale.ROOT)
+            val impact = item.optString("impact").ifBlank { "Low" }
+            val dateText = item.optString("date")
+            val time = runCatching { parser.parse(dateText)?.time }.getOrNull() ?: continue
+            add(AnalyzerEconomicEvent(title, currency, impact, time))
+        }
+    }.sortedBy { it.timeMillis }
+}
+
+private fun analyzerCurrenciesForSymbol(symbol: String): Set<String> {
+    val compact = symbol.trim().uppercase(Locale.ROOT).substringAfterLast(':').substringBefore('.')
+        .filter { it in 'A'..'Z' }
+    if (compact.length < 6) return emptySet()
+    val base = compact.take(3)
+    val quote = compact.drop(3).take(3)
+    if (base == "XAU" || base == "XAG") return setOf(quote).filter { it in analyzerCalendarCurrencies }.toSet()
+    return setOf(base, quote).filter { it in analyzerCalendarCurrencies }.toSet()
+}
+
+private fun analyzerLocalDateKey(timeMillis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getDefault() }.format(Date(timeMillis))
+
+private fun analyzerLocalTime(timeMillis: Long, pattern: String = "HH:mm"): String =
+    SimpleDateFormat(pattern, Locale.getDefault()).apply { timeZone = TimeZone.getDefault() }.format(Date(timeMillis))
+
+private fun analyzerCountdown(targetMillis: Long, nowMillis: Long): String {
+    val remaining = (targetMillis - nowMillis).coerceAtLeast(0L)
+    val hours = TimeUnit.MILLISECONDS.toHours(remaining)
+    val minutes = TimeUnit.MILLISECONDS.toMinutes(remaining) % 60
+    return when {
+        hours > 0 -> "in \${hours}h \${minutes}m"
+        minutes > 0 -> "in \${minutes}m"
+        else -> "in less than 1m"
+    }
+}
+
+@Composable
+private fun EconomicCalendarCard(symbol: String) {
+    val context = LocalContext.current
+    val preferences = remember(context) {
+        context.getSharedPreferences(ANALYZER_CALENDAR_PREFS, android.content.Context.MODE_PRIVATE)
+    }
+    var events by remember { mutableStateOf(emptyList<AnalyzerEconomicEvent>()) }
+    var lastUpdated by remember { mutableStateOf(0L) }
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(preferences) {
+        preferences.getString(ANALYZER_CALENDAR_PAYLOAD, null)?.let { cached ->
+            events = runCatching { parseAnalyzerCalendar(cached) }.getOrDefault(emptyList())
+            lastUpdated = preferences.getLong(ANALYZER_CALENDAR_UPDATED, 0L)
+        }
+        while (true) {
+            try {
+                val downloaded = withContext(Dispatchers.IO) {
+                    val raw = downloadAnalyzerCalendar()
+                    raw to parseAnalyzerCalendar(raw)
+                }
+                events = downloaded.second
+                lastUpdated = System.currentTimeMillis()
+                preferences.edit()
+                    .putString(ANALYZER_CALENDAR_PAYLOAD, downloaded.first)
+                    .putLong(ANALYZER_CALENDAR_UPDATED, lastUpdated)
+                    .apply()
+            } catch (_: Exception) {
+                // Keep the last successful calendar in memory and in the local cache.
+            }
+            delay(ANALYZER_CALENDAR_REFRESH_MS)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMillis = System.currentTimeMillis()
+            delay(30_000L)
+        }
+    }
+
+    val currencies = remember(symbol) { analyzerCurrenciesForSymbol(symbol) }
+    val todayKey = remember(nowMillis) { analyzerLocalDateKey(nowMillis) }
+    val tomorrowKey = remember(nowMillis) {
+        val tomorrow = Calendar.getInstance().apply {
+            timeInMillis = nowMillis
+            add(Calendar.DAY_OF_YEAR, 1)
+        }
+        analyzerLocalDateKey(tomorrow.timeInMillis)
+    }
+    val visibleEvents = remember(events, currencies, todayKey, tomorrowKey) {
+        events.filter { event ->
+            event.currency in currencies &&
+                (analyzerLocalDateKey(event.timeMillis) == todayKey ||
+                    analyzerLocalDateKey(event.timeMillis) == tomorrowKey)
+        }.sortedBy { it.timeMillis }
+    }
+    val nextEvent = visibleEvents.firstOrNull { it.timeMillis > nowMillis }
+
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("ECONOMIC CALENDAR", color = ElectricCyan, fontSize = 11.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+            if (nextEvent != null) {
+                Text("NEXT: \${nextEvent.title} · \${analyzerCountdown(nextEvent.timeMillis, nowMillis)}",
+                    color = TextPrimary, fontSize = 12.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            }
+            if (visibleEvents.isEmpty()) {
+                Text(
+                    if (lastUpdated > 0L) "No events scheduled for these currencies today or tomorrow."
+                    else "Calendar data unavailable.",
+                    color = TextSecondary, fontSize = 12.sp
+                )
+            } else {
+                visibleEvents.forEach { event ->
+                    val impactColor = when (event.impact.uppercase(Locale.ROOT)) {
+                        "HIGH" -> LossRed
+                        "MEDIUM" -> WarningAmber
+                        else -> TextSecondary
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Text(analyzerLocalTime(event.timeMillis), color = TextSecondary, fontSize = 10.sp)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(event.title, color = TextPrimary, fontSize = 11.sp)
+                            Text(event.currency, color = TextSecondary, fontSize = 9.sp)
+                        }
+                        Text(event.impact.uppercase(Locale.ROOT), color = impactColor, fontSize = 9.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    }
+                }
+            }
+            if (lastUpdated > 0L) {
+                Text("Last updated: \${analyzerLocalTime(lastUpdated, "dd MMM, HH:mm")}",
+                    color = TextSecondary, fontSize = 9.sp)
+            }
+        }
     }
 }
