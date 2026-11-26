@@ -183,14 +183,11 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "The Analyzer uses the paired MT5 Bridge snapshot, maps only supported TradingView symbols, returns null for unmappable symbols, leaves the chart blank with no ticker, and gates Signal/Levels on a mapped ticker. Price remains MT5-only. No placeholder UI labels are required.",
     )
 
-    ephemeral_live_risk_acceptance = "I UNDERSTAND, I ACCEPT RISK, CONTINUE WITH LIVE TRADE"
-    ephemeral_live_policy_ok = (
-        ephemeral_live_risk_acceptance in live_flow
-        and "ephemeralLiveTradeAcknowledged" in live_flow
-        and "mt5CredentialFieldsEnabled = !ephemeralLiveTradeWarningRequired || ephemeralLiveTradeAcknowledged" in live_flow
-        and "riskAccepted = !details.mode.equals(\"LIVE\", true) || details.hostProfile != HostProfile.EPHEMERAL || ephemeralLiveTradeAcknowledged" in live_flow
-        and "EPHEMERAL_HOST_LIVE_BLOCKED" not in arming
-        and "hostProfile != HostProfile.PERSISTENT" not in arming
+    persistent_live_policy_ok = (
+        "val hostProfile: HostProfile = HostProfile.EPHEMERAL" in arming
+        and "request.hostProfile != HostProfile.PERSISTENT" in arming
+        and "hostProfile != HostProfile.PERSISTENT" in arming
+        and "liveLeases.remove(identity.fingerprint())" in arming
         and "required_slots = 1 if HOST_PROFILE == 'EPHEMERAL' else max(1, minimum_active_slots)" in bridge
         and "if HOST_PROFILE == 'PERSISTENT' and" in bridge
         and 'allow_trade = "1" if access_type == "MASTER" else "0"' in live_worker
@@ -198,9 +195,9 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     )
     add_check(
         checks,
-        "EPHEMERAL LIVE allowed after explicit risk acceptance",
-        ephemeral_live_policy_ok,
-        "The owner can unlock LIVE on an EPHEMERAL Codespaces host with the explicit disconnect-risk acceptance. Root-attested terminal isolation remains required, and MASTER access enables MT5 live trading.",
+        "fail-closed persistent-host LIVE policy",
+        persistent_live_policy_ok,
+        "LIVE arming defaults unknown host state to EPHEMERAL, requires explicit PERSISTENT host proof, and revokes an existing local lease if a later host check is EPHEMERAL. Root-attested isolation and MASTER access remain required.",
     )
 
     bridge_defaults_fail_closed = (
