@@ -84,7 +84,7 @@ class DerivBrokerGateway(
         .pingInterval(20, TimeUnit.SECONDS)
         .build(),
     private val modeArmingPolicy: com.example.data.broker.ModeArmingPolicy? = null
-) : DerivMultiplierGateway {
+) : DerivBotRuntimeGateway {
     companion object {
         private const val TAG = "DerivBrokerGW"
         private const val REST_BASE = "https://api.derivws.com"
@@ -171,10 +171,10 @@ class DerivBrokerGateway(
      * Personal Access Tokens. If the token is legacy or missing the trade scope, the REST error
      * is surfaced so the user can create the correct token.
      */
-    suspend fun connectAndAuthorize(
-        apiToken: String? = null,
-        selectedAccountId: String? = null,
-        expectedMode: String? = null
+    override suspend fun connectAndAuthorize(
+        apiToken: String?,
+        selectedAccountId: String?,
+        expectedMode: String?
     ): Result<DerivAccountInfo> = withContext(Dispatchers.IO) {
         if (!secrets.isSecureStorageAvailable) {
             _connectionState.value = DerivConnectionState.AUTH_FAILED
@@ -544,7 +544,7 @@ class DerivBrokerGateway(
         webSocket?.send(json.toString())
     }
 
-    suspend fun getQuote(symbol: String): Result<MarketQuote> = withContext(Dispatchers.IO) {
+    override suspend fun getQuote(symbol: String): Result<MarketQuote> = withContext(Dispatchers.IO) {
         if (_connectionState.value != DerivConnectionState.READY) {
             return@withContext Result.failure(Exception("BROKER_DISCONNECTED: Deriv broker is not connected."))
         }
@@ -1046,7 +1046,7 @@ class DerivBrokerGateway(
         } catch (_: Exception) { null } finally { pendingRequests.remove(reqId) }
     }
 
-    fun disconnect() {
+    override fun disconnect() {
         secrets.invalidateDerivRealAuthorization()
         webSocket?.close(1000, "Client disconnect")
         webSocket = null

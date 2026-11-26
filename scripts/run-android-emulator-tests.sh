@@ -64,4 +64,32 @@ adb devices -l
 adb shell getprop ro.build.version.sdk
 adb shell df -h /data
 ./gradlew :app:connectedDebugAndroidTest --stacktrace
+mkdir -p app/build/reports/bot-lifecycle
+remote_evidence="/sdcard/Android/data/com.aistudio.destinedfx.qwvzxp/files/bot-lifecycle-evidence.json"
+local_evidence="app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json"
+adb pull "$remote_evidence" "$local_evidence"
+python - "$local_evidence" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+rows = json.loads(Path(sys.argv[1]).read_text())
+required = {
+    "Start", "Pause", "Resume", "Stop", "Emergency-Stop",
+    "NoAutoRestartAfterStop", "RestartAfterStop",
+    "NoAutoRestartAfterEmergencyStop", "RestartAfterEmergencyStop", "CleanupStop",
+}
+present = {row.get("step") for row in rows}
+missing = sorted(required - present)
+if missing:
+    raise SystemExit(f"Bot lifecycle evidence missing required transitions: {', '.join(missing)}")
+for row in rows:
+    if not row.get("timestamp_utc") or "state_before" not in row or "state_after" not in row:
+        raise SystemExit(f"Bot lifecycle row missing timestamp/state evidence: {row.get('step')}")
+    if row.get("account_mode") != "DEMO" or row.get("live_enabled") is not False or row.get("fake_gateway_only") is not True:
+        raise SystemExit(f"Bot lifecycle row violates DEMO/fake-only boundary: {row.get('step')}")
+    if not isinstance(row.get("broker_gateway_log"), list):
+        raise SystemExit(f"Bot lifecycle row missing broker gateway log: {row.get('step')}")
+print(f"DEMO Bot lifecycle evidence: {len(rows)} timestamped records; fake gateway only; LIVE disabled.")
+PY
 collect_ui_screenshots

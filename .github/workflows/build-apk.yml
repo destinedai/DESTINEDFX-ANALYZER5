@@ -954,6 +954,7 @@ jobs:
           path: |
             app/build/reports/androidTests/connected/**
             app/build/reports/ui-screenshots/**
+            app/build/reports/bot-lifecycle/**
             app/build/outputs/androidTest-results/connected/**
             ${{ runner.temp }}/emulator-diagnostics/**
           if-no-files-found: warn

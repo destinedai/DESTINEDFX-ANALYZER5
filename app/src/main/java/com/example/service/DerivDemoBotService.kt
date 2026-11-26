@@ -6,12 +6,15 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.MyApplication
+import com.example.BuildConfig
 import com.example.R
+import com.example.data.deriv.DerivBotRuntimeGateway
 import com.example.data.deriv.DerivMultiplierExecutor
 import com.example.data.deriv.DerivMultiplierIntent
 import com.example.data.deriv.DerivMultiplierProduct
@@ -39,6 +42,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicInteger
+
+/** Debug-only runtime seam; production builds use the normal Deriv gateway. */
+internal object DerivDemoBotLifecycleHarness {
+    @Volatile var gateway: DerivBotRuntimeGateway? = null
+    @Volatile var candleProvider: (suspend (String, Int, Int) -> List<Candle>)? = null
+    @Volatile var scanDelayMs: Long? = null
+    @Volatile var pauseDelayMs: Long? = null
+    @Volatile var activeWaitDelayMs: Long? = null
+    val runStarts = AtomicInteger(0)
+
+    fun reset() {
+        gateway = null
+        candleProvider = null
+        scanDelayMs = null
+        pauseDelayMs = null
+        activeWaitDelayMs = null
+        runStarts.set(0)
+    }
+}
 
 
 internal suspend fun cancelDerivEntriesAndCloseBotContracts(
@@ -551,6 +574,7 @@ class DerivDemoBotService : Service() {
                     stopSafely("BOT NOT RUNNING — a previous Deriv STOP close-out is still being verified")
                     return START_NOT_STICKY
                 }
+                if (loopJob?.isActive == true) return START_NOT_STICKY
                 stopRequested = false
                 pauseRequested = false
                 activeExecutor = null
@@ -627,16 +651,25 @@ class DerivDemoBotService : Service() {
         return if (intent?.action == ACTION_START || intent == null) START_STICKY else START_NOT_STICKY
     }
 
+    private fun lifecycleHarnessIfEnabled(): DerivDemoBotLifecycleHarness? {
+        val debuggable = BuildConfig.DEBUG &&
+            (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        return DerivDemoBotLifecycleHarness.takeIf { debuggable && it.gateway != null }
+    }
+
     private suspend fun runBot(symbol: String, strategyId: String, timeframe: String, riskPercent: Double) {
         val app = application as MyApplication
-        val gateway = app.derivBrokerGateway
+        val lifecycleHarness = lifecycleHarnessIfEnabled()
+        val gateway: DerivBotRuntimeGateway = lifecycleHarness?.gateway ?: app.derivBrokerGateway
+        lifecycleHarness?.runStarts?.incrementAndGet()
         if (!DerivMultiplierRules.isSupportedUnderlying(symbol)) {
             stopSafely("Safety blocked — $symbol is not a supported Deriv Multiplier underlying")
             return
         }
-        // This public Deriv OHLC feed is Bot-owned and deliberately independent of Analyzer.
-        val botMarketDataGateway = DerivMarketDataGateway()
-        currentCoroutineContext()[Job]?.invokeOnCompletion { botMarketDataGateway.disconnect() }
+        // The production Bot retains its public candle gateway. Instrumentation can inject
+        // deterministic DEMO candles and never opens a market-data or broker socket.
+        val botMarketDataGateway = if (lifecycleHarness == null) DerivMarketDataGateway() else null
+        currentCoroutineContext()[Job]?.invokeOnCompletion { botMarketDataGateway?.disconnect() }
         // Keep the user-started foreground service alive through transient broker outages.
         // This is especially important after a persisted daily-loss lock: reconnect and retry
         // broker-confirmed closure rather than silently abandoning an unresolved managed contract.
@@ -800,7 +833,7 @@ class DerivDemoBotService : Service() {
             app.db.derivExecutionDao(),
             sensitiveActionAuthorized = { com.example.security.AppSecurityGuard.authorizeSensitiveAction() },
             dailyRiskEntryAllowed = { accountId, mode ->
-                !stopRequested && mode.equals("demo", ignoreCase = true) && accountId == acceptedAccount.loginId &&
+                !stopRequested && !pauseRequested && mode.equals("demo", ignoreCase = true) && accountId == acceptedAccount.loginId &&
                     app.secretsManager.hasCurrentDerivDemoAcceptance(
                         acceptedAccount.loginId, acceptedAccount.currency, credentialGeneration = acceptedAccount.credentialGeneration
                     ) &&
@@ -921,7 +954,7 @@ class DerivDemoBotService : Service() {
                 }
                 if (pauseRequested) {
                     update("PAUSED — monitoring continues; no new DEMO entries will be submitted")
-                    delay(5_000L)
+                    delay(lifecycleHarness?.pauseDelayMs ?: 5_000L)
                     continue
                 }
                 val maximumSafeStake = DerivMultiplierRules.safeStakeForBalance(balance)
@@ -938,7 +971,7 @@ class DerivDemoBotService : Service() {
                 // against the same fresh, account-matched portfolio snapshot.
                 if (executor.hasActiveContracts()) {
                     update("Running — an existing contract is still active; waiting for broker settlement before another entry")
-                    delay(10_000)
+                    delay(lifecycleHarness?.activeWaitDelayMs ?: 10_000L)
                     continue
                 }
                 val selectedTimeframe = Timeframe.parse(timeframe)
@@ -954,11 +987,11 @@ class DerivDemoBotService : Service() {
                     selectedTimeframe.minutes * 60
                 }
                 val historyCount = if (selectedTimeframe == Timeframe.W1) 1_800 else 300
-                val rawBotCandles = botMarketDataGateway.fetchCandles(
-                    symbol,
-                    historyGranularitySeconds,
-                    historyCount
-                )
+                val rawBotCandles = if (lifecycleHarness != null) {
+                    lifecycleHarness.candleProvider?.invoke(symbol, historyGranularitySeconds, historyCount).orEmpty()
+                } else {
+                    botMarketDataGateway?.fetchCandles(symbol, historyGranularitySeconds, historyCount).orEmpty()
+                }
                 val botCandles = if (selectedTimeframe == Timeframe.W1) {
                     BotStrategy.aggregateWeekly(rawBotCandles)
                 } else {
@@ -1014,6 +1047,10 @@ class DerivDemoBotService : Service() {
                                 stopSafely("Safety blocked — $reason. Manual reconciliation is required.")
                             reason.contains("REAL_EXECUTION_DISABLED") ->
                                 stopSafely("Safety blocked — REAL authorization expired or changed. Re-verify readiness and explicitly arm this account again.")
+                            pauseRequested -> {
+                                update("PAUSED — no new DEMO entries were accepted while Pause was requested")
+                                delay(lifecycleHarness?.pauseDelayMs ?: 5_000L)
+                            }
                             reason.startsWith("PORTFOLIO_RETRYABLE") || reason.startsWith("PORTFOLIO_REQUIRED") || reason.startsWith("BALANCE_REQUIRED") -> {
                                 update("RECONNECTING — $reason; purchases paused")
                                 if (!connectWithBoundedRetry(gateway)) {
@@ -1044,7 +1081,7 @@ class DerivDemoBotService : Service() {
                 } else {
                     update("Running — BotStrategy WAIT: no confirmed setup from fresh closed Deriv candles and quote")
                 }
-                delay(30_000)
+                delay(lifecycleHarness?.scanDelayMs ?: 30_000L)
             } catch (_: CancellationException) {
                 throw CancellationException()
             } catch (error: Exception) {
@@ -1059,7 +1096,7 @@ class DerivDemoBotService : Service() {
 
     private suspend fun reconcileWithRecovery(
         executor: DerivMultiplierExecutor,
-        gateway: com.example.data.deriv.DerivBrokerGateway
+        gateway: DerivBotRuntimeGateway
     ): Boolean {
         // Retryable transport/portfolio failures are not terminal service failures. Keep the
         // foreground monitor alive, preserve the account/mode daily lock, and retry until the
@@ -1095,7 +1132,7 @@ class DerivDemoBotService : Service() {
         return false
     }
 
-    private suspend fun connectWithBoundedRetry(gateway: com.example.data.deriv.DerivBrokerGateway): Boolean {
+    private suspend fun connectWithBoundedRetry(gateway: DerivBotRuntimeGateway): Boolean {
         val job = currentCoroutineContext()[Job]
         val connected = retryFreshDerivAuthorization(
             maxAttempts = MAX_RECONNECT_ATTEMPTS,

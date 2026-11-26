@@ -6,6 +6,7 @@ import com.example.domain.risk.TradingSafetyLimits
 import com.example.domain.model.Position
 import com.example.domain.repository.AccountMetrics
 import kotlinx.coroutines.flow.StateFlow
+import com.destinedfx.core.marketdata.MarketQuote
 
 /** Narrow broker contract consumed by the execution authority; production uses DerivBrokerGateway. */
 interface DerivMultiplierGateway {
@@ -23,6 +24,17 @@ interface DerivMultiplierGateway {
         onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit
     ): Result<DerivBuyResult>
     suspend fun sellContract(contractId: Long): Result<DerivSellResult>
+}
+
+/** Service runtime extension; test builds can supply a fake DEMO implementation. */
+interface DerivBotRuntimeGateway : DerivMultiplierGateway {
+    suspend fun connectAndAuthorize(
+        apiToken: String? = null,
+        selectedAccountId: String? = null,
+        expectedMode: String? = null
+    ): Result<DerivAccountInfo>
+    suspend fun getQuote(symbol: String): Result<MarketQuote>
+    fun disconnect()
 }
 
 class DerivMultiplierExecutor(

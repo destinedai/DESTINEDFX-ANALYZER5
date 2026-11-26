@@ -55,6 +55,8 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     vm = read_text(root, "app/src/main/java/com/example/ui/DestinedFXViewModel.kt")
     signal = read_text(root, "app/src/main/java/com/example/domain/usecase/impl/SignalGenerationUseCaseImpl.kt")
     analyzer_ui = read_text(root, "app/src/main/java/com/example/ui/SimplifiedAnalyzerTab.kt")
+    analyzer_view_model = read_text(root, "app/src/main/java/com/example/ui/AnalyzerViewModel.kt")
+    analyzer_mapping_test = read_text(root, "app/src/test/java/com/example/MT5AnalyzerMathTest.kt")
     bot_ui = read_text(root, "app/src/main/java/com/example/ui/workstations/BotWorkstation.kt")
     bridge_client = read_text(root, "app/src/main/java/com/example/data/trade/MT5RemoteBridgeClient.kt")
     arming = read_text(root, "app/src/main/java/com/example/data/broker/ModeArmingPolicy.kt")
@@ -131,32 +133,54 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "MT5 Analyzer uses the app-lifetime Bridge snapshot; existing provider and multi-timeframe operations retain bounded timeouts.",
     )
 
-    chart_ui = read_text(root, "app/src/main/java/com/example/ui/TradingViewEmbedChart.kt")
     analyzer_math = read_text(root, "app/src/main/java/com/example/ui/MT5AnalyzerMath.kt")
+    mapping_start = analyzer_ui.find("internal fun tradingViewSymbolForMt5")
+    mapping_end = analyzer_ui.find("internal fun tradingViewIntervalForMt5", mapping_start)
+    analyzer_mapping = analyzer_ui[mapping_start:mapping_end] if mapping_start >= 0 and mapping_end > mapping_start else ""
+    chart_branch = (
+        analyzer_ui.split("if (chartTicker != null)", 1)[1].split("if (showAnalysis)", 1)[0]
+        if "if (chartTicker != null)" in analyzer_ui and "if (showAnalysis)" in analyzer_ui
+        else ""
+    )
     diagnostics_ok = (
         "managedMt5BridgeSnapshot" in analyzer_ui
         and "startSelectedMt5AnalyzerBridgeMonitor" in analyzer_ui
         and "MT5_TERMINAL" in analyzer_ui
         and "activeChartSymbol" in analyzer_ui
-        and "TradingViewEmbedChart" in analyzer_ui
-        and "Waiting for MT5..." in analyzer_ui
         and "Deriv public WebSocket" not in analyzer_ui
         and "refreshMarketData(" not in analyzer_ui
         and "runSignalScan(" not in analyzer_ui
+        and '?: "FX:EURUSD"' not in analyzer_ui
+        and '?: "FX:EURUSD"' not in analyzer_view_model
+        and "internal fun analyzerTradingViewTicker(mt5Symbol: String): String? =" in analyzer_view_model
+        and "tradingViewSymbolForMt5(mt5Symbol)" in analyzer_view_model
+        and "return null" in analyzer_mapping
+        and 'return "TVC:GOLD"' in analyzer_mapping
+        and '"FX:$pair"' in analyzer_mapping
+        and "OANDA:" not in analyzer_mapping
+        and "val chartTicker = analyzerTradingViewTicker(symbol)" in analyzer_ui
+        and "if (chartTicker != null)" in analyzer_ui
+        and "Box(Modifier.fillMaxWidth().height(270.dp).background(Color(0xFF171B27)))" in analyzer_ui
+        and "val showAnalysis = showPrice && analysisValidated && chartTicker != null" in analyzer_ui
+        and "if (showAnalysis)" in analyzer_ui
+        and "connected" not in chart_branch
+        and "val quote = if (connected)" in analyzer_ui
+        and "if (connected) ProfitGreen else Color.Gray" in analyzer_ui
         and "ChartSymbol(0)" in ea
         and "active_chart_symbol" in ea
         and "active_chart_timeframe" in ea
-        and "settings.javaScriptEnabled=true" in chart_ui
-        and "settings.domStorageEnabled=true" in chart_ui
-        and "Loading chart..." in chart_ui
-        and "RETRY" in chart_ui
         and "MT5_TERMINAL" in analyzer_math
+        and 'tradingViewSymbolForMt5("EURUSD.a")' in analyzer_mapping_test
+        and 'tradingViewSymbolForMt5("XAUUSDm")' in analyzer_mapping_test
+        and 'tradingViewSymbolForMt5("GOLD")' in analyzer_mapping_test
+        and 'analyzerTradingViewTicker("FAKEPAIR")' in analyzer_mapping_test
+        and "assertNull(ticker)" in analyzer_mapping_test
     )
     add_check(
         checks,
         "Analyzer provider diagnostics",
         diagnostics_ok,
-        "The Analyzer follows the paired MT5 Bridge snapshot and active MT5 chart, computes from MT5 quotes/closed candles only, and maps TradingView to that symbol with Loading/Retry handling.",
+        "The Analyzer uses the paired MT5 Bridge snapshot, maps only supported TradingView symbols, returns null for unmappable symbols, leaves the chart blank with no ticker, and gates Signal/Levels on a mapped ticker. Price remains MT5-only. No placeholder UI labels are required.",
     )
 
     ephemeral_live_risk_acceptance = "I UNDERSTAND, I ACCEPT RISK, CONTINUE WITH LIVE TRADE"
