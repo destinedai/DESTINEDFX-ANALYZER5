@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.compose.viewModel as composeViewModel
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkSurface
 import com.example.ui.theme.ElectricCyan
@@ -65,7 +65,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val snapshot by viewModel.managedMt5BridgeSnapshot.collectAsStateWithLifecycle()
     val mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
     val brand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
-    val analyzerState: AnalyzerViewModel = viewModel()
+    val analyzerState: AnalyzerViewModel = composeViewModel()
 
     LaunchedEffect(brand, mode) { viewModel.startSelectedMt5AnalyzerBridgeMonitor() }
 
