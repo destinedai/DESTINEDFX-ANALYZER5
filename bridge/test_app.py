@@ -304,18 +304,43 @@ def test_duplicate_request_ids_delivery_ack_and_replay():
     assert state['last_command']['outcome']=='APPLIED'
     assert client.get('/v1/terminal/commands?cursor='+str(delivered['cursor']),headers=th).json()['commands']==[]
 
-def test_verified_terminal_chart_selection_and_ohlc_are_returned_to_the_app():
-    p=pair(); t=claimed(p)
-    ah={'Authorization':'Bearer '+p['app_token']}
-    th={'Authorization':'Bearer '+t['terminal_token']}
+def test_verified_terminal_chart_selection_and_ohlc_are_returned_to_the_app(monkeypatch):
+    managed_env(monkeypatch)
+    p, ah = managed_pair(subject='active-chart-owner', tenant='active-chart-owner')
+    registered = client.post('/v1/app/managed-account', headers=ah, json={
+        'login':'123456', 'server':'FBS-Demo', 'password':'fixture-secret',
+        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS', 'consent':True,
+    })
+    assert registered.status_code == 202, registered.text
+    worker_id='active-chart-worker'
+    wh={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']}
+    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':worker_id}).json()
+    client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={
+        'worker_id':worker_id,'status':'AUTHENTICATING'
+    })
+    terminal=client.post('/v1/terminal/claim',json={
+        'pairing_code':job['pairing_code'],
+        'terminal_instance_id':'active-chart-terminal',
+        'account':fbs_terminal_account(),
+    }).json()
+    th={'Authorization':'Bearer '+terminal['terminal_token']}
     now_ms=int(time.time()*1000)
-    beat=heartbeat_data(active_chart_symbol='XAUUSD.a', active_chart_timeframe='M15',
+    beat=heartbeat_data(
+        account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,
+                 'free_margin':9890,'margin_level':9990,'leverage':100},
+        active_chart_symbol='XAUUSD.a',
+        active_chart_timeframe='M15',
         broker_quotes=[{'symbol':'XAUUSD.a','bid':2345.10,'ask':2345.30,'digits':2,'timestamp_ms':now_ms}],
         broker_candles=[{'symbol':'XAUUSD.a','timeframe':'M15','timestamp_ms':now_ms-900000,
                          'open':2344.0,'high':2346.0,'low':2343.0,'close':2345.0,
-                         'volume':100.0,'complete':True}])
+                         'volume':100.0,'complete':True}],
+    )
     assert client.post('/v1/terminal/heartbeat',json=beat,headers=th).status_code==200
-    state=client.get('/v1/app/state',headers=ah).json()
+    ready=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id='+worker_id,headers=wh)
+    assert ready.status_code==200 and ready.json()['status']=='READY'
+    state=client.get('/v1/app/state',headers={'Authorization':'Bearer '+p['app_token']}).json()
+    assert state['terminal_online'] is True and state['account_identity_verified'] is True
+    assert state['broker_identity_verified'] is True
     assert state['active_chart_symbol']=='XAUUSD.a'
     assert state['active_chart_timeframe']=='M15'
     assert state['broker_quotes'][0]['symbol']=='XAUUSD.a'
