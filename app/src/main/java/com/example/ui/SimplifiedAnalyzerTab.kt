@@ -115,7 +115,9 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             else -> false
         }
     val analysisValidated = trendValidated && levelsValidated
-    val showAnalysis = analyzerState.priceAvailable && analyzerState.priceFresh && analysisValidated
+    val showPrice = priceQuoteAvailable && priceQuoteFresh &&
+        analyzerState.priceAvailable && analyzerState.priceFresh
+    val showAnalysis = showPrice && analysisValidated
     val chartTicker = analyzerTradingViewTicker(symbol) ?: "FX:EURUSD"
 
     Column(
@@ -134,14 +136,14 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text("PRICE", color = TextSecondary, fontSize = 9.sp)
-                        Text(if (analyzerState.priceAvailable && analyzerState.priceFresh) {
+                        Text(if (showPrice) {
                             price?.let { formatPrice(it, symbol) } ?: "--"
                         } else "--", color = TextPrimary, fontSize = 29.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("SPREAD", color = TextSecondary, fontSize = 9.sp)
-                        Text(if (analyzerState.priceAvailable && analyzerState.priceFresh) {
+                        Text(if (showPrice) {
                             spread?.let { formatPrice(it, symbol) } ?: "--"
                         } else "--", color = TextPrimary, fontSize = 15.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
