@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -88,9 +89,21 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val chartTicker = if (connected && symbol.isNotBlank()) analyzerTradingViewTicker(symbol) else null
 
     if (!connected || quote == null) {
-        Box(Modifier.fillMaxSize().background(DarkBackground)) {
-            Text("Waiting for MT5...", color = TextSecondary, fontSize = 14.sp,
-                modifier = Modifier.align(Alignment.Center))
+        Column(
+            Modifier.fillMaxSize().background(DarkBackground).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(symbol.ifBlank { "—" }, color = TextPrimary, fontSize = 21.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                        Box(Modifier.size(10.dp).background(if (connected) ProfitGreen else Color.Gray, CircleShape))
+                    }
+                    Text("Waiting for MT5...", color = TextSecondary, fontSize = 14.sp)
+                }
+            }
         }
     } else {
         Column(Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
@@ -98,8 +111,11 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text(symbol, color = TextPrimary, fontSize = 21.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(symbol, color = TextPrimary, fontSize = 21.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                        Box(Modifier.size(10.dp).background(if (connected) ProfitGreen else Color.Gray, CircleShape))
+                    }
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                         Column(Modifier.weight(1f)) {
                             Text("PRICE", color = TextSecondary, fontSize = 9.sp)
