@@ -4,6 +4,7 @@ import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.data.codespaces.isCodespacesForwardedBridgeOrigin
 import com.example.data.trade.parseVerifiedBrokerQuotes
 import com.example.data.trade.parseVerifiedBrokerCandles
+import com.example.data.trade.parseVerifiedBrokerChartSelection
 import com.example.security.SecretsManager
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
