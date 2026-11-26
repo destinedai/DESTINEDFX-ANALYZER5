@@ -306,27 +306,15 @@ def test_duplicate_request_ids_delivery_ack_and_replay():
 
 def test_verified_terminal_chart_selection_and_ohlc_are_returned_to_the_app(monkeypatch):
     managed_env(monkeypatch)
-    p, ah = managed_pair(subject='active-chart-owner', tenant='active-chart-owner')
-    registered = client.post('/v1/app/managed-account', headers=ah, json={
-        'login':'123456', 'server':'FBS-Demo', 'password':'fixture-secret',
-        'access_type':'MASTER', 'account_mode':'DEMO', 'broker_brand':'FBS', 'consent':True,
-    })
-    assert registered.status_code == 202, registered.text
-    worker_id='active-chart-worker'
-    wh={'Authorization':'Bearer '+os.environ['WORKER_TOKEN']}
-    job=client.post('/v1/worker/jobs/claim',headers=wh,json={'worker_id':worker_id}).json()
-    client.patch('/v1/worker/jobs/'+job['job_id'],headers=wh,json={
-        'worker_id':worker_id,'status':'AUTHENTICATING'
-    })
-    terminal=client.post('/v1/terminal/claim',json={
-        'pairing_code':job['pairing_code'],
-        'terminal_instance_id':'active-chart-terminal',
-        'account':fbs_terminal_account(),
-    }).json()
-    th={'Authorization':'Bearer '+terminal['terminal_token']}
+    pairing, headers = managed_pair(subject='active-chart-owner', tenant='active-chart-owner')
+    worker_headers = _test_worker('active-chart-worker')
+    job, terminal_headers, actual = _ready_test_profile(
+        pairing, headers, worker_headers, 'active-chart-worker',
+        '123456', 'Demo-Server', 'DEMO', 'fixture-secret'
+    )
     now_ms=int(time.time()*1000)
     beat=heartbeat_data(
-        account={**fbs_terminal_account(),'balance':10000,'equity':9990,'margin':100,
+        account={**actual,'balance':10000,'equity':9990,'margin':100,
                  'free_margin':9890,'margin_level':9990,'leverage':100},
         active_chart_symbol='XAUUSD.a',
         active_chart_timeframe='M15',
@@ -335,10 +323,11 @@ def test_verified_terminal_chart_selection_and_ohlc_are_returned_to_the_app(monk
                          'open':2344.0,'high':2346.0,'low':2343.0,'close':2345.0,
                          'volume':100.0,'complete':True}],
     )
-    assert client.post('/v1/terminal/heartbeat',json=beat,headers=th).status_code==200
-    ready=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id='+worker_id,headers=wh)
+    assert client.post('/v1/terminal/heartbeat',json=beat,headers=terminal_headers).status_code==200
+    ready=client.get('/v1/worker/jobs/'+job['job_id']+'/status?worker_id=active-chart-worker',
+                     headers=worker_headers)
     assert ready.status_code==200 and ready.json()['status']=='READY'
-    state=client.get('/v1/app/state',headers={'Authorization':'Bearer '+p['app_token']}).json()
+    state=client.get('/v1/app/state',headers=headers).json()
     assert state['terminal_online'] is True and state['account_identity_verified'] is True
     assert state['broker_identity_verified'] is True
     assert state['active_chart_symbol']=='XAUUSD.a'
