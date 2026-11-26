@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [ "**" ]
+    branches: [ "feat/self-hosted-linux-host-runtime" ]
     tags: [ "host-v*" ]
   pull_request:
     branches: [ "main" ]
