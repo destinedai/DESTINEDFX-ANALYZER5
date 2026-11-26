@@ -616,7 +616,7 @@ jobs:
           if-no-files-found: error
   codespaces-bootstrap-apk:
     name: Locked Codespaces bootstrap APK
-    needs: [python-tests, android-build-and-unit-tests]
+    needs: []
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
