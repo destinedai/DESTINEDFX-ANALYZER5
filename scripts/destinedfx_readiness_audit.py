@@ -128,23 +128,35 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         checks,
         "Analyzer outer refresh and MTF budgets",
         refresh_ok,
-        "Analyzer public quotes and OHLC use DERIV_PUBLIC with bounded outer waits; MT5 account snapshot verification remains separate and multi-timeframe loads retain their 65-second ceiling.",
+        "MT5 Analyzer uses the app-lifetime Bridge snapshot; existing provider and multi-timeframe operations retain bounded timeouts.",
     )
 
+    chart_ui = read_text(root, "app/src/main/java/com/example/ui/TradingViewEmbedChart.kt")
+    analyzer_math = read_text(root, "app/src/main/java/com/example/ui/MT5AnalyzerMath.kt")
     diagnostics_ok = (
-        'override val selectedApiSource = MutableStateFlow("DERIV_PUBLIC")' in market
-        and "Deriv public WebSocket" in analyzer_ui
-        and "PUBLIC MARKET FEED · NO LOGIN NEEDED" in analyzer_ui
-        and "PUBLIC FEED CONNECTING · NO LOGIN NEEDED" in analyzer_ui
-        and "REFRESH PRICE & SIGNAL" in analyzer_ui
-        and "candleFetchErrors" in market
-        and "Provider detail:" in market
+        "managedMt5BridgeSnapshot" in analyzer_ui
+        and "startSelectedMt5AnalyzerBridgeMonitor" in analyzer_ui
+        and "MT5_TERMINAL" in analyzer_ui
+        and "activeChartSymbol" in analyzer_ui
+        and "TradingViewEmbedChart" in analyzer_ui
+        and "Waiting for MT5..." in analyzer_ui
+        and "Deriv public WebSocket" not in analyzer_ui
+        and "refreshMarketData(" not in analyzer_ui
+        and "runSignalScan(" not in analyzer_ui
+        and "ChartSymbol(0)" in ea
+        and "active_chart_symbol" in ea
+        and "active_chart_timeframe" in ea
+        and "settings.javaScriptEnabled = true" in chart_ui
+        and "settings.domStorageEnabled=true" in chart_ui
+        and "Loading chart..." in chart_ui
+        and "RETRY" in chart_ui
+        and "MT5_TERMINAL" in analyzer_math
     )
     add_check(
         checks,
         "Analyzer provider diagnostics",
         diagnostics_ok,
-        "The Analyzer defaults to DERIV_PUBLIC without login, shows public-feed status and refresh, and retains OHLC provider errors in the market repository.",
+        "The Analyzer follows the paired MT5 Bridge snapshot and active MT5 chart, computes from MT5 quotes/closed candles only, and maps TradingView to that symbol with Loading/Retry handling.",
     )
 
     ephemeral_live_risk_acceptance = "I UNDERSTAND, I ACCEPT RISK, CONTINUE WITH LIVE TRADE"
