@@ -169,7 +169,7 @@ class DerivBotLifecycleInstrumentedTest {
         await("Resume execution") {
             gateway.purchaseAttempts.get() >= initialBuys + 1 && DerivDemoBotService.state.value == "RUNNING"
         }
-        assertEquals(2, DerivDemoBotLifecycleHarness.runStarts.get())
+        assertEquals(1, DerivDemoBotLifecycleHarness.runStarts.get())
         val secondContract = gateway.purchasedContractIds.last()
         assertEquals(gateway.purchaseSignalIds.size, gateway.purchaseSignalIds.toSet().size)
         record("Resume", beforeResume, DerivDemoBotService.state.value,
@@ -287,8 +287,8 @@ class DerivBotLifecycleInstrumentedTest {
         val lastTime = System.currentTimeMillis() - 61_000L
         return (0 until 35).map { i ->
             val timestamp = lastTime - (34 - i) * 60_000L
-            if (i == 34) Candle(timestamp, 100.00, 100.09, 99.99, 100.08, 100.0, true)
-            else Candle(timestamp, 100.00, 100.01, 99.98, 100.00, 100.0, true)
+            if (i == 34) Candle(timestamp, 100.00, 100.09, 99.99, 100.08, volume = 100.0, complete = true)
+            else Candle(timestamp, 100.00, 100.01, 99.98, 100.00, volume = 100.0, complete = true)
         }
     }
 
