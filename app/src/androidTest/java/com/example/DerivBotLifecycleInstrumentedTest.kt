@@ -281,7 +281,10 @@ class DerivBotLifecycleInstrumentedTest {
     private fun await(description: String, timeoutMs: Long = 15_000L, condition: () -> Boolean) {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline && !condition()) SystemClock.sleep(20L)
-        assertTrue("Timed out waiting for $description; state=" + DerivDemoBotService.state.value, condition())
+        assertTrue(
+            "Timed out waiting for $description; state=${DerivDemoBotService.state.value}; reason=${DerivDemoBotService.statusReason.value}",
+            condition()
+        )
     }
 
     private fun record(step: String, before: String, after: String, detail: String) {
@@ -346,7 +349,7 @@ class DerivBotLifecycleInstrumentedTest {
             DerivPortfolioSnapshot(true, accountId, "DEMO", System.currentTimeMillis(), emptyList(), currency = currency)
         )
         override val portfolioSnapshot: StateFlow<DerivPortfolioSnapshot?> = portfolio
-        override val connectionState = MutableStateFlow(DerivConnectionState.READY)
+        override val connectionState = MutableStateFlow(DerivConnectionState.DISCONNECTED)
         val events = CopyOnWriteArrayList<String>()
         val purchaseAttempts = AtomicInteger(0)
         val purchasedContractIds = CopyOnWriteArrayList<Long>()
@@ -365,6 +368,9 @@ class DerivBotLifecycleInstrumentedTest {
                 return Result.failure(SecurityException("Lifecycle fake rejects non-DEMO sessions"))
             }
             events.add("CONNECT_DEMO|expectedMode=$expectedMode")
+            // Preflight data must be refreshed by an authenticated connect, not by fixture setup time.
+            refreshSnapshot()
+            connectionState.value = DerivConnectionState.READY
             return Result.success(account)
         }
 
