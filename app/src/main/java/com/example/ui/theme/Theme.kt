@@ -5,7 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
@@ -57,8 +57,8 @@ fun DestinedFXTheme(
   val colorScheme = DestinedFxDarkColorScheme
 
   val view = LocalView.current
-  if (!view.isInEditMode) {
-    SideEffect {
+  DisposableEffect(view) {
+    if (!view.isInEditMode) {
       try {
         val activity = view.context.findActivity()
         val window = activity?.window
@@ -70,6 +70,7 @@ fun DestinedFXTheme(
         }
       } catch (ignored: Exception) {}
     }
+    onDispose {}
   }
 
   MaterialTheme(colorScheme = colorScheme, typography = Typography, shapes = DestinedFxShapes, content = content)

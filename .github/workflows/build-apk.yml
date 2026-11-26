@@ -519,6 +519,13 @@ jobs:
             return 1
           }
 
+          echo "=== Focused StrategyWorkbench responsive Compose regression classes ==="
+          if ! run_suite strategy-workbench-responsive --tests 'com.example.StrategyWorkbenchCompactResponsiveTest' --tests 'com.example.StrategyWorkbenchStandardResponsiveTest'; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "JVM acceptance is NOT PASSED: StrategyWorkbench responsive Compose tests did not pass." >&2
+            exit 1
+          fi
+
           echo "=== Focused Android broker login regression classes ==="
           if ! run_suite focused-broker-login --tests 'com.example.BrokerLoginSpecTest' --tests 'com.example.ui.bot.MetaTraderBrokerFlowTest'; then
             echo "status=failed" >> "$GITHUB_OUTPUT"
