@@ -1002,7 +1002,7 @@ class TerminalCandle(BaseModel):
 
 class Heartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict); cancelled_order_tickets:list[str]=Field(default_factory=list); broker_quotes:list[TerminalQuote]=Field(default_factory=list,max_length=32); broker_candles:list[TerminalCandle]=Field(default_factory=list,max_length=1000); active_chart_symbol:str=Field(default='',max_length=32); active_chart_timeframe:str=Field(default='M15',pattern='^(M1|M5|M15|M30|H1|H4|D1|W1)
+    state:str; timestamp:str; terminal_connected:bool; trade_allowed:bool; account:Account; configuration:dict[str,Any]=Field(default_factory=dict); last_signal:Any=None; last_error:str=Field(default='',max_length=1000); open_positions:list[Position]; active_orders:list[ActiveOrder]=Field(default_factory=list); closed_deals:list[ClosedDeal]; news_verdict:dict[str,Any]=Field(default_factory=dict); cancelled_order_tickets:list[str]=Field(default_factory=list); broker_quotes:list[TerminalQuote]=Field(default_factory=list,max_length=32); broker_candles:list[TerminalCandle]=Field(default_factory=list,max_length=1000); active_chart_symbol:str=Field(default='',max_length=32); active_chart_timeframe:str=Field(default='M15',min_length=2,max_length=3)
 
 def relevant_news_currencies(symbol):
     s=''.join(ch for ch in (symbol or '').upper() if ch.isalnum())
