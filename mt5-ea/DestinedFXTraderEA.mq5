@@ -863,19 +863,50 @@ string DealsJson()
 }
 string LastSignalJson(){if(g_sigSymbol=="")return "null";return StringFormat("{\"state\":\"%s\",\"signal_key\":\"%s\",\"strategy\":\"%s\",\"execution_state\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"%s\",\"direction\":\"%s\",\"entry\":%.10f,\"actual_entry\":%.10f,\"submitted_at\":\"%s\",\"opened_at\":\"%s\",\"stop_loss\":%.10f,\"take_profit\":%.10f,\"risk_percent\":%.4f,\"requested_volume\":%.4f,\"executed_volume\":%.4f,\"rationale\":\"%s\",\"order_retcode\":\"%s\",\"order\":\"%s\",\"deal\":\"%s\",\"position\":\"%s\",\"cost_model\":\"%s\",\"news_status\":\"%s\",\"news_detail\":\"%s\",\"news_source\":\"%s\",\"news_event\":\"%s\",\"news_currency\":\"%s\",\"news_retrieved_at_ms\":%I64d}",g_sigState,Esc(g_lastSignal),Esc(g_strategy),g_sigExecutionState,Esc(g_sigSymbol),Esc(g_sigTf),Esc(g_sigDirection),g_sigEntry,g_sigActualEntry,(g_sigSubmittedAt>0?IsoUtc(g_sigSubmittedAt):"UNAVAILABLE"),(g_sigOpenedAt>0?BrokerTime(g_sigOpenedAt):"UNAVAILABLE"),g_sigSL,g_sigTP,g_sigRisk,g_sigRequestedVolume,g_sigExecutedVolume,Esc(g_sigRationale),Esc(g_sigRetcode),Esc(g_sigOrder),Esc(g_sigDeal),Esc(g_sigPosition),Esc(InpCostModel),Esc(g_newsStatus),Esc(g_newsDetail),Esc(g_newsSource),Esc(g_newsEvent),Esc(g_newsCurrency),g_newsRetrievedMs);}
 string NewsJson(){return StringFormat("{\"status\":\"%s\",\"detail\":\"%s\",\"source\":\"%s\",\"event\":\"%s\",\"currency\":\"%s\",\"retrieved_at_ms\":%I64d,\"coverage_from_ms\":%I64d,\"coverage_to_ms\":%I64d,\"event_time_ms\":%I64d,\"blackout_start_ms\":%I64d,\"blackout_end_ms\":%I64d}",Esc(g_newsStatus),Esc(g_newsDetail),Esc(g_newsSource),Esc(g_newsEvent),Esc(g_newsCurrency),g_newsRetrievedMs,g_newsCoverageFromMs,g_newsCoverageToMs,g_newsEventMs,g_newsBlackoutStartMs,g_newsBlackoutEndMs);}
+string ActiveChartSymbol(){
+   string selected=Trim(ChartSymbol(0));
+   if(selected=="")selected=(ArraySize(g_symbols)>0?Trim(g_symbols[0]):"");
+   return selected;
+}
+string ActiveChartTimeframeLabel(){
+   ENUM_TIMEFRAMES tf=(ENUM_TIMEFRAMES)ChartPeriod(0);
+   switch(tf){
+      case PERIOD_M1:return "M1";
+      case PERIOD_M5:return "M5";
+      case PERIOD_M15:return "M15";
+      case PERIOD_M30:return "M30";
+      case PERIOD_H1:return "H1";
+      case PERIOD_H4:return "H4";
+      case PERIOD_D1:return "D1";
+      case PERIOD_W1:return "W1";
+   }
+   return "M15";
+}
 string BrokerQuotesJson(){
    string output="[";
    int emitted=0;
-   // MqlTick.time_msc is broker-server time. Normalize to UTC before
-   // comparing it with the Bridge clock or serializing the heartbeat.
+   string quoteSymbols[33];
+   int quoteSymbolCount=0;
+   int configuredCount=MathMin(ArraySize(g_symbols),32);
+   for(int i=0;i<configuredCount;i++){
+      string configured=Trim(g_symbols[i]);
+      if(configured=="")continue;
+      bool duplicate=false;
+      for(int j=0;j<quoteSymbolCount;j++)if(StringCompare(quoteSymbols[j],configured,false)==0){duplicate=true;break;}
+      if(!duplicate){quoteSymbols[quoteSymbolCount]=configured;quoteSymbolCount++;}
+   }
+   string chartSymbol=ActiveChartSymbol();
+   if(chartSymbol!=""){
+      bool duplicate=false;
+      for(int j=0;j<quoteSymbolCount;j++)if(StringCompare(quoteSymbols[j],chartSymbol,false)==0){duplicate=true;break;}
+      if(!duplicate&&quoteSymbolCount<ArraySize(quoteSymbols)){quoteSymbols[quoteSymbolCount]=chartSymbol;quoteSymbolCount++;}
+   }
    datetime utcNow=TimeGMT();
    datetime serverNow=TimeTradeServer();
    long serverUtcOffsetMs=(long)(serverNow-utcNow)*1000;
    long nowMs=(long)utcNow*1000;
-   for(int i=0;i<ArraySize(g_symbols)&&i<32;i++)
-   {
-      string sym=Trim(g_symbols[i]);
-      if(sym=="")continue;
+   for(int i=0;i<quoteSymbolCount;i++){
+      string sym=quoteSymbols[i];
       MqlTick q;
       if(!SymbolInfoTick(sym,q))continue;
       long stamp=(long)q.time_msc-serverUtcOffsetMs;
@@ -896,9 +927,11 @@ ENUM_TIMEFRAMES AnalyzerChartTimeframe(int index){
       case 0:return PERIOD_M1;
       case 1:return PERIOD_M5;
       case 2:return PERIOD_M15;
-      case 3:return PERIOD_H1;
-      case 4:return PERIOD_H4;
-      case 5:return PERIOD_D1;
+      case 3:return PERIOD_M30;
+      case 4:return PERIOD_H1;
+      case 5:return PERIOD_H4;
+      case 6:return PERIOD_D1;
+      case 7:return PERIOD_W1;
    }
    return PERIOD_CURRENT;
 }
@@ -907,9 +940,11 @@ string AnalyzerChartTimeframeLabel(int index){
       case 0:return "M1";
       case 1:return "M5";
       case 2:return "M15";
-      case 3:return "H1";
-      case 4:return "H4";
-      case 5:return "D1";
+      case 3:return "M30";
+      case 4:return "H1";
+      case 5:return "H4";
+      case 6:return "D1";
+      case 7:return "W1";
    }
    return "";
 }
@@ -920,20 +955,31 @@ string BrokerCandlesJson(){
    datetime serverNow=TimeTradeServer();
    long serverUtcOffsetSeconds=(long)(serverNow-utcNow);
    long nowMs=(long)utcNow*1000;
-   // Chart history is independent of the strategy scan timeframes.
-   // 2 symbols x 6 chart timeframes x 80 closed bars = at most 960 bars.
-   // Quotes may cover up to 32 symbols; OHLC is bounded to the first two configured symbols.
-   int symbolLimit=MathMin(ArraySize(g_symbols),2);
-   for(int si=0;si<symbolLimit;si++){
-      string sym=Trim(g_symbols[si]);
-      if(sym=="")continue;
-      for(int ti=0;ti<6;ti++){
+   string chartSymbols[3];
+   int symbolCount=0;
+   int configuredCount=MathMin(ArraySize(g_symbols),2);
+   for(int si=0;si<configuredCount;si++){
+      string configured=Trim(g_symbols[si]);
+      if(configured=="")continue;
+      bool duplicate=false;
+      for(int j=0;j<symbolCount;j++)if(StringCompare(chartSymbols[j],configured,false)==0){duplicate=true;break;}
+      if(!duplicate){chartSymbols[symbolCount]=configured;symbolCount++;}
+   }
+   string activeSymbol=ActiveChartSymbol();
+   if(activeSymbol!=""){
+      bool duplicate=false;
+      for(int j=0;j<symbolCount;j++)if(StringCompare(chartSymbols[j],activeSymbol,false)==0){duplicate=true;break;}
+      if(!duplicate&&symbolCount<ArraySize(chartSymbols)){chartSymbols[symbolCount]=activeSymbol;symbolCount++;}
+   }
+   for(int si=0;si<symbolCount;si++){
+      string sym=chartSymbols[si];
+      for(int ti=0;ti<8;ti++){
          ENUM_TIMEFRAMES tf=AnalyzerChartTimeframe(ti);
          string label=AnalyzerChartTimeframeLabel(ti);
          if(tf==PERIOD_CURRENT||label=="")continue;
          MqlRates rates[];
          ArraySetAsSeries(rates,true);
-         int got=CopyRates(sym,tf,1,80,rates); // shift 1 excludes the still-forming bar
+         int got=CopyRates(sym,tf,1,80,rates);
          if(got<1)continue;
          for(int ri=got-1;ri>=0;ri--){
             MqlRates bar=rates[ri];
@@ -978,7 +1024,7 @@ void Heartbeat(){
    double bal=AccountInfoDouble(ACCOUNT_BALANCE),eq=AccountInfoDouble(ACCOUNT_EQUITY),mar=AccountInfoDouble(ACCOUNT_MARGIN),free=AccountInfoDouble(ACCOUNT_MARGIN_FREE),ml=AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
    double profitToday=0.0;
    string profitTodayJson=BotProfitToday(profitToday)?DoubleToString(profitToday,2):"null";
-   string b=StringFormat("{\"state\":\"%s\",\"timestamp\":\"%s\",\"terminal_connected\":%s,\"trade_allowed\":%s,\"news_verdict\":%s,\"account\":{\"login\":\"%I64d\",\"server\":\"%s\",\"company\":\"%s\",\"currency\":\"%s\",\"account_mode\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"profit_today\":%s,\"margin_level\":%.2f,\"leverage\":%d},\"configuration\":%s,\"last_signal\":%s,\"last_error\":\"%s\",\"open_positions\":%s,\"active_orders\":%s,\"closed_deals\":%s,\"broker_quotes\":%s,\"broker_candles\":%s}",StateJson(),IsoUtc(TimeGMT()),TerminalInfoInteger(TERMINAL_CONNECTED)?"true":"false",(MQLInfoInteger(MQL_TRADE_ALLOWED)&&AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))?"true":"false",NewsJson(),AccountInfoInteger(ACCOUNT_LOGIN),Esc(AccountInfoString(ACCOUNT_SERVER)),Esc(AccountInfoString(ACCOUNT_COMPANY)),Esc(AccountInfoString(ACCOUNT_CURRENCY)),BrokerAccountMode(),bal,eq,mar,free,profitTodayJson,ml,AccountInfoInteger(ACCOUNT_LEVERAGE),cfg,LastSignalJson(),Esc(g_lastError),PositionsJson(),OrdersJson(),DealsJson(),BrokerQuotesJson(),BrokerCandlesJson());
+   string b=StringFormat("{\"state\":\"%s\",\"timestamp\":\"%s\",\"active_chart_symbol\":\"%s\",\"active_chart_timeframe\":\"%s\",\"terminal_connected\":%s,\"trade_allowed\":%s,\"news_verdict\":%s,\"account\":{\"login\":\"%I64d\",\"server\":\"%s\",\"company\":\"%s\",\"currency\":\"%s\",\"account_mode\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"profit_today\":%s,\"margin_level\":%.2f,\"leverage\":%d},\"configuration\":%s,\"last_signal\":%s,\"last_error\":\"%s\",\"open_positions\":%s,\"active_orders\":%s,\"closed_deals\":%s,\"broker_quotes\":%s,\"broker_candles\":%s}",StateJson(),IsoUtc(TimeGMT()),Esc(ActiveChartSymbol()),ActiveChartTimeframeLabel(),TerminalInfoInteger(TERMINAL_CONNECTED)?"true":"false",(MQLInfoInteger(MQL_TRADE_ALLOWED)&&AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))?"true":"false",NewsJson(),AccountInfoInteger(ACCOUNT_LOGIN),Esc(AccountInfoString(ACCOUNT_SERVER)),Esc(AccountInfoString(ACCOUNT_COMPANY)),Esc(AccountInfoString(ACCOUNT_CURRENCY)),BrokerAccountMode(),bal,eq,mar,free,profitTodayJson,ml,AccountInfoInteger(ACCOUNT_LEVERAGE),cfg,LastSignalJson(),Esc(g_lastError),PositionsJson(),OrdersJson(),DealsJson(),BrokerQuotesJson(),BrokerCandlesJson());
    string response=Api("POST","/v1/terminal/heartbeat",b);
    if(response!=""){
       g_liveAuthorizedUntil=(datetime)JNum(response,"live_authorized_until",0);

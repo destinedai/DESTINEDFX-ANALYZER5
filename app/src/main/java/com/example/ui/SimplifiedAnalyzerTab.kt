@@ -2,24 +2,28 @@ package com.example.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -34,83 +38,109 @@ import com.example.ui.theme.WarningAmber
 
 @Composable
 fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {}) {
-    val symbol by viewModel.selectedTicker.collectAsStateWithLifecycle()
-    val timeframe by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
-    val tickers by viewModel.tickers.collectAsStateWithLifecycle()
-    val signal by viewModel.currentTradeSignal.collectAsStateWithLifecycle()
-    val scanning by viewModel.isSignalScanning.collectAsStateWithLifecycle()
-    val activeTicker = tickers[symbol]
-    val quoteAgeMs = activeTicker?.lastUpdateMillis?.let { System.currentTimeMillis() - it }
-    val livePrice = activeTicker?.takeIf {
-        it.isLive && it.kind == "STREAM" && it.price.isFinite() && it.price > 0.0 &&
-            quoteAgeMs != null && quoteAgeMs in 0L..15_000L &&
-            it.source.equals("Deriv public WebSocket", ignoreCase = true)
-    }?.price
-    val signalText = if (scanning) "ANALYZING…" else
-        signal?.let { userFacingSignalLabel(it.signalState, it.direction) } ?: "WAIT"
-    val signalColor = when (signalText.uppercase()) {
-        "BUY" -> ProfitGreen
-        "SELL" -> LossRed
-        "DATA UNAVAILABLE" -> LossRed
-        "NO VALID SETUP" -> WarningAmber
-        else -> ElectricCyan
-    }
+    val snapshot by viewModel.managedMt5BridgeSnapshot.collectAsStateWithLifecycle()
+    val mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
+    val brand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
 
-    LaunchedEffect(symbol, timeframe) {
-        viewModel.refreshMarketData(symbol, timeframe)
-        viewModel.runSignalScan(symbol, timeframe)
-    }
+    LaunchedEffect(brand, mode) { viewModel.startSelectedMt5AnalyzerBridgeMonitor() }
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(DarkBackground)
-            .verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text("DESTINEDFX ANALYZER", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("$symbol · $timeframe", color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface)
-        ) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("LIVE PRICE", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                Text(
-                    livePrice?.let { formatPrice(it, symbol) } ?: "Price unavailable",
-                    color = if (livePrice != null) TextPrimary else LossRed,
-                    fontSize = 27.sp,
-                    fontWeight = FontWeight.Black
-                )
-                Text(
-                    if (livePrice != null) "PUBLIC MARKET FEED · NO LOGIN NEEDED"
-                    else "PUBLIC FEED CONNECTING · NO LOGIN NEEDED",
-                    color = if (livePrice != null) ProfitGreen else WarningAmber,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
+    val connected = snapshot?.let {
+        it.connected && it.terminalConnected && it.terminalOnline && it.heartbeatFresh &&
+            it.accountVerified && it.brokerIdentityVerified && it.actualAccountMode == mode
+    } == true
+    val symbol = snapshot?.activeChartSymbol?.takeIf { it.isNotBlank() }
+        ?: snapshot?.brokerQuotes?.firstOrNull()?.symbol.orEmpty()
+    val timeframe = snapshot?.activeChartTimeframe?.takeIf { it.isNotBlank() } ?: "M15"
+    val quote = if (connected && symbol.isNotBlank()) snapshot?.brokerQuotes?.firstOrNull {
+        it.symbol.equals(symbol, true) && it.source == "MT5_TERMINAL"
+    } else null
+    val candles = if (connected && symbol.isNotBlank()) snapshot?.brokerCandles.orEmpty().filter {
+        it.symbol.equals(symbol, true) && it.timeframe.equals(timeframe, true) &&
+            it.source == "MT5_TERMINAL" && it.complete
+    } else emptyList()
+    val insight = remember(quote, candles) { MT5AnalyzerMath.analyze(quote, candles) }
+    val price = quote?.let { (it.bid + it.ask) / 2.0 }
+    val spread = quote?.let { it.ask - it.bid }
+
+    Column(Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
+        .padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("MT5 MARKET", color = TextSecondary, fontSize = 10.sp)
+                        Text(symbol.ifBlank { "Waiting for MT5..." }, color = TextPrimary, fontSize = 21.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.size(9.dp).background(if (connected) ProfitGreen else TextSecondary, CircleShape))
+                        Text(if (connected) "MT5 CONNECTED · ${snapshot?.actualAccountMode}" else "Waiting for MT5...",
+                            color = if (connected) ProfitGreen else TextSecondary, fontSize = 10.sp)
+                    }
+                }
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("LIVE PRICE · MT5", color = TextSecondary, fontSize = 9.sp)
+                        Text(price?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 29.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("SPREAD", color = TextSecondary, fontSize = 9.sp)
+                        Text(spread?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 15.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    }
+                }
             }
         }
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface)
-        ) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("SIGNAL", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                Text(signalText, color = signalColor, fontSize = 28.sp, fontWeight = FontWeight.Black)
-                if (scanning) CircularProgressIndicator(color = ElectricCyan)
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+            Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("TRADINGVIEW CHART", color = ElectricCyan, fontSize = 11.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    Spacer(Modifier.weight(1f))
+                    Text(if (connected) "$symbol · $timeframe" else "Waiting for MT5...", color = TextSecondary, fontSize = 9.sp)
+                }
+                TradingViewEmbedChart(symbol.takeIf { connected && it.isNotBlank() }, timeframe,
+                    Modifier.fillMaxWidth().height(270.dp))
             }
         }
-        Button(
-            onClick = {
-                viewModel.refreshMarketData(symbol, timeframe)
-                viewModel.runSignalScan(symbol, timeframe)
-            },
-            enabled = !scanning,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
-        ) {
-            Text("REFRESH PRICE & SIGNAL", fontWeight = FontWeight.Black)
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("SIGNAL", color = ElectricCyan, fontSize = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(if (connected) insight.trend else "NEUTRAL",
+                        color = when { !connected -> TextSecondary; insight.trend=="BUY" -> ProfitGreen
+                            insight.trend=="SELL" -> LossRed; else -> WarningAmber },
+                        fontSize = 27.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    Spacer(Modifier.weight(1f))
+                    Text("${if (connected) insight.confidence else 0}%", color = TextPrimary, fontSize = 21.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                }
+                Text(if (connected) insight.reason else "Waiting for MT5...", color = TextSecondary, fontSize = 12.sp)
+            }
         }
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text("LEVELS · MT5 CANDLES", color = ElectricCyan, fontSize = 11.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                AnalyzerLevelValue("Support", insight.support, symbol)
+                AnalyzerLevelValue("Resistance", insight.resistance, symbol)
+                AnalyzerLevelValue("SL suggestion", insight.stopLoss, symbol)
+                AnalyzerLevelValue("TP suggestion", insight.takeProfit, symbol)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnalyzerLevelValue(label: String, value: Double?, symbol: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = TextSecondary, fontSize = 12.sp)
+        Text(value?.let { formatPrice(it, symbol) } ?: "—", color = TextPrimary, fontSize = 13.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
     }
 }

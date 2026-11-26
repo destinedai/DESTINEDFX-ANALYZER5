@@ -120,6 +120,16 @@ def test_ea_source_contract_and_balanced_delimiters():
     assert not failed, "EA source contract checks failed: " + ", ".join(failed)
 
 
+def test_analyzer_uses_active_terminal_chart_symbol_and_timeframe_from_mt5_heartbeat():
+    quotes = source[source.index("string ActiveChartSymbol()") : source.index("ENUM_TIMEFRAMES AnalyzerChartTimeframe")]
+    candles = source[source.index("string BrokerCandlesJson()") : source.index("bool BotProfitToday")]
+    heartbeat = source[source.index("void Heartbeat()") : source.index("int OnInit()")]
+    assert "ChartSymbol(0)" in quotes and "ActiveChartSymbol()" in quotes
+    assert "ActiveChartSymbol()" in candles and "for(int ti=0;ti<8;ti++)" in candles
+    assert "active_chart_symbol" in heartbeat and "active_chart_timeframe" in heartbeat
+    assert "BrokerQuotesJson()" in heartbeat and "BrokerCandlesJson()" in heartbeat
+
+
 def test_followup_safety_contracts():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     assert "requiredGrossReward=2.0*MathAbs(loss)+3.0*costPerLot" in source

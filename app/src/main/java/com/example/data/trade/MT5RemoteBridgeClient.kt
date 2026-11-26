@@ -127,6 +127,15 @@ internal fun isManagedTerminalIsolationStatusAccepted(isolationStatus: String): 
     isolationStatus.trim().uppercase(Locale.ROOT) in
         setOf("VERIFIED", "WORKER_ATTESTATION_REQUIRED")
 
+internal data class VerifiedBrokerChartSelection(val symbol: String, val timeframe: String)
+
+internal fun parseVerifiedBrokerChartSelection(symbol: String?, timeframe: String?): VerifiedBrokerChartSelection {
+    val cleanSymbol = symbol?.trim()?.takeIf { it.length <= 32 && Regex("[A-Za-z0-9._#-]{1,32}").matches(it) }.orEmpty()
+    val supported = setOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
+    val cleanTimeframe = timeframe?.trim()?.uppercase(Locale.ROOT)?.takeIf { it in supported }.orEmpty()
+    return VerifiedBrokerChartSelection(cleanSymbol, cleanTimeframe)
+}
+
 class MT5RemoteBridgeClient(
     private val secrets: SecretsManager,
     profile: String,
@@ -264,7 +273,9 @@ class MT5RemoteBridgeClient(
         val actualCompany: String = "",
         val connectionWarning: String = "MT5 terminal state is not verified.",
         val connectionErrorCode: String = "",
-        val profitToday: Double? = null
+        val profitToday: Double? = null,
+        val activeChartSymbol: String = "",
+        val activeChartTimeframe: String = "M15"
     )
 
     private fun configuredServiceUrl(): String = resolveServiceOrigin(
@@ -536,6 +547,7 @@ class MT5RemoteBridgeClient(
             obj.optLong("broker_quote_stale_ms", 15_000L).coerceIn(1L, 15_000L)
         )
         val brokerCandles = parseVerifiedBrokerCandles(obj.optJSONArray("broker_candles"), System.currentTimeMillis())
+        val chartSelection = parseVerifiedBrokerChartSelection(obj.optString("active_chart_symbol"), obj.optString("active_chart_timeframe"))
         val managedState = managed?.let { it.optString("status", it.optString("state", "")) }.orEmpty().uppercase()
         val workerStatus = managed?.optString("worker_status", "UNKNOWN").orEmpty().uppercase()
         val access = managed?.optString("access_type", "").orEmpty().uppercase()
@@ -568,7 +580,9 @@ class MT5RemoteBridgeClient(
             array("open_positions"), array("active_orders"), array("closed_deals"),
             obj.has("open_positions") && !obj.isNull("open_positions") && obj.has("active_orders") && !obj.isNull("active_orders") && obj.has("closed_deals") && !obj.isNull("closed_deals") && array("open_positions") != null && array("active_orders") != null && array("closed_deals") != null,
             obj.optJSONObject("last_signal"), obj.optJSONObject("news_verdict"), obj, brokerQuotes, brokerCandles,
-            actualCompany, connectionWarning, connectionErrorCode, profitToday
+            actualCompany, connectionWarning, connectionErrorCode, profitToday,
+            activeChartSymbol = chartSelection.symbol,
+            activeChartTimeframe = chartSelection.timeframe.ifBlank { "M15" }
         )
     }
 

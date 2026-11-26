@@ -134,7 +134,7 @@ def claimed(p):
     r=client.post('/v1/terminal/claim',json={'pairing_code':p['pairing_code'],'terminal_instance_id':'test-terminal-1','account':ACCOUNT}); assert r.status_code==200; return r.json()
 def heartbeat_data(**kwargs):
     now_ms=int(time.time()*1000)
-    x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,'max_concurrent_positions':2,'daily_risk_status':'NORMAL','daily_loss_used_percent':10.0},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[],'broker_quotes':[],'broker_candles':[]}; x.update(kwargs); return x
+    x={'state':'READY','timestamp':app.iso(),'terminal_connected':True,'trade_allowed':True,'account':{**ACCOUNT,'balance':10000,'equity':9990,'margin':100,'free_margin':9890,'margin_level':9990,'leverage':100},'configuration':{'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,'max_concurrent_positions':2,'daily_risk_status':'NORMAL','daily_loss_used_percent':10.0},'news_verdict':{'status':'CLEAR','detail':'NEWS CLEAR','source':'fixture-provider','retrieved_at_ms':now_ms,'coverage_from_ms':now_ms-86400000,'coverage_to_ms':now_ms+7*86400000,'affected_currencies':['EUR','USD']},'last_signal':None,'last_error':'','open_positions':[],'active_orders':[],'closed_deals':[],'broker_quotes':[],'broker_candles':[],'active_chart_symbol':'EURUSD','active_chart_timeframe':'M15'}; x.update(kwargs); return x
 
 def analysis_payload(request_id='analysis-1'):
     return {'request_id':request_id,'symbol':'EUR/USD','timeframe':'M1','strategy_id':'smc-confluence-1.0.0'}
@@ -304,6 +304,25 @@ def test_duplicate_request_ids_delivery_ack_and_replay():
     assert state['last_command']['outcome']=='APPLIED'
     assert client.get('/v1/terminal/commands?cursor='+str(delivered['cursor']),headers=th).json()['commands']==[]
 
+def test_verified_terminal_chart_selection_and_ohlc_are_returned_to_the_app():
+    p=pair(); t=claimed(p)
+    ah={'Authorization':'Bearer '+p['app_token']}
+    th={'Authorization':'Bearer '+t['terminal_token']}
+    now_ms=int(time.time()*1000)
+    beat=heartbeat_data(active_chart_symbol='XAUUSD.a', active_chart_timeframe='M15',
+        broker_quotes=[{'symbol':'XAUUSD.a','bid':2345.10,'ask':2345.30,'digits':2,'timestamp_ms':now_ms}],
+        broker_candles=[{'symbol':'XAUUSD.a','timeframe':'M15','timestamp_ms':now_ms-900000,
+                         'open':2344.0,'high':2346.0,'low':2343.0,'close':2345.0,
+                         'volume':100.0,'complete':True}])
+    assert client.post('/v1/terminal/heartbeat',json=beat,headers=th).status_code==200
+    state=client.get('/v1/app/state',headers=ah).json()
+    assert state['active_chart_symbol']=='XAUUSD.a'
+    assert state['active_chart_timeframe']=='M15'
+    assert state['broker_quotes'][0]['symbol']=='XAUUSD.a'
+    assert state['broker_candles'][0]['symbol']=='XAUUSD.a'
+    assert state['broker_candles'][0]['source']=='MT5_TERMINAL'
+
+
 def test_zero_balance_and_equity_heartbeat_remains_visible_after_account_blowout():
     p=pair(); t=claimed(p); th={'Authorization':'Bearer '+t['terminal_token']}
     blown=heartbeat_data(account={**ACCOUNT,'balance':0,'equity':0,'margin':0,'free_margin':0,'margin_level':0})
@@ -323,9 +342,9 @@ def test_heartbeat_status_identity_and_offline():
     assert client.post('/v1/terminal/heartbeat',json=heartbeat_data(),headers=th).status_code==200
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['pairing_status']=='PAIRED' and state['terminal_online'] is True and state['account']['login']==ACCOUNT['login']
-    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','host_lifecycle_status','max_lifetime_seconds','host_warning_seconds','host_emergency_stop_lead_seconds','host_expiry_at_epoch_seconds','host_remaining_seconds','host_shutdown_pending','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command','broker_quotes','broker_candles','broker_quote_stale_ms','account_balance_available','connection_error','execution_storage_durable'}
+    assert set(state)=={'pairing_id','management_identity_bound','host_profile','idle_timeout_seconds','host_started_at_epoch_seconds','host_lifecycle_status','max_lifetime_seconds','host_warning_seconds','host_emergency_stop_lead_seconds','host_expiry_at_epoch_seconds','host_remaining_seconds','host_shutdown_pending','pairing_status','terminal_online','heartbeat_age_seconds','heartbeat_stale_seconds','ea_state','terminal_connected','trade_allowed','account','account_identity_verified','broker_identity_verified','configuration','risk_controls','news_verdict','last_signal','last_error','open_positions','active_orders','closed_deals','last_heartbeat_at','last_command','broker_quotes','broker_candles','active_chart_symbol','active_chart_timeframe','broker_quote_stale_ms','account_balance_available','connection_error','execution_storage_durable'}
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
-    off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE'
+    off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE' and off['active_chart_symbol']=='' and off['active_chart_timeframe']==''
 
 def test_revoke_invalidates_both_tokens():
     p=pair(); t=claimed(p); ah={'Authorization':'Bearer '+p['app_token']}; th={'Authorization':'Bearer '+t['terminal_token']}

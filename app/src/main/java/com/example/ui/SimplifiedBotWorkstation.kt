@@ -218,8 +218,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val derivBotServiceReason by DerivDemoBotService.statusReason.collectAsStateWithLifecycle()
     var batteryOptimizationExempt by remember { mutableStateOf(false) }
     var broker by remember(activeBroker) { mutableStateOf(activeBroker) }
-    var mt5Mode by remember { mutableStateOf("DEMO") }
-    var selectedMt5Broker by remember { mutableStateOf(viewModel.app.secretsManager.getSelectedMT5BrokerBrand()) }
+    var mt5Mode by remember { mutableStateOf(viewModel.selectedMt5Mode.value) }
+    var selectedMt5Broker by remember { mutableStateOf(viewModel.selectedMt5BrokerBrand.value) }
     val mt5Profile = "${selectedMt5Broker}_${mt5Mode}"
     var login by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -530,9 +530,12 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         val storedDemoPass = secrets.getPathDemoAcceptance(storedDemoIdentity) != null
         val changed = selectedMt5Broker != brand || mt5Mode != mode
         val previousBridge = bridge
-        val applySelection = {
+        val applySelection = selection@{
+            if (!viewModel.selectMt5AccountProfile(brand, mode)) {
+                message = "MT5 profile could not be saved securely."
+                return@selection
+            }
             selectedMt5Broker = brand; mt5Mode = mode
-            secrets.saveSelectedMT5BrokerBrand(brand)
             broker = BrokerType.FBS; viewModel.selectBroker(BrokerType.FBS)
             message = if (mode == "LIVE" && !storedDemoPass) {
                 "LIVE profile selected. LIVE authorization remains blocked until the matching broker-specific DEMO PASS is verified and accepted."

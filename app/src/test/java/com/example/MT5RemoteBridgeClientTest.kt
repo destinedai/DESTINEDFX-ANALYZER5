@@ -80,6 +80,15 @@ class MT5RemoteBridgeClientTest {
         assertEquals("EURUSD", accepted.single().symbol)
     }
 
+    @Test fun bridgeChartSelectionParserAcceptsOnlyKnownTerminalSymbolsAndTimeframes() {
+        val valid = parseVerifiedBrokerChartSelection("XAUUSD.a", "M15")
+        assertEquals("XAUUSD.a", valid.symbol)
+        assertEquals("M15", valid.timeframe)
+        val unknown = parseVerifiedBrokerChartSelection("../bad symbol", "H2")
+        assertEquals("", unknown.symbol)
+        assertEquals("", unknown.timeframe)
+    }
+
     @Test fun unavailableEncryptedStorageBlocksManagedRegistrationBeforeNetwork() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val secrets = SecretsManager(context) { throw IllegalStateException("simulated keystore failure") }

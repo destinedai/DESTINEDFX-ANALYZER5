@@ -288,6 +288,17 @@ open class DestinedFXViewModel(
     val riskPercent = MutableStateFlow(0.25)
     val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
     val selectedMt5Mode = MutableStateFlow(if (isPreview) "DEMO" else app.secretsManager.getSelectedMT5Mode())
+    val selectedMt5BrokerBrand = MutableStateFlow(if (isPreview) "FBS" else app.secretsManager.getSelectedMT5BrokerBrand())
+
+    fun selectMt5AccountProfile(brand: String, mode: String): Boolean {
+        val b = brand.trim().uppercase()
+        val m = mode.trim().uppercase()
+        if (b !in setOf("FBS", "EXNESS", "HFM", "DERIV") || m !in setOf("DEMO", "LIVE")) return false
+        if (!isPreview && (!app.secretsManager.saveSelectedMT5BrokerBrand(b) || !app.secretsManager.saveSelectedMT5Mode(m))) return false
+        selectedMt5BrokerBrand.value = b
+        selectedMt5Mode.value = m
+        return true
+    }
 
     fun selectMt5Mode(mode: String): Boolean {
         val normalized = mode.trim().uppercase()
@@ -423,6 +434,28 @@ open class DestinedFXViewModel(
                 delay(5_000L)
             }
         }
+    }
+
+    fun startSelectedMt5AnalyzerBridgeMonitor() {
+        if (isPreview) return
+        val brand = selectedMt5BrokerBrand.value
+        val mode = selectedMt5Mode.value
+        val profile = "${brand}_${mode}"
+        val secrets = app.secretsManager
+        if (!secrets.isSecureStorageAvailable || secrets.getMT5BridgeAccountAppToken(profile).isBlank()) {
+            clearManagedMt5BridgeMonitor()
+            return
+        }
+        val client = MT5RemoteBridgeClient(
+            secrets, profile, { AppSecurityGuard.authorizeSensitiveAction() },
+            accountMode = mode, brokerBrand = brand, modeArmingPolicy = app.modeArmingPolicy,
+            managementIdentityAssertionProvider = { issueBridgeIdentityAssertion() }
+        )
+        if (!client.managedConfigured() || !client.hasPairing()) {
+            clearManagedMt5BridgeMonitor()
+            return
+        }
+        startManagedMt5BridgeMonitor(client, profile, mode)
     }
 
     fun clearManagedMt5BridgeMonitor() {

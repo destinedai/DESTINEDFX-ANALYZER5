@@ -2481,6 +2481,20 @@ def fresh_terminal_broker_candles(beat, now_ms=None):
     accepted.sort(key=lambda item:(item['symbol'].upper(),item['timeframe'],item['timestamp_ms']))
     return accepted
 
+def safe_terminal_chart_symbol(value):
+    if not isinstance(value,str):
+        return ''
+    symbol=value.strip()
+    if not symbol or len(symbol)>32 or not re.fullmatch(r'[A-Za-z0-9._#-]{1,32}',symbol):
+        return ''
+    return symbol
+
+
+def safe_terminal_chart_timeframe(value):
+    allowed={'M1','M5','M15','M30','H1','H4','D1','W1'}
+    return value.strip().upper() if isinstance(value,str) and value.strip().upper() in allowed else ''
+
+
 @app.get('/v1/app/state')
 def state(authorization:str|None=Header(default=None)):
     # Passive state polling must not keep an idle engine awake indefinitely.
@@ -2534,7 +2548,7 @@ def state(authorization:str|None=Header(default=None)):
             'code':'ACCOUNT_BALANCE_UNAVAILABLE',
             'message':'The authenticated terminal did not provide a finite positive balance and equity snapshot; quote display may continue, but order execution remains blocked.'
         }
-    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_balance_available':account_balance_available,'connection_error':connection_error,'execution_storage_durable':durable_execution_enabled(),'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command,'broker_quotes':broker_quotes,'broker_candles':broker_candles,'broker_quote_stale_ms':BROKER_QUOTE_MAX_AGE_MS}
+    result={'pairing_id':p['id'],'management_identity_bound':bool(p['owner_subject'] and p['owner_tenant']),'host_profile':HOST_PROFILE,'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,**host_lifecycle_state(),'pairing_status':'PAIRED' if p['consumed'] else 'PAIRING','terminal_online':online,'heartbeat_age_seconds':age,'heartbeat_stale_seconds':STALE,'ea_state':beat['state'] if online else 'OFFLINE','terminal_connected':beat['terminal_connected'] if online else False,'trade_allowed':beat['trade_allowed'] if online else False,'account':beat['account'] if online else None,'account_balance_available':account_balance_available,'connection_error':connection_error,'execution_storage_durable':durable_execution_enabled(),'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified if m else False,'configuration':beat['configuration'] if online else {},'risk_controls':risk_controls,'news_verdict':beat.get('news_verdict',{'status':'UNKNOWN','detail':'NEWS UNKNOWN: authenticated verdict unavailable'}) if online else {'status':'UNKNOWN','detail':'NEWS UNKNOWN: terminal heartbeat unavailable'},'last_signal':beat['last_signal'] if online else None,'last_error':beat['last_error'] if online else ('Terminal heartbeat is stale or missing' if p['heartbeat'] else ''),'open_positions':beat['open_positions'] if online else None,'active_orders':beat.get('active_orders',[]) if online else None,'closed_deals':beat['closed_deals'] if online else None,'last_heartbeat_at':beat['timestamp'] if beat else None,'last_command':last_command,'broker_quotes':broker_quotes,'broker_candles':broker_candles,'active_chart_symbol':safe_terminal_chart_symbol(beat.get('active_chart_symbol')) if terminal_data_verified else '', 'active_chart_timeframe':safe_terminal_chart_timeframe(beat.get('active_chart_timeframe')) if terminal_data_verified else '', 'broker_quote_stale_ms':BROKER_QUOTE_MAX_AGE_MS}
     if managed is not None: result['managed_execution']=managed
     return result
 
