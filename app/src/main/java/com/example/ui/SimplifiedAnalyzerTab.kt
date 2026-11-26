@@ -133,12 +133,6 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
                 Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("TRADINGVIEW CHART", color = ElectricCyan, fontSize = 11.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                        Spacer(Modifier.weight(1f))
-                        Text("$symbol · $timeframe", color = TextSecondary, fontSize = 9.sp)
-                    }
                     AnalyzerTradingViewChart(chartTicker, timeframe, Modifier.fillMaxWidth().height(270.dp))
                 }
             }
