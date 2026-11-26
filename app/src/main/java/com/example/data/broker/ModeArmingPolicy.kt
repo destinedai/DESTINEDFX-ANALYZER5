@@ -194,7 +194,7 @@ class ModeArmingPolicy(
         return Result.success(lease)
     }
 
-    fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs(), hostProfile: HostProfile = HostProfile.PERSISTENT): ModeDecision {
+    fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs(), hostProfile: HostProfile = HostProfile.EPHEMERAL): ModeDecision {
         if (identity.mode != AccountMode.LIVE) return ModeDecision(false, "BLOCKED", "LIVE_PROFILE_REQUIRED")
         if (hostProfile != HostProfile.PERSISTENT) {
             liveLeases.remove(identity.fingerprint())
@@ -211,8 +211,12 @@ class ModeArmingPolicy(
         return ModeDecision(true, "LIVE_ARMED", "Account-bound lease active until " + lease.expiresAtMs)
     }
 
-    fun liveLease(identity: ModeAccountIdentity, now: Long = nowMs()): ModeLiveLease? =
-        if (liveDecision(identity, now).allowed) liveLeases[identity.fingerprint()] else null
+    fun liveLease(
+        identity: ModeAccountIdentity,
+        now: Long = nowMs(),
+        hostProfile: HostProfile = HostProfile.EPHEMERAL
+    ): ModeLiveLease? =
+        if (liveDecision(identity, now, hostProfile).allowed) liveLeases[identity.fingerprint()] else null
 
     fun disarm(identity: ModeAccountIdentity, reason: String = "OWNER_DISARMED"): Boolean {
         val removed = liveLeases.remove(identity.fingerprint()) != null

@@ -343,7 +343,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         secrets.getManagedMT5AccountServer("${brand}_LIVE"),
                         com.example.data.broker.AccountMode.LIVE, generation
                     )
-                    viewModel.app.modeArmingPolicy.liveLease(identity, now)?.let(::add)
+                    viewModel.app.modeArmingPolicy.liveLease(
+                        identity, now, mt5Snapshot?.hostProfile ?: com.example.data.broker.HostProfile.EPHEMERAL
+                    )?.let(::add)
                 }
                 val account = derivAccount?.takeIf { it.mode.equals("real", true) && it.accountType.equals("real", true) }
                 if (account != null) {

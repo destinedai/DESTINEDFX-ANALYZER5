@@ -42,7 +42,7 @@ class ModeArmingGatewayTest {
         assertTrue(demoResult.exceptionOrNull()?.message.orEmpty().startsWith("MODE_ARMING_BLOCKED:"))
         assertEquals(0, fakeBrokerSubmissions)
 
-        val liveDecision = policy.liveDecision(live, now)
+        val liveDecision = policy.liveDecision(live, now, HostProfile.PERSISTENT)
         val liveResult = executeWithModeArmingDecision(liveDecision) {
             fakeBrokerSubmissions++
             Result.success("fixture-order")

@@ -121,6 +121,7 @@ class ModeArmingPolicyTest {
         val persistent = request(hostProfile = HostProfile.PERSISTENT)
         assertTrue(policy.armLive(persistent).isSuccess)
         assertTrue(policy.liveDecision(persistent.identity, hostProfile = HostProfile.PERSISTENT).allowed)
+        assertTrue(policy.liveLease(persistent.identity, hostProfile = HostProfile.PERSISTENT) != null)
         assertFalse(policy.liveDecision(persistent.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
         assertEquals(0, policy.activeLeaseCount())
 
@@ -143,16 +144,16 @@ class ModeArmingPolicyTest {
         val policy = ModeArmingPolicy(nowMs = { now })
         val req = request()
         policy.armLive(req).getOrThrow()
-        assertTrue(policy.liveDecision(req.identity).allowed)
+        assertTrue(policy.liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
         policy.onCredentialChanged(req.identity.path, req.identity.broker, req.identity.accountId)
-        assertFalse(policy.liveDecision(req.identity).allowed)
+        assertFalse(policy.liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
         policy.armLive(req).getOrThrow()
         policy.onAccountSwitch(req.identity.path, req.identity.broker, "other-account")
-        assertFalse(policy.liveDecision(req.identity).allowed)
+        assertFalse(policy.liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
         policy.armLive(req).getOrThrow()
         now += 15L * 60L * 1000L
-        assertFalse(policy.liveDecision(req.identity).allowed)
-        assertFalse(ModeArmingPolicy(nowMs = { now }).liveDecision(req.identity).allowed)
+        assertFalse(policy.liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
+        assertFalse(ModeArmingPolicy(nowMs = { now }).liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
     }
 
     @Test fun emergencyStopDisarmsAllPathsAndAuditContainsOnlyFingerprints() {
@@ -165,7 +166,7 @@ class ModeArmingPolicyTest {
         policy.armLive(deriv).getOrThrow()
         assertEquals(2, policy.emergencyStop())
         assertEquals(0, policy.activeLeaseCount())
-        assertFalse(policy.liveDecision(fbs.identity).allowed)
+        assertFalse(policy.liveDecision(fbs.identity, hostProfile = HostProfile.PERSISTENT).allowed)
         assertTrue(events.isNotEmpty())
         assertTrue(events.all { it.identityFingerprint.matches(Regex("[0-9a-f]{64}")) })
         assertTrue(events.none { it.identityFingerprint.contains("123456") || it.identityFingerprint.contains("CR123") })
@@ -181,7 +182,7 @@ class ModeArmingPolicyTest {
         val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
         val live = request().identity
         assertFalse(policy.liveDecision(live).allowed)
-        assertFalse(policy.liveLease(live) != null)
+        assertFalse(policy.liveLease(live, hostProfile = HostProfile.PERSISTENT) != null)
         assertEquals(0, policy.activeLeaseCount())
     }
 }
