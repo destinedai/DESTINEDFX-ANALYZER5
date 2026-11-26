@@ -33,6 +33,7 @@ import com.example.service.DerivDemoBotLifecycleHarness
 import com.example.service.DerivDemoBotService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -144,6 +145,7 @@ class DerivBotLifecycleInstrumentedTest {
         assertEquals(1, DerivDemoBotLifecycleHarness.runStarts.get())
         val initialBuys = gateway.purchaseAttempts.get()
         val firstContract = gateway.purchasedContractIds.last()
+        awaitPersistedContract(firstContract)
         DerivDemoBotService.start(context, "1HZ100V", StrategyRegistry.BREAKOUT_MOMENTUM.id, "M1", 1.0)
         SystemClock.sleep(250L)
         assertEquals(1, DerivDemoBotLifecycleHarness.runStarts.get())
@@ -171,6 +173,7 @@ class DerivBotLifecycleInstrumentedTest {
         }
         assertEquals(1, DerivDemoBotLifecycleHarness.runStarts.get())
         val secondContract = gateway.purchasedContractIds.last()
+        awaitPersistedContract(secondContract)
         assertEquals(gateway.purchaseSignalIds.size, gateway.purchaseSignalIds.toSet().size)
         record("Resume", beforeResume, DerivDemoBotService.state.value,
             "Existing service loop resumed and emitted one new DEMO setup with a different signal identity.")
@@ -203,6 +206,7 @@ class DerivBotLifecycleInstrumentedTest {
         }
         assertEquals(2, DerivDemoBotLifecycleHarness.runStarts.get())
         val thirdContract = gateway.purchasedContractIds.last()
+        awaitPersistedContract(thirdContract)
         record("RestartAfterStop", beforeRestart, DerivDemoBotService.state.value,
             "Explicit owner Start created one fresh DEMO entry after Stop.")
 
@@ -238,6 +242,7 @@ class DerivBotLifecycleInstrumentedTest {
         }
         assertEquals(3, DerivDemoBotLifecycleHarness.runStarts.get())
         val fourthContract = gateway.purchasedContractIds.last()
+        awaitPersistedContract(fourthContract)
         record("RestartAfterEmergencyStop", beforeSecondRestart, DerivDemoBotService.state.value,
             "Explicit owner Start created one new DEMO execution after Emergency-Stop.")
 
@@ -251,6 +256,25 @@ class DerivBotLifecycleInstrumentedTest {
         record("CleanupStop", beforeCleanup, DerivDemoBotService.state.value,
             "The final Bot-owned contract was broker-confirmed closed; the first contract settled externally during Pause.")
         assertTrue(evidenceFile.isFile && evidenceFile.length() > 100L)
+    }
+
+    /**
+     * A fake broker confirms a purchase before the executor finishes writing its Room row.
+     * STOP is intentionally tested only after the broker-confirmed contract ID and buy
+     * transaction ID are durably visible in the same ledger that production STOP consumes.
+     */
+    private fun awaitPersistedContract(contractId: Long) {
+        val index = gateway.purchasedContractIds.indexOf(contractId)
+        assertTrue("Fake gateway has no purchase identity for contract $contractId", index >= 0)
+        val signalId = gateway.purchaseSignalIds[index]
+        await("Room confirmation for broker contract $contractId") {
+            runBlocking {
+                val row = app.db.derivExecutionDao().findBySignalId(accountId, "DEMO", signalId)
+                row?.contractId == contractId &&
+                    row.buyTransactionId != null &&
+                    row.status in setOf("CONTRACT_CONFIRMED", "CONTRACT_OPEN")
+            }
+        }
     }
 
     private fun await(description: String, timeoutMs: Long = 15_000L, condition: () -> Boolean) {
