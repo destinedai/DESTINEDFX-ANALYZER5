@@ -186,7 +186,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     persistent_live_policy_ok = (
         "val hostProfile: HostProfile = HostProfile.EPHEMERAL" in arming
         and "request.hostProfile != HostProfile.PERSISTENT" in arming
-        and "hostProfile != HostProfile.PERSISTENT): ModeDecision" in arming
+        and "hostProfile: HostProfile = HostProfile.EPHEMERAL): ModeDecision" in arming
         and "hostProfile: HostProfile = HostProfile.EPHEMERAL" in arming
         and "liveLeases.remove(identity.fingerprint())" in arming
         and "required_slots = 1 if HOST_PROFILE == 'EPHEMERAL' else max(1, minimum_active_slots)" in bridge

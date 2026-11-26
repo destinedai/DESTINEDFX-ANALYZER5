@@ -120,6 +120,11 @@ class ModeArmingPolicyTest {
 
         val persistent = request(hostProfile = HostProfile.PERSISTENT)
         assertTrue(policy.armLive(persistent).isSuccess)
+        // Omitting the host profile means it is unverified and therefore EPHEMERAL.
+        assertFalse(policy.liveDecision(persistent.identity).allowed)
+        assertEquals(0, policy.activeLeaseCount())
+
+        assertTrue(policy.armLive(persistent).isSuccess)
         assertTrue(policy.liveDecision(persistent.identity, hostProfile = HostProfile.PERSISTENT).allowed)
         assertTrue(policy.liveLease(persistent.identity, hostProfile = HostProfile.PERSISTENT) != null)
         assertFalse(policy.liveDecision(persistent.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
