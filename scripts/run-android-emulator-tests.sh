@@ -65,13 +65,17 @@ adb shell getprop ro.build.version.sdk
 adb shell df -h /data
 ./gradlew :app:connectedDebugAndroidTest --stacktrace
 mkdir -p app/build/reports/bot-lifecycle
-remote_evidence="$(adb logcat -d -s DestinedFXBotLifecycle:I | sed -n 's/.*EVIDENCE_PATH=//p' | tail -n 1 | tr -d '\r')"
-if [ -z "$remote_evidence" ]; then
-  echo "Bot lifecycle test did not publish its evidence path to logcat." >&2
+local_evidence="app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json"
+# Android's scoped storage hides /Android/data from the adb shell user. Use run-as
+# against the debuggable test target package to export its private app-files evidence.
+if ! adb exec-out run-as com.aistudio.destinedfx.qwvzxp cat files/bot-lifecycle-evidence.json > "$local_evidence"; then
+  echo "Could not export bot-lifecycle-evidence.json from the debuggable app sandbox." >&2
   exit 1
 fi
-local_evidence="app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json"
-adb pull "$remote_evidence" "$local_evidence"
+if [ ! -s "$local_evidence" ]; then
+  echo "Bot lifecycle evidence file was empty after export." >&2
+  exit 1
+fi
 python - "$local_evidence" <<'PY'
 import json
 import sys
