@@ -65,7 +65,11 @@ adb shell getprop ro.build.version.sdk
 adb shell df -h /data
 ./gradlew :app:connectedDebugAndroidTest --stacktrace
 mkdir -p app/build/reports/bot-lifecycle
-remote_evidence="/sdcard/Android/data/com.aistudio.destinedfx.qwvzxp/files/bot-lifecycle-evidence.json"
+remote_evidence="$(adb logcat -d -s DestinedFXBotLifecycle:I | sed -n 's/.*EVIDENCE_PATH=//p' | tail -n 1 | tr -d '\r')"
+if [ -z "$remote_evidence" ]; then
+  echo "Bot lifecycle test did not publish its evidence path to logcat." >&2
+  exit 1
+fi
 local_evidence="app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json"
 adb pull "$remote_evidence" "$local_evidence"
 python - "$local_evidence" <<'PY'

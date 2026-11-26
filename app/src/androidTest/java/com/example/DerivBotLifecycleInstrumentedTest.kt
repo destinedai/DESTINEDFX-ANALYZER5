@@ -120,6 +120,7 @@ class DerivBotLifecycleInstrumentedTest {
         DerivDemoBotLifecycleHarness.activeWaitDelayMs = 40L
         evidenceFile = File(requireNotNull(context.getExternalFilesDir(null)), "bot-lifecycle-evidence.json")
         evidenceFile.delete()
+        Log.i("DestinedFXBotLifecycle", "EVIDENCE_PATH=${evidenceFile.absolutePath}")
     }
 
     @After
