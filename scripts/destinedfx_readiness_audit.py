@@ -146,7 +146,7 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         and "ChartSymbol(0)" in ea
         and "active_chart_symbol" in ea
         and "active_chart_timeframe" in ea
-        and "settings.javaScriptEnabled = true" in chart_ui
+        and "settings.javaScriptEnabled=true" in chart_ui
         and "settings.domStorageEnabled=true" in chart_ui
         and "Loading chart..." in chart_ui
         and "RETRY" in chart_ui
