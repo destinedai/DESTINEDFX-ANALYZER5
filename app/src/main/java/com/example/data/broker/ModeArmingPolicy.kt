@@ -110,7 +110,7 @@ data class LiveArmRequest(
     val firstMinimumSizeVerified: Boolean,
     val dailyRiskClear: Boolean,
     val riskCapsClear: Boolean,
-    val hostProfile: HostProfile = HostProfile.PERSISTENT,
+    val hostProfile: HostProfile = HostProfile.EPHEMERAL,
     val demoProfileAssociation: VerifiedDemoProfileAssociation? = null
 )
 
@@ -160,6 +160,7 @@ class ModeArmingPolicy(
             identity.path == ModePath.CTRADER_ACCOUNT -> "CTRADER_TRADING_NOT_IMPLEMENTED"
             identity.path.leaseDurationMs <= 0L -> "LIVE_PATH_NOT_SUPPORTED"
             !identity.isValid() -> "LIVE_ACCOUNT_IDENTITY_INCOMPLETE"
+            request.hostProfile != HostProfile.PERSISTENT -> "LIVE_REQUIRES_PERSISTENT_HOST"
             request.demoAcceptance == null -> "MATCHING_DEMO_PASS_REQUIRED"
             request.demoAcceptance.identity.mode != AccountMode.DEMO -> "DEMO_PASS_MODE_INVALID"
             !(request.demoAcceptance.identity.sameLogicalAccount(identity) ||
@@ -193,8 +194,13 @@ class ModeArmingPolicy(
         return Result.success(lease)
     }
 
-    fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs(), @Suppress("UNUSED_PARAMETER") hostProfile: HostProfile = HostProfile.PERSISTENT): ModeDecision {
+    fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs(), hostProfile: HostProfile = HostProfile.PERSISTENT): ModeDecision {
         if (identity.mode != AccountMode.LIVE) return ModeDecision(false, "BLOCKED", "LIVE_PROFILE_REQUIRED")
+        if (hostProfile != HostProfile.PERSISTENT) {
+            liveLeases.remove(identity.fingerprint())
+            audit(identity, "LIVE_DISARMED", false, "LIVE_REQUIRES_PERSISTENT_HOST", now)
+            return ModeDecision(false, "LIVE_LOCKED", "LIVE_REQUIRES_PERSISTENT_HOST")
+        }
         val lease = liveLeases[identity.fingerprint()]
             ?: return ModeDecision(false, "LIVE_LOCKED", "LIVE_LEASE_MISSING_OR_PROCESS_RESTARTED")
         if (lease.identity != identity || now < lease.armedAtMs || now >= lease.expiresAtMs) {

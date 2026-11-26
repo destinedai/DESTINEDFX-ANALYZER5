@@ -29,9 +29,10 @@ class ModeArmingPolicyTest {
         demoIdentity: ModeAccountIdentity = identity(), liveVerified: ModeReadOnlyVerification = verified(liveIdentity),
         confirmation: String = "ARM LIVE " + liveIdentity.broker + " " + liveIdentity.accountId, minSize: Boolean = true,
         dailyRisk: Boolean = true, riskCaps: Boolean = true, reauthenticated: Boolean = true,
-        currentDemoGeneration: String = demoIdentity.credentialGeneration) =
+        currentDemoGeneration: String = demoIdentity.credentialGeneration,
+        hostProfile: HostProfile = HostProfile.PERSISTENT) =
         LiveArmRequest(liveIdentity, accepted(demoIdentity), currentDemoGeneration, liveVerified,
-            confirmation, reauthenticated, minSize, dailyRisk, riskCaps)
+            confirmation, reauthenticated, minSize, dailyRisk, riskCaps, hostProfile)
 
     @Test fun demoRequiresMatchingAcceptanceCredentialGenerationAndFreshEvidence() {
         val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
@@ -110,11 +111,19 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(demoIdentity = demo.copy(accountId = "600002")))).isSuccess)
     }
 
-    @Test fun ephemeralHostCanArmAndDecideLiveWhenAccountEvidenceAndRiskChecksPass() {
+    @Test fun ephemeralHostCannotArmLiveAndPersistentLeaseIsRevokedOnHostDowngrade() {
         val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
-        val req = request().copy(hostProfile = HostProfile.EPHEMERAL)
-        assertTrue(policy.armLive(req).isSuccess)
-        assertTrue(policy.liveDecision(req.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
+        val ephemeral = request(hostProfile = HostProfile.EPHEMERAL)
+        assertFalse(policy.armLive(ephemeral).isSuccess)
+        assertFalse(policy.liveDecision(ephemeral.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
+        assertEquals(0, policy.activeLeaseCount())
+
+        val persistent = request(hostProfile = HostProfile.PERSISTENT)
+        assertTrue(policy.armLive(persistent).isSuccess)
+        assertTrue(policy.liveDecision(persistent.identity, hostProfile = HostProfile.PERSISTENT).allowed)
+        assertFalse(policy.liveDecision(persistent.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
+        assertEquals(0, policy.activeLeaseCount())
+
         val demo = identity()
         assertTrue(policy.demoDecision(demo, verified(demo), accepted(demo), "cred-demo").allowed)
     }
