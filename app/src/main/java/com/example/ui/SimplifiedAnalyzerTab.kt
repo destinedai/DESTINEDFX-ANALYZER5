@@ -118,7 +118,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val showPrice = priceQuoteAvailable && priceQuoteFresh &&
         analyzerState.priceAvailable && analyzerState.priceFresh
     val showAnalysis = showPrice && analysisValidated
-    val chartTicker = analyzerTradingViewTicker(symbol) ?: "FX:EURUSD"
+    val chartTicker = tradingViewSymbolForMt5(symbol) ?: "FX:EURUSD"
 
     Column(
         Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
@@ -206,9 +206,10 @@ private val analyzerCalendarCurrencies = setOf(
     "DKK", "SGD", "HKD", "CNH", "CNY", "MXN", "ZAR", "TRY", "PLN", "HUF", "CZK"
 )
 
-private fun analyzerTradingViewTicker(mt5Symbol: String): String? {
+internal fun tradingViewSymbolForMt5(mt5Symbol: String): String? {
     val raw = mt5Symbol.trim().uppercase(Locale.ROOT).substringAfterLast(':').substringBefore('.')
     val compact = raw.filter { it in 'A'..'Z' }
+    if (compact == "GOLD" || compact.startsWith("GOLD")) return "TVC:GOLD"
     if (compact.length < 6) return null
     val pair = compact.take(6)
     if (pair.startsWith("XAU") && pair.endsWith("USD")) return "TVC:GOLD"
@@ -218,7 +219,7 @@ private fun analyzerTradingViewTicker(mt5Symbol: String): String? {
     return if (base in analyzerCalendarCurrencies && quote in analyzerCalendarCurrencies) "FX:$pair" else null
 }
 
-private fun analyzerTradingViewInterval(timeframe: String): String = when (timeframe.trim().uppercase(Locale.ROOT)) {
+internal fun tradingViewIntervalForMt5(timeframe: String): String = when (timeframe.trim().uppercase(Locale.ROOT)) {
     "M1" -> "1"
     "M5" -> "5"
     "M15" -> "15"
@@ -240,7 +241,7 @@ private fun AnalyzerTradingViewChart(
     val url = remember(ticker, timeframe) {
         "https://www.tradingview.com/widgetembed/?frameElementId=destinedfx_analyzer" +
             "&symbol=${URLEncoder.encode(ticker, "UTF-8")}" +
-            "&interval=${analyzerTradingViewInterval(timeframe)}" +
+            "&interval=${tradingViewIntervalForMt5(timeframe)}" +
             "&hidesidetoolbar=1&hide_top_toolbar=1&symboledit=0&saveimage=0" +
             "&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=0&hideideas=1&locale=en"
     }

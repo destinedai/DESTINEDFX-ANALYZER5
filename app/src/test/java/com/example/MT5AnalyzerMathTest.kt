@@ -27,8 +27,9 @@ class MT5AnalyzerMathTest{
         assertTrue(result.support!!<=result.resistance!!)
     }
     @Test fun TradingViewMapsCurrentMT5SymbolAndTimeframe(){
-        assertEquals("OANDA:EURUSD",tradingViewSymbolForMt5("EURUSD.a"))
-        assertEquals("OANDA:XAUUSD",tradingViewSymbolForMt5("XAUUSDm"))
+        assertEquals("FX:EURUSD",tradingViewSymbolForMt5("EURUSD.a"))
+        assertEquals("TVC:GOLD",tradingViewSymbolForMt5("XAUUSDm"))
+        assertEquals("TVC:GOLD",tradingViewSymbolForMt5("GOLD"))
         assertEquals("60",tradingViewIntervalForMt5("H1"));assertEquals("1D",tradingViewIntervalForMt5("D1"))
     }
 }
