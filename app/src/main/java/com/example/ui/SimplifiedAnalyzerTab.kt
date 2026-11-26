@@ -62,8 +62,14 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val price = quote?.let { (it.bid + it.ask) / 2.0 }
     val spread = quote?.let { it.ask - it.bid }
 
-    Column(Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
-        .padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    if (!connected || quote == null) {
+        Box(Modifier.fillMaxSize().background(DarkBackground)) {
+            Text("Waiting for MT5...", color = TextSecondary, fontSize = 14.sp,
+                modifier = Modifier.align(Alignment.Center))
+        }
+    } else {
+        Column(Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -133,6 +139,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                 AnalyzerLevelValue("TP suggestion", insight.takeProfit, symbol)
             }
         }
+    }
     }
 }
 
