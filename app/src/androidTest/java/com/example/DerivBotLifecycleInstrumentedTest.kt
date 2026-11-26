@@ -467,7 +467,7 @@ class DerivBotLifecycleInstrumentedTest {
         private fun refreshSnapshot() {
             val now = System.currentTimeMillis()
             metricsUpdated.value = now
-            accountMetrics.value = AccountMetrics(100.0, 100.0, 0.0, 100.0, 0.0, currency)
+            accountMetrics.value = AccountMetrics(100.0, 100.0, 0.0, 100.0, 0.0, account.currency)
             portfolio.value = DerivPortfolioSnapshot(
                 successful = true,
                 accountId = account.loginId,
