@@ -20,14 +20,12 @@ import com.example.data.deriv.DerivMultiplierExecutor
 import com.example.data.deriv.DerivMultiplierIntent
 import com.example.data.deriv.DerivMultiplierProduct
 import com.example.data.deriv.DerivMultiplierRules
-import com.example.data.deriv.DerivMarketDataGateway
-import com.destinedfx.core.marketdata.MarketQuote
-import com.example.domain.model.Candle
 import com.example.data.deriv.DerivReconciliationStatus
 import com.example.data.deriv.DerivDailyRiskMonitor
 import com.example.domain.risk.TradingSafetyLimits
 import com.example.domain.model.SignalDirection
-import com.destinedfx.core.strategy.StrategyRegistry
+import com.example.domain.model.TradeSignal
+import com.destinedfx.core.analysis.SignalState
 import com.destinedfx.core.marketdata.Timeframe
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -48,7 +46,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Debug-only runtime seam; production builds use the normal Deriv gateway. */
 internal object DerivDemoBotLifecycleHarness {
     @Volatile var gateway: DerivBotRuntimeGateway? = null
-    @Volatile var candleProvider: (suspend (String, Int, Int) -> List<Candle>)? = null
+    @Volatile var signalProvider: (suspend (String, String, String) -> TradeSignal)? = null
     @Volatile var scanDelayMs: Long? = null
     @Volatile var pauseDelayMs: Long? = null
     @Volatile var activeWaitDelayMs: Long? = null
@@ -57,7 +55,7 @@ internal object DerivDemoBotLifecycleHarness {
 
     fun reset() {
         gateway = null
-        candleProvider = null
+        signalProvider = null
         scanDelayMs = null
         pauseDelayMs = null
         activeWaitDelayMs = null
@@ -75,357 +73,6 @@ internal suspend fun cancelDerivEntriesAndCloseBotContracts(
     return executor?.closeBotOwnedContracts() == true
 }
 
-
-/** A Bot-owned signal contract. It deliberately does not depend on Analyzer TradeSignal. */
-private data class BotStrategySignal(
-    val id: String,
-    val direction: SignalDirection,
-    val entryPrice: Double,
-    val stopLoss: Double,
-    val takeProfit: Double,
-    val timestampMs: Long,
-    val strategyVersion: String
-)
-
-/**
- * Independent OHLC strategy evaluator used by the Deriv Bot.
- * Every strategy returns null (WAIT) unless a closed-candle setup and a fresh authenticated quote agree.
- */
-private object BotStrategy {
-    const val VERSION = "bot-rules-1.0.0"
-    private const val MIN_REWARD_RISK = 2.2
-
-    fun aggregateWeekly(dailyCandles: List<Candle>): List<Candle> {
-        val dayMs = 86_400_000L
-        val weekMs = dayMs * 7L
-        val mondayOffsetMs = dayMs * 3L // Unix epoch begins on Thursday.
-        return dailyCandles.asSequence()
-            .filter { it.complete && it.timestamp > 0L }
-            .groupBy { Math.floorDiv(it.timestamp + mondayOffsetMs, weekMs) * weekMs - mondayOffsetMs }
-            .toSortedMap()
-            .mapNotNull { (weekStart, rows) ->
-                val week = rows.sortedBy { it.timestamp }
-                if (week.isEmpty()) null else Candle(
-                    timestamp = weekStart,
-                    open = week.first().open,
-                    high = week.maxOf { it.high },
-                    low = week.minOf { it.low },
-                    close = week.last().close,
-                    volume = week.sumOf { it.volume },
-                    complete = true
-                )
-            }
-    }
-
-    fun generateSignal(
-        strategyId: String,
-        symbol: String,
-        timeframe: Timeframe,
-        candles: List<Candle>,
-        quote: MarketQuote,
-        nowMs: Long
-    ): BotStrategySignal? {
-        if (strategyId !in StrategyRegistry.managedStrategyIds) return null
-        if (quote.symbol != symbol || !quote.isStructurallyValid ||
-            quote.timestampMs <= 0L || quote.timestampMs > nowMs ||
-            nowMs - quote.timestampMs !in 0L..15_000L || quote.ageMs(nowMs) !in 0L..15_000L
-        ) return null
-
-        val intervalMs = timeframe.millis
-        val closed = candles.asSequence()
-            .filter { candle ->
-                candle.complete && candle.timestamp > 0L &&
-                    candle.timestamp + intervalMs <= nowMs &&
-                    candle.open.isFinite() && candle.high.isFinite() &&
-                    candle.low.isFinite() && candle.close.isFinite() &&
-                    candle.volume.isFinite() && candle.open > 0.0 &&
-                    candle.low > 0.0 && candle.high >= maxOf(candle.open, candle.close) &&
-                    candle.low <= minOf(candle.open, candle.close)
-            }
-            .distinctBy { it.timestamp }
-            .sortedBy { it.timestamp }
-            .toList()
-        if (closed.size < 30) return null
-
-        val last = closed.last()
-        val candleCloseTime = last.timestamp + intervalMs
-        val maximumClosedBarAge = maxOf(60_000L, intervalMs * 2L)
-        if (nowMs - candleCloseTime !in 0L..maximumClosedBarAge) return null
-
-        val atr = averageTrueRange(closed) ?: return null
-        val entry = quote.mid?.takeIf { it.isFinite() && it > 0.0 } ?: return null
-        if (kotlin.math.abs(entry - last.close) > atr * 3.0) return null
-
-        val direction = when (strategyId) {
-            StrategyRegistry.SMC_CONFLUENCE.id -> smartMoneyStructure(closed, atr)
-            StrategyRegistry.LIQUIDITY_STOP_HUNTS.id -> liquidityStopHunt(closed, atr)
-            StrategyRegistry.ICT_SILVER_BULLET.id -> silverBullet(closed, atr)
-            StrategyRegistry.WYCKOFF_METHOD.id -> wyckoffSpringOrUtad(closed, atr)
-            StrategyRegistry.SUPPLY_AND_DEMAND.id -> supplyDemandRetest(closed, atr)
-            StrategyRegistry.BREAKOUT_MOMENTUM.id -> breakoutMomentum(closed, atr)
-            StrategyRegistry.MEAN_REVERSION.id -> meanReversion(closed, atr)
-            StrategyRegistry.TREND_FOLLOWING.id -> trendFollowing(closed, atr)
-            else -> null
-        } ?: return null
-
-        val recentStructure = closed.takeLast(7)
-        var stopLoss = if (direction == SignalDirection.LONG) {
-            recentStructure.minOf { it.low } - atr * 0.15
-        } else {
-            recentStructure.maxOf { it.high } + atr * 0.15
-        }
-        var risk = if (direction == SignalDirection.LONG) entry - stopLoss else stopLoss - entry
-        if (!risk.isFinite() || risk <= 0.0) return null
-        if (risk < atr * 0.35) {
-            stopLoss = if (direction == SignalDirection.LONG) entry - atr * 1.25 else entry + atr * 1.25
-            risk = atr * 1.25
-        }
-        if (risk > atr * 6.0) return null
-
-        val takeProfit = if (direction == SignalDirection.LONG) {
-            entry + risk * MIN_REWARD_RISK
-        } else {
-            entry - risk * MIN_REWARD_RISK
-        }
-        if (!takeProfit.isFinite() || takeProfit <= 0.0 ||
-            DerivMultiplierRules.planConsistencyError(direction, entry, stopLoss, takeProfit) != null
-        ) return null
-
-        // Identity is tied to the closed candle so rescans cannot invent a new setup ID.
-        val stableId = "bot:$strategyId:$symbol:${timeframe.label}:${last.timestamp}:${direction.name}"
-        return BotStrategySignal(
-            id = stableId,
-            direction = direction,
-            entryPrice = entry,
-            stopLoss = stopLoss,
-            takeProfit = takeProfit,
-            // The signal is created at the fresh quote boundary; candle identity remains in stableId.
-            timestampMs = nowMs,
-            strategyVersion = VERSION
-        )
-    }
-
-    private fun averageTrueRange(candles: List<Candle>): Double? {
-        val sample = candles.takeLast(15)
-        if (sample.size < 15) return null
-        val ranges = (1 until sample.size).map { index ->
-            val current = sample[index]
-            val previousClose = sample[index - 1].close
-            maxOf(
-                current.high - current.low,
-                kotlin.math.abs(current.high - previousClose),
-                kotlin.math.abs(current.low - previousClose)
-            )
-        }
-        return ranges.average().takeIf { it.isFinite() && it > 0.0 }
-    }
-
-    private fun bullish(candle: Candle): Boolean {
-        val range = candle.high - candle.low
-        return range > 0.0 && candle.close > candle.open &&
-            candle.close >= candle.low + range * 0.60
-    }
-
-    private fun bearish(candle: Candle): Boolean {
-        val range = candle.high - candle.low
-        return range > 0.0 && candle.close < candle.open &&
-            candle.close <= candle.low + range * 0.40
-    }
-
-    private fun body(candle: Candle): Double = kotlin.math.abs(candle.close - candle.open)
-
-    private fun recentSweep(
-        candles: List<Candle>,
-        direction: SignalDirection,
-        atr: Double,
-        referenceCount: Int = 12,
-        sweepWindow: Int = 6
-    ): Boolean {
-        if (candles.size < referenceCount + sweepWindow + 1) return false
-        val reference = candles.dropLast(sweepWindow).takeLast(referenceCount)
-        if (reference.size < referenceCount) return false
-        val window = candles.takeLast(sweepWindow).dropLast(1)
-        return when (direction) {
-            SignalDirection.LONG -> {
-                val level = reference.minOf { it.low }
-                window.any { it.low < level - atr * 0.05 && it.close > level }
-            }
-            SignalDirection.SHORT -> {
-                val level = reference.maxOf { it.high }
-                window.any { it.high > level + atr * 0.05 && it.close < level }
-            }
-            else -> false
-        }
-    }
-
-    private fun smartMoneyStructure(candles: List<Candle>, atr: Double): SignalDirection? {
-        if (candles.size < 35) return null
-        val last = candles.last()
-        val structure = candles.dropLast(1).takeLast(10)
-        if (structure.size < 10) return null
-        if (recentSweep(candles.dropLast(1), SignalDirection.LONG, atr) &&
-            last.close > structure.maxOf { it.high } + atr * 0.05 && bullish(last)
-        ) return SignalDirection.LONG
-        if (recentSweep(candles.dropLast(1), SignalDirection.SHORT, atr) &&
-            last.close < structure.minOf { it.low } - atr * 0.05 && bearish(last)
-        ) return SignalDirection.SHORT
-        return null
-    }
-
-    private fun liquidityStopHunt(candles: List<Candle>, atr: Double): SignalDirection? {
-        val last = candles.last()
-        val prior = candles.dropLast(1).takeLast(15)
-        if (prior.size < 15) return null
-        val priorLow = prior.minOf { it.low }
-        val priorHigh = prior.maxOf { it.high }
-        if (last.low < priorLow - atr * 0.05 && last.close > priorLow && bullish(last)) {
-            return SignalDirection.LONG
-        }
-        if (last.high > priorHigh + atr * 0.05 && last.close < priorHigh && bearish(last)) {
-            return SignalDirection.SHORT
-        }
-        return null
-    }
-
-    private fun silverBullet(candles: List<Candle>, atr: Double): SignalDirection? {
-        if (candles.size < 30) return null
-        val last = candles.last()
-        val twoBack = candles[candles.lastIndex - 2]
-        if (!inSilverBulletWindow(last.timestamp)) return null
-        val sweptLong = recentSweep(candles, SignalDirection.LONG, atr, referenceCount = 12, sweepWindow = 6)
-        val sweptShort = recentSweep(candles, SignalDirection.SHORT, atr, referenceCount = 12, sweepWindow = 6)
-        if (sweptLong && twoBack.high < last.low && bullish(last) && body(last) >= atr * 0.75) {
-            return SignalDirection.LONG
-        }
-        if (sweptShort && twoBack.low > last.high && bearish(last) && body(last) >= atr * 0.75) {
-            return SignalDirection.SHORT
-        }
-        return null
-    }
-
-    private fun inSilverBulletWindow(timestampMs: Long): Boolean {
-        val calendar = java.util.Calendar.getInstance(
-            java.util.TimeZone.getTimeZone("America/New_York"),
-            java.util.Locale.US
-        ).apply { timeInMillis = timestampMs }
-        val minuteOfDay = calendar.get(java.util.Calendar.HOUR_OF_DAY) * 60 +
-            calendar.get(java.util.Calendar.MINUTE)
-        return minuteOfDay in 180 until 240 || minuteOfDay in 600 until 660 || minuteOfDay in 840 until 900
-    }
-
-    private fun wyckoffSpringOrUtad(candles: List<Candle>, atr: Double): SignalDirection? {
-        val last = candles.last()
-        val prior = candles.dropLast(1).takeLast(20)
-        if (prior.size < 20) return null
-        val averageVolume = prior.map { it.volume }.average()
-        if (!averageVolume.isFinite() || averageVolume <= 0.0 ||
-            last.volume < averageVolume * 1.20
-        ) return null
-        val rangeLow = prior.minOf { it.low }
-        val rangeHigh = prior.maxOf { it.high }
-        if (last.low < rangeLow - atr * 0.05 && last.close > rangeLow && bullish(last)) {
-            return SignalDirection.LONG
-        }
-        if (last.high > rangeHigh + atr * 0.05 && last.close < rangeHigh && bearish(last)) {
-            return SignalDirection.SHORT
-        }
-        return null
-    }
-
-    private fun supplyDemandRetest(candles: List<Candle>, atr: Double): SignalDirection? {
-        if (candles.size < 12) return null
-        val last = candles.last()
-        val departure = candles[candles.lastIndex - 1]
-        val base = candles.subList(candles.lastIndex - 4, candles.lastIndex - 1)
-        val baseHigh = base.maxOf { it.high }
-        val baseLow = base.minOf { it.low }
-        val compactBase = baseHigh - baseLow <= atr * 1.50
-        if (!compactBase) return null
-        if (bullish(departure) && departure.close > baseHigh + atr * 0.70 &&
-            last.low <= baseHigh + atr * 0.25 && last.close > baseHigh && bullish(last)
-        ) return SignalDirection.LONG
-        if (bearish(departure) && departure.close < baseLow - atr * 0.70 &&
-            last.high >= baseLow - atr * 0.25 && last.close < baseLow && bearish(last)
-        ) return SignalDirection.SHORT
-        return null
-    }
-
-    private fun breakoutMomentum(candles: List<Candle>, atr: Double): SignalDirection? {
-        val last = candles.last()
-        val prior = candles.dropLast(1).takeLast(20)
-        if (prior.size < 20) return null
-        val channelHigh = prior.maxOf { it.high }
-        val channelLow = prior.minOf { it.low }
-        if (last.close > channelHigh + atr * 0.05 && bullish(last) && body(last) >= atr * 0.55) {
-            return SignalDirection.LONG
-        }
-        if (last.close < channelLow - atr * 0.05 && bearish(last) && body(last) >= atr * 0.55) {
-            return SignalDirection.SHORT
-        }
-        return null
-    }
-
-    private fun meanReversion(candles: List<Candle>, atr: Double): SignalDirection? {
-        val sample = candles.takeLast(20)
-        if (sample.size < 20) return null
-        val mean = sample.map { it.close }.average()
-        val variance = sample.map { (it.close - mean) * (it.close - mean) }.average()
-        val deviation = kotlin.math.sqrt(variance)
-        if (!mean.isFinite() || !deviation.isFinite() || deviation <= 0.0) return null
-        val lowerBand = mean - deviation * 2.0
-        val upperBand = mean + deviation * 2.0
-        val last = candles.last()
-        val rsi = relativeStrengthIndex(candles, 14) ?: return null
-        if (last.low <= lowerBand && last.close > lowerBand && rsi <= 38.0 && bullish(last)) {
-            return SignalDirection.LONG
-        }
-        if (last.high >= upperBand && last.close < upperBand && rsi >= 62.0 && bearish(last)) {
-            return SignalDirection.SHORT
-        }
-        return null
-    }
-
-    private fun trendFollowing(candles: List<Candle>, atr: Double): SignalDirection? {
-        if (candles.size < 200) return null
-        val closes = candles.map { it.close }
-        val ema20 = exponentialMovingAverage(closes, 20) ?: return null
-        val ema50 = exponentialMovingAverage(closes, 50) ?: return null
-        val ema200 = exponentialMovingAverage(closes, 200) ?: return null
-        val last = candles.last()
-        val previous = candles[candles.lastIndex - 1]
-        if (ema20 > ema50 && ema50 > ema200 &&
-            last.low <= ema20 + atr * 0.30 && last.close > ema20 &&
-            last.close > previous.close && bullish(last)
-        ) return SignalDirection.LONG
-        if (ema20 < ema50 && ema50 < ema200 &&
-            last.high >= ema20 - atr * 0.30 && last.close < ema20 &&
-            last.close < previous.close && bearish(last)
-        ) return SignalDirection.SHORT
-        return null
-    }
-
-    private fun exponentialMovingAverage(values: List<Double>, period: Int): Double? {
-        if (values.size < period) return null
-        val alpha = 2.0 / (period + 1.0)
-        var result = values.take(period).average()
-        for (index in period until values.size) {
-            result += alpha * (values[index] - result)
-        }
-        return result.takeIf { it.isFinite() }
-    }
-
-    private fun relativeStrengthIndex(candles: List<Candle>, period: Int): Double? {
-        if (candles.size < period + 1) return null
-        val closes = candles.takeLast(period + 1).map { it.close }
-        val changes = (1 until closes.size).map { closes[it] - closes[it - 1] }
-        val averageGain = changes.map { it.coerceAtLeast(0.0) }.average()
-        val averageLoss = changes.map { (-it).coerceAtLeast(0.0) }.average()
-        if (!averageGain.isFinite() || !averageLoss.isFinite()) return null
-        if (averageLoss <= 0.0) return 100.0
-        val relativeStrength = averageGain / averageLoss
-        return (100.0 - 100.0 / (1.0 + relativeStrength)).takeIf { it.isFinite() }
-    }
-}
 
 class DerivDemoBotService : Service() {
     companion object {
@@ -669,10 +316,6 @@ class DerivDemoBotService : Service() {
             stopSafely("Safety blocked — $symbol is not a supported Deriv Multiplier underlying")
             return
         }
-        // The production Bot retains its public candle gateway. Instrumentation can inject
-        // deterministic DEMO candles and never opens a market-data or broker socket.
-        val botMarketDataGateway = if (lifecycleHarness == null) DerivMarketDataGateway() else null
-        currentCoroutineContext()[Job]?.invokeOnCompletion { botMarketDataGateway?.disconnect() }
         // Every explicit service start must refresh authenticated read-only account,
         // balance, portfolio and quote evidence. READY describes the socket state only;
         // it does not prove that the existing balance/portfolio snapshot is still fresh.
@@ -972,53 +615,65 @@ class DerivDemoBotService : Service() {
                 }
                 val selectedTimeframe = Timeframe.parse(timeframe)
                 if (selectedTimeframe == null) {
-                    update("Running — BotStrategy WAIT: unsupported timeframe; no order was sent")
+                    update("Running — Analyzer WAIT: unsupported timeframe; no order was sent")
                     delay(30_000)
                     continue
                 }
-                // Deriv serves W1 as daily history; aggregate complete daily bars into UTC weeks.
-                val historyGranularitySeconds = if (selectedTimeframe == Timeframe.W1) {
-                    Timeframe.D1.minutes * 60
+
+                // One brain: production invokes the same Analyzer use case as the Analyzer UI.
+                // The test seam supplies only an explicitly fake TradeSignal for lifecycle tests.
+                val analysisSignal = if (lifecycleHarness != null) {
+                    lifecycleHarness.signalProvider?.invoke(symbol, selectedTimeframe.label, strategyId)
                 } else {
-                    selectedTimeframe.minutes * 60
+                    app.signalGenerationUseCase.generateSignal(symbol, selectedTimeframe.label, strategyId)
                 }
-                val historyCount = if (selectedTimeframe == Timeframe.W1) 1_800 else 300
-                val rawBotCandles = if (lifecycleHarness != null) {
-                    lifecycleHarness.candleProvider?.invoke(symbol, historyGranularitySeconds, historyCount).orEmpty()
-                } else {
-                    botMarketDataGateway?.fetchCandles(symbol, historyGranularitySeconds, historyCount).orEmpty()
-                }
-                val botCandles = if (selectedTimeframe == Timeframe.W1) {
-                    BotStrategy.aggregateWeekly(rawBotCandles)
-                } else {
-                    rawBotCandles
-                }
-                val currentQuote = gateway.getQuote(symbol).getOrNull()
-                val signal = currentQuote?.let {
-                    BotStrategy.generateSignal(
-                        strategyId = strategyId,
-                        symbol = symbol,
-                        timeframe = selectedTimeframe,
-                        candles = botCandles,
-                        quote = it,
-                        nowMs = System.currentTimeMillis()
-                    )
+                val nowMs = System.currentTimeMillis()
+                val signal = analysisSignal?.takeIf {
+                    it.id.isNotBlank() &&
+                        it.symbol.equals(symbol, ignoreCase = true) &&
+                        it.timeframe.equals(selectedTimeframe.label, ignoreCase = true) &&
+                        it.timestamp > 0L && nowMs - it.timestamp in 0..30_000L &&
+                        it.executable &&
+                        it.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT) &&
+                        it.signalState in setOf(
+                            SignalState.BUY.name, SignalState.STRONG_BUY.name,
+                            SignalState.SELL.name, SignalState.STRONG_SELL.name
+                        )
                 }
                 emitLifecycleEvent("SCAN", mapOf(
                     "symbol" to symbol,
                     "timeframe" to selectedTimeframe.label,
-                    "quote_fresh" to (currentQuote != null).toString(),
-                    "closed_candles" to botCandles.count { it.complete }.toString()
+                    "signal_source" to (analysisSignal?.dataSource ?: "UNAVAILABLE"),
+                    "signal_state" to (analysisSignal?.signalState ?: "DATA_UNAVAILABLE"),
+                    "signal_executable" to (analysisSignal?.executable ?: false).toString(),
+                    "analysis_timestamp_ms" to (analysisSignal?.timestamp?.toString() ?: "0")
                 ))
                 if (signal == null) {
-                    emitLifecycleEvent("WAIT", mapOf("symbol" to symbol, "reason" to "No confirmed setup from fresh closed candles and authenticated quote"))
+                    val waitReason = analysisSignal?.blockReasons?.firstOrNull()
+                        ?: analysisSignal?.reasons?.firstOrNull()
+                        ?: analysisSignal?.rationale
+                        ?: "Analyzer did not return a fresh executable BUY or SELL TradeSignal"
+                    emitLifecycleEvent("WAIT", mapOf(
+                        "symbol" to symbol,
+                        "signal_state" to (analysisSignal?.signalState ?: "DATA_UNAVAILABLE"),
+                        "reason" to waitReason.take(240)
+                    ))
                 } else {
                     emitLifecycleEvent("SIGNAL", mapOf(
                         "signal_id" to signal.id,
-                        "symbol" to symbol,
+                        "symbol" to signal.symbol,
+                        "timeframe" to signal.timeframe,
                         "direction" to signal.direction.name,
                         "trade_side" to if (signal.direction == SignalDirection.LONG) "BUY" else "SELL",
-                        "entry_price" to signal.entryPrice.toString()
+                        "signal_state" to signal.signalState,
+                        "signal_reason" to signal.entryReason.ifBlank { signal.rationale }.take(400),
+                        "strategy_version" to signal.strategyVersion,
+                        "entry_price" to signal.entryPrice.toString(),
+                        "stop_loss" to signal.stopLoss.toString(),
+                        "take_profit" to signal.takeProfit.toString(),
+                        "signal_timestamp_ms" to signal.timestamp.toString(),
+                        "data_source" to signal.dataSource,
+                        "data_health" to signal.dataHealth
                     ))
                 }
                 val planError = signal?.let {
@@ -1082,12 +737,19 @@ class DerivDemoBotService : Service() {
                     delay(lifecycleHarness?.scanDelayMs ?: 30_000L)
                     continue
                 }
+                if (!DerivMultiplierRules.isSupportedUnderlying(symbol)) {
+                    val reason = "UNSUPPORTED_PRODUCT_MAPPING: Deriv Options/Multiplier does not accept Forex/CFD volume lots or chart-price SL/TP for $symbol. No order was sent; use the separate Deriv MT5 DEMO execution path."
+                    emitLifecycleEvent("EXECUTION_BLOCK", mapOf("symbol" to symbol, "reason" to reason))
+                    update(reason)
+                    delay(lifecycleHarness?.scanDelayMs ?: 30_000L)
+                    continue
+                }
                 if (planError != null) {
-                    update("Running — BotStrategy signal rejected: ${planError.take(120)}")
+                    update("Running — Analyzer signal rejected: ${planError.take(120)}")
                 } else if (signal != null && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT)) {
                     val stableId = signal.id.takeIf { it.isNotBlank() }
                     if (stableId == null) {
-                        update("Running — BotStrategy signal rejected: stable setup identity is unavailable")
+                        update("Running — Analyzer signal rejected: stable setup identity is unavailable")
                         delay(10_000)
                         continue
                     }
@@ -1103,7 +765,7 @@ class DerivDemoBotService : Service() {
                         multiplier = 10,
                         stopLossAmount = stake,
                         takeProfitAmount = stake * TradingSafetyLimits.MIN_REWARD_TO_RISK,
-                        signalTimestampMs = signal.timestampMs
+                        signalTimestampMs = signal.timestamp
                     )
                     update("Submitting — broker proposal required for ${intent.product.contractType}")
                     val result = executor.submit(intent)
@@ -1164,7 +826,7 @@ class DerivDemoBotService : Service() {
                         }
                     }
                 } else {
-                    update("Running — BotStrategy WAIT: no confirmed setup from fresh closed Deriv candles and quote")
+                    update("Running — Analyzer WAIT: no confirmed setup from fresh closed Deriv candles and quote")
                 }
                 delay(lifecycleHarness?.scanDelayMs ?: 30_000L)
             } catch (_: CancellationException) {

@@ -29,8 +29,8 @@ import com.example.data.deriv.DerivMultiplierIntent
 import com.example.data.deriv.DerivPortfolioSnapshot
 import com.example.data.deriv.DerivSellResult
 import com.example.data.deriv.DerivSubmissionStage
-import com.example.domain.model.Candle
 import com.example.domain.model.Position
+import com.example.domain.model.TradeSignal
 import com.example.domain.repository.AccountMetrics
 import com.example.security.AppSecurityGuard
 import com.example.service.DerivDemoBotLifecycleHarness
@@ -123,10 +123,11 @@ class DerivBotLifecycleInstrumentedTest {
         gateway = FakeDemoGateway(accountId, currency, sessionId, credentialGeneration)
         DerivDemoBotLifecycleHarness.reset()
         DerivDemoBotLifecycleHarness.gateway = gateway
-        DerivDemoBotLifecycleHarness.candleProvider = { symbol, granularity, _ ->
-            assertEquals("1HZ100V", symbol)
-            assertEquals(60, granularity)
-            breakoutCandles()
+        DerivDemoBotLifecycleHarness.signalProvider = { symbol, timeframe, strategyId ->
+            val sequence = gateway.purchaseAttempts.get()
+            val direction = if (sequence % 2 == 0) SignalDirection.LONG else SignalDirection.SHORT
+            gateway.nextDirection = direction.name
+            fakeAnalyzerSignal(symbol, timeframe, strategyId, sequence, direction)
         }
         DerivDemoBotLifecycleHarness.scanDelayMs = 150L
         DerivDemoBotLifecycleHarness.pauseDelayMs = 40L
@@ -305,14 +306,12 @@ class DerivBotLifecycleInstrumentedTest {
         val buysBeforeCycles = gateway.purchaseAttempts.get()
         managedCycleStartIndex = tradeCycles.length()
         managedCycleCount = 0
-        val scanDirection = AtomicInteger(0)
         gateway.autoManageCycles = true
-        DerivDemoBotLifecycleHarness.candleProvider = { symbol, granularity, _ ->
-            assertEquals("1HZ100V", symbol)
-            assertEquals(60, granularity)
-            val direction = if (scanDirection.incrementAndGet() % 2 == 1) "LONG" else "SHORT"
-            gateway.nextDirection = direction
-            breakoutCandles(direction == "LONG")
+        DerivDemoBotLifecycleHarness.signalProvider = { symbol, timeframe, strategyId ->
+            val sequence = gateway.purchaseAttempts.get()
+            val direction = if (sequence % 2 == 0) SignalDirection.LONG else SignalDirection.SHORT
+            gateway.nextDirection = direction.name
+            fakeAnalyzerSignal(symbol, timeframe, strategyId, sequence, direction)
         }
         DerivDemoBotService.start(context, "1HZ100V", StrategyRegistry.BREAKOUT_MOMENTUM.id, "M1", 1.0)
         await("five new complete managed DEMO cycles and the following opening", timeoutMs = 25_000L) {
@@ -507,6 +506,8 @@ class DerivBotLifecycleInstrumentedTest {
     private fun evidenceDocument(): JSONObject = JSONObject()
         .put("schema_version", 1)
         .put("account_mode", "DEMO")
+        .put("evidence_class", "TEST_SIMULATION_ONLY")
+        .put("trading_proof", false)
         .put("fake_gateway_only", true)
         .put("live_enabled", false)
         .put("transitions", rows)
@@ -544,14 +545,33 @@ class DerivBotLifecycleInstrumentedTest {
         Log.i("DestinedFXBotLifecycle", "EVIDENCE_FLUSHED|internal=${evidenceFile.absolutePath}|shared=Downloads/DestinedFX/bot-lifecycle-evidence.json|bytes=${bytes.size}")
     }
 
-    private fun breakoutCandles(bullish: Boolean = true): List<Candle> {
-        val lastTime = System.currentTimeMillis() - 61_000L
-        return (0 until 35).map { i ->
-            val timestamp = lastTime - (34 - i) * 60_000L
-            if (i == 34 && bullish) Candle(timestamp, 100.00, 100.09, 99.99, 100.08, volume = 100.0, complete = true)
-            else if (i == 34) Candle(timestamp, 100.00, 100.01, 99.91, 99.92, volume = 100.0, complete = true)
-            else Candle(timestamp, 100.00, 100.01, 99.98, 100.00, volume = 100.0, complete = true)
-        }
+    private fun fakeAnalyzerSignal(
+        symbol: String,
+        timeframe: String,
+        strategyId: String,
+        sequence: Int,
+        direction: SignalDirection
+    ): TradeSignal {
+        val isLong = direction == SignalDirection.LONG
+        return TradeSignal(
+            id = "ci-only-test-signal-$sequence",
+            symbol = symbol,
+            timeframe = timeframe,
+            direction = direction,
+            entryPrice = 100.0,
+            stopLoss = if (isLong) 99.0 else 101.0,
+            takeProfit = if (isLong) 103.2 else 96.8,
+            confidenceScore = 99,
+            rationale = "TEST ONLY: injected TradeSignal fixture; not a real Analyzer or broker result",
+            timestamp = System.currentTimeMillis(),
+            entryReason = "TEST ONLY: injected lifecycle signal",
+            signalState = if (isLong) "STRONG_BUY" else "STRONG_SELL",
+            executable = true,
+            reasons = listOf("TEST ONLY: fake signal provider"),
+            dataSource = "FAKE_TEST_PROVIDER",
+            dataHealth = "TEST_ONLY",
+            strategyVersion = strategyId
+        )
     }
 
     private class FakeDemoGateway(
