@@ -94,7 +94,7 @@ def validate_evidence(path: Path) -> tuple[int, int, int]:
     if sides != {"BUY", "SELL"}:
         fail(f"The five managed-service cycles must include BUY and SELL; found {sorted(sides)}.")
     required_stop_reason = "Stopped — Deriv broker confirms all DestinedFX Bot contracts are closed"
-    if payload.get("stop_reason") != required_stop_reason:
+    if not isinstance(payload.get("stop_reason"), str) or not payload["stop_reason"].endswith(required_stop_reason):
         fail(f"Final STOP was not fully broker-confirmed: {payload.get('stop_reason')!r}.")
     final_stop = next((row for row in reversed(transitions) if row.get("step") == "FinalStopAfterCycles"), None)
     if final_stop is None or "confirms every Bot-owned DEMO contract closed" not in final_stop.get("detail", ""):

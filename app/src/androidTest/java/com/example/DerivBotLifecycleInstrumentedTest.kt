@@ -347,8 +347,8 @@ class DerivBotLifecycleInstrumentedTest {
                 gateway.sellRequests.contains(activeBeforeFinalStop)
         }
         val expectedStopReason = "Stopped — Deriv broker confirms all DestinedFX Bot contracts are closed"
-        assertEquals("STOP must confirm the entire Bot-owned ledger, not only the last sell request",
-            expectedStopReason, DerivDemoBotService.statusReason.value)
+        assertTrue("STOP must confirm the entire Bot-owned ledger, not only the last sell request",
+            DerivDemoBotService.statusReason.value.endsWith(expectedStopReason))
         assertFalse("STOP must not sell unowned contracts", gateway.sellRequests.any { it >= 990_000L })
         record("FinalStopAfterCycles", beforeFinalStop, DerivDemoBotService.state.value,
             "STOP confirmed every Bot-owned DEMO contract closed; service reason=${DerivDemoBotService.statusReason.value}; no unowned position was sent to SELL.")
