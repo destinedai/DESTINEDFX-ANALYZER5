@@ -2636,16 +2636,30 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         if (showPairingRevokeDialog) AlertDialog(
             onDismissRequest = { showPairingRevokeDialog = false },
             title = { Text("Revoke this managed account?") },
-            text = { Text("This revokes the selected $selectedMt5Broker $mt5Mode pairing at the bridge and requests worker cleanup for its isolated terminal. It does not place an order. Locally saved form values remain on this device.") },
+            text = { Text("Logout first stops scanning and closes DestinedFX-owned positions and pending orders. The app waits for a fresh MT5 snapshot proving zero Bot exposure. If closure cannot be verified, logout is blocked and the pairing stays active. Manual trades and other EAs are not touched.") },
             confirmButton = { TextButton(onClick = {
                 showPairingRevokeDialog = false
                 scope.launch {
                     busy = true
-                    try { requireNotNull(bridge).revoke(); mt5Snapshot = null; liveAuthorizationExpiry = ""; message = "Pairing revoked; worker cleanup requested. Check bridge/worker status before reuse." }
-                    catch (e: Exception) { message = e.message ?: "Pairing revocation was not confirmed." }
-                    finally { busy = false }
+                    try {
+                        val client = requireNotNull(bridge)
+                        stopAndRevokeManagedMt5ForSwitch(
+                            accountMode = mt5Mode,
+                            clearLiveAuthorization = { client.clearLiveAuthorization() },
+                            stopAndConfirm = { stopManagedMt5AndConfirm(client, "STOP") { mt5Snapshot = it } },
+                            revoke = { client.revoke() },
+                        )
+                        mt5Snapshot = null
+                        liveAuthorizationExpiry = ""
+                        login = ""
+                        password = ""
+                        server = ""
+                        message = "$selectedMt5Broker $mt5Mode logged out. STOP verified zero Bot positions and pending orders; isolated terminal cleanup was queued. Select DEMO or REAL and sign in again."
+                    } catch (e: Exception) {
+                        message = e.message ?: "Pairing revocation was not confirmed."
+                    } finally { busy = false }
                 }
-            }) { Text("REVOKE PAIRING") } },
+            }) { Text("STOP, VERIFY & LOG OUT") } },
             dismissButton = { TextButton(onClick = { showPairingRevokeDialog = false }) { Text("CANCEL") } }
         )
         if (showLiveAuthorizationDialog) AlertDialog(

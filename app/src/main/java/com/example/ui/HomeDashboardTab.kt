@@ -57,8 +57,16 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
     val selectedMtfTimeframes by viewModel.selectedMtfTimeframes.collectAsStateWithLifecycle()
     val marketDataStatus by viewModel.marketDataStatus.collectAsStateWithLifecycle()
     val selectedMt5Mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
+    val selectedMt5BrokerBrand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
     val secrets = viewModel.app.secretsManager
-    val mt5Brand = remember { secrets.getSelectedMT5BrokerBrand() }
+    val mt5Brand = selectedMt5BrokerBrand
+    var selectedMt5ProfilePaired by remember { mutableStateOf(false) }
+    LaunchedEffect(mt5Brand, selectedMt5Mode) {
+        while (true) {
+            selectedMt5ProfilePaired = secrets.getMT5BridgeAccountAppToken("${mt5Brand}_${selectedMt5Mode}").isNotBlank()
+            delay(1_000L)
+        }
+    }
     val demoGateClient = remember(mt5Brand) {
         MT5RemoteBridgeClient(secrets, "${mt5Brand}_DEMO", accountMode = "DEMO", brokerBrand = mt5Brand)
     }
@@ -113,12 +121,16 @@ fun HomeDashboardTab(viewModel: DestinedFXViewModel) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("EXECUTION MODE", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        FilterChip(selected = selectedMt5Mode == "DEMO", onClick = { viewModel.selectMt5Mode("DEMO") }, label = { Text("DEMO") })
-                        FilterChip(selected = selectedMt5Mode == "LIVE", enabled = persistentLinuxLiveAccepted,
-                            onClick = { if (persistentLinuxLiveAccepted) viewModel.selectMt5Mode("LIVE") }, label = { Text("LIVE") })
+                        FilterChip(selected = selectedMt5Mode == "DEMO", enabled = !selectedMt5ProfilePaired,
+                            onClick = { viewModel.selectMt5Mode("DEMO") }, label = { Text("DEMO") })
+                        FilterChip(selected = selectedMt5Mode == "LIVE", enabled = persistentLinuxLiveAccepted && !selectedMt5ProfilePaired,
+                            onClick = { if (persistentLinuxLiveAccepted && !selectedMt5ProfilePaired) viewModel.selectMt5Mode("LIVE") }, label = { Text("LIVE") })
                         Spacer(Modifier.weight(1f))
                         Text(if (persistentLinuxLiveAccepted) "PERSISTENT LINUX · ISOLATION ACCEPTED" else "DEMO ONLY",
                             color = if (persistentLinuxLiveAccepted) ProfitGreen else WarningAmber, fontSize = 9.sp)
+                    }
+                    if (selectedMt5ProfilePaired) {
+                        Text("LOGOUT REQUIRED: Revoke the current pairing from the Bot screen before switching DEMO / REAL.", color = WarningAmber, fontSize = 10.sp)
                     }
                     if (!persistentLinuxLiveAccepted) {
                         Text("LIVE REQUIRES PERSISTENT LINUX HOST - Install via scripts/linux-host/README.md - Codespace is DEMO ONLY",

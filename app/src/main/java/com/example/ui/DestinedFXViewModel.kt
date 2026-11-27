@@ -294,6 +294,11 @@ open class DestinedFXViewModel(
         val b = brand.trim().uppercase()
         val m = mode.trim().uppercase()
         if (b !in setOf("FBS", "EXNESS", "HFM", "DERIV") || m !in setOf("DEMO", "LIVE")) return false
+        val currentProfile = "${selectedMt5BrokerBrand.value}_${selectedMt5Mode.value}"
+        val requestedProfile = "${b}_${m}"
+        if (!isPreview && requestedProfile != currentProfile &&
+            app.secretsManager.getMT5BridgeAccountAppToken(currentProfile).isNotBlank()
+        ) return false
         if (!isPreview && (!app.secretsManager.saveSelectedMT5BrokerBrand(b) || !app.secretsManager.saveSelectedMT5Mode(m))) return false
         selectedMt5BrokerBrand.value = b
         selectedMt5Mode.value = m
@@ -303,6 +308,10 @@ open class DestinedFXViewModel(
     fun selectMt5Mode(mode: String): Boolean {
         val normalized = mode.trim().uppercase()
         if (normalized !in setOf("DEMO", "LIVE")) return false
+        val currentProfile = "${selectedMt5BrokerBrand.value}_${selectedMt5Mode.value}"
+        if (!isPreview && normalized != selectedMt5Mode.value &&
+            app.secretsManager.getMT5BridgeAccountAppToken(currentProfile).isNotBlank()
+        ) return false
         if (!isPreview && !app.secretsManager.saveSelectedMT5Mode(normalized)) return false
         selectedMt5Mode.value = normalized
         return true

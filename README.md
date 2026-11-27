@@ -97,7 +97,7 @@ This is EA-managed automated execution, not an Android manual ticket. An EA stra
 
 The Bot only enables position/order actions from a fresh identity-matched terminal snapshot. It checks exact ticket/position identifiers and EA ownership before sending a change. CLOSE_ALL requires a server-issued one-use confirmation token. After a command, the UI reconciles the server command, EA per-ticket acknowledgement and later terminal snapshot; an uncertain result remains UNKNOWN and is not blindly resent.
 
-STOP and EMERGENCY_STOP block new entries; they are not a command to close every open position. Closing positions and cancelling pending orders are separate, explicit actions. The EA has its own daily-risk emergency exit path; that is separate from the ordinary Bot STOP control.
+STOP and EMERGENCY_STOP stop scanning and start the EA's persisted close-out process. The EA cancels DestinedFX-owned pending orders and closes DestinedFX-owned positions, retrying unresolved exposure on later timer cycles until a fresh terminal snapshot confirms zero Bot-owned positions and orders. Manual trades and positions from other EAs are intentionally untouched. The Android app reports close-out success only after a fresh authenticated MT5 snapshot shows STOPPED with no Bot-owned exposure.
 
 ### Other broker execution paths
 
