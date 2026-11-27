@@ -1082,8 +1082,6 @@ class DerivDemoBotService : Service() {
                     delay(lifecycleHarness?.scanDelayMs ?: 30_000L)
                     continue
                 }
-                    DerivMultiplierRules.planConsistencyError(it.direction, it.entryPrice, it.stopLoss, it.takeProfit)
-                }
                 if (planError != null) {
                     update("Running — BotStrategy signal rejected: ${planError.take(120)}")
                 } else if (signal != null && signal.direction in setOf(SignalDirection.LONG, SignalDirection.SHORT)) {
