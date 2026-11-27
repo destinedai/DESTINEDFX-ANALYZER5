@@ -1,5 +1,6 @@
 import asyncio, os, sqlite3, secrets, hashlib, hmac, json, time, math, uuid, ipaddress, urllib.request, urllib.error, base64
 import re
+import threading
 import stat
 import logging
 import subprocess
@@ -207,6 +208,17 @@ ANALYSIS_SESSION_POLICY={'FOREX':True,'METAL':True,'CRYPTO':False}
 _NEWS_CACHE={}
 app=FastAPI(title='DestinedFX MT5 Bridge', version='1.0')
 _HOST_LIFECYCLE_TASK=None
+
+# Analyzer data is a short-lived, read-only projection, separate from Bot pairings and commands.
+_ANALYZER_FEED_LOCK=threading.Lock()
+_ANALYZER_FEED_STATE={
+    'heartbeat_at_ms':0,
+    'terminal_connected':False,
+    'symbols':[],
+    'broker_quotes':[],
+    'broker_candles':[],
+}
+_ANALYZER_MARKET_SELECTION={'symbol':'','timeframe':'M15'}
 
 async def _host_lifecycle_guard():
     """Queue an idempotent safety stop before an EPHEMERAL host reaches its hard limit."""
@@ -608,6 +620,12 @@ def secure(request):
         actual_host=request.headers.get('host','').split(':')[0].strip('[]').lower().rstrip('.')
         if expected_host and actual_host==expected_host: return
     peer=request.client.host if request.client else ''
+    # Only the local MT5 market publisher uses plain HTTP; these routes cannot place trades.
+    local_analyzer_path=request.url.path in (
+        '/v1/analyzer/market-heartbeat',
+        '/v1/analyzer/market-selection',
+    )
+    if local_analyzer_path and peer in ('127.0.0.1','::1','localhost','172.30.250.1'): return
     if ALLOW_LOOPBACK and peer in ('127.0.0.1','::1','localhost'): return
     raise HTTPException(400,'HTTPS is required')
 def request_host(request):
@@ -639,6 +657,9 @@ def client_ip(request):
     return peer
 def public_host_guard(request):
     if not PUBLIC_EXPOSURE: return None
+    if (request.url.path in ('/v1/analyzer/market-heartbeat','/v1/analyzer/market-selection')
+            and analyzer_feed_local_peer(request)):
+        return None
     host=request.headers.get('host','').split(':')[0].strip('[]').lower().rstrip('.')
     if host==EXPECTED_PUBLIC_HOST or host in LOOPBACK_HOSTS: return None
     return JSONResponse({'detail':{'code':'HOST_NOT_ALLOWED'}},421)
@@ -703,7 +724,11 @@ async def limits(request:Request, call_next):
         access_settings=cloudflare_access_settings()
     except ValueError:
         return JSONResponse({'detail':{'code':'ACCESS_VALIDATION_MISCONFIGURED'}},503)
-    if access_settings is not None and request.url.path != '/health/live':
+    local_analyzer_publisher = (
+        request.url.path in ('/v1/analyzer/market-heartbeat','/v1/analyzer/market-selection')
+        and analyzer_feed_local_peer(request)
+    )
+    if access_settings is not None and request.url.path != '/health/live' and not local_analyzer_publisher:
         assertion=request.headers.get('cf-access-jwt-assertion','').strip()
         if not assertion: return JSONResponse({'detail':{'code':'ACCESS_ASSERTION_REQUIRED'}},401)
         try: valid_access=validate_cloudflare_assertion(assertion)
@@ -998,6 +1023,41 @@ class TerminalCandle(BaseModel):
             raise ValueError('Terminal candle symbol contains control characters')
         if not self.complete:
             raise ValueError('Only completed terminal candles are accepted')
+        return self
+
+class AnalyzerMarketSelection(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    symbol:StrictStr=Field(min_length=1,max_length=32)
+    timeframe:StrictStr=Field(min_length=2,max_length=3)
+
+    @model_validator(mode='after')
+    def validate_selection(self):
+        if self.symbol.strip()!=self.symbol or not re.fullmatch(r'[A-Za-z0-9._# -]{1,32}',self.symbol):
+            raise ValueError('Invalid MT5 Analyzer symbol')
+        if self.timeframe not in {'M1','M5','M15','M30','H1','H4','D1','W1'}:
+            raise ValueError('Unsupported MT5 Analyzer timeframe')
+        return self
+
+class AnalyzerMarketHeartbeat(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    terminal_connected:StrictBool
+    symbols:list[StrictStr]=Field(default_factory=list,max_length=128)
+    broker_quotes:list[TerminalQuote]=Field(default_factory=list,max_length=128)
+    broker_candles:list[TerminalCandle]=Field(default_factory=list,max_length=1000)
+
+    @model_validator(mode='after')
+    def validate_market_symbols(self):
+        clean=[]
+        seen=set()
+        for value in self.symbols:
+            symbol=value.strip()
+            if symbol!=value or not re.fullmatch(r'[A-Za-z0-9._# -]{1,32}',symbol):
+                raise ValueError('Invalid MT5 Market Watch symbol')
+            key=symbol.upper()
+            if key not in seen:
+                seen.add(key)
+                clean.append(symbol)
+        self.symbols=clean
         return self
 
 class Heartbeat(BaseModel):
@@ -2528,6 +2588,99 @@ def safe_terminal_chart_symbol(value):
 def safe_terminal_chart_timeframe(value):
     allowed={'M1','M5','M15','M30','H1','H4','D1','W1'}
     return value.strip().upper() if isinstance(value,str) and value.strip().upper() in allowed else ''
+
+
+def safe_analyzer_market_symbol(value):
+    if not isinstance(value,str):
+        return ''
+    symbol=value.strip()
+    if not symbol or len(symbol)>32 or not re.fullmatch(r'[A-Za-z0-9._# -]{1,32}',symbol):
+        return ''
+    return symbol
+
+
+def analyzer_feed_local_peer(request):
+    peer=request.client.host if request.client else ''
+    return peer in ('127.0.0.1','::1','localhost','172.30.250.1')
+
+
+@app.get('/v1/analyzer/market-selection')
+def analyzer_market_selection():
+    with _ANALYZER_FEED_LOCK:
+        return dict(_ANALYZER_MARKET_SELECTION)
+
+
+@app.post('/v1/analyzer/market-selection')
+def set_analyzer_market_selection(x:AnalyzerMarketSelection):
+    # Selection is only a read-only symbol/timeframe subscription, never an execution command.
+    with _ANALYZER_FEED_LOCK:
+        _ANALYZER_MARKET_SELECTION['symbol']=x.symbol
+        _ANALYZER_MARKET_SELECTION['timeframe']=x.timeframe
+    return {'accepted':True,'symbol':x.symbol,'timeframe':x.timeframe}
+
+
+@app.post('/v1/analyzer/market-heartbeat')
+def analyzer_market_heartbeat(x:AnalyzerMarketHeartbeat, request:Request):
+    if not analyzer_feed_local_peer(request):
+        raise HTTPException(403,detail={'code':'ANALYZER_FEED_LOCAL_PUBLISHER_ONLY',
+                                        'message':'Market data must be published by the local MT5 terminal'})
+    now_ms=int(time.time()*1000)
+    if x.terminal_connected:
+        accepted_quotes=fresh_terminal_broker_quotes(
+            {'broker_quotes':[row.model_dump() for row in x.broker_quotes]},now_ms
+        )[:128]
+        accepted_candles=fresh_terminal_broker_candles(
+            {'broker_candles':[row.model_dump() for row in x.broker_candles]},now_ms
+        )[:1000]
+        symbols=[]
+        seen=set()
+        for value in x.symbols:
+            symbol=safe_analyzer_market_symbol(value)
+            if symbol and symbol.upper() not in seen:
+                seen.add(symbol.upper())
+                symbols.append(symbol)
+    else:
+        accepted_quotes=[]
+        accepted_candles=[]
+        symbols=[]
+    with _ANALYZER_FEED_LOCK:
+        _ANALYZER_FEED_STATE.update({
+            'heartbeat_at_ms':now_ms,
+            'terminal_connected':bool(x.terminal_connected),
+            'symbols':symbols,
+            'broker_quotes':accepted_quotes,
+            'broker_candles':accepted_candles,
+        })
+    return {'accepted':True,'received_at_ms':now_ms,
+            'quote_count':len(accepted_quotes),'candle_count':len(accepted_candles)}
+
+
+@app.get('/v1/analyzer/market-state')
+def analyzer_market_state():
+    now_ms=int(time.time()*1000)
+    with _ANALYZER_FEED_LOCK:
+        state={key:(list(value) if isinstance(value,list) else value)
+               for key,value in _ANALYZER_FEED_STATE.items()}
+        selection=dict(_ANALYZER_MARKET_SELECTION)
+    heartbeat_at=state.get('heartbeat_at_ms',0)
+    age_ms=now_ms-heartbeat_at if isinstance(heartbeat_at,int) and heartbeat_at>0 else None
+    heartbeat_fresh=bool(age_ms is not None and 0<=age_ms<=BROKER_QUOTE_MAX_AGE_MS)
+    connected=bool(heartbeat_fresh and state.get('terminal_connected') is True)
+    quotes=fresh_terminal_broker_quotes({'broker_quotes':state.get('broker_quotes',[])},now_ms) if connected else []
+    candles=fresh_terminal_broker_candles({'broker_candles':state.get('broker_candles',[])},now_ms) if connected else []
+    symbols=state.get('symbols',[]) if connected else []
+    return {
+        'connected':connected,
+        'terminal_connected':bool(state.get('terminal_connected')),
+        'heartbeat_fresh':heartbeat_fresh,
+        'heartbeat_age_seconds':None if age_ms is None else max(0,int(age_ms/1000)),
+        'symbols':symbols,
+        'broker_quotes':quotes,
+        'broker_candles':candles,
+        'selected_symbol':selection.get('symbol',''),
+        'selected_timeframe':selection.get('timeframe','M15'),
+        'error_message':'' if connected else 'MT5 not connected',
+    }
 
 
 @app.get('/v1/app/state')

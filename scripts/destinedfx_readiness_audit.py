@@ -57,6 +57,8 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     analyzer_ui = read_text(root, "app/src/main/java/com/example/ui/SimplifiedAnalyzerTab.kt")
     analyzer_view_model = read_text(root, "app/src/main/java/com/example/ui/AnalyzerViewModel.kt")
     analyzer_mapping_test = read_text(root, "app/src/test/java/com/example/MT5AnalyzerMathTest.kt")
+    analyzer_feed_client = read_text(root, "app/src/main/java/com/example/data/trade/MT5AnalyzerMarketFeedClient.kt")
+    analyzer_feed_ea = read_text(root, "mt5-ea/AnalyzerMarketFeedEA.mq5")
     bot_ui = read_text(root, "app/src/main/java/com/example/ui/workstations/BotWorkstation.kt")
     bridge_client = read_text(root, "app/src/main/java/com/example/data/trade/MT5RemoteBridgeClient.kt")
     arming = read_text(root, "app/src/main/java/com/example/data/broker/ModeArmingPolicy.kt")
@@ -91,6 +93,8 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "MT5RemoteBridgeClient.kt": bridge_client,
         "ModeArmingPolicy.kt": arming,
         "DestinedFXTraderEA.mq5": ea,
+        "MT5AnalyzerMarketFeedClient.kt": analyzer_feed_client,
+        "AnalyzerMarketFeedEA.mq5": analyzer_feed_ea,
         "README.md": readme,
     }
     missing = [name for name, body in required.items() if not body]
@@ -134,42 +138,33 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
     )
 
     analyzer_math = read_text(root, "app/src/main/java/com/example/ui/MT5AnalyzerMath.kt")
-    mapping_start = analyzer_ui.find("internal fun tradingViewSymbolForMt5")
-    mapping_end = analyzer_ui.find("internal fun tradingViewIntervalForMt5", mapping_start)
-    analyzer_mapping = analyzer_ui[mapping_start:mapping_end] if mapping_start >= 0 and mapping_end > mapping_start else ""
-    chart_branch = (
-        analyzer_ui.split("if (chartTicker != null)", 1)[1].split("if (showAnalysis)", 1)[0]
-        if "if (chartTicker != null)" in analyzer_ui and "if (showAnalysis)" in analyzer_ui
-        else ""
-    )
     diagnostics_ok = (
-        "managedMt5BridgeSnapshot" in analyzer_ui
-        and "startSelectedMt5AnalyzerBridgeMonitor" in analyzer_ui
-        and "MT5_TERMINAL" in analyzer_ui
-        and "activeChartSymbol" in analyzer_ui
-        and "requestAnalyzerChartSelection" in vm
-        and '"SET_ANALYZER_CHART"' in vm
-        and "SymbolsTotal(true)" in ea
-        and "SymbolName(i,true)" in ea
-        and "g_analyzerSymbol" in ea
-        and "g_analyzerTimeframe" in ea
-        and 'action=="SET_ANALYZER_CHART"' in ea
-        and "BrokerQuotesJson()" in ea
-        and "BrokerCandlesJson()" in ea
-        and "CopyRates(sym,tf,1,60,rates)" in ea
+        "MT5AnalyzerMarketFeedClient" in analyzer_feed_client
+        and "/v1/analyzer/market-state" in analyzer_feed_client
+        and "/v1/analyzer/market-selection" in analyzer_feed_client
+        and "/v1/analyzer/market-heartbeat" in bridge
+        and "def analyzer_feed_local_peer" in bridge
+        and "ANALYZER_FEED_LOCAL_PUBLISHER_ONLY" in bridge
+        and "SymbolInfoTick(" in analyzer_feed_ea
+        and "CopyRates(" in analyzer_feed_ea
+        and "TERMINAL_CONNECTED" in analyzer_feed_ea
+        and "BrokerQuotesJson()" not in analyzer_feed_ea
         and "AnalyzerBrokerCandlestickChart" in analyzer_ui
         and "Canvas(" in analyzer_ui
-        and "val price = quote?.bid" in analyzer_ui
-        and "if (chartTicker != null)" not in analyzer_ui
+        and "quote!!.bid" in analyzer_ui
+        and "quote!!.ask" in analyzer_ui
+        and "managedMt5BridgeSnapshot" not in analyzer_ui
+        and "startSelectedMt5AnalyzerBridgeMonitor" not in analyzer_ui
+        and "getMT5BridgeAccountAppToken" not in analyzer_feed_client
         and "tradingview.com" not in analyzer_ui.lower()
+        and "TradingView" not in analyzer_ui
         and "OANDA:" not in analyzer_ui
-        and "MT5_TERMINAL" in analyzer_math
     )
     add_check(
         checks,
         "Analyzer provider diagnostics",
         diagnostics_ok,
-        "The Analyzer uses fresh MT5 terminal heartbeat quotes and closed candles, lets the user select a real Market Watch symbol/timeframe through a read-only command, draws its own native candlestick chart, and does not route Analyzer prices or charts through TradingView or OANDA.",
+        "The Analyzer reads the independent token-free MT5 feed, validates fresh terminal BID/ASK and closed candles, selects MT5 Market Watch symbols/timeframes, and renders its own chart without Bot pairing, TradingView or OANDA."
     )
 
     persistent_live_policy_ok = (

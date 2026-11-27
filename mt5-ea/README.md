@@ -45,3 +45,19 @@ Closed-trade history includes actual entry price and broker-server entry time wh
 ### Daily risk guard — MT5 EA enforcement
 
 The managed MT5 EA calculates daily bot-owned net P&L in broker-server time, including closed deal profit, commissions and fees plus current bot-managed floating profit and swap. It emits one-time 80% and 90% terminal push warnings when MetaTrader push notifications are configured. At 100%, it persists an account/server/magic/day-scoped lock, blocks START/RESUME and new orders, cancels only EA-magic pending orders, and closes only EA-magic positions. It verifies each action against refreshed broker order/position state and reports EXIT_PENDING when any outcome remains unresolved. This code path still requires genuine MetaEditor compilation and DEMO terminal acceptance; it is not a universal guard for Deriv or non-MT5 adapters.
+## Independent token-free Analyzer market feed
+
+`AnalyzerMarketFeedEA.mq5` is a second, read-only Expert Advisor. It is separate from `DestinedFXTraderEA.mq5`: it has no pairing code, broker password, Bot app token, order placement, or position-management functions. It reads the actual terminal's Market Watch symbols and `SymbolInfoTick` BID/ASK values, then copies completed `MqlRates` candles for the selected symbol. The Android Analyzer reads this separate market-data stream and displays exact BID and ASK using the broker's digits; it does not use TradingView or OANDA.
+
+The host bridge keeps only a short-lived in-memory feed. A missing or older-than-15-second terminal heartbeat clears the available prices and returns `MT5 not connected`; it does not substitute a synthetic price, account snapshot, TradingView, or another broker's quote. Quotes and candles are read-only data and never enter the Bot order command queue.
+
+### One-time terminal setup
+
+1. Build/launch the bridge host and configure the same external HTTPS host origin in the Android app (the existing managed MT5 service URL setting). This is only the market-data host address; it is not a Bot broker profile or a Bot pairing token.
+2. In the MT5 terminal, open **Tools → Options → Expert Advisors** and add the exact local feed URL to **Allow WebRequest for listed URL**:
+   - Codespaces/Wine when the terminal and Bridge share the Codespace: `http://127.0.0.1:8000`
+   - Owner Linux host using the owner Docker network: `http://172.30.250.3:8000`
+3. Attach `AnalyzerMarketFeedEA` to a chart and enable Algo Trading / allow WebRequest. The EA is read-only; no broker login is stored or submitted by the Analyzer phone UI. Keep the relevant instrument visible in Market Watch. The EA initially uses the chart symbol/timeframe, then follows the symbol/timeframe selected in the Android Analyzer.
+4. Open Analyzer on the phone. It polls the read-only HTTPS market-state endpoint; the local MT5 EA publishes every two seconds. Check that BID, ASK, and the candle chart update from the connected terminal. If terminal heartbeats stop, the UI shows `MT5 not connected`.
+
+The EA source and `.ex5` are compiled and installed by the existing MT5 MetaEditor installation/finalization scripts. The owner must still complete the one-time MT5 WebRequest allow-list and attach the EA to a chart. The owner terminal must be online and logged in to a broker account; the Analyzer phone UI itself does not need a Bot pairing token or a second broker login. CI MetaEditor compilation proves source compilation only, not that an owner's broker terminal is online or that HFM, Exness, FBS, or Deriv has supplied a live quote. The Analyzer's terminal symbol list is the broker's own Market Watch, including broker suffixes and named synthetic indices; a symbol absent from that broker terminal is not fabricated.

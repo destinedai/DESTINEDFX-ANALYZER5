@@ -179,22 +179,61 @@ $outputEa = Join-Path $OutputDir 'DestinedFXTraderEA.ex5'
 $outputLog = Join-Path $OutputDir 'DestinedFXTraderEA.log'
 Copy-Item -LiteralPath $compiledEa -Destination $outputEa -Force
 Copy-Item -LiteralPath $compileLog -Destination $outputLog -Force
+
+# Compile the independent read-only Analyzer publisher with the same genuine MetaEditor.
+$analyzerSourcePath = Join-Path $env:GITHUB_WORKSPACE 'mt5-ea\AnalyzerMarketFeedEA.mq5'
+if (!(Test-Path -LiteralPath $analyzerSourcePath -PathType Leaf)) {
+    throw "Analyzer market-feed EA source not found: $analyzerSourcePath"
+}
+$stagedAnalyzerSource = Join-Path $expertsPath 'AnalyzerMarketFeedEA.mq5'
+Copy-Item -LiteralPath $analyzerSourcePath -Destination $stagedAnalyzerSource -Force
+$compiledAnalyzerEa = [System.IO.Path]::ChangeExtension($stagedAnalyzerSource, '.ex5')
+$analyzerCompileLog = [System.IO.Path]::ChangeExtension($stagedAnalyzerSource, '.log')
+Remove-Item -LiteralPath $compiledAnalyzerEa, $analyzerCompileLog -Force -ErrorAction SilentlyContinue
+$analyzerArguments = @("/compile:`"$stagedAnalyzerSource`"", "/include:`"$mql5Root`"", '/log')
+$analyzerCompileProcess = Start-Process -FilePath $metaEditor.FullName -ArgumentList $analyzerArguments -Wait -PassThru
+if (!(Test-Path -LiteralPath $analyzerCompileLog -PathType Leaf)) {
+    throw "MetaEditor exited with code $($analyzerCompileProcess.ExitCode) and produced no Analyzer EA compiler log."
+}
+$analyzerLogText = Get-Content -LiteralPath $analyzerCompileLog -Raw
+$analyzerSummary = [regex]::Match($analyzerLogText, '(?im)^\s*(?:Result:\s*)?(?<errors>\d+)\s+errors?,\s*(?<warnings>\d+)\s+warnings?\b')
+if (!$analyzerSummary.Success -or [int]$analyzerSummary.Groups['errors'].Value -ne 0) {
+    Write-Host '---- Analyzer MetaEditor compiler diagnostics ----'
+    Get-Content -LiteralPath $analyzerCompileLog | ForEach-Object { Write-Host $_ }
+    Write-Host '---- End Analyzer MetaEditor compiler diagnostics ----'
+    throw 'AnalyzerMarketFeedEA.mq5 did not compile with zero errors.'
+}
+if (!(Test-Path -LiteralPath $compiledAnalyzerEa -PathType Leaf)) {
+    throw 'MetaEditor reported no Analyzer EA errors but did not create AnalyzerMarketFeedEA.ex5.'
+}
+$outputAnalyzerEa = Join-Path $OutputDir 'AnalyzerMarketFeedEA.ex5'
+$outputAnalyzerLog = Join-Path $OutputDir 'AnalyzerMarketFeedEA.log'
+Copy-Item -LiteralPath $compiledAnalyzerEa -Destination $outputAnalyzerEa -Force
+Copy-Item -LiteralPath $analyzerCompileLog -Destination $outputAnalyzerLog -Force
+
 $eaHash = (Get-FileHash -LiteralPath $outputEa -Algorithm SHA256).Hash.ToLowerInvariant()
 $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$analyzerEaHash = (Get-FileHash -LiteralPath $outputAnalyzerEa -Algorithm SHA256).Hash.ToLowerInvariant()
+$analyzerSourceHash = (Get-FileHash -LiteralPath $analyzerSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $compilerVersion = (Get-Item -LiteralPath $metaEditor.FullName).VersionInfo.ProductVersion
 $warnings = [int]$summary.Groups['warnings'].Value
+$analyzerWarnings = [int]$analyzerSummary.Groups['warnings'].Value
 
 @"
 Artifact: DestinedFXTraderEA.ex5
 Source: mt5-ea/DestinedFXTraderEA.mq5
 Source SHA-256: $sourceHash
 EA SHA-256: $eaHash
+Analyzer source: mt5-ea/AnalyzerMarketFeedEA.mq5
+Analyzer source SHA-256: $analyzerSourceHash
+Analyzer EA SHA-256: $analyzerEaHash
 MetaEditor version: $compilerVersion
 Installer signer: $signer
-Compilation: 0 errors, $warnings warnings
+Compilation: Bot EA 0 errors, $warnings warnings; Analyzer feed EA 0 errors, $analyzerWarnings warnings
 Platform: disposable GitHub Actions windows-latest runner
 Scope: genuine MetaEditor compilation only; no broker login, terminal heartbeat, or order execution was performed.
 "@ | Set-Content -LiteralPath (Join-Path $OutputDir 'build-evidence.txt') -Encoding utf8
 
-Write-Host "MetaEditor compilation passed with 0 errors and $warnings warnings."
-Write-Host "Compiled EA SHA-256: $eaHash"
+Write-Host "MetaEditor compilation passed for Bot and independent Analyzer feed EAs."
+Write-Host "Bot EA SHA-256: $eaHash"
+Write-Host "Analyzer feed EA SHA-256: $analyzerEaHash"

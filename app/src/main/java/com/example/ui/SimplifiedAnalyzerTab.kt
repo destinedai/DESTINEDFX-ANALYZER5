@@ -36,7 +36,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.trade.MT5AnalyzerMarketFeedClient
+import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.data.trade.VerifiedBrokerCandle
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkSurface
@@ -61,50 +62,82 @@ import java.util.concurrent.TimeUnit
 
 @Composable
 fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {}) {
-    val snapshot by viewModel.managedMt5BridgeSnapshot.collectAsStateWithLifecycle()
-    val mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
-    val brand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
-
-    LaunchedEffect(brand, mode) { viewModel.startSelectedMt5AnalyzerBridgeMonitor() }
-
-    val connected = snapshot?.let {
-        it.connected && it.terminalConnected && it.terminalOnline && it.heartbeatFresh &&
-            it.accountVerified && it.brokerIdentityVerified && it.actualAccountMode == mode
-    } == true
-    val symbols = snapshot?.brokerQuotes.orEmpty().asSequence()
-        .filter { it.source == "MT5_TERMINAL" && it.bid.isFinite() && it.ask.isFinite() && it.bid > 0.0 && it.ask >= it.bid }
-        .map { it.symbol }.distinct().sorted().toList()
-    var selectedSymbol by remember { mutableStateOf("") }
-    var selectedTimeframe by remember(snapshot?.activeChartTimeframe) {
-        mutableStateOf(snapshot?.activeChartTimeframe?.takeIf { it in setOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1") } ?: "M15")
+    val secrets = viewModel.app.secretsManager
+    val serviceOrigin = remember(secrets) {
+        MT5RemoteBridgeClient.initialServiceUrl(
+            secrets.getManagedMT5ServiceUrl(),
+            com.example.BuildConfig.MT5_MANAGED_SERVICE_URL,
+            com.example.BuildConfig.DESTINEDFX_ENDPOINTS_LOCKED,
+            com.example.BuildConfig.DESTINEDFX_CODESPACES_HOST_DISCOVERY
+        )
     }
+    val accessId = remember(secrets) { secrets.getCloudflareAccessClientId() }
+    val accessSecret = remember(secrets) { secrets.getCloudflareAccessClientSecret() }
+    val feedClient = remember(serviceOrigin, accessId, accessSecret) {
+        if (serviceOrigin.isBlank()) null else runCatching {
+            MT5AnalyzerMarketFeedClient(serviceOrigin, accessId, accessSecret)
+        }.getOrNull()
+    }
+    var snapshot by remember(feedClient) {
+        mutableStateOf<MT5AnalyzerMarketFeedClient.Snapshot?>(null)
+    }
+    var connectionError by remember(feedClient) {
+        mutableStateOf(if (feedClient == null) "MT5 not connected" else "")
+    }
+    var selectedSymbol by remember(feedClient) { mutableStateOf("") }
+    var selectedTimeframe by remember(feedClient) { mutableStateOf("M15") }
     var symbolMenuExpanded by remember { mutableStateOf(false) }
     var timeframeMenuExpanded by remember { mutableStateOf(false) }
+
+    // The standalone Analyzer feed is read-only and does not start or inspect Bot pairing.
+    LaunchedEffect(feedClient) {
+        if (feedClient == null) {
+            snapshot = null
+            connectionError = "MT5 not connected"
+            return@LaunchedEffect
+        }
+        while (true) {
+            try {
+                val fresh = feedClient.state()
+                snapshot = fresh
+                connectionError = fresh.errorMessage
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                snapshot = null
+                connectionError = "MT5 not connected"
+            }
+            delay(1_000L)
+        }
+    }
+
+    val symbols = snapshot?.symbols.orEmpty()
     val symbol = selectedSymbol.takeIf { it.isNotBlank() }
         ?: snapshot?.activeChartSymbol?.takeIf { it in symbols }
         ?: symbols.firstOrNull()
-        ?: "EURUSD"
+        ?: ""
     val timeframe = selectedTimeframe
 
-    LaunchedEffect(connected, symbol, timeframe) {
-        if (connected && symbol in symbols) viewModel.requestAnalyzerChartSelection(symbol, timeframe)
+    LaunchedEffect(feedClient, symbol, timeframe) {
+        if (feedClient != null && symbol.isNotBlank()) {
+            runCatching { feedClient.select(symbol, timeframe) }
+        }
     }
 
-    val quote = if (connected) snapshot?.brokerQuotes?.firstOrNull {
-        it.symbol.equals(symbol, true) && it.source == "MT5_TERMINAL" &&
-            it.bid.isFinite() && it.ask.isFinite() && it.bid > 0.0 && it.ask >= it.bid
+    val connected = snapshot?.connected == true && snapshot?.heartbeatFresh == true
+    val quote = if (connected && symbol.isNotBlank()) {
+        snapshot?.brokerQuotes?.singleOrNull { it.symbol.equals(symbol, true) }
     } else null
-    val allSymbolCandles = if (connected) snapshot?.brokerCandles.orEmpty().filter {
-        it.symbol.equals(symbol, true) && it.source == "MT5_TERMINAL" && it.complete
+    val allSymbolCandles = if (connected && symbol.isNotBlank()) {
+        snapshot?.brokerCandles.orEmpty().filter {
+            it.symbol.equals(symbol, true) && it.source == "MT5_TERMINAL" && it.complete
+        }
     } else emptyList()
     val candles = allSymbolCandles.filter { it.timeframe.equals(timeframe, true) }
         .sortedBy { it.timestampMs }
-
-    // MT5 chart prices are BID-based. Keep ASK available through the displayed spread.
     val price = quote?.bid?.takeIf { it.isFinite() && it > 0.0 }
-    val spread = quote?.let { (it.ask - it.bid).takeIf { value -> value.isFinite() && value >= 0.0 } }
-    val priceQuoteAvailable = price != null
-    val priceQuoteFresh = priceQuoteAvailable && connected && snapshot?.heartbeatFresh == true
+    val priceQuoteFresh = connected && quote != null && quote.ageMs in 0L..15_000L &&
+        quote.timestampMs > 0L
     val insight = remember(quote, allSymbolCandles, timeframe) {
         MT5AnalyzerMath.analyze(quote, allSymbolCandles, timeframe)
     }
@@ -127,7 +160,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             else -> false
         }
     val analysisValidated = trendValidated && levelsValidated
-    val showPrice = priceQuoteAvailable && priceQuoteFresh
+    val showPrice = priceQuoteFresh
 
     Column(
         Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
@@ -139,7 +172,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box {
-                        Text(symbol, color = TextPrimary, fontSize = 21.sp,
+                        Text(symbol.ifBlank { "Select pair" }, color = TextPrimary, fontSize = 21.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Black,
                             modifier = Modifier.clickable { symbolMenuExpanded = true })
                         DropdownMenu(expanded = symbolMenuExpanded, onDismissRequest = { symbolMenuExpanded = false }) {
@@ -162,23 +195,34 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                         }
                     }
                     Spacer(Modifier.weight(1f))
-                    Box(Modifier.size(9.dp).background(if (priceQuoteFresh) ProfitGreen else Color.Gray, CircleShape))
+                    Box(Modifier.size(9.dp).background(if (showPrice) ProfitGreen else Color.Gray, CircleShape))
                 }
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text("PRICE", color = TextSecondary, fontSize = 9.sp)
-                        Text(if (showPrice) price?.let { formatPrice(it, symbol) } ?: "--" else "--",
-                            color = TextPrimary, fontSize = 29.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                        Text("BID", color = TextSecondary, fontSize = 9.sp)
+                        Text(
+                            if (showPrice) formatAnalyzerTerminalPrice(quote!!.bid, quote!!.digits) else "--",
+                            color = TextPrimary, fontSize = 27.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black
+                        )
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("SPREAD", color = TextSecondary, fontSize = 9.sp)
-                        Text(if (showPrice) spread?.let { formatPrice(it, symbol) } ?: "--" else "--",
-                            color = TextPrimary, fontSize = 15.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        Text("ASK", color = TextSecondary, fontSize = 9.sp)
+                        Text(
+                            if (showPrice) formatAnalyzerTerminalPrice(quote!!.ask, quote!!.digits) else "--",
+                            color = TextPrimary, fontSize = 19.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                        )
                     }
                 }
-                if (!priceQuoteFresh) Text("Waiting for live market quote", color = TextSecondary, fontSize = 10.sp)
+                if (!connected) {
+                    Text("MT5 not connected", color = TextSecondary, fontSize = 10.sp)
+                } else if (!showPrice) {
+                    Text(
+                        connectionError.ifBlank { "Waiting for live MT5 quote" },
+                        color = TextSecondary, fontSize = 10.sp
+                    )
+                }
             }
         }
 
@@ -225,9 +269,12 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             }
         }
 
-        EconomicCalendarCard(symbol)
+        if (symbol.isNotBlank()) EconomicCalendarCard(symbol)
     }
 }
+
+private fun formatAnalyzerTerminalPrice(value: Double, digits: Int): String =
+    String.format(Locale.US, "%.${digits.coerceIn(0, 12)}f", value)
 
 @Composable
 private fun AnalyzerBrokerCandlestickChart(

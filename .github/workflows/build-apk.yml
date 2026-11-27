@@ -71,7 +71,7 @@ jobs:
           print(f'test_doctor.py cases executed: {len(executed)}')
           PY
       - name: Run MT5 EA source-contract and safety-math regressions
-        run: python -m pytest -q mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py
+        run: python -m pytest -q mt5-ea/test_ea_source.py mt5-ea/test_ea_safety_math.py mt5-ea/test_analyzer_feed_ea.py
 
   backend-tests:
     name: Application backend tests and PostgreSQL migration
