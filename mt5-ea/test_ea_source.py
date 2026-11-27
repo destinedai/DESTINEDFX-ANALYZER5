@@ -212,7 +212,7 @@ def test_trade_report_fields_come_from_ea_owned_broker_history():
 def test_ticket_operation_safety_contracts():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     workstation = (Path(__file__).resolve().parents[1] / "app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt").read_text()
-    stop_start = source.index("void StopAndCloseBotTrades(")
+    stop_start = source.index("string StopCloseoutKey()")
     stop_end = source.index("void ProcessCommands()", stop_start)
     stop_logic = source[stop_start:stop_end]
     ui_stop_start = workstation.index("onStop = {")
@@ -318,20 +318,28 @@ def test_ticket_operation_safety_contracts():
                     "trade.OrderDelete(ticket)",
                     "PositionGetInteger(POSITION_MAGIC)!=InpMagic",
                     "trade.PositionClose(ticket)",
-                    "remainingPositions==0&&remainingOrders==0&&closeFailures==0",
+                    "remainingPositions==0&&remainingOrders==0",
+                    "PersistStopCloseoutIntent(true)",
+                    "GlobalVariableSet(key,1.0)",
+                    "GlobalVariablesFlush()",
+                    "trade.SetAsyncMode(false)",
+                    "TRADE_RETCODE_DONE_PARTIAL",
+                    "RetryPendingStopCloseout()",
                     'outcome="APPLIED"',
                     'message="BOT STOPPED - All Bot trades closed"',
                 )
             )
             and all(
-                term in ui_stop
+                term in workstation
                 for term in (
-                    'client.command(UUID.randomUUID().toString(), "STOP")',
-                    "for (attempt in 0 until 12)",
+                    "private suspend fun stopManagedMt5AndConfirm(",
+                    "client.command(UUID.randomUUID().toString(), action)",
+                    "for (attempt in 0 until 60)",
                     "val fresh = client.state()",
-                    'fresh.connected && fresh.snapshotsValid && fresh.state == "STOPPED"',
+                    'fresh.connected && fresh.heartbeatFresh && fresh.snapshotsValid && fresh.state == "STOPPED"',
                     "botPositions.isEmpty() && botOrders.isEmpty()",
-                    'message = "BOT STOPPED - All Bot trades closed"',
+                    'stopManagedMt5AndConfirm(client, "STOP")',
+                    'stopManagedMt5AndConfirm(requireNotNull(bridge), "EMERGENCY_STOP")',
                 )
             )
         ),
@@ -534,3 +542,21 @@ def test_phone_position_stop_edit_only_tightens_sl_and_preserves_tp():
     assert "bool Ack(string id,string outcome,string msg,string resultJson" in source
     assert 'Ack(g_sigCommandId,finalOutcome,g_sigRationale,"")' in source
     assert 'g_sigOrder=commandId' not in source
+
+
+def test_stop_and_emergency_stop_have_identical_verified_closeout_semantics():
+    root = Path(__file__).resolve().parents[1]
+    workstation = (root / "app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt").read_text()
+    protocol = (root / "docs/mt5-bridge-protocol.md").read_text()
+    helper_start = workstation.index("private suspend fun stopManagedMt5AndConfirm(")
+    helper_end = workstation.index("@Composable\nfun SimplifiedBotWorkstation", helper_start)
+    helper = workstation[helper_start:helper_end]
+    assert 'client.command(UUID.randomUUID().toString(), action)' in helper
+    assert "for (attempt in 0 until 60)" in helper
+    assert "fresh.heartbeatFresh && fresh.snapshotsValid && fresh.state == \"STOPPED\"" in helper
+    assert "botPositions.isEmpty() && botOrders.isEmpty()" in helper
+    assert 'stopManagedMt5AndConfirm(client, "STOP")' in workstation
+    assert 'stopManagedMt5AndConfirm(requireNotNull(bridge), "EMERGENCY_STOP")' in workstation
+    assert "existing positions are not liquidated" not in workstation
+    assert "EA-side liquidation of every DestinedFX-owned open position and pending order" in protocol
+    assert "retries any remaining exposure on subsequent timer cycles" in protocol

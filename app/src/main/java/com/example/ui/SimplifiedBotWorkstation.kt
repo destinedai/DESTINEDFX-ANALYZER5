@@ -194,6 +194,33 @@ fun liveLeaseStatusLabel(serverLeaseActive: Boolean): String = if (serverLeaseAc
     "LIVE NOT ARMED · SERVER LEASE INACTIVE"
 }
 
+private suspend fun stopManagedMt5AndConfirm(
+    client: MT5RemoteBridgeClient,
+    action: String,
+    onSnapshot: (MT5RemoteBridgeClient.Snapshot) -> Unit
+): String {
+    val submitted = client.command(UUID.randomUUID().toString(), action)
+    if (!submitted.queued) return submitted.detail.ifBlank { "BOT STOPPED - MT5 close-out was not confirmed." }
+    var lastSnapshot: MT5RemoteBridgeClient.Snapshot? = null
+    for (attempt in 0 until 60) {
+        delay(1_000L)
+        val fresh = client.state()
+        onSnapshot(fresh)
+        lastSnapshot = fresh
+        val botPositions = fresh.positions.orEmpty().filter { it.optBoolean("managed_by_ea", false) }
+        val botOrders = fresh.activeOrders.orEmpty().filter { it.optBoolean("managed_by_ea", false) }
+        if (fresh.connected && fresh.heartbeatFresh && fresh.snapshotsValid && fresh.state == "STOPPED" &&
+            botPositions.isEmpty() && botOrders.isEmpty()) {
+            return "BOT STOPPED - All Bot trades closed"
+        }
+    }
+    val finalState = lastSnapshot
+        ?: return "BOT STOPPED - close-out not confirmed; no fresh MT5 snapshot was received."
+    val remainingPositions = finalState.positions.orEmpty().count { it.optBoolean("managed_by_ea", false) }
+    val remainingOrders = finalState.activeOrders.orEmpty().count { it.optBoolean("managed_by_ea", false) }
+    return "BOT STOPPED - close-out not confirmed; $remainingPositions Bot position(s) and $remainingOrders Bot pending order(s) remain. Keep MT5 connected; do not assume closure."
+}
+
 @Composable
 fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val context = LocalContext.current
@@ -1475,13 +1502,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 "Deriv service stop requested"
                             }.getOrElse { "Deriv service stop failed: ${it.message?.take(120) ?: "verify and stop manually"}" }
                             val mt5Result = if (bridge?.hasPairing() == true) {
-                                runCatching { requireNotNull(bridge).command(UUID.randomUUID().toString(), "EMERGENCY_STOP") }
-                                    .fold(
-                                        { if (it.queued) "MT5 bridge stop acknowledged; verify fresh EA stop state" else "MT5 bridge stop not acknowledged: ${it.detail.take(160)}" },
-                                        { "MT5 bridge stop failed: ${it.message?.take(120) ?: "verify and stop at the host"}" }
-                                    )
-                            } else "MT5 bridge not paired; stop at the owner host if active"
-                            message = "Emergency stop requested; $disarmed LIVE lease(s) disarmed. $derivResult. $mt5Result. Verify broker state; existing positions are not liquidated."
+                                runCatching {
+                                    stopManagedMt5AndConfirm(requireNotNull(bridge), "EMERGENCY_STOP") { mt5Snapshot = it }
+                                }.getOrElse { "MT5 close-out not confirmed: ${it.message?.take(160) ?: "keep the terminal connected and verify broker state"}" }
+                            } else "MT5 bridge not paired; Bot close-out cannot be confirmed"
+                            message = "Emergency stop requested; $disarmed LIVE lease(s) disarmed. $derivResult. $mt5Result."
                         } catch (e: Exception) { message = e.message?.take(240) ?: "Emergency stop was not confirmed; stop manually at the broker/host." }
                         finally { commandPending = false }
                     }
@@ -1489,7 +1514,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 enabled = !commandPending,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White)
-        ) { Icon(Icons.Default.Stop, contentDescription = null); Text("EMERGENCY STOP · STOP NEW ENTRIES", fontWeight = FontWeight.Black) }
+        ) { Icon(Icons.Default.Stop, contentDescription = null); Text("EMERGENCY STOP · CLOSE BOT TRADES", fontWeight = FontWeight.Black) }
         val codespacesUsage = githubCodespacesClient.usageEstimate()
         val githubSignedIn = secrets.getCodespacesGitHubRefreshToken().isNotBlank() &&
             secrets.getCodespacesGitHubRefreshExpiresAtMillis() > System.currentTimeMillis()
@@ -2447,34 +2472,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         try {
                             if (broker.usesManagedMt5Terminal) {
                                 val client = requireNotNull(bridge)
-                                val result = client.command(UUID.randomUUID().toString(), "STOP")
-                                if (!result.queued) {
-                                    message = result.detail.ifBlank { "BOT STOPPED - MT5 close-out was not confirmed." }
-                                } else {
-                                    var lastSnapshot: MT5RemoteBridgeClient.Snapshot? = null
-                                    var confirmed = false
-                                    for (attempt in 0 until 12) {
-                                        delay(1_000L)
-                                        val fresh = client.state()
-                                        mt5Snapshot = fresh
-                                        lastSnapshot = fresh
-                                        val botPositions = fresh.positions.orEmpty().filter { it.optBoolean("managed_by_ea", false) }
-                                        val botOrders = fresh.activeOrders.orEmpty().filter { it.optBoolean("managed_by_ea", false) }
-                                        if (fresh.connected && fresh.snapshotsValid && fresh.state == "STOPPED" &&
-                                            botPositions.isEmpty() && botOrders.isEmpty()) {
-                                            confirmed = true
-                                            break
-                                        }
-                                    }
-                                    val finalState = lastSnapshot
-                                    if (confirmed) {
-                                        message = "BOT STOPPED - All Bot trades closed"
-                                        verifyMessage = "Verified MT5 balance: ${finalState?.balance} ${finalState?.currency}; Bot open trades: 0."
-                                    } else {
-                                        val remaining = finalState?.positions.orEmpty().count { it.optBoolean("managed_by_ea", false) } +
-                                            finalState?.activeOrders.orEmpty().count { it.optBoolean("managed_by_ea", false) }
-                                        message = "BOT STOPPED - close-out not confirmed; $remaining Bot trade/order(s) remain. Check MT5."
-                                    }
+                                message = stopManagedMt5AndConfirm(client, "STOP") { mt5Snapshot = it }
+                                if (message == "BOT STOPPED - All Bot trades closed") {
+                                    val finalState = mt5Snapshot
+                                    verifyMessage = "Verified MT5 balance: ${finalState?.balance} ${finalState?.currency}; Bot open trades: 0."
                                 }
                             } else {
                                 DerivDemoBotService.stop(context)

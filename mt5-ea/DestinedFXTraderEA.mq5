@@ -50,6 +50,7 @@ int QuoteFreshnessSeconds(string sym){
 }
 bool QuoteFresh(string sym,MqlTick &q){return q.time>0&&TimeCurrent()>=q.time&&TimeCurrent()-q.time<=QuoteFreshnessSeconds(sym);}
 string g_state="READY",g_terminalToken="",g_terminalId="",g_lastSignal="",g_lastReason="Not started",g_lastError="";
+bool g_stopCloseoutPending=false; datetime g_lastStopCloseoutAttemptUtc=0;
 string g_eaInstanceId="";
 long g_eaStartedAtMs=0;
 string g_symbols[],g_tfs[]; string g_analyzerSymbol="",g_analyzerTimeframe=""; string g_strategy="ict-silver-bullet"; double g_riskPercent=0.25,g_dailyLossPercent=2.0,g_initialVolume=0.01,g_maxVolume=0.01; bool g_scalingEnabled=false; bool g_startupRecoveryReady=false,g_journalsLoaded=false; int g_scalingMinClosedTrades=20,g_maxConcurrent=2; string g_sigState="WAIT",g_sigExecutionState="NONE",g_sigSymbol="",g_sigTf="",g_sigDirection="",g_sigRationale="Not scanned",g_sigRetcode="",g_sigDeal="",g_sigOrder="",g_sigPosition="",g_sigCommandId=""; double g_sigEntry=0,g_sigSL=0,g_sigTP=0,g_sigRisk=0,g_sigRequestedVolume=0,g_sigExecutedVolume=0,g_sigActualEntry=0; datetime g_sigSubmittedAt=0,g_sigOpenedAt=0; string g_newsStatus="UNKNOWN",g_newsDetail="NEWS UNKNOWN: no authenticated verdict",g_newsSource="",g_newsEvent="",g_newsCurrency=""; long g_newsRetrievedMs=0,g_newsCoverageFromMs=0,g_newsCoverageToMs=0,g_newsEventMs=0,g_newsBlackoutStartMs=0,g_newsBlackoutEndMs=0; int g_cursor=0; datetime g_lastScan=0,g_lastHeartbeat=0,g_lastAuthenticatedBridgeUtc=0,g_lastHeartbeatAcceptedUtc=0; double g_dayStartEquity=0; int g_day=-1; datetime g_liveAuthorizedUntil=0,g_lastStopAckAttemptUtc=0; bool g_dailyLossLocked=false; string g_dailyRiskStatus="UNKNOWN"; double g_dailyRiskUsedPct=-1.0;
@@ -845,63 +846,114 @@ void PublishReconciledOperationAcks(){for(int i=0;i<ArraySize(g_opRequest);i++){
 void ReconcileOperations(){for(int i=0;i<ArraySize(g_opRequest);i++)if(g_opPhase[i]!="TERMINAL")ReconcileOperation(i);PublishReconciledOperationAcks();}
 
 
-void StopAndCloseBotTrades(string &outcome,string &message){
+string StopCloseoutKey(){
+   string server=AccountInfoString(ACCOUNT_SERVER);
+   long hash=0;
+   for(int i=0;i<StringLen(server);i++)hash=(hash*31+(long)StringGetCharacter(server,i))%2147483647;
+   return StringFormat("DFXSTOP_%I64d_%I64d_%I64d",(long)AccountInfoInteger(ACCOUNT_LOGIN),(long)InpMagic,hash);
+}
+bool PersistStopCloseoutIntent(bool pending){
+   g_stopCloseoutPending=pending;
+   string key=StopCloseoutKey();
+   if(pending){
+      if(GlobalVariableSet(key,1.0)==0){g_stopCloseoutPending=true;return false;}
+   }else if(GlobalVariableCheck(key)&&!GlobalVariableDel(key)){
+      g_stopCloseoutPending=true;return false;
+   }
+   GlobalVariablesFlush();
+   return true;
+}
+void CountBotExposure(int &positions,int &orders){
+   positions=0;orders=0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      ulong ticket=PositionGetTicket(i);
+      if(ticket>0&&(ulong)PositionGetInteger(POSITION_MAGIC)==InpMagic)positions++;
+   }
+   for(int i=OrdersTotal()-1;i>=0;i--){
+      ulong ticket=OrderGetTicket(i);
+      if(ticket>0&&(ulong)OrderGetInteger(ORDER_MAGIC)==InpMagic&&PendingType(OrderGetInteger(ORDER_TYPE)))orders++;
+   }
+}
+void AttemptBotStopCloseout(string &outcome,string &message){
    g_state="STOPPED";
    outcome="UNKNOWN";
-   message="BOT STOPPED - entries stopped; MT5 close-out is not yet confirmed";
+   message="BOT STOPPED - Bot close-out remains pending";
+   int remainingPositions=0,remainingOrders=0;
+   CountBotExposure(remainingPositions,remainingOrders);
+   if(remainingPositions==0&&remainingOrders==0){
+      PersistStopCloseoutIntent(false);
+      outcome="APPLIED";
+      message="BOT STOPPED - All Bot trades closed";
+      g_lastError="";
+      g_lastReason=message;
+      return;
+   }
    if(!AccountIdentityMatches()||!TerminalInfoInteger(TERMINAL_CONNECTED)||
       !MQLInfoInteger(MQL_TRADE_ALLOWED)||!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)){
-      message="BOT STOPPED - entries stopped; MT5 connection, account identity or trade permission prevents Bot close-out";
+      PersistStopCloseoutIntent(true);
+      message="BOT STOPPED - MT5 account identity, connection or trade permission blocks close-out; retry remains armed";
       g_lastError=message;
       g_lastReason=message;
       return;
    }
    trade.SetExpertMagicNumber(InpMagic);
-   int closeFailures=0;
+   trade.SetAsyncMode(false);
+   // Cancel every Bot-owned pending order first. A late fill is caught by the
+   // position pass and the persisted retry on the next timer cycle.
    for(int i=OrdersTotal()-1;i>=0;i--){
       ulong ticket=OrderGetTicket(i);
-      if(ticket==0||(ulong)OrderGetInteger(ORDER_MAGIC)!=InpMagic)continue;
-      long type=OrderGetInteger(ORDER_TYPE);
-      if(!PendingType(type))continue;
-      if(!trade.OrderDelete(ticket)){
-         if(OrderSelect(ticket))closeFailures++;
-         continue;
-      }
-      if(OrderSelect(ticket)){
-         closeFailures++;
-      }else if(!HistoryOrderSelect(ticket)){
-         closeFailures++;
-      }else{
-         ENUM_ORDER_STATE state=(ENUM_ORDER_STATE)HistoryOrderGetInteger(ticket,ORDER_STATE);
-         if(state!=ORDER_STATE_CANCELED&&state!=ORDER_STATE_EXPIRED)closeFailures++;
-      }
+      if(ticket==0||(ulong)OrderGetInteger(ORDER_MAGIC)!=InpMagic||!PendingType(OrderGetInteger(ORDER_TYPE)))continue;
+      bool submitted=trade.OrderDelete(ticket);
+      uint retcode=trade.ResultRetcode();
+      if((!submitted||retcode!=TRADE_RETCODE_DONE)&&OrderSelect(ticket))
+         Print("STOP pending-order cancellation not yet confirmed: ",ticket," retcode=",retcode," ",trade.ResultRetcodeDescription());
    }
+   // Close all Bot-owned positions. Partial fills and transient broker rejects
+   // are not success: any residual exposure is retried on the next timer cycle.
    for(int i=PositionsTotal()-1;i>=0;i--){
       ulong ticket=PositionGetTicket(i);
       if(ticket==0||(ulong)PositionGetInteger(POSITION_MAGIC)!=InpMagic)continue;
-      trade.PositionClose(ticket);
-      if(PositionSelectByTicket(ticket))closeFailures++;
+      bool submitted=trade.PositionClose(ticket);
+      uint retcode=trade.ResultRetcode();
+      if((!submitted||(retcode!=TRADE_RETCODE_DONE&&retcode!=TRADE_RETCODE_DONE_PARTIAL))&&PositionSelectByTicket(ticket))
+         Print("STOP position close not yet confirmed: ",ticket," retcode=",retcode," ",trade.ResultRetcodeDescription());
    }
-   int remainingPositions=0,remainingOrders=0;
-   for(int i=PositionsTotal()-1;i>=0;i--){
-      ulong ticket=PositionGetTicket(i);
-      if(ticket>0&&(ulong)PositionGetInteger(POSITION_MAGIC)==InpMagic)remainingPositions++;
-   }
-   for(int i=OrdersTotal()-1;i>=0;i--){
-      ulong ticket=OrderGetTicket(i);
-      if(ticket>0&&(ulong)OrderGetInteger(ORDER_MAGIC)==InpMagic&&PendingType(OrderGetInteger(ORDER_TYPE)))remainingOrders++;
-   }
-   if(remainingPositions==0&&remainingOrders==0&&closeFailures==0){
+   CountBotExposure(remainingPositions,remainingOrders);
+   if(remainingPositions==0&&remainingOrders==0){
+      PersistStopCloseoutIntent(false);
       outcome="APPLIED";
       message="BOT STOPPED - All Bot trades closed";
       g_lastError="";
       g_lastReason=message;
    }else{
+      PersistStopCloseoutIntent(true);
       outcome="UNKNOWN";
-      message=StringFormat("BOT STOPPED - %d Bot position(s) and %d Bot pending order(s) remain; close-out not confirmed",
+      message=StringFormat("BOT STOPPED - %d Bot position(s) and %d Bot pending order(s) remain; automatic close-out retry is armed",
                            remainingPositions,remainingOrders);
       g_lastError=message;
       g_lastReason=message;
+   }
+}
+void RetryPendingStopCloseout(){
+   if(!g_stopCloseoutPending)return;
+   datetime now=TimeGMT();
+   if(g_lastStopCloseoutAttemptUtc>0&&now-g_lastStopCloseoutAttemptUtc<MathMax(1,InpPollSeconds))return;
+   g_lastStopCloseoutAttemptUtc=now;
+   string outcome,message;
+   AttemptBotStopCloseout(outcome,message);
+}
+void StopAndCloseBotTrades(string &outcome,string &message){
+   g_state="STOPPED";
+   PersistStopCloseoutIntent(true);
+   g_lastStopCloseoutAttemptUtc=0;
+   RetryPendingStopCloseout();
+   if(g_stopCloseoutPending){
+      outcome="UNKNOWN";
+      message=g_lastError;
+      if(message=="")message="BOT STOPPED - close-out not yet confirmed; automatic retry is armed";
+   }else{
+      outcome="APPLIED";
+      message="BOT STOPPED - All Bot trades closed";
    }
 }
 
@@ -1144,7 +1196,7 @@ void Heartbeat(){
       g_lastHeartbeatAcceptedUtc=TimeGMT();
    }
 }
-int OnInit(){g_eaStartedAtMs=(long)TimeGMT()*1000;g_eaInstanceId=StringFormat("%I64d-%I64d-%d",(long)AccountInfoInteger(ACCOUNT_LOGIN),(long)GetMicrosecondCount(),(int)MathRand());if(StringFind(InpBridgeBaseURL,"https://")!=0||StringFind(InpBridgeBaseURL,".example")>=0||StringFind(InpBridgeBaseURL,"example.com")>=0||StringGetCharacter(InpBridgeBaseURL,StringLen(InpBridgeBaseURL)-1)=='/'){Print("Bridge URL must be a real HTTPS origin without a placeholder host or trailing slash");return INIT_PARAMETERS_INCORRECT;}if(InpStrategy!="smc-confluence-1.0.0"&&InpStrategy!="ict-silver-bullet"&&InpStrategy!="wyckoff-schematics"&&InpStrategy!="supply-and-demand"&&InpStrategy!="breakout-momentum"&&InpStrategy!="mean-reversion"&&InpStrategy!="trend-following"&&InpStrategy!="liquidity-stop-hunts"){Print("Unsupported strategy identifier");return INIT_PARAMETERS_INCORRECT;}g_strategy=InpStrategy;if(InpNewsFreshnessSeconds<1||InpNewsFreshnessSeconds>120||InpQuoteFreshnessSeconds<1||InpQuoteFreshnessSeconds>120||InpSlippageAllowancePoints<1||InpSlippageAllowancePoints>1000||!Finite(InpInitialVolume)||!Finite(InpMaxVolume)||InpInitialVolume<=0||InpMaxVolume<InpInitialVolume||InpScalingMinClosedTrades<20)return INIT_PARAMETERS_INCORRECT;g_initialVolume=InpInitialVolume;g_maxVolume=InpMaxVolume;g_scalingEnabled=InpScalingEnabled;g_scalingMinClosedTrades=InpScalingMinClosedTrades;if(!CostConfigurationValid()){Print("Cost model requires representative observed history or positive operator-verified cost plus evidence");return INIT_PARAMETERS_INCORRECT;}if(!Finite(InpRiskPercent)||InpRiskPercent<=0||InpRiskPercent>1||!Finite(InpMaxDailyLossPercent)||InpMaxDailyLossPercent<=0||InpMaxDailyLossPercent>2.0||InpMaxConcurrentPositions<1)return INIT_PARAMETERS_INCORRECT;SplitCsv(InpSymbols,g_symbols);SplitCsv(InpTimeframes,g_tfs);string autoWhy="";if(!ExpandMarketWatchSymbols(g_symbols,autoWhy)){Print(autoWhy);ArrayResize(g_symbols,0);}g_riskPercent=InpRiskPercent;g_dailyLossPercent=InpMaxDailyLossPercent;g_maxConcurrent=InpMaxConcurrentPositions;LoadState();if(g_terminalToken=="")Claim();EventSetTimer(MathMax(1,InpPollSeconds));g_lastReason="Initialized; broker synchronization and persisted-journal reconciliation required before START/RESUME or new orders";return INIT_SUCCEEDED;}
+int OnInit(){g_eaStartedAtMs=(long)TimeGMT()*1000;g_eaInstanceId=StringFormat("%I64d-%I64d-%d",(long)AccountInfoInteger(ACCOUNT_LOGIN),(long)GetMicrosecondCount(),(int)MathRand());if(StringFind(InpBridgeBaseURL,"https://")!=0||StringFind(InpBridgeBaseURL,".example")>=0||StringFind(InpBridgeBaseURL,"example.com")>=0||StringGetCharacter(InpBridgeBaseURL,StringLen(InpBridgeBaseURL)-1)=='/'){Print("Bridge URL must be a real HTTPS origin without a placeholder host or trailing slash");return INIT_PARAMETERS_INCORRECT;}if(InpStrategy!="smc-confluence-1.0.0"&&InpStrategy!="ict-silver-bullet"&&InpStrategy!="wyckoff-schematics"&&InpStrategy!="supply-and-demand"&&InpStrategy!="breakout-momentum"&&InpStrategy!="mean-reversion"&&InpStrategy!="trend-following"&&InpStrategy!="liquidity-stop-hunts"){Print("Unsupported strategy identifier");return INIT_PARAMETERS_INCORRECT;}g_strategy=InpStrategy;if(InpNewsFreshnessSeconds<1||InpNewsFreshnessSeconds>120||InpQuoteFreshnessSeconds<1||InpQuoteFreshnessSeconds>120||InpSlippageAllowancePoints<1||InpSlippageAllowancePoints>1000||!Finite(InpInitialVolume)||!Finite(InpMaxVolume)||InpInitialVolume<=0||InpMaxVolume<InpInitialVolume||InpScalingMinClosedTrades<20)return INIT_PARAMETERS_INCORRECT;g_initialVolume=InpInitialVolume;g_maxVolume=InpMaxVolume;g_scalingEnabled=InpScalingEnabled;g_scalingMinClosedTrades=InpScalingMinClosedTrades;if(!CostConfigurationValid()){Print("Cost model requires representative observed history or positive operator-verified cost plus evidence");return INIT_PARAMETERS_INCORRECT;}if(!Finite(InpRiskPercent)||InpRiskPercent<=0||InpRiskPercent>1||!Finite(InpMaxDailyLossPercent)||InpMaxDailyLossPercent<=0||InpMaxDailyLossPercent>2.0||InpMaxConcurrentPositions<1)return INIT_PARAMETERS_INCORRECT;SplitCsv(InpSymbols,g_symbols);SplitCsv(InpTimeframes,g_tfs);string autoWhy="";if(!ExpandMarketWatchSymbols(g_symbols,autoWhy)){Print(autoWhy);ArrayResize(g_symbols,0);}g_riskPercent=InpRiskPercent;g_dailyLossPercent=InpMaxDailyLossPercent;g_maxConcurrent=InpMaxConcurrentPositions;LoadState();g_stopCloseoutPending=GlobalVariableCheck(StopCloseoutKey())&&GlobalVariableGet(StopCloseoutKey())>0.5;if(g_stopCloseoutPending){g_state="STOPPED";g_lastError="Persisted Bot STOP close-out is pending; retries will continue while MT5 is connected";g_lastReason=g_lastError;}if(g_terminalToken=="")Claim();EventSetTimer(MathMax(1,InpPollSeconds));g_lastReason="Initialized; broker synchronization and persisted-journal reconciliation required before START/RESUME or new orders";return INIT_SUCCEEDED;}
 void OnDeinit(const int reason){EventKillTimer();}
 bool StartupBrokerSnapshotReady(){
    if(!g_journalsLoaded||!TerminalInfoInteger(TERMINAL_CONNECTED)||!AccountIdentityMatches())return false;
@@ -1163,6 +1215,7 @@ bool StartupBrokerSnapshotReady(){
 }
 void OnTimer(){
    if(!g_startupRecoveryReady)g_startupRecoveryReady=StartupBrokerSnapshotReady();
+   RetryPendingStopCloseout();
    if(g_terminalToken==""){if(g_state!="STOPPED")Claim();return;}
    if(ArraySize(g_symbols)>0)NewsClear(g_symbols[0]);
    CancelNewsBlockedPendingOrders();
@@ -1188,7 +1241,8 @@ void OnTimer(){
    ReconcileOperations();
    if(g_state=="RUNNING"&&(g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS)){
       g_state="STOPPED";
-      g_lastError="No accepted heartbeat within HEARTBEAT_STALE_SECONDS=15; stopped without liquidation";
+      string stopOutcome,stopMessage;StopAndCloseBotTrades(stopOutcome,stopMessage);
+      g_lastError="No accepted heartbeat within HEARTBEAT_STALE_SECONDS=15; scanning stopped and Bot close-out is active: "+stopMessage;
       g_lastReason=g_lastError;
    }
    if(g_state=="RUNNING"&&now-g_lastScan>=MathMax(1,InpScanSeconds)){
