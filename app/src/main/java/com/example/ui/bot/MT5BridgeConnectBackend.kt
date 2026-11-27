@@ -16,7 +16,7 @@ import org.json.JSONObject
 class MT5BridgeConnectBackend(
     private val client: MT5ManagedAccountGateway,
     private val managementHealthCheck: suspend () -> Unit = {},
-    private val wakeHost: (suspend ((ConnectStage) -> Unit) -> Unit)? = null,
+    private val wakeHost: (suspend ((ConnectStage) -> Unit) -> Unit),
 ) : ConnectBackend {
     private var requestedForm: LoginForm? = null
     private var stageListener: (ConnectStage) -> Unit = {}
@@ -25,7 +25,7 @@ class MT5BridgeConnectBackend(
         stageListener = onStage
         onStage(ConnectStage.WAKING_ENGINE)
         try {
-            wakeHost?.invoke(onStage)
+            wakeHost.invoke(onStage)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (failure: ConnectSubmissionFailure) {

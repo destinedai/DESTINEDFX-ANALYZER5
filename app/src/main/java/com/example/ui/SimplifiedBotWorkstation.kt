@@ -643,6 +643,76 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         Text("MT5 NOT CONNECTED", color = LossRed, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
     }
 
+    suspend fun wakeCodespacesHostForMt5(
+        client: MT5RemoteBridgeClient,
+        reportStage: (com.example.ui.bot.ConnectStage) -> Unit,
+    ) {
+        check(secrets.isSecureStorageAvailable) {
+            "Android Keystore-backed storage is unavailable; host wake is blocked."
+        }
+        // Broker credentials are not submitted until the owner-authorized GitHub
+        // lifecycle has brought the configured Codespace and both services online.
+        val usage = githubCodespacesClient.usageEstimate()
+        val targets = githubCodespacesClient.listTargetCodespaces()
+        val target = targets.singleOrNull()
+            ?: error("Exactly one DestinedFX Codespaces host on the configured branch must be discoverable.")
+        var current = githubCodespacesClient.getCodespace(target.name)
+        selectedGithubCodespace = current
+        githubCodespaces = targets
+
+        if (!current.state.equals("Available", ignoreCase = true)) {
+            check(!usage.blockStart) {
+                "HOST WAKE BLOCKED: the local 90-minute daily target or monthly usage reserve has been reached."
+            }
+            githubCodespacesClient.recordCodespaceStarted(current)
+            try {
+                githubCodespacesClient.startCodespace(current)
+                reportStage(com.example.ui.bot.ConnectStage.HOST_QUEUED)
+            } catch (startError: Exception) {
+                val observed = runCatching { githubCodespacesClient.getCodespace(current.name) }.getOrNull()
+                if (observed != null && !observed.state.equals("Available", ignoreCase = true)) {
+                    runCatching { githubCodespacesClient.recordCodespaceStopped(observed) }
+                }
+                throw startError
+            }
+            githubHostOperationState = "STARTING"
+            withTimeout(10 * 60 * 1000L) {
+                while (!current.state.equals("Available", ignoreCase = true)) {
+                    delay(5_000L)
+                    current = githubCodespacesClient.getCodespace(target.name)
+                    selectedGithubCodespace = current
+                    githubCodespaces = githubCodespaces.filterNot { it.name == current.name } + current
+                    check(!current.state.equals("Failed", ignoreCase = true) &&
+                        !current.state.equals("Deleted", ignoreCase = true)) {
+                        "GitHub reports that the DestinedFX Codespace failed to start."
+                    }
+                }
+            }
+        } else {
+            // Start observing an already-running host without creating a duplicate usage session.
+            githubCodespacesClient.recordCodespaceStarted(current)
+        }
+
+        check(current.state.equals("Available", ignoreCase = true)) {
+            "GitHub did not confirm that the DestinedFX Codespace is Available."
+        }
+        githubHostOperationState = "STARTING"
+        val discoveredBridgeOrigin = codespacesLifecycleClient.discoverAndSaveBridge()
+        serviceUrl = discoveredBridgeOrigin
+        codespacesLifecycleClient.discoverAndSaveManagementApi()
+        val readiness = client.checkServiceReadiness()
+        check(client.managedConfigured() && readiness.hostRuntimeReady &&
+            readiness.database.equals("ok", ignoreCase = true) &&
+            readiness.managedExecution.equals("configured", ignoreCase = true) &&
+            readiness.perUserTerminalIsolation.equals("VERIFIED", ignoreCase = true)) {
+            "HOST NOT READY: Bridge, durable storage, Management API, or isolated MT5 host verification failed. Broker credentials were not submitted."
+        }
+        serviceReadiness = readiness
+        githubHostOperationState = "ACTIVE"
+        githubHostMessage =
+            "Host wake confirmed · Bridge and Management API verified · isolated MT5 host READY. A fresh broker login and MT5 heartbeat are still required."
+    }
+
     if (showModernBrokerFlow && !connected) {
         MetaTraderBrokerFlow(
             secrets = secrets,
@@ -694,7 +764,13 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         val brand = spec.id.removeSuffix("_MT5")
                         val mode = form.mode.name
                         val client = mt5Client("${brand}_${mode}", mode, brand)
-                        ConnectUseCase(MT5BridgeConnectBackend(client) { viewModel.requireManagementApiHealth() }).connect(spec, form, onStage)
+                        ConnectUseCase(
+                            MT5BridgeConnectBackend(
+                                client = client,
+                                managementHealthCheck = { viewModel.requireManagementApiHealth() },
+                                wakeHost = { reportStage -> wakeCodespacesHostForMt5(client, reportStage) },
+                            )
+                        ).connect(spec, form, onStage)
                     }
                 }
             },
@@ -2295,24 +2371,49 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 statusMessage = message,
                 onStart = {
                     scope.launch {
-                        busy = true; commandPending = true; message = "Starting Bot from its saved settings…"
+                        busy = true; commandPending = true; message = "Starting the MT5 EA AUTO Market Watch scan…"
                         try {
-                            val botConfig = viewModel.findBestBotOpportunity()
                             if (broker.usesManagedMt5Terminal) {
-                                require(mt5Mode != "LIVE" || mt5Snapshot?.liveAuthorized == true) { "LIVE START blocked: explicitly authorize this exact LIVE profile first." }
+                                val client = requireNotNull(bridge)
+                                require(mt5Mode != "LIVE" || mt5Snapshot?.liveAuthorized == true) {
+                                    "LIVE START blocked: explicitly authorize this exact LIVE profile first."
+                                }
                                 val config = JSONObject()
-                                    .put("strategy", botConfig.strategyId)
-                                    .put("symbols", JSONArray().put(botConfig.symbol))
-                                    .put("timeframes", JSONArray().put(botConfig.timeframe))
-                                    .put("risk_percent", botConfig.riskPercent)
-                                    .put("initial_volume", botConfig.lot)
-                                    .put("max_volume", botConfig.lot)
+                                    .put("strategy", viewModel.botSelectedStrategyId.value)
+                                    .put("symbols", JSONArray().put("AUTO"))
+                                    .put("timeframes", JSONArray().put("M5").put("M15").put("M30").put("H1").put("H4").put("D1"))
+                                    .put("risk_percent", viewModel.botRiskPercent.value)
+                                    .put("initial_volume", viewModel.botLot.value)
+                                    .put("max_volume", viewModel.botLot.value)
                                     .put("scaling_enabled", false)
                                     .put("max_daily_loss_percent", 2.0)
-                                    .put("max_concurrent_positions", 2)
-                                val result = requireNotNull(bridge).command(UUID.randomUUID().toString(), "START", config)
-                                message = if (result.queued) "Bot START requested: ${botConfig.symbol} ${botConfig.timeframe}." else result.detail
+                                    .put("max_concurrent_positions", 1)
+                                val result = client.command(UUID.randomUUID().toString(), "START", config)
+                                if (!result.queued) {
+                                    message = result.detail.ifBlank { "EA START was not accepted by the MT5 Bridge." }
+                                } else {
+                                    var confirmed = false
+                                    var latest: MT5RemoteBridgeClient.Snapshot? = null
+                                    for (attempt in 0 until 12) {
+                                        delay(1_000L)
+                                        val fresh = client.state()
+                                        latest = fresh
+                                        mt5Snapshot = fresh
+                                        if (fresh.connected && fresh.workerStatus == "READY" &&
+                                            fresh.terminalOnline && fresh.terminalConnected &&
+                                            fresh.heartbeatFresh && fresh.state == "RUNNING") {
+                                            confirmed = true
+                                            break
+                                        }
+                                    }
+                                    message = if (confirmed) {
+                                        "EA RUNNING · scanning up to 32 instruments selected in MT5 Market Watch. The EA chooses entries only after higher-timeframe confirmation."
+                                    } else {
+                                        "START queued, but a fresh EA RUNNING heartbeat was not confirmed. No trade execution is being claimed. " + latest?.connectionWarning.orEmpty()
+                                    }
+                                }
                             } else {
+                                val botConfig = viewModel.findBestBotOpportunity()
                                 val account = requireNotNull(derivAccount) { "Deriv account is not authenticated." }
                                 require(derivMode.equals("demo", true) && account.mode.equals("demo", true) && account.accountType.equals("demo", true)) {
                                     "BOT NOT RUNNING — this foreground service accepts DEMO accounts only. REAL remains blocked here."
@@ -2328,7 +2429,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                     return@launch
                                 }
                                 DerivDemoBotService.start(context, botConfig.symbol, botConfig.strategyId, botConfig.timeframe, botConfig.riskPercent)
-                                message = "DEMO Bot start requested for ${botConfig.symbol} ${botConfig.timeframe}. The service re-verifies account, risk and reconciliation before entries."
+                                message = "DEMO Bot start requested for " + botConfig.symbol + " " + botConfig.timeframe +
+                                    ". The service re-verifies account, risk and reconciliation before entries."
                             }
                         } catch (e: Exception) {
                             val detail = listOf(derivToken, cTraderClientSecret).filter { it.isNotBlank() }

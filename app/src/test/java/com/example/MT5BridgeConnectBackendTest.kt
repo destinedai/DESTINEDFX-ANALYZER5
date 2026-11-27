@@ -77,7 +77,9 @@ class MT5BridgeConnectBackendTest {
     fun firstPairingForAllFourMt5BrandsForwardsOneTimeBootstrapWithoutLoggingIt() = runBlocking {
         listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
             val gateway = FakeGateway()
-            val backend = MT5BridgeConnectBackend(gateway)
+            val backend = MT5BridgeConnectBackend(gateway, wakeHost = { reportStage ->
+            reportStage(ConnectStage.ENGINE_READY)
+        })
             val spec = requireNotNull(BrokerLoginSpecs.byId("${brand}_MT5"))
             val form = LoginForm(
                 type = AccessType.TRADE,
@@ -116,7 +118,9 @@ class MT5BridgeConnectBackendTest {
                 .put("requested_login", "123456")
                 .put("requested_server", "Fixture-Demo")),
         )
-        val backend = MT5BridgeConnectBackend(gateway)
+        val backend = MT5BridgeConnectBackend(gateway, wakeHost = { reportStage ->
+            reportStage(ConnectStage.ENGINE_READY)
+        })
         val spec = requireNotNull(BrokerLoginSpecs.byId("FBS_MT5"))
         val form = LoginForm(
             type = AccessType.TRADE, mode = LoginMode.DEMO, login = "123456",
@@ -142,7 +146,9 @@ class MT5BridgeConnectBackendTest {
                 .put("requested_login", "654321")
                 .put("requested_server", "Fixture-Demo")),
         )
-        val backend = MT5BridgeConnectBackend(gateway)
+        val backend = MT5BridgeConnectBackend(gateway, wakeHost = { reportStage ->
+            reportStage(ConnectStage.ENGINE_READY)
+        })
         val spec = requireNotNull(BrokerLoginSpecs.byId("FBS_MT5"))
         val form = LoginForm(
             type = AccessType.TRADE, mode = LoginMode.DEMO, login = "123456",
@@ -161,7 +167,9 @@ class MT5BridgeConnectBackendTest {
     @Test
     fun liveTradeCredentialsCanBeSubmittedOnEphemeralHostForReadOnlyVerification() = runBlocking {
         val gateway = FakeGateway(HostProfile.EPHEMERAL)
-        val backend = MT5BridgeConnectBackend(gateway)
+        val backend = MT5BridgeConnectBackend(gateway, wakeHost = { reportStage ->
+            reportStage(ConnectStage.ENGINE_READY)
+        })
         val spec = requireNotNull(BrokerLoginSpecs.byId("FBS_MT5"))
         val form = LoginForm(
             type = AccessType.TRADE,
@@ -178,6 +186,30 @@ class MT5BridgeConnectBackendTest {
         assertEquals("LIVE", gateway.submitted?.accountMode)
         assertEquals("MASTER", gateway.submitted?.accessType)
         assertEquals("123456", gateway.submitted?.login)
+    }
+
+
+    @Test
+    fun hostWakeFailureBlocksManagementCheckAndBrokerCredentialSubmission() = runBlocking {
+        val gateway = FakeGateway()
+        val events = mutableListOf<String>()
+        val backend = MT5BridgeConnectBackend(
+            client = gateway,
+            managementHealthCheck = { events += "MANAGEMENT_HEALTH" },
+            wakeHost = { throw IllegalStateException("fixture wake failed") },
+        )
+        val spec = requireNotNull(BrokerLoginSpecs.byId("FBS_MT5"))
+        val form = LoginForm(
+            type = AccessType.TRADE,
+            mode = LoginMode.DEMO,
+            login = "123456",
+            password = "fixture-broker-password",
+            server = "Fixture-Demo",
+        )
+
+        assertEquals("HOST_WAKE_FAILED", backend.preflight(spec, form) { events += it.name })
+        assertTrue("Management API check must not run before a successful wake.", "MANAGEMENT_HEALTH" !in events)
+        assertTrue("Broker credentials must not be submitted after a failed wake.", gateway.submitted == null)
     }
 
     companion object {

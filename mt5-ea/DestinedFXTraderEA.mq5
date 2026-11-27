@@ -335,6 +335,102 @@ bool FindTrendSetup(string sym,ENUM_TIMEFRAMES tf,bool &bull,double &entry,doubl
 bool FindLiquiditySetup(string sym,ENUM_TIMEFRAMES tf,bool &bull,double &entry,double &sl,double &tp,string &why,datetime &signalBar){MqlRates r[];if(!ClosedRates(sym,tf,r,60)){why="Liquidity setup insufficient closed candles";return false;}double atr=AtrClosed(sym,tf);if(!Finite(atr)){why="Liquidity ATR unavailable";return false;}bool lowPool=false,highPool=false;double poolLow=0,poolHigh=0;for(int i=3;i<=25;i++)for(int j=i+1;j<=30;j++){if(MathAbs(r[i].low-r[j].low)<=0.2*atr){lowPool=true;poolLow=MathMax(r[i].low,r[j].low);}if(MathAbs(r[i].high-r[j].high)<=0.2*atr){highPool=true;poolHigh=MathMin(r[i].high,r[j].high);}}bool up=lowPool&&r[0].low<poolLow&&r[0].close>poolLow&&r[0].close>r[0].open,down=highPool&&r[0].high>poolHigh&&r[0].close<poolHigh&&r[0].close<r[0].open;if(!up&&!down){why="Liquidity stop hunt requires equal pool sweep and rejection";return false;}bull=up;sl=bull?r[0].low-0.2*atr:r[0].high+0.2*atr;signalBar=r[0].time;return QuoteSetup(sym,bull,entry,sl,tp,atr,why,signalBar);}
 bool FindStrategySetup(string sym,ENUM_TIMEFRAMES tf,bool &bull,double &entry,double &sl,double &tp,string &why,datetime &signalBar){if(g_strategy=="smc-confluence-1.0.0")return FindSmcSetup(sym,tf,bull,entry,sl,tp,why,signalBar);if(g_strategy=="ict-silver-bullet")return FindIctSetup(sym,tf,bull,entry,sl,tp,why,signalBar);if(g_strategy=="wyckoff-schematics")return FindWyckoffSetup(sym,tf,bull,entry,sl,tp,why,signalBar);if(g_strategy=="supply-and-demand")return FindSupplyDemandSetup(sym,tf,bull,entry,sl,tp,why,signalBar);if(g_strategy=="breakout-momentum")return FindBreakoutSetup(sym,tf,bull,entry,sl,tp,why,signalBar);if(g_strategy=="mean-reversion")return FindMeanReversionSetup(sym,tf,bull,entry,sl,tp,why,signalBar);if(g_strategy=="trend-following")return FindTrendSetup(sym,tf,bull,entry,sl,tp,why,signalBar);if(g_strategy=="liquidity-stop-hunts")return FindLiquiditySetup(sym,tf,bull,entry,sl,tp,why,signalBar);why="Unsupported managed strategy";return false;}
 
+
+ENUM_TIMEFRAMES HigherTimeframeFor(const ENUM_TIMEFRAMES timeframe)
+{
+   if(timeframe==PERIOD_M1)return PERIOD_M5;
+   if(timeframe==PERIOD_M5)return PERIOD_M15;
+   if(timeframe==PERIOD_M15)return PERIOD_H1;
+   if(timeframe==PERIOD_M30)return PERIOD_H4;
+   if(timeframe==PERIOD_H1)return PERIOD_H4;
+   if(timeframe==PERIOD_H4)return PERIOD_D1;
+   if(timeframe==PERIOD_D1)return PERIOD_W1;
+   if(timeframe==PERIOD_W1)return PERIOD_MN1;
+   return PERIOD_CURRENT;
+}
+
+// Every automatic entry needs a separately calculated, closed-candle HTF trend.
+// Unknown, mixed, cooling and ranging markets are intentionally non-tradable.
+bool ConfirmHigherTimeframeDirection(string sym,ENUM_TIMEFRAMES executionTf,bool bull,string &why)
+{
+   ENUM_TIMEFRAMES higherTf=HigherTimeframeFor(executionTf);
+   if(higherTf==PERIOD_CURRENT){
+      why="No higher timeframe exists for this execution timeframe";
+      return false;
+   }
+   MqlRates higher[];
+   if(!ClosedRates(sym,higherTf,higher,80)){
+      why="Higher-timeframe closed candles are unavailable";
+      return false;
+   }
+   double ema20=EmaClosed(sym,higherTf,20);
+   double ema50=EmaClosed(sym,higherTf,50);
+   double atr=AtrClosed(sym,higherTf);
+   double adx=OneBuffer(iADX(sym,higherTf,14),0,1);
+   if(!Finite(ema20)||!Finite(ema50)||!Finite(atr)||!Finite(adx)||atr<=0){
+      why="Higher-timeframe trend or ADX data is unavailable";
+      return false;
+   }
+
+   double rangeHigh=-DBL_MAX,rangeLow=DBL_MAX;
+   for(int i=0;i<20;i++){
+      rangeHigh=MathMax(rangeHigh,higher[i].high);
+      rangeLow=MathMin(rangeLow,higher[i].low);
+   }
+   double netMove=MathAbs(higher[0].close-higher[19].open);
+   bool ranging=(adx<18.0)||((rangeHigh-rangeLow)<atr*4.0&&netMove<atr*1.8);
+   if(ranging){
+      why="Higher timeframe is consolidating/ranging; trend entry withheld";
+      return false;
+   }
+
+   double previousSwingHigh=0.0,lastSwingHigh=0.0;
+   double previousSwingLow=0.0,lastSwingLow=0.0;
+   int swingHighCount=0,swingLowCount=0;
+   // Series arrays: scan from older confirmed pivots toward the newest confirmed pivot.
+   for(int i=40;i>=3;i--){
+      bool swingHigh=higher[i].high>higher[i-1].high&&higher[i].high>higher[i-2].high&&
+                     higher[i].high>higher[i+1].high&&higher[i].high>higher[i+2].high;
+      bool swingLow=higher[i].low<higher[i-1].low&&higher[i].low<higher[i-2].low&&
+                    higher[i].low<higher[i+1].low&&higher[i].low<higher[i+2].low;
+      if(swingHigh){
+         previousSwingHigh=lastSwingHigh;
+         lastSwingHigh=higher[i].high;
+         swingHighCount++;
+      }
+      if(swingLow){
+         previousSwingLow=lastSwingLow;
+         lastSwingLow=higher[i].low;
+         swingLowCount++;
+      }
+   }
+   if(swingHighCount<2||swingLowCount<2){
+      why="Higher-timeframe swing structure is not confirmed";
+      return false;
+   }
+
+   bool higherHigh=lastSwingHigh>previousSwingHigh;
+   bool higherLow=lastSwingLow>previousSwingLow;
+   bool lowerHigh=lastSwingHigh<previousSwingHigh;
+   bool lowerLow=lastSwingLow<previousSwingLow;
+   bool uptrend=ema20>ema50&&higher[0].close>ema20&&higherHigh&&higherLow;
+   bool downtrend=ema20<ema50&&higher[0].close<ema20&&lowerHigh&&lowerLow;
+   if(!uptrend&&!downtrend){
+      why="Higher timeframe is mixed/cooling; no directional entry is allowed";
+      return false;
+   }
+   if(bull&&!uptrend){
+      why="Higher-timeframe downtrend or structure conflict blocks BUY";
+      return false;
+   }
+   if(!bull&&!downtrend){
+      why="Higher-timeframe uptrend or structure conflict blocks SELL";
+      return false;
+   }
+   why=bull?"Higher-timeframe uptrend confirmed BUY direction":"Higher-timeframe downtrend confirmed SELL direction";
+   return true;
+}
+
 int VolDigits(double step){int d=0;while(d<8&&MathAbs(step-NormalizeDouble(step,d))>1e-9)d++;return d;}
 double ObservedCommissionPerLot(string sym){if(!HistorySelect(TimeCurrent()-86400*30,TimeCurrent()))return -1;ulong ids[];double entered[],exited[],charges[];bool hasEntry[],hasExit[],invalid[];int total=HistoryDealsTotal();for(int i=total-1,seen=0;i>=0&&seen<5000;i--,seen++){ulong d=HistoryDealGetTicket(i);if(!d||HistoryDealGetString(d,DEAL_SYMBOL)!=sym||(ulong)HistoryDealGetInteger(d,DEAL_MAGIC)!=(ulong)InpMagic)continue;long e=HistoryDealGetInteger(d,DEAL_ENTRY);if(e!=DEAL_ENTRY_IN&&e!=DEAL_ENTRY_OUT&&e!=DEAL_ENTRY_OUT_BY&&e!=DEAL_ENTRY_INOUT)continue;ulong pid=(ulong)HistoryDealGetInteger(d,DEAL_POSITION_ID);if(pid==0)continue;int k=-1;for(int j=0;j<ArraySize(ids);j++)if(ids[j]==pid){k=j;break;}if(k<0){k=ArraySize(ids);ArrayResize(ids,k+1);ArrayResize(entered,k+1);ArrayResize(exited,k+1);ArrayResize(charges,k+1);ArrayResize(hasEntry,k+1);ArrayResize(hasExit,k+1);ArrayResize(invalid,k+1);ids[k]=pid;entered[k]=0;exited[k]=0;charges[k]=0;hasEntry[k]=false;hasExit[k]=false;invalid[k]=false;}double v=HistoryDealGetDouble(d,DEAL_VOLUME),commission=HistoryDealGetDouble(d,DEAL_COMMISSION),fee=HistoryDealGetDouble(d,DEAL_FEE),swap=HistoryDealGetDouble(d,DEAL_SWAP);if(!Finite(v)||v<=0||!Finite(commission)||!Finite(fee)||!Finite(swap)){invalid[k]=true;continue;}if(e==DEAL_ENTRY_IN){hasEntry[k]=true;entered[k]+=v;}else if(e==DEAL_ENTRY_OUT||e==DEAL_ENTRY_OUT_BY){hasExit[k]=true;exited[k]+=v;}else{invalid[k]=true;continue;}charges[k]+=MathAbs(commission)+MathAbs(fee)+MathAbs(swap);}double totalCharges=0,totalEntered=0;int samples=0;for(int k=0;k<ArraySize(ids);k++){if(invalid[k]||!hasEntry[k]||!hasExit[k]||entered[k]<=0||MathAbs(exited[k]-entered[k])>MathMax(0.0000001,entered[k]*0.00001))continue;bool open=false;for(int j=PositionsTotal()-1;j>=0;j--){ulong t=PositionGetTicket(j);if(t>0&&(ulong)PositionGetInteger(POSITION_IDENTIFIER)==ids[k]){open=true;break;}}if(open)continue;if(!Finite(charges[k])||charges[k]<=0)continue;totalCharges+=charges[k];totalEntered+=entered[k];samples++;}return samples>=3&&totalEntered>0&&totalCharges>0?totalCharges/totalEntered:-1;}
 bool ManagedClosedPosition(ulong pid){if(pid==0||!HistorySelect(TimeCurrent()-86400*90,TimeCurrent()))return false;double entered=0,exited=0;bool hasEntry=false,hasExit=false;for(int i=HistoryDealsTotal()-1;i>=0;i--){ulong d=HistoryDealGetTicket(i);if(!d||(ulong)HistoryDealGetInteger(d,DEAL_POSITION_ID)!=pid)continue;if((ulong)HistoryDealGetInteger(d,DEAL_MAGIC)!=(ulong)InpMagic)return false;long e=HistoryDealGetInteger(d,DEAL_ENTRY);double v=HistoryDealGetDouble(d,DEAL_VOLUME);if(v<=0||!Finite(v))return false;if(e==DEAL_ENTRY_IN){hasEntry=true;entered+=v;}else if(e==DEAL_ENTRY_OUT||e==DEAL_ENTRY_OUT_BY){hasExit=true;exited+=v;}else if(e==DEAL_ENTRY_INOUT){return false;}}for(int j=PositionsTotal()-1;j>=0;j--){ulong t=PositionGetTicket(j);if(t>0&&(ulong)PositionGetInteger(POSITION_IDENTIFIER)==pid)return false;}return hasEntry&&hasExit&&entered>0&&MathAbs(exited-entered)<=MathMax(0.0000001,entered*0.00001);}
@@ -699,7 +795,7 @@ void ReconcilePhonePositionStopState(){
 
 
 void SetWait(string sym,string tf,string why){g_sigState="WAIT";g_sigExecutionState="NONE";g_sigCommandId="";g_sigSymbol=sym;g_sigTf=tf;g_sigDirection="";g_sigEntry=0;g_sigSL=0;g_sigTP=0;g_sigRisk=g_riskPercent;g_sigRequestedVolume=0;g_sigExecutedVolume=0;g_sigRationale=why;g_sigRetcode="";g_sigDeal="";g_sigOrder="";g_sigPosition="";g_lastReason=why;}
-void Scan(){if(!g_startupRecoveryReady){g_state="STOPPED";g_lastError="Startup broker snapshot and persisted journals are not reconciled; new orders withheld";return;}if(PhoneTradeOutcomeUnresolved()){g_state="STOPPED";g_lastError="Unresolved MT5 trade result; reconcile before any new order";return;}if(g_sigExecutionState=="POSITION_SL_MODIFY_INTENT"||g_sigCommandId!=""){g_lastError="Position protection request is being reconciled; new entries held until broker acknowledgement";return;}if(g_state!="RUNNING"||g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS)return;if((g_sigExecutionState=="POSITION_SL_TIGHTENED"||g_sigExecutionState=="POSITION_SL_NOT_APPLIED")&&g_sigSubmittedAt>0&&TimeGMT()-g_sigSubmittedAt<30)return;if(g_sigOrder!=""&&g_sigExecutionState!="CLOSED_DEAL_RECONCILED"&&g_sigExecutionState!="CANCELLED_OR_EXPIRED"&&g_sigExecutionState!="REJECTED"&&g_sigExecutionState!="UNKNOWN_REQUIRES_RECONCILIATION"&&g_sigExecutionState!="FILLED_POSITION_NOT_FOUND")return;SetWait("","","No eligible setup in active scan list");for(int s=0;s<ArraySize(g_symbols);s++){string sym=g_symbols[s];if(!SymbolSelect(sym,true)){SetWait(sym,"","Symbol unavailable");continue;}for(int t=0;t<ArraySize(g_tfs);t++){ENUM_TIMEFRAMES tf=ParseTF(g_tfs[t]);string why;bool bull;double en,sl,tp;datetime bt;if(!FindStrategySetup(sym,tf,bull,en,sl,tp,why,bt)){SetWait(sym,g_tfs[t],why);continue;}string key=SignalKey(sym,tf,bt);g_sigSymbol=sym;g_sigTf=g_tfs[t];g_sigDirection=bull?"BUY":"SELL";g_sigEntry=en;g_sigActualEntry=0;g_sigSubmittedAt=0;g_sigOpenedAt=0;g_sigSL=sl;g_sigTP=tp;g_sigRisk=g_riskPercent;g_sigRationale="Eligible "+g_strategy+" closed-candle setup";if(Seen(key)){SetWait(sym,g_tfs[t],"Duplicate signal suppressed");continue;}bool accepted=Place(sym,tf,bull,en,sl,tp,bt,key);if(accepted)return;if(!accepted){g_sigState="REJECTED";g_sigRationale=g_lastReason;g_sigRetcode=IntegerToString((int)trade.ResultRetcode());g_sigDeal=(string)trade.ResultDeal();}}}}
+void Scan(){if(!g_startupRecoveryReady){g_state="STOPPED";g_lastError="Startup broker snapshot and persisted journals are not reconciled; new orders withheld";return;}if(PhoneTradeOutcomeUnresolved()){g_state="STOPPED";g_lastError="Unresolved MT5 trade result; reconcile before any new order";return;}if(g_sigExecutionState=="POSITION_SL_MODIFY_INTENT"||g_sigCommandId!=""){g_lastError="Position protection request is being reconciled; new entries held until broker acknowledgement";return;}if(g_state!="RUNNING"||g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS)return;if((g_sigExecutionState=="POSITION_SL_TIGHTENED"||g_sigExecutionState=="POSITION_SL_NOT_APPLIED")&&g_sigSubmittedAt>0&&TimeGMT()-g_sigSubmittedAt<30)return;if(g_sigOrder!=""&&g_sigExecutionState!="CLOSED_DEAL_RECONCILED"&&g_sigExecutionState!="CANCELLED_OR_EXPIRED"&&g_sigExecutionState!="REJECTED"&&g_sigExecutionState!="UNKNOWN_REQUIRES_RECONCILIATION"&&g_sigExecutionState!="FILLED_POSITION_NOT_FOUND")return;SetWait("","","No eligible setup in active scan list");for(int s=0;s<ArraySize(g_symbols);s++){string sym=g_symbols[s];if(!SymbolSelect(sym,true)){SetWait(sym,"","Symbol unavailable");continue;}for(int t=0;t<ArraySize(g_tfs);t++){ENUM_TIMEFRAMES tf=ParseTF(g_tfs[t]);string why;bool bull;double en,sl,tp;datetime bt;if(!FindStrategySetup(sym,tf,bull,en,sl,tp,why,bt)){SetWait(sym,g_tfs[t],why);continue;}if(!ConfirmHigherTimeframeDirection(sym,tf,bull,why)){SetWait(sym,g_tfs[t],why);continue;}string key=SignalKey(sym,tf,bt);g_sigSymbol=sym;g_sigTf=g_tfs[t];g_sigDirection=bull?"BUY":"SELL";g_sigEntry=en;g_sigActualEntry=0;g_sigSubmittedAt=0;g_sigOpenedAt=0;g_sigSL=sl;g_sigTP=tp;g_sigRisk=g_riskPercent;g_sigRationale="Eligible "+g_strategy+" closed-candle setup";if(Seen(key)){SetWait(sym,g_tfs[t],"Duplicate signal suppressed");continue;}bool accepted=Place(sym,tf,bull,en,sl,tp,bt,key);if(accepted)return;if(!accepted){g_sigState="REJECTED";g_sigRationale=g_lastReason;g_sigRetcode=IntegerToString((int)trade.ResultRetcode());g_sigDeal=(string)trade.ResultDeal();}}}}
 bool Ack(string id,string outcome,string msg,string resultJson){if(resultJson==""){for(int i=0;i<ArraySize(g_processed);i++)if(g_processed[i]==id){resultJson=g_ackResults[i];break;}}if(resultJson=="")resultJson="[]";string b=StringFormat("{\"outcome\":\"%s\",\"state\":\"%s\",\"message\":\"%s\",\"results\":%s}",outcome,g_state,Esc(msg),resultJson);string response=Api("POST","/v1/terminal/commands/"+id+"/ack",b);return response!=""&&StringFind(response,"\"acknowledged\":true")>=0;}
 bool SaveCursor(){return AtomicWrite("DestinedFX_cursor.txt",IntegerToString(g_cursor));}
 bool PersistProcessed(){string text="";for(int i=0;i<ArraySize(g_processed);i++)text+=g_processed[i]+"|"+g_ackOutcomes[i]+"|"+g_ackMessages[i]+"|"+g_ackResults[i]+"\n";return AtomicWrite("DestinedFX_processed.txt",text);}
