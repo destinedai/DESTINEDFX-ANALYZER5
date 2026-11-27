@@ -26,6 +26,7 @@ import com.example.domain.risk.TradingSafetyLimits
 import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.destinedfx.core.analysis.SignalState
+import com.destinedfx.core.strategy.StrategyRegistry
 import com.destinedfx.core.marketdata.Timeframe
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
