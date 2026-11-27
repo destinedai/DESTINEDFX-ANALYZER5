@@ -919,33 +919,22 @@ jobs:
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot -no-snapshot-save -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
           script: bash ./scripts/run-android-emulator-tests.sh
-      - name: Verify nonzero Android instrumentation test execution
+      - name: Verify Android instrumentation and bot lifecycle evidence
         id: verify-instrumentation
-        if: success() && steps.kvm.outputs.available == 'true'
+        if: always() && steps.kvm.outputs.available == 'true'
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import os
-          import xml.etree.ElementTree as ET
-          files = list(Path("app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml"))
-          executed = failed = 0
-          for path in files:
-              root = ET.parse(path).getroot()
-              for case in root.iter("testcase"):
-                  if case.find("skipped") is None:
-                      executed += 1
-                  if case.find("failure") is not None or case.find("error") is not None:
-                      failed += 1
-          if executed == 0:
-              raise SystemExit("Emulator task produced zero executed instrumentation tests; runtime acceptance is incomplete.")
-          if failed != 0:
-              raise SystemExit(f"Emulator acceptance failed: {failed} instrumentation test(s) failed.")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write("accepted=true\n")
-          print(f"Android instrumentation tests executed: {executed}; failed: {failed}")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              summary.write(f"\nAndroid instrumentation tests executed: **{executed}**; failed: **{failed}**. Chaquopy runtime acceptance requires these tests to pass.\n")
-          PY
+          python scripts/validate-bot-lifecycle-evidence.py \
+            --evidence app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json \
+            --test-results app/build/outputs/androidTest-results/connected
+          echo "accepted=true" >> "$GITHUB_OUTPUT"
+      - name: Upload bot lifecycle evidence JSON
+        if: always() && steps.kvm.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-lifecycle-evidence
+          path: app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload emulator test reports and failure diagnostics
         if: always()
         uses: actions/upload-artifact@v4

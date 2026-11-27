@@ -72,6 +72,8 @@ class DerivBotLifecycleInstrumentedTest {
     private val evidenceLock = Any()
     private val eventRows = JSONArray()
     private val tradeCycles = JSONArray()
+    private var managedCycleStartIndex = -1
+    private var managedCycleCount = 0
     private val openTradeRows = ConcurrentHashMap<String, JSONObject>()
     private val manageTradeRows = ConcurrentHashMap<String, JSONObject>()
     private val accountId = "D-CI-FAKE-1001"
@@ -169,6 +171,8 @@ class DerivBotLifecycleInstrumentedTest {
         assertEquals(gateway.purchaseSignalIds.size, gateway.purchaseSignalIds.toSet().size)
         record("Start", beforeStart, DerivDemoBotService.state.value,
             "One foreground service loop and one broker-confirmed DEMO entry; a repeated Start created no second loop/order.")
+        record("Run", "STARTING", DerivDemoBotService.state.value,
+            "The Android foreground service entered its active scan loop and obtained fresh broker quote/candle inputs.")
 
         val beforePause = DerivDemoBotService.state.value
         DerivDemoBotService.pause(context)
@@ -261,6 +265,8 @@ class DerivBotLifecycleInstrumentedTest {
         awaitPersistedContract(fourthContract)
         record("RestartAfterEmergencyStop", beforeSecondRestart, DerivDemoBotService.state.value,
             "Explicit owner Start created one new DEMO execution after Emergency-Stop.")
+        record("Restart", "STOPPED", DerivDemoBotService.state.value,
+            "Explicit owner restart after Emergency-Stop created a fresh DEMO service run; no automatic restart occurred.")
 
         val beforeCleanup = DerivDemoBotService.state.value
         DerivDemoBotService.stop(context)
@@ -275,6 +281,8 @@ class DerivBotLifecycleInstrumentedTest {
         // Exercise continuous operation through the real Android foreground service,
         // Room ledger and executor. Only broker I/O is replaced by the in-process DEMO fake.
         val buysBeforeCycles = gateway.purchaseAttempts.get()
+        managedCycleStartIndex = tradeCycles.length()
+        managedCycleCount = 0
         val scanDirection = AtomicInteger(0)
         gateway.autoManageCycles = true
         DerivDemoBotLifecycleHarness.candleProvider = { symbol, granularity, _ ->
@@ -285,17 +293,23 @@ class DerivBotLifecycleInstrumentedTest {
             breakoutCandles(direction == "LONG")
         }
         DerivDemoBotService.start(context, "1HZ100V", StrategyRegistry.BREAKOUT_MOMENTUM.id, "M1", 1.0)
-        await("five full managed DEMO trade cycles", timeoutMs = 25_000L) {
-            tradeCycles.length() >= 5 && gateway.purchaseAttempts.get() >= buysBeforeCycles + 6
+        await("five new complete managed DEMO cycles and the following opening", timeoutMs = 25_000L) {
+            val fifthCycleIndex = managedCycleStartIndex + 4
+            tradeCycles.length() > fifthCycleIndex &&
+                gateway.purchaseAttempts.get() >= buysBeforeCycles + 6 &&
+                tradeCycles.getJSONObject(fifthCycleIndex).optString("next_open_at_utc").isNotBlank()
         }
-        val sides = (0 until tradeCycles.length()).map {
-            tradeCycles.getJSONObject(it).getString("trade_side")
-        }.toSet()
-        assertEquals("The emulator must record both BUY and SELL cycles", setOf("BUY", "SELL"), sides)
-        assertTrue("At least five cycles must be assembled from service OPEN/MANAGE/CLOSE events",
-            tradeCycles.length() >= 5)
+        val managedCycles = (managedCycleStartIndex until managedCycleStartIndex + 5).map {
+            tradeCycles.getJSONObject(it)
+        }
+        val sides = managedCycles.map { it.getString("trade_side") }.toSet()
+        assertEquals("The five new emulator cycles must include BUY and SELL", setOf("BUY", "SELL"), sides)
+        assertTrue("Five full cycles must each have a following open",
+            managedCycles.all { it.optString("next_open_at_utc").isNotBlank() })
+        managedCycleCount = managedCycles.size
+        assertEquals(5, managedCycleCount)
         record("FiveManagedDemoCycles", "RUNNING", "RUNNING",
-            "Five broker-confirmed DEMO closures and the next sixth opening were observed on the running Android foreground service.")
+            "Five new broker-confirmed DEMO cycles completed OPEN -> MANAGE -> CLOSE -> NEXT; both BUY and SELL were recorded.")
 
         DerivDemoBotService.pause(context)
         await("Pause after five cycles") {
@@ -312,13 +326,23 @@ class DerivBotLifecycleInstrumentedTest {
         await("Resume after managed cycle pause") {
             gateway.purchaseAttempts.get() > buysDuringPause && DerivDemoBotService.state.value == "RUNNING"
         }
+        val resumedContract = gateway.purchasedContractIds.lastOrNull()
+            ?: throw AssertionError("Resume reported a purchase attempt without a broker contract identity")
+        // Broker purchase acknowledgement precedes the executor's Room commit. Wait for the
+        // exact contract ID and buy transaction to be durable before testing production STOP.
+        awaitPersistedContract(resumedContract)
+        await("resumed Bot-owned contract is still active and broker-sellable") {
+            gateway.activeContracts.value[resumedContract]?.isValidToSell == true
+        }
         gateway.autoManageCycles = false
         val beforeFinalStop = DerivDemoBotService.state.value
-        val activeBeforeFinalStop = gateway.activeContracts.value.keys.firstOrNull { it < 990_000L }
+        record("Resume", "PAUSED", beforeFinalStop,
+            "The same foreground loop resumed, submitted one new DEMO trade, and durably persisted its broker contract identity before Stop.")
+        val activeBeforeFinalStop = resumedContract
         DerivDemoBotService.stop(context)
         await("final STOP after resumed DEMO loop") {
             DerivDemoBotService.state.value == "STOPPED" &&
-                (activeBeforeFinalStop == null || gateway.sellRequests.contains(activeBeforeFinalStop))
+                gateway.sellRequests.contains(activeBeforeFinalStop)
         }
         assertFalse("STOP must not sell unowned contracts", gateway.sellRequests.any { it >= 990_000L })
         record("FinalStopAfterCycles", beforeFinalStop, DerivDemoBotService.state.value,
@@ -463,6 +487,8 @@ class DerivBotLifecycleInstrumentedTest {
         .put("transitions", rows)
         .put("trade_events", eventRows)
         .put("trade_cycles", tradeCycles)
+        .put("managed_cycle_start_index", managedCycleStartIndex)
+        .put("managed_cycle_count", managedCycleCount)
         .put("stop_reason", DerivDemoBotService.statusReason.value)
 
     private fun persistEvidence() {
