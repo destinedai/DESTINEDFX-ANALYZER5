@@ -290,6 +290,15 @@ class DerivBotLifecycleInstrumentedTest {
         assertEquals(3, gateway.sellRequests.size)
         record("CleanupStop", beforeCleanup, DerivDemoBotService.state.value,
             "The final Bot-owned contract was broker-confirmed closed; the first contract settled externally during Pause.")
+        assertTrue(
+            "Cleanup STOP must report the complete broker-confirmed close-out",
+            DerivDemoBotService.statusReason.value.endsWith(
+                "Stopped — Deriv broker confirms all DestinedFX Bot contracts are closed"
+            )
+        )
+        // STOP publishes STOPPED before its coroutine has fully returned. Let that already
+        // confirmed close-out finish before sending the next explicit Start request.
+        SystemClock.sleep(500L)
 
         // Exercise continuous operation through the real Android foreground service,
         // Room ledger and executor. Only broker I/O is replaced by the in-process DEMO fake.
