@@ -30,6 +30,7 @@ import com.example.data.deriv.DerivPortfolioSnapshot
 import com.example.data.deriv.DerivSellResult
 import com.example.data.deriv.DerivSubmissionStage
 import com.example.domain.model.Position
+import com.example.domain.model.SignalDirection
 import com.example.domain.model.TradeSignal
 import com.example.domain.repository.AccountMetrics
 import com.example.security.AppSecurityGuard
