@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.MyApplication
@@ -51,6 +52,7 @@ internal object DerivDemoBotLifecycleHarness {
     @Volatile var scanDelayMs: Long? = null
     @Volatile var pauseDelayMs: Long? = null
     @Volatile var activeWaitDelayMs: Long? = null
+    @Volatile var eventRecorder: ((Map<String, String>) -> Unit)? = null
     val runStarts = AtomicInteger(0)
 
     fun reset() {
@@ -59,6 +61,7 @@ internal object DerivDemoBotLifecycleHarness {
         scanDelayMs = null
         pauseDelayMs = null
         activeWaitDelayMs = null
+        eventRecorder = null
         runStarts.set(0)
     }
 }
@@ -828,6 +831,21 @@ class DerivDemoBotService : Service() {
             }
         }
 
+        fun emitLifecycleEvent(event: String, values: Map<String, String> = emptyMap()) {
+            val payload = mutableMapOf(
+                "event" to event,
+                "timestamp_ms" to System.currentTimeMillis().toString(),
+                "account_mode" to "DEMO",
+                "live_enabled" to "false",
+                "fake_gateway_only" to (lifecycleHarness != null).toString()
+            )
+            payload.putAll(values)
+            Log.i("DestinedFXBotLifecycle", "TRADE_EVENT|" + payload.entries.joinToString("|") {
+                "${it.key}=${it.value.replace("|", "/")}"
+            })
+            runCatching { lifecycleHarness?.eventRecorder?.invoke(payload) }
+        }
+
         val executor = DerivMultiplierExecutor(
             gateway,
             app.db.derivExecutionDao(),
@@ -952,28 +970,6 @@ class DerivDemoBotService : Service() {
                 if (warningMessages.isNotEmpty()) {
                     update("Running — ${warningMessages.joinToString(" + ")}; ${"%.1f".format(dailyRisk.limitUsedPercent)}% of daily limit consumed")
                 }
-                if (pauseRequested) {
-                    update("PAUSED — monitoring continues; no new DEMO entries will be submitted")
-                    delay(lifecycleHarness?.pauseDelayMs ?: 5_000L)
-                    continue
-                }
-                val maximumSafeStake = DerivMultiplierRules.safeStakeForBalance(balance)
-                val configuredRiskStake = balance * (riskPercent / 100.0)
-                val stake = minOf(configuredRiskStake, maximumSafeStake)
-                val minimumStake = com.destinedfx.core.broker.DerivContractLimits.getMinimumStake(
-                    symbol, DerivMultiplierProduct.MULTUP.contractType
-                )
-                if (stake < minimumStake) {
-                    stopSafely("Safety blocked — configured ${riskPercent}% Bot risk permits $stake, below broker minimum $minimumStake; no order was sent")
-                    return
-                }
-                // syncKnownContracts() is already performed by reconcileWithRecovery()
-                // against the same fresh, account-matched portfolio snapshot.
-                if (executor.hasActiveContracts()) {
-                    update("Running — an existing contract is still active; waiting for broker settlement before another entry")
-                    delay(lifecycleHarness?.activeWaitDelayMs ?: 10_000L)
-                    continue
-                }
                 val selectedTimeframe = Timeframe.parse(timeframe)
                 if (selectedTimeframe == null) {
                     update("Running — BotStrategy WAIT: unsupported timeframe; no order was sent")
@@ -1008,7 +1004,84 @@ class DerivDemoBotService : Service() {
                         nowMs = System.currentTimeMillis()
                     )
                 }
+                emitLifecycleEvent("SCAN", mapOf(
+                    "symbol" to symbol,
+                    "timeframe" to selectedTimeframe.label,
+                    "quote_fresh" to (currentQuote != null).toString(),
+                    "closed_candles" to botCandles.count { it.complete }.toString()
+                ))
+                if (signal == null) {
+                    emitLifecycleEvent("WAIT", mapOf("symbol" to symbol, "reason" to "No confirmed setup from fresh closed candles and authenticated quote"))
+                } else {
+                    emitLifecycleEvent("SIGNAL", mapOf(
+                        "signal_id" to signal.id,
+                        "symbol" to symbol,
+                        "direction" to signal.direction.name,
+                        "trade_side" to if (signal.direction == SignalDirection.LONG) "BUY" else "SELL",
+                        "entry_price" to signal.entryPrice.toString()
+                    ))
+                }
                 val planError = signal?.let {
+                    DerivMultiplierRules.planConsistencyError(it.direction, it.entryPrice, it.stopLoss, it.takeProfit)
+                }
+                val management = executor.manageOpenContracts(signal?.takeIf { planError == null }?.direction?.name)
+                management.closed.forEach { closed ->
+                    emitLifecycleEvent("MANAGE", mapOf(
+                        "signal_id" to closed.signalId,
+                        "contract_id" to closed.contractId.toString(),
+                        "close_reason" to closed.closeReason,
+                        "profit" to closed.profit.toString()
+                    ))
+                    emitLifecycleEvent("CLOSE", mapOf(
+                        "signal_id" to closed.signalId,
+                        "contract_id" to closed.contractId.toString(),
+                        "symbol" to closed.symbol,
+                        "direction" to closed.direction,
+                        "trade_side" to if (closed.direction == SignalDirection.LONG.name) "BUY" else "SELL",
+                        "product" to closed.product,
+                        "stake" to closed.stake.toString(),
+                        "lot" to "N/A - Deriv contract stake",
+                        "entry_price" to closed.entryPrice.toString(),
+                        "exit_price" to closed.exitPrice.toString(),
+                        "profit" to closed.profit.toString(),
+                        "close_reason" to closed.closeReason,
+                        "opened_at_ms" to closed.openedAtMs.toString(),
+                        "managed_at_ms" to closed.managedAtMs.toString(),
+                        "closed_at_ms" to closed.closedAtMs.toString()
+                    ))
+                }
+                if (management.blockedReason != null) {
+                    update("RECONNECTING — contract management is waiting for broker confirmation: ${management.blockedReason.take(150)}")
+                    delay(lifecycleHarness?.activeWaitDelayMs ?: 1_000L)
+                    continue
+                }
+                if (management.hasOpenContracts) {
+                    update(if (pauseRequested) {
+                        "PAUSED — monitoring open DEMO contract; no new entries will be submitted"
+                    } else {
+                        "Running — managing open DEMO contract; no overlapping entry will be submitted"
+                    })
+                    delay(lifecycleHarness?.activeWaitDelayMs ?: 1_000L)
+                    continue
+                }
+                if (pauseRequested) {
+                    update("PAUSED — monitoring continues; no new DEMO entries will be submitted")
+                    delay(lifecycleHarness?.pauseDelayMs ?: 1_000L)
+                    continue
+                }
+                val maximumSafeStake = DerivMultiplierRules.safeStakeForBalance(balance)
+                val configuredRiskStake = balance * (riskPercent / 100.0)
+                val stake = minOf(configuredRiskStake, maximumSafeStake)
+                val minimumStake = com.destinedfx.core.broker.DerivContractLimits.getMinimumStake(
+                    symbol, DerivMultiplierProduct.MULTUP.contractType
+                )
+                if (stake < minimumStake) {
+                    val reason = "configured ${riskPercent}% Bot risk permits $stake, below broker minimum $minimumStake"
+                    emitLifecycleEvent("RISK_BLOCK", mapOf("symbol" to symbol, "reason" to reason))
+                    update("Running — risk blocked this entry: $reason; scanning continues")
+                    delay(lifecycleHarness?.scanDelayMs ?: 30_000L)
+                    continue
+                }
                     DerivMultiplierRules.planConsistencyError(it.direction, it.entryPrice, it.stopLoss, it.takeProfit)
                 }
                 if (planError != null) {
@@ -1036,8 +1109,22 @@ class DerivDemoBotService : Service() {
                     )
                     update("Submitting — broker proposal required for ${intent.product.contractType}")
                     val result = executor.submit(intent)
-                    if (result.isSuccess) update("Contract confirmed — ${result.getOrThrow().contractId}; monitoring broker state")
-                    else {
+                    if (result.isSuccess) {
+                        val buy = result.getOrThrow()
+                        update("Contract confirmed — ${buy.contractId}; monitoring broker state")
+                        emitLifecycleEvent("OPEN", mapOf(
+                            "signal_id" to intent.signalId,
+                            "contract_id" to buy.contractId.toString(),
+                            "symbol" to intent.symbol,
+                            "direction" to intent.direction.name,
+                            "trade_side" to if (intent.direction == SignalDirection.LONG) "BUY" else "SELL",
+                            "product" to intent.product.contractType,
+                            "stake" to intent.stake.toString(),
+                            "lot" to "N/A - Deriv contract stake",
+                            "entry_price" to buy.buyPrice.toString(),
+                            "signal_timestamp_ms" to intent.signalTimestampMs.toString()
+                        ))
+                    } else {
                         val reason = result.exceptionOrNull()?.message?.take(180) ?: "Execution blocked"
                         // An ambiguous purchase or unresolved ledger record requires manual review.
                         // A transient broker/portfolio/balance failure must reconnect and reconcile
@@ -1154,6 +1241,7 @@ class DerivDemoBotService : Service() {
     }
 
     private fun stopSafely(message: String = "Stopped — no new entry requests") {
+        Log.e("DestinedFXBotService", "STOP_REASON|$message")
         stopRequested = true
         (application as? MyApplication)?.secretsManager?.setDerivBotRecoveryEnabled(false)
         loopJob?.cancel()

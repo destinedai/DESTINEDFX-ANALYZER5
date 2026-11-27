@@ -24,7 +24,31 @@ interface DerivMultiplierGateway {
         onStage: suspend (requestId: Int?, proposalId: String?, stage: DerivSubmissionStage) -> Unit
     ): Result<DerivBuyResult>
     suspend fun sellContract(contractId: Long): Result<DerivSellResult>
+    suspend fun sellContract(contractId: Long, closeReason: String): Result<DerivSellResult> =
+        sellContract(contractId)
 }
+
+data class DerivManagedTradeClose(
+    val signalId: String,
+    val contractId: Long,
+    val symbol: String,
+    val direction: String,
+    val product: String,
+    val stake: Double,
+    val entryPrice: Double,
+    val exitPrice: Double,
+    val profit: Double,
+    val closeReason: String,
+    val openedAtMs: Long,
+    val managedAtMs: Long,
+    val closedAtMs: Long
+)
+
+data class DerivTradeManagementResult(
+    val hasOpenContracts: Boolean,
+    val closed: List<DerivManagedTradeClose> = emptyList(),
+    val blockedReason: String? = null
+)
 
 /** Service runtime extension; test builds can supply a fake DEMO implementation. */
 interface DerivBotRuntimeGateway : DerivMultiplierGateway {
@@ -193,6 +217,97 @@ class DerivMultiplierExecutor(
             updatedAtMs = System.currentTimeMillis()
         ))
     }
+
+    /**
+     * Manage only contracts confirmed in this account's persistent execution ledger.
+     * TP/SL/reversal decisions and broker identity checks stay inside the executor.
+     */
+    suspend fun manageOpenContracts(reversalDirection: String?): DerivTradeManagementResult =
+        withContext(Dispatchers.IO) {
+            val current = account
+                ?: return@withContext DerivTradeManagementResult(true, blockedReason = "Selected account is unavailable")
+            if (gateway.connectionState.value != DerivConnectionState.READY) {
+                return@withContext DerivTradeManagementResult(true, blockedReason = "Broker connection is not READY")
+            }
+            if (!syncKnownContracts()) {
+                return@withContext DerivTradeManagementResult(true, blockedReason = "Fresh account-matched portfolio could not reconcile Bot-owned contracts")
+            }
+            val closed = mutableListOf<DerivManagedTradeClose>()
+            val records = dao.knownContracts(current.loginId, current.mode.uppercase())
+            for (record in records) {
+                val contractId = record.contractId
+                    ?: return@withContext DerivTradeManagementResult(true, closed, "Persisted Bot contract ID is missing")
+                val brokerContract = gateway.activeContracts.value[contractId]
+                    ?: gateway.lookupHistoricalContract(contractId, record.createdAtMs)
+                    ?: return@withContext DerivTradeManagementResult(true, closed, "Broker has not confirmed contract $contractId")
+                if (!matchesPersistedBuy(record, brokerContract)) {
+                    return@withContext DerivTradeManagementResult(true, closed, "Broker contract/buy transaction identity mismatch for $contractId")
+                }
+                if (brokerContract.isSold || brokerContract.status.lowercase() in setOf("sold", "won", "lost", "expired")) {
+                    if (!brokerContract.profit.isFinite() || !brokerContract.bidPrice.isFinite() || brokerContract.bidPrice < 0.0) {
+                        return@withContext DerivTradeManagementResult(true, closed, "Broker settlement for $contractId omitted valid P/L or exit evidence")
+                    }
+                    updateSettled(record, brokerContract)
+                    val reason = when {
+                        brokerContract.profit >= record.takeProfitAmount -> "TAKE_PROFIT"
+                        brokerContract.profit <= -record.stopLossAmount -> "STOP_LOSS"
+                        else -> "BROKER_CONFIRMED_SETTLEMENT"
+                    }
+                    val now = System.currentTimeMillis()
+                    closed += DerivManagedTradeClose(
+                        signalId = record.signalId, contractId = contractId, symbol = record.symbol,
+                        direction = record.direction, product = record.product, stake = record.stake,
+                        entryPrice = record.purchasePrice ?: brokerContract.buyPrice,
+                        exitPrice = brokerContract.bidPrice, profit = brokerContract.profit,
+                        closeReason = reason, openedAtMs = record.createdAtMs,
+                        managedAtMs = now, closedAtMs = now
+                    )
+                    continue
+                }
+                if (!brokerContract.profit.isFinite()) {
+                    return@withContext DerivTradeManagementResult(true, closed, "Broker unrealized P/L is invalid for $contractId")
+                }
+                val reason = when {
+                    brokerContract.profit >= record.takeProfitAmount -> "TAKE_PROFIT"
+                    brokerContract.profit <= -record.stopLossAmount -> "STOP_LOSS"
+                    !reversalDirection.isNullOrBlank() && reversalDirection != record.direction -> "REVERSAL"
+                    else -> null
+                } ?: continue
+                if (!brokerContract.isValidToSell) {
+                    return@withContext DerivTradeManagementResult(true, closed, "$reason reached but broker does not permit closing $contractId")
+                }
+                val managedAt = System.currentTimeMillis()
+                val sell = gateway.sellContract(contractId, reason)
+                if (sell.isFailure) {
+                    return@withContext DerivTradeManagementResult(
+                        true, closed,
+                        "$reason close request failed for $contractId: ${sell.exceptionOrNull()?.message ?: "broker rejected close"}"
+                    )
+                }
+                gateway.fetchPortfolio()
+                val confirmation = gateway.lookupHistoricalContract(contractId, record.createdAtMs)
+                    ?: gateway.activeContracts.value[contractId]
+                    ?: return@withContext DerivTradeManagementResult(true, closed, "Broker has not confirmed the $reason close for $contractId")
+                if (!matchesPersistedBuy(record, confirmation) || !confirmation.isSold ||
+                    !confirmation.profit.isFinite() || !confirmation.bidPrice.isFinite() || confirmation.bidPrice < 0.0
+                ) {
+                    return@withContext DerivTradeManagementResult(true, closed, "Broker did not confirm the exact $reason settlement for $contractId")
+                }
+                updateSettled(record, confirmation)
+                closed += DerivManagedTradeClose(
+                    signalId = record.signalId, contractId = contractId, symbol = record.symbol,
+                    direction = record.direction, product = record.product, stake = record.stake,
+                    entryPrice = record.purchasePrice ?: brokerContract.buyPrice,
+                    exitPrice = confirmation.bidPrice, profit = confirmation.profit,
+                    closeReason = reason, openedAtMs = record.createdAtMs,
+                    managedAtMs = managedAt, closedAtMs = System.currentTimeMillis()
+                )
+            }
+            if (!syncKnownContracts()) {
+                return@withContext DerivTradeManagementResult(true, closed, "Broker close outcome is not fully reconciled")
+            }
+            DerivTradeManagementResult(hasActiveContracts(), closed)
+        }
 
     /**
      * Attempt to sell only contracts created and persisted by this app for the selected account.

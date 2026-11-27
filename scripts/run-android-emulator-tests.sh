@@ -31,8 +31,23 @@ collect_ui_screenshots() {
   fi
 }
 
+collect_lifecycle_evidence() {
+  local remote="/sdcard/Download/DestinedFX/bot-lifecycle-evidence.json"
+  local destination="app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json"
+  mkdir -p "$(dirname "$destination")"
+  if ! adb pull "$remote" "$destination" >/dev/null 2>&1; then
+    echo "Missing emulator-written bot-lifecycle-evidence.json at $remote." >&2
+    return 1
+  fi
+  if [ ! -s "$destination" ]; then
+    echo "Emulator-written bot-lifecycle-evidence.json is empty." >&2
+    return 1
+  fi
+}
+
 capture_failure() {
   local rc=$?
+  collect_lifecycle_evidence || true
   collect_ui_screenshots || true
   if [ "$rc" -ne 0 ]; then
     mkdir -p "$RUNNER_TEMP/emulator-diagnostics"
@@ -64,28 +79,25 @@ adb devices -l
 adb shell getprop ro.build.version.sdk
 adb shell df -h /data
 ./gradlew :app:connectedDebugAndroidTest --stacktrace
-mkdir -p app/build/reports/bot-lifecycle
+collect_lifecycle_evidence
 local_evidence="app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json"
-# Android's scoped storage hides /Android/data from the adb shell user. Use run-as
-# against the debuggable test target package to export its private app-files evidence.
-if ! adb exec-out run-as com.aistudio.destinedfx.qwvzxp cat files/bot-lifecycle-evidence.json > "$local_evidence"; then
-  echo "Could not export bot-lifecycle-evidence.json from the debuggable app sandbox." >&2
-  exit 1
-fi
-if [ ! -s "$local_evidence" ]; then
-  echo "Bot lifecycle evidence file was empty after export." >&2
-  exit 1
-fi
 python - "$local_evidence" <<'PY'
 import json
+import math
 import sys
 from pathlib import Path
 
-rows = json.loads(Path(sys.argv[1]).read_text())
+payload = json.loads(Path(sys.argv[1]).read_text())
+if not isinstance(payload, dict):
+    raise SystemExit("Emulator evidence must be a JSON object written by the Android service test.")
+rows = payload.get("transitions")
+if not isinstance(rows, list):
+    raise SystemExit("Emulator evidence is missing its timestamped transitions array.")
 required = {
     "Start", "Pause", "Resume", "Stop", "Emergency-Stop",
     "NoAutoRestartAfterStop", "RestartAfterStop",
     "NoAutoRestartAfterEmergencyStop", "RestartAfterEmergencyStop", "CleanupStop",
+    "FiveManagedDemoCycles", "PauseAfterCycles", "FinalStopAfterCycles",
 }
 present = {row.get("step") for row in rows}
 missing = sorted(required - present)
@@ -94,10 +106,41 @@ if missing:
 for row in rows:
     if not row.get("timestamp_utc") or "state_before" not in row or "state_after" not in row:
         raise SystemExit(f"Bot lifecycle row missing timestamp/state evidence: {row.get('step')}")
-    if row.get("account_mode") != "DEMO" or row.get("live_enabled") is not False or row.get("fake_gateway_only") is not True:
-        raise SystemExit(f"Bot lifecycle row violates DEMO/fake-only boundary: {row.get('step')}")
+    if row.get("account_mode") != "DEMO" or row.get("live_enabled") is not False:
+        raise SystemExit(f"Bot lifecycle row violates DEMO/LIVE boundary: {row.get('step')}")
     if not isinstance(row.get("broker_gateway_log"), list):
         raise SystemExit(f"Bot lifecycle row missing broker gateway log: {row.get('step')}")
-print(f"DEMO Bot lifecycle evidence: {len(rows)} timestamped records; fake gateway only; LIVE disabled.")
+if payload.get("account_mode") != "DEMO" or payload.get("fake_gateway_only") is not True or payload.get("live_enabled") is not False:
+    raise SystemExit("Top-level emulator evidence violates the DEMO-only fake-gateway boundary.")
+cycles = payload.get("trade_cycles")
+if not isinstance(cycles, list) or len(cycles) < 5:
+    count = len(cycles) if isinstance(cycles, list) else 0
+    raise SystemExit(f"Expected at least 5 full emulator DEMO trade cycles; found {count}.")
+required_cycle_fields = (
+    "signal_id", "contract_id", "symbol", "trade_side", "direction", "stake",
+    "lot", "entry_price", "exit_price", "profit", "close_reason",
+    "scan_at_utc", "signal_at_utc", "open_at_utc", "manage_at_utc", "close_at_utc",
+    "next_open_at_utc", "account_mode", "fake_gateway_only", "live_enabled",
+)
+sides = set()
+for index, cycle in enumerate(cycles[:5], start=1):
+    missing_fields = [field for field in required_cycle_fields if field not in cycle or cycle[field] in (None, "")]
+    if missing_fields:
+        raise SystemExit(f"Trade cycle {index} is incomplete: {', '.join(missing_fields)}")
+    for field in ("stake", "entry_price", "exit_price", "profit"):
+        if not isinstance(cycle[field], (int, float)) or not math.isfinite(cycle[field]):
+            raise SystemExit(f"Trade cycle {index} has invalid {field}.")
+    if cycle["stake"] <= 0 or cycle["entry_price"] <= 0 or cycle["exit_price"] < 0:
+        raise SystemExit(f"Trade cycle {index} has an invalid stake or execution price.")
+    if cycle["trade_side"] not in ("BUY", "SELL") or cycle["direction"] not in ("LONG", "SHORT"):
+        raise SystemExit(f"Trade cycle {index} direction is invalid.")
+    if cycle["account_mode"] != "DEMO" or cycle["fake_gateway_only"] is not True or cycle["live_enabled"] is not False:
+        raise SystemExit(f"Trade cycle {index} violates the DEMO-only boundary.")
+    if cycle["close_reason"] not in ("TAKE_PROFIT", "STOP_LOSS", "REVERSAL", "BROKER_CONFIRMED_SETTLEMENT"):
+        raise SystemExit(f"Trade cycle {index} has an unsupported close reason.")
+    sides.add(cycle["trade_side"])
+if sides != {"BUY", "SELL"}:
+    raise SystemExit(f"Expected both BUY and SELL emulator cycles; found {sorted(sides)}.")
+print(f"DEMO Bot lifecycle evidence: {len(rows)} transitions; {len(payload.get('trade_events', []))} service events; {len(cycles)} complete broker-confirmed cycles; both BUY and SELL; LIVE disabled.")
 PY
 collect_ui_screenshots

@@ -3,6 +3,10 @@ package com.example
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
+import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
@@ -44,6 +48,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,6 +68,12 @@ class DerivBotLifecycleInstrumentedTest {
     private lateinit var identity: ModeAccountIdentity
     private lateinit var credentialGeneration: String
     private lateinit var evidenceFile: File
+    private var evidenceUri: Uri? = null
+    private val evidenceLock = Any()
+    private val eventRows = JSONArray()
+    private val tradeCycles = JSONArray()
+    private val openTradeRows = ConcurrentHashMap<String, JSONObject>()
+    private val manageTradeRows = ConcurrentHashMap<String, JSONObject>()
     private val accountId = "D-CI-FAKE-1001"
     private val currency = "USD"
     private val sessionId = "destinedfx-ci-fake-session"
@@ -118,9 +129,12 @@ class DerivBotLifecycleInstrumentedTest {
         DerivDemoBotLifecycleHarness.scanDelayMs = 150L
         DerivDemoBotLifecycleHarness.pauseDelayMs = 40L
         DerivDemoBotLifecycleHarness.activeWaitDelayMs = 40L
+        DerivDemoBotLifecycleHarness.eventRecorder = { event -> appendServiceEvent(event) }
         evidenceFile = File(context.filesDir, "bot-lifecycle-evidence.json")
         evidenceFile.delete()
+        createSharedEvidenceFile()
         Log.i("DestinedFXBotLifecycle", "EVIDENCE_PATH=${evidenceFile.absolutePath}")
+        persistEvidence()
     }
 
     @After
@@ -130,6 +144,7 @@ class DerivBotLifecycleInstrumentedTest {
             SystemClock.sleep(250L)
             runCatching { secrets.setDerivBotRecoveryEnabled(false) }
             runCatching { secrets.clearPathDemoAcceptance(identity) }
+            runCatching { persistEvidence() }
         }
         AppSecurityGuard.lock()
         DerivDemoBotLifecycleHarness.reset()
@@ -256,7 +271,60 @@ class DerivBotLifecycleInstrumentedTest {
         assertEquals(3, gateway.sellRequests.size)
         record("CleanupStop", beforeCleanup, DerivDemoBotService.state.value,
             "The final Bot-owned contract was broker-confirmed closed; the first contract settled externally during Pause.")
+
+        // Exercise continuous operation through the real Android foreground service,
+        // Room ledger and executor. Only broker I/O is replaced by the in-process DEMO fake.
+        val buysBeforeCycles = gateway.purchaseAttempts.get()
+        val scanDirection = AtomicInteger(0)
+        gateway.autoManageCycles = true
+        DerivDemoBotLifecycleHarness.candleProvider = { symbol, granularity, _ ->
+            assertEquals("1HZ100V", symbol)
+            assertEquals(60, granularity)
+            val direction = if (scanDirection.incrementAndGet() % 2 == 1) "LONG" else "SHORT"
+            gateway.nextDirection = direction
+            breakoutCandles(direction == "LONG")
+        }
+        DerivDemoBotService.start(context, "1HZ100V", StrategyRegistry.BREAKOUT_MOMENTUM.id, "M1", 1.0)
+        await("five full managed DEMO trade cycles", timeoutMs = 25_000L) {
+            tradeCycles.length() >= 5 && gateway.purchaseAttempts.get() >= buysBeforeCycles + 6
+        }
+        val sides = (0 until tradeCycles.length()).map {
+            tradeCycles.getJSONObject(it).getString("trade_side")
+        }.toSet()
+        assertEquals("The emulator must record both BUY and SELL cycles", setOf("BUY", "SELL"), sides)
+        assertTrue("At least five cycles must be assembled from service OPEN/MANAGE/CLOSE events",
+            tradeCycles.length() >= 5)
+        record("FiveManagedDemoCycles", "RUNNING", "RUNNING",
+            "Five broker-confirmed DEMO closures and the next sixth opening were observed on the running Android foreground service.")
+
+        DerivDemoBotService.pause(context)
+        await("Pause after five cycles") {
+            DerivDemoBotService.state.value == "PAUSED" ||
+                DerivDemoBotService.statusReason.value.contains("PAUSED")
+        }
+        val buysDuringPause = gateway.purchaseAttempts.get()
+        SystemClock.sleep(300L)
+        assertEquals("Pause must not create a new contract", buysDuringPause, gateway.purchaseAttempts.get())
+        record("PauseAfterCycles", "RUNNING", DerivDemoBotService.state.value,
+            "No new DEMO entries were submitted during Pause after the continuous-cycle run.")
+
+        DerivDemoBotService.resume(context)
+        await("Resume after managed cycle pause") {
+            gateway.purchaseAttempts.get() > buysDuringPause && DerivDemoBotService.state.value == "RUNNING"
+        }
+        gateway.autoManageCycles = false
+        val beforeFinalStop = DerivDemoBotService.state.value
+        val activeBeforeFinalStop = gateway.activeContracts.value.keys.firstOrNull { it < 990_000L }
+        DerivDemoBotService.stop(context)
+        await("final STOP after resumed DEMO loop") {
+            DerivDemoBotService.state.value == "STOPPED" &&
+                (activeBeforeFinalStop == null || gateway.sellRequests.contains(activeBeforeFinalStop))
+        }
+        assertFalse("STOP must not sell unowned contracts", gateway.sellRequests.any { it >= 990_000L })
+        record("FinalStopAfterCycles", beforeFinalStop, DerivDemoBotService.state.value,
+            "STOP closed only the resumed Bot-owned DEMO contract; no unowned position was sent to SELL.")
         assertTrue(evidenceFile.isFile && evidenceFile.length() > 100L)
+        persistEvidence()
     }
 
     /**
@@ -305,17 +373,132 @@ class DerivBotLifecycleInstrumentedTest {
             .put("broker_gateway_log", brokerLog)
             .put("detail", detail)
         rows.put(row)
-        val parent = requireNotNull(evidenceFile.parentFile)
-        check(parent.exists() || parent.mkdirs())
-        evidenceFile.writeText(rows.toString(2))
         Log.i("DestinedFXBotLifecycle", row.toString())
+        persistEvidence()
     }
 
-    private fun breakoutCandles(): List<Candle> {
+    private fun createSharedEvidenceFile() {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, "bot-lifecycle-evidence.json")
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/DestinedFX")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        evidenceUri = requireNotNull(context.contentResolver.insert(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+        )) { "Could not create shared emulator evidence file in Downloads/DestinedFX" }
+    }
+
+    private fun appendServiceEvent(event: Map<String, String>) {
+        synchronized(evidenceLock) {
+            val row = JSONObject()
+            event.forEach { (key, value) ->
+                when (key) {
+                    "timestamp_ms", "opened_at_ms", "managed_at_ms", "closed_at_ms",
+                    "signal_timestamp_ms", "contract_id" -> row.put(key, value.toLongOrNull() ?: value)
+                    "stake", "entry_price", "exit_price", "profit" -> row.put(key, value.toDoubleOrNull() ?: value)
+                    "fake_gateway_only", "live_enabled" -> row.put(key, value.toBooleanStrictOrNull() ?: value)
+                    else -> row.put(key, value)
+                }
+            }
+            val eventName = event["event"].orEmpty()
+            val signalId = event["signal_id"].orEmpty()
+            eventRows.put(row)
+            when (eventName) {
+                "OPEN" -> {
+                    openTradeRows[signalId] = row
+                    if (tradeCycles.length() > 0) {
+                        tradeCycles.getJSONObject(tradeCycles.length() - 1)
+                            .put("next_open_at_utc", utc(row.optLong("timestamp_ms")))
+                    }
+                }
+                "MANAGE" -> manageTradeRows[signalId] = row
+                "CLOSE" -> {
+                    val opened = openTradeRows[signalId]
+                    if (opened != null) {
+                        val managed = manageTradeRows[signalId]
+                        tradeCycles.put(JSONObject()
+                            .put("signal_id", signalId)
+                            .put("contract_id", row.optLong("contract_id"))
+                            .put("account_mode", "DEMO")
+                            .put("fake_gateway_only", true)
+                            .put("live_enabled", false)
+                            .put("symbol", row.optString("symbol"))
+                            .put("direction", row.optString("direction"))
+                            .put("trade_side", row.optString("trade_side"))
+                            .put("product", row.optString("product"))
+                            .put("stake", row.optDouble("stake"))
+                            .put("lot", row.optString("lot"))
+                            .put("entry_price", row.optDouble("entry_price"))
+                            .put("exit_price", row.optDouble("exit_price"))
+                            .put("profit", row.optDouble("profit"))
+                            .put("close_reason", row.optString("close_reason"))
+                            .put("scan_at_utc", utc(opened.optLong("signal_timestamp_ms", opened.optLong("timestamp_ms"))))
+                            .put("signal_at_utc", utc(opened.optLong("timestamp_ms")))
+                            .put("open_at_utc", utc(opened.optLong("timestamp_ms")))
+                            .put("manage_at_utc", managed?.let { utc(it.optLong("timestamp_ms")) } ?: utc(row.optLong("timestamp_ms")))
+                            .put("close_at_utc", utc(row.optLong("timestamp_ms")))
+                            .put("opened_at_ms", row.optLong("opened_at_ms"))
+                            .put("managed_at_ms", row.optLong("managed_at_ms"))
+                            .put("closed_at_ms", row.optLong("closed_at_ms")))
+                        openTradeRows.remove(signalId)
+                        manageTradeRows.remove(signalId)
+                    }
+                }
+            }
+            persistEvidenceLocked()
+        }
+    }
+
+    private fun utc(milliseconds: Long): String =
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }.format(Date(milliseconds))
+
+    private fun evidenceDocument(): JSONObject = JSONObject()
+        .put("schema_version", 1)
+        .put("account_mode", "DEMO")
+        .put("fake_gateway_only", true)
+        .put("live_enabled", false)
+        .put("transitions", rows)
+        .put("trade_events", eventRows)
+        .put("trade_cycles", tradeCycles)
+        .put("stop_reason", DerivDemoBotService.statusReason.value)
+
+    private fun persistEvidence() {
+        synchronized(evidenceLock) { persistEvidenceLocked() }
+    }
+
+    private fun persistEvidenceLocked() {
+        val parent = requireNotNull(evidenceFile.parentFile)
+        check(parent.exists() || parent.mkdirs())
+        val bytes = evidenceDocument().toString(2).toByteArray(Charsets.UTF_8)
+        FileOutputStream(evidenceFile, false).use { output ->
+            output.write(bytes)
+            output.flush()
+            output.fd.sync()
+        }
+        val uri = requireNotNull(evidenceUri) { "Shared emulator evidence URI was not created" }
+        context.contentResolver.openOutputStream(uri, "wt").use { output ->
+            requireNotNull(output) { "Could not open shared emulator evidence output stream" }
+            output.write(bytes)
+            output.flush()
+        }
+        context.contentResolver.update(
+            uri,
+            ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+            null,
+            null
+        )
+        Log.i("DestinedFXBotLifecycle", "EVIDENCE_FLUSHED|internal=${evidenceFile.absolutePath}|shared=Downloads/DestinedFX/bot-lifecycle-evidence.json|bytes=${bytes.size}")
+    }
+
+    private fun breakoutCandles(bullish: Boolean = true): List<Candle> {
         val lastTime = System.currentTimeMillis() - 61_000L
         return (0 until 35).map { i ->
             val timestamp = lastTime - (34 - i) * 60_000L
-            if (i == 34) Candle(timestamp, 100.00, 100.09, 99.99, 100.08, volume = 100.0, complete = true)
+            if (i == 34 && bullish) Candle(timestamp, 100.00, 100.09, 99.99, 100.08, volume = 100.0, complete = true)
+            else if (i == 34) Candle(timestamp, 100.00, 100.01, 99.91, 99.92, volume = 100.0, complete = true)
             else Candle(timestamp, 100.00, 100.01, 99.98, 100.00, volume = 100.0, complete = true)
         }
     }
@@ -355,6 +538,16 @@ class DerivBotLifecycleInstrumentedTest {
         val purchasedContractIds = CopyOnWriteArrayList<Long>()
         val purchaseSignalIds = CopyOnWriteArrayList<String>()
         val sellRequests = CopyOnWriteArrayList<Long>()
+        val managedCloseCount = AtomicInteger(0)
+        @Volatile var nextDirection: String = "LONG"
+        @Volatile var autoManageCycles: Boolean = false
+        private val cycleSequence = AtomicInteger(0)
+        private data class FakeTradeMeta(
+            val cycle: Int,
+            val intent: DerivMultiplierIntent,
+            val openedAtMs: Long
+        )
+        private val tradeMeta = ConcurrentHashMap<Long, FakeTradeMeta>()
         private val ownedIds = ConcurrentHashMap.newKeySet<Long>()
         private val externalIds = AtomicInteger(0)
         private val historical = ConcurrentHashMap<Long, DerivContractInfo>()
@@ -377,17 +570,35 @@ class DerivBotLifecycleInstrumentedTest {
         override suspend fun getQuote(symbol: String): Result<MarketQuote> {
             val now = System.currentTimeMillis()
             events.add("QUOTE|symbol=$symbol|mode=DEMO")
+            val quotePrices = if (nextDirection == "SHORT") 99.91 to 99.93 else 100.07 to 100.09
             val quote = MarketQuote.twoSided(
-                symbol, AssetClassifier.of(symbol), 100.07, 100.09, now, now,
+                symbol, AssetClassifier.of(symbol), quotePrices.first, quotePrices.second, now, now,
                 "DESTINEDFX_CI_FAKE_DEMO_GATEWAY"
             ) ?: return Result.failure(IllegalStateException("Test quote could not be created"))
             return Result.success(quote)
         }
 
         override suspend fun fetchPortfolio(): List<Position> {
+            refreshManagedProfit()
             refreshSnapshot()
             events.add("PORTFOLIO|contracts=" + active.value.size + "|mode=DEMO")
             return emptyList()
+        }
+
+        private fun refreshManagedProfit() {
+            if (!autoManageCycles) return
+            val now = System.currentTimeMillis()
+            active.value.values.forEach { current ->
+                val meta = tradeMeta[current.contractId] ?: return@forEach
+                if (meta.cycle <= 0 || now - meta.openedAtMs < 60L) return@forEach
+                val profit = when (meta.cycle % 3) {
+                    1 -> meta.intent.takeProfitAmount + 0.01
+                    2 -> -meta.intent.stopLossAmount
+                    else -> 0.0
+                }
+                active.value = active.value + (current.contractId to current.copy(profit = profit))
+                events.add("MANAGED_PNL|contract=${current.contractId}|profit=$profit|mode=DEMO")
+            }
         }
 
         override suspend fun lookupHistoricalContract(contractId: Long, sinceMs: Long): DerivContractInfo? =
@@ -408,6 +619,8 @@ class DerivBotLifecycleInstrumentedTest {
             val sequence = purchaseAttempts.incrementAndGet()
             val contractId = 880_000L + sequence
             val transactionId = 770_000L + sequence
+            val cycle = if (autoManageCycles) cycleSequence.incrementAndGet() else 0
+            tradeMeta[contractId] = FakeTradeMeta(cycle, intent, System.currentTimeMillis())
             val contract = DerivContractInfo(
                 contractId = contractId,
                 transactionId = transactionId,
@@ -434,7 +647,10 @@ class DerivBotLifecycleInstrumentedTest {
             return Result.success(DerivBuyResult(contractId, transactionId, intent.stake, proposalId, requestId))
         }
 
-        override suspend fun sellContract(contractId: Long): Result<DerivSellResult> {
+        override suspend fun sellContract(contractId: Long): Result<DerivSellResult> =
+            sellContract(contractId, "STOP")
+
+        override suspend fun sellContract(contractId: Long, closeReason: String): Result<DerivSellResult> {
             if (!ownedIds.contains(contractId)) {
                 events.add("SELL_REJECTED_UNOWNED|contract=" + contractId)
                 return Result.failure(SecurityException("Fake broker refuses to close unowned contract"))
@@ -442,9 +658,10 @@ class DerivBotLifecycleInstrumentedTest {
             val current = active.value[contractId]
                 ?: return Result.failure(IllegalStateException("Fake contract is not active"))
             if (!current.isValidToSell) return Result.failure(IllegalStateException("Fake broker did not permit close"))
+            val settledProfit = current.profit.takeIf { closeReason != "STOP" } ?: 0.0
             val sold = current.copy(
-                bidPrice = current.buyPrice + 0.25,
-                profit = 0.25,
+                bidPrice = (current.buyPrice + settledProfit).coerceAtLeast(0.0),
+                profit = settledProfit,
                 isSold = true,
                 isValidToSell = false,
                 status = "sold"
@@ -453,8 +670,9 @@ class DerivBotLifecycleInstrumentedTest {
             active.value = active.value - contractId
             ownedIds.remove(contractId)
             sellRequests.add(contractId)
+            if (closeReason != "STOP") managedCloseCount.incrementAndGet()
             refreshSnapshot()
-            events.add("SELL_CONFIRMED|contract=" + contractId + "|transaction=" + current.transactionId)
+            events.add("SELL_CONFIRMED|contract=" + contractId + "|transaction=" + current.transactionId + "|reason=" + closeReason)
             return Result.success(DerivSellResult(contractId, current.transactionId, sold.bidPrice))
         }
 
