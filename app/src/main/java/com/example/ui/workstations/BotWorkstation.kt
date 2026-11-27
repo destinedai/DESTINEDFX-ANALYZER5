@@ -1397,8 +1397,8 @@ fun BotWorkstationTab(viewModel: DestinedFXViewModel) {
                                     val action = if (active) "START" else "STOP"
                                     val config = JSONObject()
                                         .put("strategy", selectedStrategyId)
-                                        .put("symbols", JSONArray().put(terminalSymbol))
-                                        .put("timeframes", JSONArray().put(selectedTimeframe))
+                                        .put("symbols", JSONArray().put("AUTO"))
+                                        .put("timeframes", JSONArray().put("M5").put("M15").put("M30").put("H1").put("H4").put("D1"))
                                         .put("risk_percent", riskPercent)
                                         .put("max_daily_loss_percent", TradingSafetyLimits.MAX_DAILY_LOSS_PERCENT)
                                         .put("max_concurrent_positions", TradingSafetyLimits.MAX_CONCURRENT_POSITIONS)

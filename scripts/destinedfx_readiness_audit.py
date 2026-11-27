@@ -147,40 +147,29 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         and "startSelectedMt5AnalyzerBridgeMonitor" in analyzer_ui
         and "MT5_TERMINAL" in analyzer_ui
         and "activeChartSymbol" in analyzer_ui
-        and "Deriv public WebSocket" not in analyzer_ui
-        and "refreshMarketData(" not in analyzer_ui
-        and "runSignalScan(" not in analyzer_ui
-        and '?: "FX:EURUSD"' not in analyzer_ui
-        and '?: "FX:EURUSD"' not in analyzer_view_model
-        and "internal fun analyzerTradingViewTicker(mt5Symbol: String): String? =" in analyzer_view_model
-        and "tradingViewSymbolForMt5(mt5Symbol)" in analyzer_view_model
-        and "return null" in analyzer_mapping
-        and 'return "TVC:GOLD"' in analyzer_mapping
-        and '"FX:$pair"' in analyzer_mapping
-        and "OANDA:" not in analyzer_mapping
-        and "val chartTicker = analyzerTradingViewTicker(symbol)" in analyzer_ui
-        and "if (chartTicker != null)" in analyzer_ui
-        and "Box(Modifier.fillMaxWidth().height(270.dp).background(Color(0xFF171B27)))" in analyzer_ui
-        and "val showAnalysis = showPrice && analysisValidated && chartTicker != null" in analyzer_ui
-        and "if (showAnalysis)" in analyzer_ui
-        and "connected" not in chart_branch
-        and "val quote = if (connected)" in analyzer_ui
-        and "if (connected) ProfitGreen else Color.Gray" in analyzer_ui
-        and "ChartSymbol(0)" in ea
-        and "active_chart_symbol" in ea
-        and "active_chart_timeframe" in ea
+        and "requestAnalyzerChartSelection" in vm
+        and '"SET_ANALYZER_CHART"' in vm
+        and "SymbolsTotal(true)" in ea
+        and "SymbolName(i,true)" in ea
+        and "g_analyzerSymbol" in ea
+        and "g_analyzerTimeframe" in ea
+        and 'action=="SET_ANALYZER_CHART"' in ea
+        and "BrokerQuotesJson()" in ea
+        and "BrokerCandlesJson()" in ea
+        and "CopyRates(sym,tf,1,60,rates)" in ea
+        and "AnalyzerBrokerCandlestickChart" in analyzer_ui
+        and "Canvas(" in analyzer_ui
+        and "val price = quote?.bid" in analyzer_ui
+        and "if (chartTicker != null)" not in analyzer_ui
+        and "tradingview.com" not in analyzer_ui.lower()
+        and "OANDA:" not in analyzer_ui
         and "MT5_TERMINAL" in analyzer_math
-        and 'tradingViewSymbolForMt5("EURUSD.a")' in analyzer_mapping_test
-        and 'tradingViewSymbolForMt5("XAUUSDm")' in analyzer_mapping_test
-        and 'tradingViewSymbolForMt5("GOLD")' in analyzer_mapping_test
-        and 'analyzerTradingViewTicker("FAKEPAIR")' in analyzer_mapping_test
-        and "assertNull(ticker)" in analyzer_mapping_test
     )
     add_check(
         checks,
         "Analyzer provider diagnostics",
         diagnostics_ok,
-        "The Analyzer uses the paired MT5 Bridge snapshot, maps only supported TradingView symbols, returns null for unmappable symbols, leaves the chart blank with no ticker, and gates Signal/Levels on a mapped ticker. Price remains MT5-only. No placeholder UI labels are required.",
+        "The Analyzer uses fresh MT5 terminal heartbeat quotes and closed candles, lets the user select a real Market Watch symbol/timeframe through a read-only command, draws its own native candlestick chart, and does not route Analyzer prices or charts through TradingView or OANDA.",
     )
 
     persistent_live_policy_ok = (

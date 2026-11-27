@@ -120,16 +120,28 @@ def test_ea_source_contract_and_balanced_delimiters():
     assert not failed, "EA source contract checks failed: " + ", ".join(failed)
 
 
-def test_managed_mode_waits_for_analyzer_commands_and_preserves_standalone_scanner():
+def test_bot_brain_scans_independently_after_start_without_analyzer_dependency():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     timer = source[source.index("void OnTimer()") : source.index("void OnTick()")]
-    assert "input bool InpManagedAnalyzerMode=true;" in source
-    assert "bool managedMode=InpManagedAnalyzerMode;" in timer
-    assert "if(managedMode)return;" in timer
-    assert timer.index("ProcessCommands();") < timer.index("if(managedMode)return;") < timer.index("Scan();")
-    assert 'action=="PLACE_MARKET_ORDER"' in source
-    assert "ExecutePhoneMarketOrder(orderConfig,orderRequest,outcome,msg)" in source
+    assert "InpManagedAnalyzerMode" not in source
+    assert "Analyzer is brain" not in source
+    assert timer.index("ProcessCommands();") < timer.index("Scan();")
+    assert 'action=="START"' in source
+    assert 'action=="STOP"' in source
     assert "void Scan()" in source and "Scan();" in timer
+    assert "FindStrategySetup(sym,tf" in source
+    assert "if(accepted)return;" in source
+
+
+def test_bot_auto_market_watch_scan_expands_real_broker_symbols():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    assert 'input string InpSymbols="AUTO";' in source
+    assert "bool ExpandMarketWatchSymbols(string &symbols[],string &why)" in source
+    assert "SymbolsTotal(true)" in source and "SymbolName(i,true)" in source
+    assert "ArraySize(symbols)<32" in source
+    assert "ExpandMarketWatchSymbols(syms,why)" in source
+    assert "ExpandMarketWatchSymbols(g_symbols,autoWhy)" in source
+    assert "Requested symbols/timeframes lack fresh quotes or sufficient history" in source
 
 
 def test_analyzer_uses_active_terminal_chart_symbol_and_timeframe_from_mt5_heartbeat():
@@ -141,6 +153,11 @@ def test_analyzer_uses_active_terminal_chart_symbol_and_timeframe_from_mt5_heart
     assert "ActiveChartSymbol()" in candles and "for(int ti=0;ti<8;ti++)" in candles
     assert "active_chart_symbol" in heartbeat and "active_chart_timeframe" in heartbeat
     assert "BrokerQuotesJson()" in heartbeat and "BrokerCandlesJson()" in heartbeat
+    assert "SymbolsTotal(true)" in quotes and "SymbolName(i,true)" in quotes
+    assert "g_analyzerSymbol" in quotes and "g_analyzerTimeframe" in quotes
+    assert 'action=="SET_ANALYZER_CHART"' in source
+    assert "Analyzer selection requires an exact Market Watch symbol" in source
+    assert "CopyRates(sym,tf,1,60,rates)" in candles
 
 
 def test_followup_safety_contracts():

@@ -406,6 +406,7 @@ open class DestinedFXViewModel(
     val managedMt5BridgeSnapshot: StateFlow<MT5RemoteBridgeClient.Snapshot?> = _managedMt5BridgeSnapshot.asStateFlow()
     private var managedMt5BridgeMonitorJob: Job? = null
     private var managedMt5BridgeMonitorKey: String? = null
+    private var analyzerChartRequestKey: String = ""
 
     /**
      * App-lifetime monitor for the selected managed MT5 profile. It remains active while the
@@ -456,6 +457,45 @@ open class DestinedFXViewModel(
             return
         }
         startManagedMt5BridgeMonitor(client, profile, mode)
+    }
+
+    fun requestAnalyzerChartSelection(symbol: String, timeframe: String) {
+        if (isPreview) return
+        val cleanSymbol = symbol.trim()
+        val cleanTimeframe = timeframe.trim().uppercase()
+        if (cleanSymbol.isBlank() || cleanTimeframe !in setOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")) return
+        val brand = selectedMt5BrokerBrand.value
+        val mode = selectedMt5Mode.value
+        val profile = "${brand}_${mode}"
+        val key = "$profile|${cleanSymbol.uppercase()}|$cleanTimeframe"
+        if (analyzerChartRequestKey == key) return
+        analyzerChartRequestKey = key
+        val secrets = app.secretsManager
+        if (!secrets.isSecureStorageAvailable || secrets.getMT5BridgeAccountAppToken(profile).isBlank()) {
+            analyzerChartRequestKey = ""
+            return
+        }
+        val client = MT5RemoteBridgeClient(
+            secrets, profile, { AppSecurityGuard.authorizeSensitiveAction() },
+            accountMode = mode, brokerBrand = brand, modeArmingPolicy = app.modeArmingPolicy,
+            managementIdentityAssertionProvider = { issueBridgeIdentityAssertion() }
+        )
+        if (!client.managedConfigured() || !client.hasPairing()) {
+            analyzerChartRequestKey = ""
+            return
+        }
+        viewModelScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    client.command(
+                        UUID.randomUUID().toString(),
+                        "SET_ANALYZER_CHART",
+                        JSONObject().put("symbol", cleanSymbol).put("timeframe", cleanTimeframe)
+                    )
+                }
+            }
+            if (result.isFailure || result.getOrNull()?.queued != true) analyzerChartRequestKey = ""
+        }
     }
 
     fun clearManagedMt5BridgeMonitor() {

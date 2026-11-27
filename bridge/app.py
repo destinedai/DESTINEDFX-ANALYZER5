@@ -1008,6 +1008,15 @@ def relevant_news_currencies(symbol):
     s=''.join(ch for ch in (symbol or '').upper() if ch.isalnum())
     explicit={'XAUUSD':{'XAU','USD'},'XAGUSD':{'XAG','USD'},'XPTUSD':{'XPT','USD'},'BTCUSD':{'BTC','USD'},'ETHUSD':{'ETH','USD'},'US30':{'USD'},'NAS100':{'USD'},'US100':{'USD'},'SPX500':{'USD'},'GER40':{'EUR'},'UK100':{'GBP'},'JPN225':{'JPY'}}
     if s in explicit: return explicit[s]
+    # Explicitly known Deriv synthetic indices have no currency-macro exposure.
+    # Unknown index-like names remain unsupported and fail closed.
+    if re.fullmatch(
+        r"(?:VOLATILITY[0-9]+(?:1S)?INDEX|V[0-9]+(?:1S)?|1HZ[0-9]+V|"
+        r"BOOM[0-9]+INDEX|CRASH[0-9]+INDEX|STEPINDEX|JUMP[0-9]+INDEX|"
+        r"RANGEBREAK[0-9]+INDEX|DRIFTSWITCH[0-9]+INDEX|DEX[0-9]+(?:UP|DOWN)?)",
+        s,
+    ):
+        return set()
     currencies={'USD','EUR','GBP','JPY','CHF','CAD','AUD','NZD','CNH','NOK','SEK','SGD','HKD','ZAR','MXN','TRY','PLN'}
     # Broker prefixes/suffixes are tolerated only when the first six characters are a known FX pair.
     if len(s)>=6 and s[:3] in currencies and s[3:6] in currencies: return {s[:3],s[3:6]}
@@ -1053,6 +1062,22 @@ def _unknown_news(source='unavailable',detail='NEWS UNKNOWN: provider unavailabl
 def _showmytrades_news(symbol):
     relevant=relevant_news_currencies(symbol)
     supported={'USD','EUR','GBP','JPY','AUD','NZD','CAD','CHF','CNY'}
+    if relevant == set():
+        # Known synthetic indices do not have currency-macro event exposure.
+        # This is a narrowly scoped calendar verdict, not permission to trade.
+        now_ms=int(time.time()*1000)
+        return {
+            'status':'CLEAR',
+            'source':'DestinedFX known synthetic-index macro policy',
+            'affected_currencies':[],
+            'retrieved_at_ms':now_ms,
+            'coverage_from_ms':now_ms-60_000,
+            'coverage_to_ms':now_ms+(max(NEWS_BEFORE,NEWS_AFTER,60)+60)*1000,
+            'max_age_seconds':NEWS_MAX_AGE,
+            'blackout_before_seconds':NEWS_BEFORE,
+            'blackout_after_seconds':NEWS_AFTER,
+            'detail':'NEWS CLEAR: recognized synthetic index has no currency-macro exposure',
+        }
     if not relevant: return _unknown_news('ShowMyTrades Economic Calendar','NEWS UNKNOWN: instrument relevance mapping unavailable')
     currencies=sorted({'CNY' if c=='CNH' else c for c in relevant})
     if not set(currencies).issubset(supported):
@@ -1662,6 +1687,16 @@ def heartbeat_news_clear(beat, symbols=None):
     if not isinstance(verdict,dict) or str(verdict.get('status','')).upper()!='CLEAR': return False
     ok,_=validate_news_verdict(verdict, (symbols or [None])[0] if symbols else None)
     return ok
+
+
+def resolve_start_news_symbols(config, beat):
+    symbols=config.get('symbols',[]) if isinstance(config,dict) else []
+    if isinstance(symbols,list) and any(str(item).strip().upper()=='AUTO' for item in symbols):
+        runtime=beat.get('configuration') if isinstance(beat,dict) else {}
+        actual=runtime.get('symbols') if isinstance(runtime,dict) else None
+        resolved=[str(item) for item in actual if isinstance(item,str) and item.strip()] if isinstance(actual,list) else []
+        return resolved if resolved else None
+    return symbols if isinstance(symbols,list) else []
 
 
 def demo_soak_account_digest(account):
@@ -3555,7 +3590,7 @@ def command(x:Command,authorization:str|None=Header(default=None)):
     # A non-durable diagnostic deployment may still deliver a narrowly scoped
     # safety stop to a terminal already paired in the current process. It must
     # never create a new START/RESUME or a destructive trading command.
-    safety_actions = {'STOP','PAUSE','EMERGENCY_STOP'}
+    safety_actions = {'STOP','PAUSE','EMERGENCY_STOP','SET_ANALYZER_CHART'}
     if not durable_execution_enabled() and x.action not in safety_actions:
         raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Only STOP, PAUSE and EMERGENCY_STOP are available on non-durable storage'})
     try: uuid.UUID(x.request_id)
@@ -3563,7 +3598,7 @@ def command(x:Command,authorization:str|None=Header(default=None)):
     if x.action in DESTRUCTIVE_ACTIONS: return issue_destructive_command(x,p)
     if x.action in OPENING_ACTIONS: return issue_market_order_command(x,p)
     if x.action in POSITION_MANAGEMENT_ACTIONS: return issue_position_stop_command(x,p)
-    if x.action not in ('START','STOP','PAUSE','RESUME','EMERGENCY_STOP'): raise HTTPException(422,'Invalid action')
+    if x.action not in ('START','STOP','PAUSE','RESUME','EMERGENCY_STOP','SET_ANALYZER_CHART'): raise HTTPException(422,'Invalid action')
     with tx() as c:
         m=c.execute('SELECT access_type,revoked,account_mode FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
     if x.action in ('START','RESUME'):
@@ -3572,8 +3607,8 @@ def command(x:Command,authorization:str|None=Header(default=None)):
         with tx() as c: job=c.execute("SELECT status FROM worker_jobs WHERE pairing_id=? ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
         account=beat.get('account',{}) if beat else {}
         live_ok=(m['account_mode']!='LIVE' or live_authorization_valid(p,m,beat))
-        symbols=x.config.get('symbols',[]) if isinstance(x.config,dict) else []
-        if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or not heartbeat_news_clear(beat,symbols) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, eligible EA state, verified identity/mode, fresh CLEAR news verdict, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
+        symbols=resolve_start_news_symbols(x.config,beat)
+        if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or symbols is None or not heartbeat_news_clear(beat,symbols) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, eligible EA state, verified identity/mode, fresh CLEAR news verdict, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
     serialized=json.dumps(x.config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
         _require_host_accepting_commands(c)
@@ -3597,7 +3632,7 @@ def poll(cursor:int=Query(default=0,ge=0),authorization:str|None=Header(default=
         else:
             # Never deliver a previously queued START/RESUME from an ephemeral
             # database. Keep emergency stop controls available as a safe fallback.
-            rows=c.execute("SELECT * FROM commands WHERE pairing_id=? AND action IN ('STOP','PAUSE','EMERGENCY_STOP') AND (id>? OR ack IS NULL) AND (expires_at IS NULL OR expires_at>?) ORDER BY id",(p['id'],cursor,time.time())).fetchall()
+            rows=c.execute("SELECT * FROM commands WHERE pairing_id=? AND action IN ('STOP','PAUSE','EMERGENCY_STOP','SET_ANALYZER_CHART') AND (id>? OR ack IS NULL) AND (expires_at IS NULL OR expires_at>?) ORDER BY id",(p['id'],cursor,time.time())).fetchall()
         if HOST_PROFILE=='EPHEMERAL':
             rows=[r for r in rows if r['action'] not in ('START','RESUME') or
                   (r['host_generation']==HOST_GENERATION and mode in ('DEMO','LIVE'))]
@@ -3610,7 +3645,7 @@ def acknowledge(command_id:int,x:Ack,authorization:str|None=Header(default=None)
     with tx(True) as c:
         r=c.execute('SELECT * FROM commands WHERE id=? AND pairing_id=?',(command_id,p['id'])).fetchone()
         if not r: raise HTTPException(404,'Command not found')
-        if not durable_execution_enabled() and r['action'] not in ('STOP','PAUSE','EMERGENCY_STOP'):
+        if not durable_execution_enabled() and r['action'] not in ('STOP','PAUSE','EMERGENCY_STOP','SET_ANALYZER_CHART'):
             raise HTTPException(503, detail={'code':'NON_DURABLE_STORAGE','message':'Only safety-stop acknowledgements are accepted on non-durable storage'})
         if r['expires_at'] is not None and r['expires_at']<=time.time() and not r['ack']: raise HTTPException(410,'Command expired')
         if r['action'] in DESTRUCTIVE_ACTIONS:

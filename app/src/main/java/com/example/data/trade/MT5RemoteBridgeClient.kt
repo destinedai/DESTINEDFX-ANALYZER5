@@ -651,7 +651,7 @@ class MT5RemoteBridgeClient(
 
     /** Creates one profile-scoped idempotency key; UNKNOWN is retained for reconciliation, never retried here. */
     suspend fun command(requestId: String, action: String, config: JSONObject = JSONObject()): CommandResult {
-        require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP") + COMMAND_TRADE_ACTIONS)
+        require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP", "SET_ANALYZER_CHART") + COMMAND_TRADE_ACTIONS)
         touchHostActivity()
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
         if (action in COMMAND_TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
@@ -668,6 +668,21 @@ class MT5RemoteBridgeClient(
             }
             val reason = tradeActionFailure(fresh, action, config)
             if (reason != null) return CommandResult(requestId, false, reason, rejected = true)
+        } else if (action == "SET_ANALYZER_CHART") {
+            val symbol = config.optString("symbol").trim()
+            val timeframe = config.optString("timeframe").trim().uppercase(Locale.ROOT)
+            if (symbol.isBlank() || symbol.length > 64 || timeframe !in setOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")) {
+                return CommandResult(requestId, false, "Analyzer symbol or timeframe is invalid.", rejected = true)
+            }
+            val fresh = try { state() } catch (e: Exception) {
+                return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
+            }
+            if (!fresh.connected || !fresh.terminalConnected || !fresh.terminalOnline || !fresh.heartbeatFresh || !fresh.brokerIdentityVerified) {
+                return CommandResult(requestId, false, "MT5 market feed is not connected or its heartbeat is stale.", rejected = true)
+            }
+            if (fresh.brokerQuotes.orEmpty().none { it.symbol.equals(symbol, ignoreCase = true) }) {
+                return CommandResult(requestId, false, "That instrument has no fresh quote from the connected MT5 Market Watch.", rejected = true)
+            }
         } else if (action in setOf("START", "RESUME", "PAUSE")) {
             val fresh = try { state() } catch (e: Exception) {
                 return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)

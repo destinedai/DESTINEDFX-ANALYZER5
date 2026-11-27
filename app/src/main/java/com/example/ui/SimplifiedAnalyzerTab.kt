@@ -1,11 +1,8 @@
 package com.example.ui
 
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,11 +14,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,13 +30,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel as composeViewModel
+import com.example.data.trade.VerifiedBrokerCandle
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkSurface
 import com.example.ui.theme.ElectricCyan
@@ -52,7 +52,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -65,7 +64,6 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val snapshot by viewModel.managedMt5BridgeSnapshot.collectAsStateWithLifecycle()
     val mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
     val brand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
-    val analyzerState: AnalyzerViewModel = composeViewModel()
 
     LaunchedEffect(brand, mode) { viewModel.startSelectedMt5AnalyzerBridgeMonitor() }
 
@@ -73,29 +71,43 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         it.connected && it.terminalConnected && it.terminalOnline && it.heartbeatFresh &&
             it.accountVerified && it.brokerIdentityVerified && it.actualAccountMode == mode
     } == true
-    val symbol = snapshot?.activeChartSymbol?.takeIf { it.isNotBlank() }
-        ?: snapshot?.brokerQuotes?.firstOrNull()?.symbol?.takeIf { it.isNotBlank() }
+    val symbols = snapshot?.brokerQuotes.orEmpty().asSequence()
+        .filter { it.source == "MT5_TERMINAL" && it.bid.isFinite() && it.ask.isFinite() && it.bid > 0.0 && it.ask >= it.bid }
+        .map { it.symbol }.distinct().sorted().toList()
+    var selectedSymbol by remember { mutableStateOf("") }
+    var selectedTimeframe by remember(snapshot?.activeChartTimeframe) {
+        mutableStateOf(snapshot?.activeChartTimeframe?.takeIf { it in setOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1") } ?: "M15")
+    }
+    var symbolMenuExpanded by remember { mutableStateOf(false) }
+    var timeframeMenuExpanded by remember { mutableStateOf(false) }
+    val symbol = selectedSymbol.takeIf { it.isNotBlank() }
+        ?: snapshot?.activeChartSymbol?.takeIf { it in symbols }
+        ?: symbols.firstOrNull()
         ?: "EURUSD"
-    val timeframe = snapshot?.activeChartTimeframe?.takeIf { it.isNotBlank() } ?: "M15"
+    val timeframe = selectedTimeframe
+
+    LaunchedEffect(connected, symbol, timeframe) {
+        if (connected && symbol in symbols) viewModel.requestAnalyzerChartSelection(symbol, timeframe)
+    }
 
     val quote = if (connected) snapshot?.brokerQuotes?.firstOrNull {
         it.symbol.equals(symbol, true) && it.source == "MT5_TERMINAL" &&
             it.bid.isFinite() && it.ask.isFinite() && it.bid > 0.0 && it.ask >= it.bid
     } else null
-    val candles = if (connected) snapshot?.brokerCandles.orEmpty().filter {
-        it.symbol.equals(symbol, true) && it.timeframe.equals(timeframe, true) &&
-            it.source == "MT5_TERMINAL" && it.complete
+    val allSymbolCandles = if (connected) snapshot?.brokerCandles.orEmpty().filter {
+        it.symbol.equals(symbol, true) && it.source == "MT5_TERMINAL" && it.complete
     } else emptyList()
+    val candles = allSymbolCandles.filter { it.timeframe.equals(timeframe, true) }
+        .sortedBy { it.timestampMs }
 
-    val price = quote?.let { ((it.bid + it.ask) / 2.0).takeIf { value -> value.isFinite() && value > 0.0 } }
+    // MT5 chart prices are BID-based. Keep ASK available through the displayed spread.
+    val price = quote?.bid?.takeIf { it.isFinite() && it > 0.0 }
     val spread = quote?.let { (it.ask - it.bid).takeIf { value -> value.isFinite() && value >= 0.0 } }
     val priceQuoteAvailable = price != null
     val priceQuoteFresh = priceQuoteAvailable && connected && snapshot?.heartbeatFresh == true
-    LaunchedEffect(priceQuoteAvailable, priceQuoteFresh) {
-        analyzerState.updatePriceState(priceQuoteAvailable, priceQuoteFresh)
+    val insight = remember(quote, allSymbolCandles, timeframe) {
+        MT5AnalyzerMath.analyze(quote, allSymbolCandles, timeframe)
     }
-
-    val insight = remember(quote, candles) { MT5AnalyzerMath.analyze(quote, candles) }
     val support = insight.support
     val resistance = insight.resistance
     val stopLoss = insight.stopLoss
@@ -115,13 +127,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             else -> false
         }
     val analysisValidated = trendValidated && levelsValidated
-    val showPrice = priceQuoteAvailable && priceQuoteFresh &&
-        analyzerState.priceAvailable && analyzerState.priceFresh
-    val chartTicker = analyzerTradingViewTicker(symbol)
-    val showAnalysis = showPrice && analysisValidated && chartTicker != null
-    LaunchedEffect(chartTicker) {
-        if (chartTicker == null) analyzerState.onChartUnavailable()
-    }
+    val showPrice = priceQuoteAvailable && priceQuoteFresh
 
     Column(
         Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
@@ -132,40 +138,56 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(symbol, color = TextPrimary, fontSize = 21.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                    Box(Modifier.size(10.dp).background(if (connected) ProfitGreen else Color.Gray, CircleShape))
+                    Box {
+                        Text(symbol, color = TextPrimary, fontSize = 21.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black,
+                            modifier = Modifier.clickable { symbolMenuExpanded = true })
+                        DropdownMenu(expanded = symbolMenuExpanded, onDismissRequest = { symbolMenuExpanded = false }) {
+                            symbols.forEach { option ->
+                                DropdownMenuItem(text = { Text(option) }, onClick = {
+                                    selectedSymbol = option
+                                    symbolMenuExpanded = false
+                                })
+                            }
+                        }
+                    }
+                    Text(timeframe, color = ElectricCyan, fontSize = 13.sp,
+                        modifier = Modifier.clickable { timeframeMenuExpanded = true })
+                    DropdownMenu(expanded = timeframeMenuExpanded, onDismissRequest = { timeframeMenuExpanded = false }) {
+                        listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1").forEach { option ->
+                            DropdownMenuItem(text = { Text(option) }, onClick = {
+                                selectedTimeframe = option
+                                timeframeMenuExpanded = false
+                            })
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Box(Modifier.size(9.dp).background(if (priceQuoteFresh) ProfitGreen else Color.Gray, CircleShape))
                 }
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text("PRICE", color = TextSecondary, fontSize = 9.sp)
-                        Text(if (showPrice) {
-                            price?.let { formatPrice(it, symbol) } ?: "--"
-                        } else "--", color = TextPrimary, fontSize = 29.sp,
+                        Text(if (showPrice) price?.let { formatPrice(it, symbol) } ?: "--" else "--",
+                            color = TextPrimary, fontSize = 29.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("SPREAD", color = TextSecondary, fontSize = 9.sp)
-                        Text(if (showPrice) {
-                            spread?.let { formatPrice(it, symbol) } ?: "--"
-                        } else "--", color = TextPrimary, fontSize = 15.sp,
+                        Text(if (showPrice) spread?.let { formatPrice(it, symbol) } ?: "--" else "--",
+                            color = TextPrimary, fontSize = 15.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                     }
                 }
+                if (!priceQuoteFresh) Text("Waiting for live market quote", color = TextSecondary, fontSize = 10.sp)
             }
         }
 
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-            if (chartTicker != null) {
-                AnalyzerTradingViewChart(chartTicker, timeframe, analyzerState,
-                    Modifier.fillMaxWidth().height(270.dp))
-            } else {
-                Box(Modifier.fillMaxWidth().height(270.dp).background(Color(0xFF171B27)))
-            }
+            AnalyzerBrokerCandlestickChart(candles, symbol, timeframe, Modifier.fillMaxWidth().height(270.dp))
         }
 
-        if (showAnalysis) {
+        if (showPrice) {
             Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -180,22 +202,70 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                     }
                     Text(insight.reason, color = TextSecondary, fontSize = 12.sp)
+                    Text("${insight.higherTimeframe}  ·  ${insight.lowerTimeframe}",
+                        color = TextPrimary, fontSize = 11.sp)
+                    Text("${insight.structure}  ·  ${insight.marketState}",
+                        color = TextSecondary, fontSize = 11.sp)
                 }
             }
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text("LEVELS", color = ElectricCyan, fontSize = 11.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
-                    AnalyzerLevelValue("Support", support, symbol)
-                    AnalyzerLevelValue("Resistance", resistance, symbol)
-                    AnalyzerLevelValue("SL suggestion", stopLoss, symbol)
-                    AnalyzerLevelValue("TP suggestion", takeProfit, symbol)
+            if (analysisValidated) {
+                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Text("LEVELS", color = ElectricCyan, fontSize = 11.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                        AnalyzerLevelValue("Support", support, symbol)
+                        AnalyzerLevelValue("Resistance", resistance, symbol)
+                        AnalyzerLevelValue("Swing low", insight.swingLow, symbol)
+                        AnalyzerLevelValue("Swing high", insight.swingHigh, symbol)
+                        AnalyzerLevelValue("SL suggestion", stopLoss, symbol)
+                        AnalyzerLevelValue("TP suggestion", takeProfit, symbol)
+                    }
                 }
             }
         }
 
         EconomicCalendarCard(symbol)
+    }
+}
+
+@Composable
+private fun AnalyzerBrokerCandlestickChart(
+    candles: List<VerifiedBrokerCandle>,
+    symbol: String,
+    timeframe: String,
+    modifier: Modifier = Modifier
+) {
+    val visible = remember(candles, symbol, timeframe) {
+        candles.filter { it.symbol.equals(symbol, true) && it.timeframe.equals(timeframe, true) && it.source == "MT5_TERMINAL" && it.complete }
+            .sortedBy { it.timestampMs }
+            .takeLast(60)
+    }
+    Box(modifier.background(Color(0xFF171B27)), contentAlignment = Alignment.Center) {
+        if (visible.size < 2) {
+            Text("Waiting for broker candles", color = TextSecondary, fontSize = 12.sp)
+        } else {
+            Canvas(Modifier.fillMaxSize().padding(12.dp)) {
+                val rawLow = visible.minOf { it.low }
+                val rawHigh = visible.maxOf { it.high }
+                val rawRange = (rawHigh - rawLow).takeIf { it.isFinite() && it > 0.0 } ?: (rawHigh * 0.001)
+                val low = rawLow - rawRange * 0.05
+                val high = rawHigh + rawRange * 0.05
+                val range = (high - low).coerceAtLeast(1e-12)
+                fun y(priceValue: Double): Float = ((high - priceValue) / range * size.height.toDouble()).toFloat()
+                val slot = size.width / visible.size.toFloat()
+                val bodyWidth = (slot * 0.58f).coerceAtLeast(2f)
+                val wickWidth = 1.dp.toPx()
+                visible.forEachIndexed { index, candle ->
+                    val x = (index + 0.5f) * slot
+                    val wickColor = if (candle.close >= candle.open) ProfitGreen else LossRed
+                    drawLine(wickColor, Offset(x, y(candle.high)), Offset(x, y(candle.low)), strokeWidth = wickWidth)
+                    val bodyTop = minOf(y(candle.open), y(candle.close))
+                    val bodyHeight = kotlin.math.abs(y(candle.open) - y(candle.close)).coerceAtLeast(2.dp.toPx())
+                    drawRect(wickColor, Offset(x - bodyWidth / 2f, bodyTop), Size(bodyWidth, bodyHeight))
+                }
+            }
+        }
     }
 }
 
@@ -212,123 +282,6 @@ private val analyzerCalendarCurrencies = setOf(
     "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK",
     "DKK", "SGD", "HKD", "CNH", "CNY", "MXN", "ZAR", "TRY", "PLN", "HUF", "CZK"
 )
-
-internal fun tradingViewSymbolForMt5(mt5Symbol: String): String? {
-    val raw = mt5Symbol.trim().uppercase(Locale.ROOT).substringAfterLast(':').substringBefore('.')
-    val compact = raw.filter { it in 'A'..'Z' }
-    if (compact == "GOLD" || compact.startsWith("GOLD")) return "TVC:GOLD"
-    if (compact.length < 6) return null
-    val pair = compact.take(6)
-    if (pair.startsWith("XAU") && pair.endsWith("USD")) return "TVC:GOLD"
-    if (pair.startsWith("XAG") && pair.endsWith("USD")) return "TVC:SILVER"
-    val base = pair.substring(0, 3)
-    val quote = pair.substring(3, 6)
-    return if (base in analyzerCalendarCurrencies && quote in analyzerCalendarCurrencies) "FX:$pair" else null
-}
-
-internal fun tradingViewIntervalForMt5(timeframe: String): String = when (timeframe.trim().uppercase(Locale.ROOT)) {
-    "M1" -> "1"
-    "M5" -> "5"
-    "M15" -> "15"
-    "M30" -> "30"
-    "H1" -> "60"
-    "H4" -> "240"
-    "D1" -> "1D"
-    "W1" -> "1W"
-    else -> "15"
-}
-
-@Composable
-private fun AnalyzerTradingViewChart(
-    ticker: String,
-    timeframe: String,
-    analyzerState: AnalyzerViewModel,
-    modifier: Modifier = Modifier
-) {
-    val url = remember(ticker, timeframe) {
-        "https://www.tradingview.com/widgetembed/?frameElementId=destinedfx_analyzer" +
-            "&symbol=${URLEncoder.encode(ticker, "UTF-8")}" +
-            "&interval=${tradingViewIntervalForMt5(timeframe)}" +
-            "&hidesidetoolbar=1&hide_top_toolbar=1&symboledit=0&saveimage=0" +
-            "&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=0&hideideas=1&locale=en"
-    }
-
-    Box(modifier.background(Color(0xFF171B27))) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                WebView(context).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.databaseEnabled = true
-                    settings.loadsImagesAutomatically = true
-                    settings.blockNetworkLoads = false
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = false
-                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                    overScrollMode = android.view.View.OVER_SCROLL_NEVER
-                    setBackgroundColor(android.graphics.Color.rgb(23, 27, 39))
-                    webChromeClient = WebChromeClient()
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
-                            super.onPageStarted(view, pageUrl, favicon)
-                            if (pageUrl?.startsWith("https://www.tradingview.com/widgetembed/") == true) {
-                                analyzerState.onChartPageStarted()
-                            }
-                        }
-
-                        override fun onPageFinished(view: WebView?, pageUrl: String?) {
-                            super.onPageFinished(view, pageUrl)
-                            if (pageUrl?.startsWith("https://www.tradingview.com/widgetembed/") == true && view != null) {
-                                analyzerState.onChartPageLoaded()
-                                pollAnalyzerChartRendered(view, analyzerState)
-                            }
-                        }
-
-                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                            super.onReceivedError(view, request, error)
-                            if (request?.isForMainFrame == true) analyzerState.onChartPageFailed()
-                        }
-
-                        override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, error: android.webkit.WebResourceResponse?) {
-                            super.onReceivedHttpError(view, request, error)
-                            if (request?.isForMainFrame == true && (error?.statusCode ?: 200) >= 400) {
-                                analyzerState.onChartPageFailed()
-                            }
-                        }
-                    }
-                }
-            },
-            update = { webView ->
-                if (webView.tag != url) {
-                    analyzerState.onChartPageStarted()
-                    webView.tag = url
-                    webView.stopLoading()
-                    webView.loadUrl(url)
-                }
-            }
-        )
-    }
-}
-
-private fun pollAnalyzerChartRendered(
-    webView: WebView,
-    analyzerState: AnalyzerViewModel,
-    attempt: Int = 0
-) {
-    val script = "(function(){var nodes=document.querySelectorAll('iframe,canvas,svg');" +
-        "for(var i=0;i<nodes.length;i++){var r=nodes[i].getBoundingClientRect();" +
-        "if(r.width>0&&r.height>0)return true;}return false;})();"
-    webView.evaluateJavascript(script) { result ->
-        val rendered = result == "true"
-        analyzerState.onChartRendered(rendered)
-        if (!rendered && attempt < 40) {
-            webView.postDelayed({
-                if (webView.isAttachedToWindow) pollAnalyzerChartRendered(webView, analyzerState, attempt + 1)
-            }, 500L)
-        }
-    }
-}
 
 private data class AnalyzerEconomicEvent(
     val title: String,

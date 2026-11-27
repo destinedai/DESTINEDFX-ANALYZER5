@@ -826,8 +826,8 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             val botConfig = viewModel.findBestBotOpportunity()
                             val config = JSONObject()
                                 .put("strategy", botConfig.strategyId)
-                                .put("symbols", JSONArray().put(botConfig.symbol))
-                                .put("timeframes", JSONArray().put(botConfig.timeframe))
+                                .put("symbols", JSONArray().put("AUTO"))
+                                .put("timeframes", JSONArray().put("M5").put("M15").put("M30").put("H1").put("H4").put("D1"))
                                 .put("risk_percent", botConfig.riskPercent)
                                 .put("initial_volume", botConfig.lot)
                                 .put("max_volume", botConfig.lot)
@@ -835,7 +835,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                                 .put("max_daily_loss_percent", 2.0)
                                 .put("max_concurrent_positions", 2)
                             val result = client.command(UUID.randomUUID().toString(), "START", config)
-                            if (result.queued) "Bot start requested for ${botConfig.symbol} ${botConfig.timeframe}." else result.detail
+                            if (result.queued) "Bot start requested. Scanning up to 32 instruments from MT5 Market Watch." else result.detail
                         }
                         "CLOSE_POSITION_SELECTED", "CANCEL_PENDING_SELECTED" -> {
                             val target = ticket?.takeIf { it.isNotBlank() }

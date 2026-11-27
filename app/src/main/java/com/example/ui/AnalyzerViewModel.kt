@@ -50,5 +50,3 @@ class AnalyzerViewModel : ViewModel() {
     }
 }
 
-internal fun analyzerTradingViewTicker(mt5Symbol: String): String? =
-    tradingViewSymbolForMt5(mt5Symbol)

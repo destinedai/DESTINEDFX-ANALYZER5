@@ -3485,3 +3485,32 @@ def test_host_agent_token_credential_rejects_group_or_other_readable_file(monkey
     monkeypatch.delenv("HOST_AGENT_TOKEN", raising=False)
     monkeypatch.setenv("HOST_AGENT_TOKEN_FILE", str(token_file))
     assert app.host_agent_shared_token() == ""
+
+
+
+def test_auto_start_news_preflight_resolves_real_terminal_symbols():
+    beat = {"configuration": {"symbols": ["XAUUSD", "EURUSD.a"]}}
+    assert app.resolve_start_news_symbols({"symbols": ["AUTO"]}, beat) == ["XAUUSD", "EURUSD.a"]
+    assert app.resolve_start_news_symbols({"symbols": ["AUTO"]}, {"configuration": {"symbols": []}}) is None
+    assert app.resolve_start_news_symbols({"symbols": ["EURUSD"]}, beat) == ["EURUSD"]
+    assert app.resolve_start_news_symbols({}, beat) == []
+
+
+
+def test_recognized_synthetic_indices_have_no_currency_macro_mapping():
+    for symbol in (
+        "Volatility 75 Index",
+        "Volatility 10 (1s) Index",
+        "Boom 1000 Index",
+        "Crash 500 Index",
+        "Step Index",
+        "Jump 50 Index",
+        "Range Break 100 Index",
+        "1HZ10V",
+    ):
+        assert app.relevant_news_currencies(symbol) == set()
+        verdict = app._showmytrades_news(symbol)
+        assert verdict["status"] == "CLEAR"
+        assert app.validate_news_verdict(verdict, symbol)[0] is True
+
+    assert app.relevant_news_currencies("Unknown Index 999") is None
