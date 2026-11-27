@@ -142,8 +142,10 @@ class DerivBotLifecycleInstrumentedTest {
     @After
     fun tearDown() {
         if (::context.isInitialized) {
-            runCatching { DerivDemoBotService.stop(context) }
-            SystemClock.sleep(250L)
+            if (DerivDemoBotService.state.value != "STOPPED") {
+                runCatching { DerivDemoBotService.stop(context) }
+                SystemClock.sleep(250L)
+            }
             runCatching { secrets.setDerivBotRecoveryEnabled(false) }
             runCatching { secrets.clearPathDemoAcceptance(identity) }
             runCatching { persistEvidence() }
@@ -344,9 +346,12 @@ class DerivBotLifecycleInstrumentedTest {
             DerivDemoBotService.state.value == "STOPPED" &&
                 gateway.sellRequests.contains(activeBeforeFinalStop)
         }
+        val expectedStopReason = "Stopped — Deriv broker confirms all DestinedFX Bot contracts are closed"
+        assertEquals("STOP must confirm the entire Bot-owned ledger, not only the last sell request",
+            expectedStopReason, DerivDemoBotService.statusReason.value)
         assertFalse("STOP must not sell unowned contracts", gateway.sellRequests.any { it >= 990_000L })
         record("FinalStopAfterCycles", beforeFinalStop, DerivDemoBotService.state.value,
-            "STOP closed only the resumed Bot-owned DEMO contract; no unowned position was sent to SELL.")
+            "STOP confirmed every Bot-owned DEMO contract closed; service reason=${DerivDemoBotService.statusReason.value}; no unowned position was sent to SELL.")
         assertTrue(evidenceFile.isFile && evidenceFile.length() > 100L)
         persistEvidence()
     }
