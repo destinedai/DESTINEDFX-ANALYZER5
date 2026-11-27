@@ -120,6 +120,18 @@ def test_ea_source_contract_and_balanced_delimiters():
     assert not failed, "EA source contract checks failed: " + ", ".join(failed)
 
 
+def test_managed_mode_waits_for_analyzer_commands_and_preserves_standalone_scanner():
+    source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
+    timer = source[source.index("void OnTimer()") : source.index("void OnTick()")]
+    assert "input bool InpManagedAnalyzerMode=true;" in source
+    assert "bool managedMode=InpManagedAnalyzerMode;" in timer
+    assert "if(managedMode)return;" in timer
+    assert timer.index("ProcessCommands();") < timer.index("if(managedMode)return;") < timer.index("Scan();")
+    assert 'action=="PLACE_MARKET_ORDER"' in source
+    assert "ExecutePhoneMarketOrder(orderConfig,orderRequest,outcome,msg)" in source
+    assert "void Scan()" in source and "Scan();" in timer
+
+
 def test_analyzer_uses_active_terminal_chart_symbol_and_timeframe_from_mt5_heartbeat():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     quotes = source[source.index("string ActiveChartSymbol()") : source.index("ENUM_TIMEFRAMES AnalyzerChartTimeframe")]
@@ -367,7 +379,10 @@ def test_daily_limit_blocks_start_resume_and_timer_keeps_exit_retrying():
     source = Path(__file__).resolve().parent.joinpath("DestinedFXTraderEA.mq5").read_text()
     assert 'if(!RiskDayOK()){g_state="STOPPED";outcome="REJECTED";msg="DAILY RISK GUARD' in source
     assert 'if(RiskDayOK()&&AccountIdentityMatches()' in source
-    assert 'if(!RiskDayOK()){if(DailyRiskLocked())DailyEmergencyExit();' in source
+    timer = source[source.index("void OnTimer()") : source.index("void OnTick()")]
+    assert 'if(!RiskDayOK()){' in timer
+    assert 'if(DailyRiskLocked())DailyEmergencyExit();' in timer
+    assert 'else if(g_state=="RUNNING"){' in timer
 
 
 def test_journal_failure_contracts_fail_closed_before_ack_or_submission():

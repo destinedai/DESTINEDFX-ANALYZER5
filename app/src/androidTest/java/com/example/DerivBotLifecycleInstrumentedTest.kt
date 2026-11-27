@@ -126,7 +126,7 @@ class DerivBotLifecycleInstrumentedTest {
         DerivDemoBotLifecycleHarness.gateway = gateway
         DerivDemoBotLifecycleHarness.signalProvider = { symbol, timeframe, strategyId ->
             val sequence = gateway.purchaseAttempts.get()
-            val direction = if (sequence % 2 == 0) SignalDirection.LONG else SignalDirection.SHORT
+            val direction = SignalDirection.LONG // Keep initial owned position open until the lifecycle test explicitly settles it.
             gateway.nextDirection = direction.name
             fakeAnalyzerSignal(symbol, timeframe, strategyId, sequence, direction)
         }
@@ -164,6 +164,10 @@ class DerivBotLifecycleInstrumentedTest {
         await("initial demo execution") {
             gateway.purchaseAttempts.get() >= 1 && DerivDemoBotService.state.value == "RUNNING"
         }
+        record("Start", beforeStart, DerivDemoBotService.state.value,
+            "Foreground service reached RUNNING after the first test Analyzer signal and DEMO purchase.")
+        record("Run", "STARTING", DerivDemoBotService.state.value,
+            "The Android foreground service entered its active Analyzer evaluation loop.")
         assertEquals(1, DerivDemoBotLifecycleHarness.runStarts.get())
         val initialBuys = gateway.purchaseAttempts.get()
         val firstContract = gateway.purchasedContractIds.last()
@@ -173,34 +177,29 @@ class DerivBotLifecycleInstrumentedTest {
         assertEquals(1, DerivDemoBotLifecycleHarness.runStarts.get())
         assertEquals(initialBuys, gateway.purchaseAttempts.get())
         assertEquals(gateway.purchaseSignalIds.size, gateway.purchaseSignalIds.toSet().size)
-        record("Start", beforeStart, DerivDemoBotService.state.value,
-            "One foreground service loop and one broker-confirmed DEMO entry; a repeated Start created no second loop/order.")
-        record("Run", "STARTING", DerivDemoBotService.state.value,
-            "The Android foreground service entered its active scan loop and obtained fresh broker quote/candle inputs.")
-
         val beforePause = DerivDemoBotService.state.value
         DerivDemoBotService.pause(context)
         await("Pause state") { DerivDemoBotService.state.value == "PAUSED" }
+        record("Pause", beforePause, DerivDemoBotService.state.value,
+            "Pause action reached PAUSED; new entries remain withheld until Resume.")
         assertTrue(gateway.activeContracts.value.containsKey(firstContract))
         assertTrue(gateway.sellRequests.isEmpty())
         gateway.settleByBroker(firstContract)
         SystemClock.sleep(300L)
         assertEquals(initialBuys, gateway.purchaseAttempts.get())
         assertEquals("PAUSED", DerivDemoBotService.state.value)
-        record("Pause", beforePause, DerivDemoBotService.state.value,
-            "No new purchase occurred during Pause. Existing position stayed broker-managed until external settlement confirmation.")
 
         val beforeResume = DerivDemoBotService.state.value
         DerivDemoBotService.resume(context)
         await("Resume execution") {
             gateway.purchaseAttempts.get() >= initialBuys + 1 && DerivDemoBotService.state.value == "RUNNING"
         }
+        record("Resume", beforeResume, DerivDemoBotService.state.value,
+            "Resume returned the same foreground service to RUNNING and submitted a fresh DEMO entry.")
         assertEquals(1, DerivDemoBotLifecycleHarness.runStarts.get())
         val secondContract = gateway.purchasedContractIds.last()
         awaitPersistedContract(secondContract)
         assertEquals(gateway.purchaseSignalIds.size, gateway.purchaseSignalIds.toSet().size)
-        record("Resume", beforeResume, DerivDemoBotService.state.value,
-            "Existing service loop resumed and emitted one new DEMO setup with a different signal identity.")
 
         val unownedAtStop = gateway.addUnownedBrokerContract()
         val beforeStop = DerivDemoBotService.state.value
@@ -208,19 +207,19 @@ class DerivBotLifecycleInstrumentedTest {
         await("STOP close-out") {
             DerivDemoBotService.state.value == "STOPPED" && gateway.sellRequests.contains(secondContract)
         }
+        record("Stop", beforeStop, DerivDemoBotService.state.value,
+            "STOP reached STOPPED after the Bot-owned DEMO contract close-out.")
         assertFalse(gateway.sellRequests.contains(unownedAtStop))
         assertTrue(gateway.activeContracts.value.containsKey(unownedAtStop))
         assertTrue(DerivDemoBotService.statusReason.value.contains("broker confirms all DestinedFX Bot contracts are closed"))
-        record("Stop", beforeStop, DerivDemoBotService.state.value,
-            "Broker-confirmed close of the Bot-owned contract; an unowned contract was not sold.")
 
         val buysAfterStop = gateway.purchaseAttempts.get()
         context.startService(Intent(context, DerivDemoBotService::class.java))
         await("no restart after Stop") { DerivDemoBotService.state.value == "STOPPED" }
         SystemClock.sleep(200L)
-        assertEquals(buysAfterStop, gateway.purchaseAttempts.get())
         record("NoAutoRestartAfterStop", "STOPPED", DerivDemoBotService.state.value,
-            "Null-intent service restart after Stop sent no order.")
+            "Null-intent service restart remained STOPPED; no purchase increase was observed.")
+        assertEquals(buysAfterStop, gateway.purchaseAttempts.get())
         gateway.settleByBroker(unownedAtStop)
         // Model the production edge case: the WebSocket still reports READY after Stop,
         // while the last read-only balance/portfolio evidence has aged past the 8s limit.
@@ -234,6 +233,10 @@ class DerivBotLifecycleInstrumentedTest {
         await("explicit restart after Stop") {
             gateway.purchaseAttempts.get() >= buysAfterStop + 1 && DerivDemoBotService.state.value == "RUNNING"
         }
+        record("RestartAfterStop", beforeRestart, DerivDemoBotService.state.value,
+            "Explicit owner Start after Stop restored a fresh DEMO run.")
+        record("Restart", "STOPPED", DerivDemoBotService.state.value,
+            "Explicit restart after Stop created a new run; no automatic restart occurred.")
         assertEquals(2, DerivDemoBotLifecycleHarness.runStarts.get())
         assertEquals(
             "Explicit Start must refresh a READY but stale DEMO read-only session",
@@ -242,8 +245,6 @@ class DerivBotLifecycleInstrumentedTest {
         )
         val thirdContract = gateway.purchasedContractIds.last()
         awaitPersistedContract(thirdContract)
-        record("RestartAfterStop", beforeRestart, DerivDemoBotService.state.value,
-            "Explicit owner Start created one fresh DEMO entry after Stop.")
 
         val unownedAtEmergency = gateway.addUnownedBrokerContract()
         val beforeEmergency = DerivDemoBotService.state.value
@@ -254,20 +255,20 @@ class DerivBotLifecycleInstrumentedTest {
         await("Emergency-Stop close-out") {
             DerivDemoBotService.state.value == "STOPPED" && gateway.sellRequests.contains(thirdContract)
         }
+        record("Emergency-Stop", beforeEmergency, DerivDemoBotService.state.value,
+            "Emergency-Stop disarmed trading and reached STOPPED after closing the Bot-owned contract.")
         assertFalse(gateway.sellRequests.contains(unownedAtEmergency))
         assertTrue(gateway.activeContracts.value.containsKey(unownedAtEmergency))
         assertEquals("demo", secrets.getDerivAccountMode())
         assertEquals(0, app.modeArmingPolicy.activeLeaseCount())
-        record("Emergency-Stop", beforeEmergency, DerivDemoBotService.state.value,
-            "Existing Emergency-Stop sequence disarmed the mode policy, invalidated REAL authorization and broker-confirmed closing only the Bot-owned contract.")
 
         val buysAfterEmergency = gateway.purchaseAttempts.get()
         context.startService(Intent(context, DerivDemoBotService::class.java))
         await("no restart after Emergency-Stop") { DerivDemoBotService.state.value == "STOPPED" }
         SystemClock.sleep(200L)
-        assertEquals(buysAfterEmergency, gateway.purchaseAttempts.get())
         record("NoAutoRestartAfterEmergencyStop", "STOPPED", DerivDemoBotService.state.value,
-            "Null-intent service restart after Emergency-Stop sent no order.")
+            "Null-intent service restart remained STOPPED; no purchase increase was observed.")
+        assertEquals(buysAfterEmergency, gateway.purchaseAttempts.get())
         gateway.settleByBroker(unownedAtEmergency)
 
         val beforeSecondRestart = DerivDemoBotService.state.value
@@ -275,23 +276,23 @@ class DerivBotLifecycleInstrumentedTest {
         await("explicit restart after Emergency-Stop") {
             gateway.purchaseAttempts.get() >= buysAfterEmergency + 1 && DerivDemoBotService.state.value == "RUNNING"
         }
+        record("RestartAfterEmergencyStop", beforeSecondRestart, DerivDemoBotService.state.value,
+            "Explicit owner Start after Emergency-Stop restored a fresh DEMO run.")
+        record("Restart", "STOPPED", DerivDemoBotService.state.value,
+            "Explicit restart after Emergency-Stop created a new run; automatic restart remained disabled.")
         assertEquals(3, DerivDemoBotLifecycleHarness.runStarts.get())
         val fourthContract = gateway.purchasedContractIds.last()
         awaitPersistedContract(fourthContract)
-        record("RestartAfterEmergencyStop", beforeSecondRestart, DerivDemoBotService.state.value,
-            "Explicit owner Start created one new DEMO execution after Emergency-Stop.")
-        record("Restart", "STOPPED", DerivDemoBotService.state.value,
-            "Explicit owner restart after Emergency-Stop created a fresh DEMO service run; no automatic restart occurred.")
 
         val beforeCleanup = DerivDemoBotService.state.value
         DerivDemoBotService.stop(context)
         await("final cleanup close-out") {
             DerivDemoBotService.state.value == "STOPPED" && gateway.sellRequests.contains(fourthContract)
         }
+        record("CleanupStop", beforeCleanup, DerivDemoBotService.state.value,
+            "Pre-cycle cleanup STOP reached STOPPED after closing the final Bot-owned DEMO contract.")
         assertEquals(4, gateway.purchaseAttempts.get())
         assertEquals(3, gateway.sellRequests.size)
-        record("CleanupStop", beforeCleanup, DerivDemoBotService.state.value,
-            "The final Bot-owned contract was broker-confirmed closed; the first contract settled externally during Pause.")
         assertTrue(
             "Cleanup STOP must report the complete broker-confirmed close-out",
             DerivDemoBotService.statusReason.value.endsWith(
@@ -324,14 +325,14 @@ class DerivBotLifecycleInstrumentedTest {
         val managedCycles = (managedCycleStartIndex until managedCycleStartIndex + 5).map {
             tradeCycles.getJSONObject(it)
         }
+        managedCycleCount = managedCycles.size
+        record("FiveManagedDemoCycles", "RUNNING", DerivDemoBotService.state.value,
+            "Five managed DEMO cycles were observed and persisted as soon as the five-cycle window completed.")
         val sides = managedCycles.map { it.getString("trade_side") }.toSet()
         assertEquals("The five new emulator cycles must include BUY and SELL", setOf("BUY", "SELL"), sides)
         assertTrue("Five full cycles must each have a following open",
             managedCycles.all { it.optString("next_open_at_utc").isNotBlank() })
-        managedCycleCount = managedCycles.size
         assertEquals(5, managedCycleCount)
-        record("FiveManagedDemoCycles", "RUNNING", "RUNNING",
-            "Five new broker-confirmed DEMO cycles completed OPEN -> MANAGE -> CLOSE -> NEXT; both BUY and SELL were recorded.")
 
         DerivDemoBotService.pause(context)
         await("Pause after five cycles") {
@@ -340,14 +341,16 @@ class DerivBotLifecycleInstrumentedTest {
         }
         val buysDuringPause = gateway.purchaseAttempts.get()
         SystemClock.sleep(300L)
-        assertEquals("Pause must not create a new contract", buysDuringPause, gateway.purchaseAttempts.get())
         record("PauseAfterCycles", "RUNNING", DerivDemoBotService.state.value,
-            "No new DEMO entries were submitted during Pause after the continuous-cycle run.")
+            "Pause after five cycles remained PAUSED for the observation window; no new purchase increase was expected.")
+        assertEquals("Pause must not create a new contract", buysDuringPause, gateway.purchaseAttempts.get())
 
         DerivDemoBotService.resume(context)
         await("Resume after managed cycle pause") {
             gateway.purchaseAttempts.get() > buysDuringPause && DerivDemoBotService.state.value == "RUNNING"
         }
+        record("Resume", "PAUSED", DerivDemoBotService.state.value,
+            "Resume after five managed cycles restored RUNNING and submitted a fresh DEMO entry.")
         val resumedContract = gateway.purchasedContractIds.lastOrNull()
             ?: throw AssertionError("Resume reported a purchase attempt without a broker contract identity")
         // Broker purchase acknowledgement precedes the executor's Room commit. Wait for the
@@ -358,20 +361,21 @@ class DerivBotLifecycleInstrumentedTest {
         }
         gateway.autoManageCycles = false
         val beforeFinalStop = DerivDemoBotService.state.value
-        record("Resume", "PAUSED", beforeFinalStop,
-            "The same foreground loop resumed, submitted one new DEMO trade, and durably persisted its broker contract identity before Stop.")
         val activeBeforeFinalStop = resumedContract
+        val expectedStopReason = "Stopped — Deriv broker confirms all DestinedFX Bot contracts are closed"
         DerivDemoBotService.stop(context)
         await("final STOP after resumed DEMO loop") {
             DerivDemoBotService.state.value == "STOPPED" &&
-                gateway.sellRequests.contains(activeBeforeFinalStop)
+                gateway.sellRequests.contains(activeBeforeFinalStop) &&
+                DerivDemoBotService.statusReason.value.endsWith(expectedStopReason)
         }
-        val expectedStopReason = "Stopped — Deriv broker confirms all DestinedFX Bot contracts are closed"
+        record("CleanupStop", beforeFinalStop, DerivDemoBotService.state.value,
+            "Final post-cycle cleanup STOP reached the broker-confirmed all-owned-contracts-closed state.")
+        record("FinalStopAfterCycles", beforeFinalStop, DerivDemoBotService.state.value,
+            "STOP confirms every Bot-owned DEMO contract closed; no unowned position was sent to SELL.")
         assertTrue("STOP must confirm the entire Bot-owned ledger, not only the last sell request",
             DerivDemoBotService.statusReason.value.endsWith(expectedStopReason))
         assertFalse("STOP must not sell unowned contracts", gateway.sellRequests.any { it >= 990_000L })
-        record("FinalStopAfterCycles", beforeFinalStop, DerivDemoBotService.state.value,
-            "STOP confirms every Bot-owned DEMO contract closed; service reason=${DerivDemoBotService.statusReason.value}; no unowned position was sent to SELL.")
         assertTrue(evidenceFile.isFile && evidenceFile.length() > 100L)
         persistEvidence()
     }
@@ -405,25 +409,27 @@ class DerivBotLifecycleInstrumentedTest {
     }
 
     private fun record(step: String, before: String, after: String, detail: String) {
-        val brokerLog = JSONArray()
-        gateway.events.forEach { brokerLog.put(it) }
-        val row = JSONObject()
-            .put("step", step)
-            .put("timestamp_utc", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }.format(Date()))
-            .put("state_before", before)
-            .put("state_after", after)
-            .put("account_mode", "DEMO")
-            .put("fake_gateway_only", true)
-            .put("live_enabled", false)
-            .put("purchase_count", gateway.purchaseAttempts.get())
-            .put("sell_requests", JSONArray(gateway.sellRequests))
-            .put("broker_gateway_log", brokerLog)
-            .put("detail", detail)
-        rows.put(row)
-        Log.i("DestinedFXBotLifecycle", row.toString())
-        persistEvidence()
+        synchronized(evidenceLock) {
+            val brokerLog = JSONArray()
+            gateway.events.forEach { brokerLog.put(it) }
+            val row = JSONObject()
+                .put("step", step)
+                .put("timestamp_utc", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }.format(Date()))
+                .put("state_before", before)
+                .put("state_after", after)
+                .put("account_mode", "DEMO")
+                .put("fake_gateway_only", true)
+                .put("live_enabled", false)
+                .put("purchase_count", gateway.purchaseAttempts.get())
+                .put("sell_requests", JSONArray(gateway.sellRequests))
+                .put("broker_gateway_log", brokerLog)
+                .put("detail", detail)
+            rows.put(row)
+            Log.i("DestinedFXBotLifecycle", row.toString())
+            persistEvidenceLocked()
+        }
     }
 
     private fun createSharedEvidenceFile() {

@@ -23,6 +23,9 @@ input bool InpScalingEnabled=false;
 input int InpScalingMinClosedTrades=20;
 input int InpPollSeconds=5;
 input int InpScanSeconds=10;
+// Managed Bridge terminals accept entries only from Analyzer-originated commands.
+// Set false only for an explicitly standalone EA deployment.
+input bool InpManagedAnalyzerMode=true;
 input int InpHeartbeatSeconds=5;
 input int InpNewsFreshnessSeconds=120;
 // Broker quote age is separate from calendar freshness. The default is intentionally conservative.
@@ -1048,5 +1051,41 @@ bool StartupBrokerSnapshotReady(){
    if(g_sigExecutionState=="SUBMISSION_INTENT"||g_sigExecutionState=="SUBMISSION_UNKNOWN"||g_sigExecutionState=="UNKNOWN_REQUIRES_RECONCILIATION")return false;
    return true;
 }
-void OnTimer(){if(!g_startupRecoveryReady)g_startupRecoveryReady=StartupBrokerSnapshotReady();if(g_terminalToken==""){if(g_state!="STOPPED")Claim();return;}if(ArraySize(g_symbols)>0)NewsClear(g_symbols[0]);CancelNewsBlockedPendingOrders();ProcessCommands();ReconcilePhonePositionStopState();if(!RiskDayOK()){if(DailyRiskLocked())DailyEmergencyExit();else if(g_state=="RUNNING"){g_state="STOPPED";g_lastError="DAILY RISK DATA UNAVAILABLE — trading stopped; broker P&L could not be verified";g_lastReason=g_lastError;}}ReconcileOrder();if(!PersistOrderState()){g_state="STOPPED";g_lastError="Periodic order-state journal persistence failed; new entries and dependent actions stopped";g_lastReason=g_lastError;return;}datetime now=TimeCurrent();if(now-g_lastHeartbeat>=MathMax(5,InpHeartbeatSeconds)){Heartbeat();g_lastHeartbeat=now;}ReconcileOperations();if(g_state=="RUNNING"&&(g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS)){g_state="STOPPED";g_lastError="No accepted heartbeat within HEARTBEAT_STALE_SECONDS=15; stopped without liquidation";g_lastReason=g_lastError;}if(g_state=="RUNNING"&&now-g_lastScan>=MathMax(1,InpScanSeconds)){Scan();g_lastScan=now;}}
+void OnTimer(){
+   if(!g_startupRecoveryReady)g_startupRecoveryReady=StartupBrokerSnapshotReady();
+   if(g_terminalToken==""){if(g_state!="STOPPED")Claim();return;}
+   if(ArraySize(g_symbols)>0)NewsClear(g_symbols[0]);
+   CancelNewsBlockedPendingOrders();
+   ProcessCommands();
+   ReconcilePhonePositionStopState();
+   if(!RiskDayOK()){
+      if(DailyRiskLocked())DailyEmergencyExit();
+      else if(g_state=="RUNNING"){
+         g_state="STOPPED";
+         g_lastError="DAILY RISK DATA UNAVAILABLE — trading stopped; broker P&L could not be verified";
+         g_lastReason=g_lastError;
+      }
+   }
+   ReconcileOrder();
+   if(!PersistOrderState()){
+      g_state="STOPPED";
+      g_lastError="Periodic order-state journal persistence failed; new entries and dependent actions stopped";
+      g_lastReason=g_lastError;
+      return;
+   }
+   datetime now=TimeCurrent();
+   if(now-g_lastHeartbeat>=MathMax(5,InpHeartbeatSeconds)){Heartbeat();g_lastHeartbeat=now;}
+   ReconcileOperations();
+   if(g_state=="RUNNING"&&(g_lastHeartbeatAcceptedUtc==0||TimeGMT()-g_lastHeartbeatAcceptedUtc>=HEARTBEAT_STALE_SECONDS)){
+      g_state="STOPPED";
+      g_lastError="No accepted heartbeat within HEARTBEAT_STALE_SECONDS=15; stopped without liquidation";
+      g_lastReason=g_lastError;
+   }
+   if(g_state=="RUNNING"&&now-g_lastScan>=MathMax(1,InpScanSeconds)){
+      bool managedMode=InpManagedAnalyzerMode;
+      if(managedMode)return; // Analyzer is brain, EA is hand.
+      Scan();
+      g_lastScan=now;
+   }
+}
 void OnTick(){/* Timed multi-symbol scanner; intentionally no chart-only trade logic. */}
