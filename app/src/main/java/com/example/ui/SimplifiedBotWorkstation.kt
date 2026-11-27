@@ -221,6 +221,28 @@ private suspend fun stopManagedMt5AndConfirm(
     return "BOT STOPPED - close-out not confirmed; $remainingPositions Bot position(s) and $remainingOrders Bot pending order(s) remain. Keep MT5 connected; do not assume closure."
 }
 
+/**
+ * DEMO/REAL switches are account logouts, not UI-only selection changes.
+ * Close and verify every Bot-owned position/order before revoking the old
+ * pairing; otherwise the new profile must not become active.
+ */
+internal suspend fun stopAndRevokeManagedMt5ForSwitch(
+    accountMode: String,
+    clearLiveAuthorization: suspend () -> Unit,
+    stopAndConfirm: suspend () -> String,
+    revoke: suspend () -> Unit,
+) {
+    require(accountMode == "DEMO" || accountMode == "LIVE") {
+        "Account switch requires a verified DEMO or LIVE profile."
+    }
+    if (accountMode == "LIVE") clearLiveAuthorization()
+    val stopResult = stopAndConfirm()
+    check(stopResult == "BOT STOPPED - All Bot trades closed") {
+        "Account switch blocked because the previous MT5 account did not confirm Bot close-out: $stopResult"
+    }
+    revoke()
+}
+
 @Composable
 fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     val context = LocalContext.current
@@ -570,25 +592,47 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 "LIVE profile selected. LIVE authorization remains blocked until the matching broker-specific DEMO PASS is verified and accepted."
             } else null
         }
-        if (changed && broker.usesManagedMt5Terminal && mt5Mode == "LIVE" && previousBridge?.hasPairing() == true) {
+        if (changed && broker.usesManagedMt5Terminal && previousBridge?.hasPairing() == true) {
             scope.launch {
                 if (busy) { message = "Wait for the current account action before switching slots."; return@launch }
                 busy = true
-                try { requireNotNull(previousBridge).clearLiveAuthorization(); applySelection() }
-                catch (e: Exception) { message = "Slot switch blocked: previous LIVE authorization could not be confirmed revoked. ${e.message.orEmpty()}" }
-                finally { busy = false }
+                try {
+                    stopAndRevokeManagedMt5ForSwitch(
+                        accountMode = mt5Mode,
+                        clearLiveAuthorization = { requireNotNull(previousBridge).clearLiveAuthorization() },
+                        stopAndConfirm = {
+                            stopManagedMt5AndConfirm(requireNotNull(previousBridge), "STOP") { mt5Snapshot = it }
+                        },
+                        revoke = { requireNotNull(previousBridge).revoke() },
+                    )
+                    applySelection()
+                } catch (e: Exception) {
+                    message = "Slot switch blocked: previous MT5 account remains selected until STOP and logout are confirmed. ${e.message.orEmpty()}"
+                } finally { busy = false }
             }
         } else applySelection()
     }
     val selectBrokerType: (BrokerType) -> Unit = { type ->
         val previousBridge = bridge
-        if (type != broker && broker.usesManagedMt5Terminal && mt5Mode == "LIVE" && previousBridge?.hasPairing() == true) {
+        if (type != broker && broker.usesManagedMt5Terminal && previousBridge?.hasPairing() == true) {
             scope.launch {
                 if (busy) { message = "Wait for the current account action before switching brokers."; return@launch }
                 busy = true
-                try { requireNotNull(previousBridge).clearLiveAuthorization(); broker = type; viewModel.selectBroker(type); message = null }
-                catch (e: Exception) { message = "Broker switch blocked: LIVE authorization could not be confirmed revoked. ${e.message.orEmpty()}" }
-                finally { busy = false }
+                try {
+                    stopAndRevokeManagedMt5ForSwitch(
+                        accountMode = mt5Mode,
+                        clearLiveAuthorization = { requireNotNull(previousBridge).clearLiveAuthorization() },
+                        stopAndConfirm = {
+                            stopManagedMt5AndConfirm(requireNotNull(previousBridge), "STOP") { mt5Snapshot = it }
+                        },
+                        revoke = { requireNotNull(previousBridge).revoke() },
+                    )
+                    broker = type
+                    viewModel.selectBroker(type)
+                    message = null
+                } catch (e: Exception) {
+                    message = "Broker switch blocked: previous MT5 account remains selected until STOP and logout are confirmed. ${e.message.orEmpty()}"
+                } finally { busy = false }
             }
         } else { broker = type; viewModel.selectBroker(type); message = null }
     }
@@ -940,6 +984,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             val result = client.command(UUID.randomUUID().toString(), "START", config)
                             if (result.queued) "Bot start requested. Scanning up to 32 instruments from MT5 Market Watch." else result.detail
                         }
+                        "STOP" -> stopManagedMt5AndConfirm(client, "STOP") { mt5Snapshot = it }
                         "CLOSE_POSITION_SELECTED", "CANCEL_PENDING_SELECTED" -> {
                             val target = ticket?.takeIf { it.isNotBlank() }
                                 ?: return@MetaTraderBrokerFlow "ACTION_BLOCKED: selected broker ticket is unavailable"
