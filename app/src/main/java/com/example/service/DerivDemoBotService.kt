@@ -673,12 +673,12 @@ class DerivDemoBotService : Service() {
         // deterministic DEMO candles and never opens a market-data or broker socket.
         val botMarketDataGateway = if (lifecycleHarness == null) DerivMarketDataGateway() else null
         currentCoroutineContext()[Job]?.invokeOnCompletion { botMarketDataGateway?.disconnect() }
-        // Keep the user-started foreground service alive through transient broker outages.
-        // This is especially important after a persisted daily-loss lock: reconnect and retry
-        // broker-confirmed closure rather than silently abandoning an unresolved managed contract.
-        while (currentCoroutineContext().isActive && !stopRequested &&
-            gateway.connectionState.value != com.example.data.deriv.DerivConnectionState.READY
-        ) {
+        // Every explicit service start must refresh authenticated read-only account,
+        // balance, portfolio and quote evidence. READY describes the socket state only;
+        // it does not prove that the existing balance/portfolio snapshot is still fresh.
+        // Keep the owner-started service alive through transient broker outages and retry
+        // the exact DEMO authentication path before permitting any entries.
+        while (currentCoroutineContext().isActive && !stopRequested) {
             if (!app.secretsManager.getDerivAccountMode().equals("demo", true)) {
                 stopSafely("BOT NOT RUNNING — Deriv mode changed from DEMO; this service will not open a REAL session")
                 return

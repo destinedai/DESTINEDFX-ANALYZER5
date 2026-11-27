@@ -220,6 +220,12 @@ class DerivBotLifecycleInstrumentedTest {
         record("NoAutoRestartAfterStop", "STOPPED", DerivDemoBotService.state.value,
             "Null-intent service restart after Stop sent no order.")
         gateway.settleByBroker(unownedAtStop)
+        // Model the production edge case: the WebSocket still reports READY after Stop,
+        // while the last read-only balance/portfolio evidence has aged past the 8s limit.
+        // An explicit Start must re-authenticate and refresh these snapshots before arming.
+        gateway.expireReadOnlyEvidenceKeepingSessionReady()
+        assertEquals(DerivConnectionState.READY, gateway.connectionState.value)
+        val connectsBeforeRestart = gateway.events.count { it.startsWith("CONNECT_DEMO|") }
 
         val beforeRestart = DerivDemoBotService.state.value
         DerivDemoBotService.start(context, "1HZ100V", StrategyRegistry.BREAKOUT_MOMENTUM.id, "M1", 1.0)
@@ -227,6 +233,11 @@ class DerivBotLifecycleInstrumentedTest {
             gateway.purchaseAttempts.get() >= buysAfterStop + 1 && DerivDemoBotService.state.value == "RUNNING"
         }
         assertEquals(2, DerivDemoBotLifecycleHarness.runStarts.get())
+        assertEquals(
+            "Explicit Start must refresh a READY but stale DEMO read-only session",
+            connectsBeforeRestart + 1,
+            gateway.events.count { it.startsWith("CONNECT_DEMO|") }
+        )
         val thirdContract = gateway.purchasedContractIds.last()
         awaitPersistedContract(thirdContract)
         record("RestartAfterStop", beforeRestart, DerivDemoBotService.state.value,
@@ -351,7 +362,7 @@ class DerivBotLifecycleInstrumentedTest {
             DerivDemoBotService.statusReason.value.endsWith(expectedStopReason))
         assertFalse("STOP must not sell unowned contracts", gateway.sellRequests.any { it >= 990_000L })
         record("FinalStopAfterCycles", beforeFinalStop, DerivDemoBotService.state.value,
-            "STOP confirmed every Bot-owned DEMO contract closed; service reason=${DerivDemoBotService.statusReason.value}; no unowned position was sent to SELL.")
+            "STOP confirms every Bot-owned DEMO contract closed; service reason=${DerivDemoBotService.statusReason.value}; no unowned position was sent to SELL.")
         assertTrue(evidenceFile.isFile && evidenceFile.length() > 100L)
         persistEvidence()
     }
@@ -742,6 +753,13 @@ class DerivBotLifecycleInstrumentedTest {
             ownedIds.remove(contractId)
             refreshSnapshot()
             events.add("BROKER_SETTLEMENT_CONFIRMED|contract=" + contractId)
+        }
+
+        fun expireReadOnlyEvidenceKeepingSessionReady() {
+            val expiredAt = System.currentTimeMillis() - 16_000L
+            metricsUpdated.value = expiredAt
+            portfolio.value = portfolio.value?.copy(retrievedAtMs = expiredAt)
+            events.add("READ_ONLY_EVIDENCE_EXPIRED|connection=READY|mode=DEMO")
         }
 
         private fun refreshSnapshot() {
