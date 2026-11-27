@@ -214,6 +214,7 @@ _ANALYZER_FEED_LOCK=threading.Lock()
 _ANALYZER_FEED_STATE={
     'heartbeat_at_ms':0,
     'terminal_connected':False,
+    'account_identity_sha256':'',
     'symbols':[],
     'broker_quotes':[],
     'broker_candles':[],
@@ -455,7 +456,7 @@ def db():
     c=sqlite3.connect(DB_PATH, timeout=10, isolation_level=None)
     c.row_factory=sqlite3.Row
     c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA foreign_keys=ON'); c.execute('PRAGMA busy_timeout=10000')
-    c.executescript('''        CREATE TABLE IF NOT EXISTS pairings(id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, app_hash TEXT NOT NULL, terminal_hash TEXT, expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, terminal_id TEXT, instance_id TEXT, account TEXT, heartbeat TEXT, created REAL NOT NULL, live_authorized_until REAL, live_authorized_login TEXT, live_authorized_server TEXT, heartbeat_seq INTEGER NOT NULL DEFAULT 0, owner_subject TEXT, owner_tenant TEXT);
+    c.executescript('''        CREATE TABLE IF NOT EXISTS pairings(id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, app_hash TEXT NOT NULL, terminal_hash TEXT, expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, terminal_id TEXT, instance_id TEXT, account TEXT, heartbeat TEXT, created REAL NOT NULL, live_authorized_until REAL, live_authorized_login TEXT, live_authorized_server TEXT, heartbeat_seq INTEGER NOT NULL DEFAULT 0, owner_subject TEXT, owner_tenant TEXT, revocation_pending INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, pairing_id TEXT NOT NULL REFERENCES pairings(id), request_id TEXT NOT NULL, action TEXT NOT NULL, config TEXT NOT NULL, ack TEXT, expires_at REAL, request_config TEXT, host_generation TEXT, UNIQUE(pairing_id,request_id));
     CREATE TABLE IF NOT EXISTS host_control(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS close_all_confirmations(token_hash TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE, account_mode TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
@@ -509,7 +510,7 @@ def db():
     c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_app_hash ON pairings(app_hash)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pairings_terminal_hash ON pairings(terminal_hash)')
     pairing_columns={r['name'] for r in c.execute('PRAGMA table_info(pairings)').fetchall()}
-    for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT'),('heartbeat_seq','INTEGER NOT NULL DEFAULT 0')):
+    for name, definition in (('live_authorized_until','REAL'),('live_authorized_login','TEXT'),('live_authorized_server','TEXT'),('heartbeat_seq','INTEGER NOT NULL DEFAULT 0'),('revocation_pending','INTEGER NOT NULL DEFAULT 0')):
         if name not in pairing_columns: c.execute(f'ALTER TABLE pairings ADD COLUMN {name} {definition}')
     if 'owner_subject' not in pairing_columns: c.execute("ALTER TABLE pairings ADD COLUMN owner_subject TEXT")
     if 'owner_tenant' not in pairing_columns: c.execute("ALTER TABLE pairings ADD COLUMN owner_tenant TEXT")
@@ -1041,12 +1042,21 @@ class AnalyzerMarketSelection(BaseModel):
 class AnalyzerMarketHeartbeat(BaseModel):
     model_config=ConfigDict(extra='forbid')
     terminal_connected:StrictBool
+    account_login:StrictStr=Field(default='',max_length=20)
+    account_server:StrictStr=Field(default='',max_length=128)
+    account_mode:StrictStr=Field(default='',max_length=8)
     symbols:list[StrictStr]=Field(default_factory=list,max_length=128)
     broker_quotes:list[TerminalQuote]=Field(default_factory=list,max_length=128)
     broker_candles:list[TerminalCandle]=Field(default_factory=list,max_length=1000)
 
     @model_validator(mode='after')
-    def validate_market_symbols(self):
+    def validate_market_identity_and_symbols(self):
+        if self.terminal_connected and (
+            not re.fullmatch(r'[0-9]{1,20}',self.account_login) or
+            not self.account_server.strip() or self.account_server.strip()!=self.account_server or
+            self.account_mode not in {'DEMO','LIVE'}
+        ):
+            raise ValueError('Connected MT5 Analyzer feed must report its exact login, server and DEMO/LIVE mode')
         clean=[]
         seen=set()
         for value in self.symbols:
@@ -1243,15 +1253,19 @@ def provider_news(symbol):
         _NEWS_CACHE[key]=(time.time(),dict(value)); return value
     except Exception: return _unknown_news('unavailable','NEWS UNKNOWN: provider unavailable or malformed')
 
-def auth(header, kind):
+def auth(header, kind, allow_revoked=False):
     if not header or not header.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
     raw=header[7:]
     if len(raw)>200 or kind not in ('app','terminal'): raise HTTPException(401,'Unauthorized')
     field='app_hash' if kind=='app' else 'terminal_hash'
     wanted=digest(raw)
+    revoked=False
     with tx() as c:
         row=c.execute(f'SELECT * FROM pairings WHERE {field}=? LIMIT 1',(wanted,)).fetchone()
+        if row is not None and kind=='app' and not allow_revoked:
+            revoked=bool(row['revocation_pending'])
     if row is not None and hmac.compare_digest(row[field] or '',wanted):
+        if revoked: raise HTTPException(401,'Unauthorized')
         if kind=='app' or (row['consumed'] and row['terminal_hash']):
             return dict(row)
     raise HTTPException(401,'Unauthorized')
@@ -2626,6 +2640,9 @@ def analyzer_market_heartbeat(x:AnalyzerMarketHeartbeat, request:Request):
                                         'message':'Market data must be published by the local MT5 terminal'})
     now_ms=int(time.time()*1000)
     if x.terminal_connected:
+        account_identity_sha256=hashlib.sha256(
+            f'{x.account_login}|{x.account_server}|{x.account_mode}'.encode('utf-8')
+        ).hexdigest()
         accepted_quotes=fresh_terminal_broker_quotes(
             {'broker_quotes':[row.model_dump() for row in x.broker_quotes]},now_ms
         )[:128]
@@ -2640,6 +2657,7 @@ def analyzer_market_heartbeat(x:AnalyzerMarketHeartbeat, request:Request):
                 seen.add(symbol.upper())
                 symbols.append(symbol)
     else:
+        account_identity_sha256=''
         accepted_quotes=[]
         accepted_candles=[]
         symbols=[]
@@ -2647,6 +2665,7 @@ def analyzer_market_heartbeat(x:AnalyzerMarketHeartbeat, request:Request):
         _ANALYZER_FEED_STATE.update({
             'heartbeat_at_ms':now_ms,
             'terminal_connected':bool(x.terminal_connected),
+            'account_identity_sha256':account_identity_sha256,
             'symbols':symbols,
             'broker_quotes':accepted_quotes,
             'broker_candles':accepted_candles,
@@ -2674,6 +2693,7 @@ def analyzer_market_state():
         'terminal_connected':bool(state.get('terminal_connected')),
         'heartbeat_fresh':heartbeat_fresh,
         'heartbeat_age_seconds':None if age_ms is None else max(0,int(age_ms/1000)),
+        'account_identity_sha256':state.get('account_identity_sha256','') if connected else '',
         'symbols':symbols,
         'broker_quotes':quotes,
         'broker_candles':candles,
@@ -3908,12 +3928,33 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
     return {'accepted':True,'received_at':iso(),'live_authorized_until':live_until}
 @app.delete('/v1/app/pairing')
 def revoke_pairing(authorization:str|None=Header(default=None)):
-    # Revocation is a safety-reducing permission change and must remain available
-    # even when the backing store is ephemeral.
-    p=auth(authorization,'app')
+    # Disable the old terminal immediately, but retain the app token for one
+    # read-only revocation-status route until the worker proves process death.
+    p=auth(authorization,'app',allow_revoked=True)
     with tx(True) as c:
         c.execute('UPDATE managed_accounts SET revoked=1,login_enc=?,server_enc=?,password_enc=? WHERE pairing_id=?',('', '', '', p['id']))
-        c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) SELECT ?,id,'REVOKE','QUEUED',? FROM pairings WHERE id=?",(str(uuid.uuid4()),time.time(),p['id']))
-        c.execute('UPDATE pairings SET app_hash=?,terminal_hash=NULL,consumed=1,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(digest(secrets.token_urlsafe(32)),p['id']))
+        existing=c.execute("SELECT id,status FROM worker_jobs WHERE pairing_id=? AND kind='REVOKE' ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
+        if existing and existing['status'] in ('QUEUED','LEASED','PROVISIONING','AUTHENTICATING','REVOKED'):
+            job_id=existing['id']
+        else:
+            job_id=str(uuid.uuid4())
+            c.execute("INSERT INTO worker_jobs(id,pairing_id,kind,status,created) VALUES(?,?,'REVOKE','QUEUED',?)",(job_id,p['id'],time.time()))
+        c.execute('UPDATE pairings SET revocation_pending=1,terminal_hash=NULL,consumed=1,heartbeat=NULL,live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
         c.execute('DELETE FROM commands WHERE pairing_id=?',(p['id'],))
-    return {'revoked':True,'deprovision_queued':True}
+    return {'revoked':True,'deprovision_queued':True,'job_id':job_id}
+
+
+@app.get('/v1/app/pairing/revocation-status')
+def pairing_revocation_status(authorization:str|None=Header(default=None)):
+    p=auth(authorization,'app',allow_revoked=True)
+    with tx() as c:
+        job=c.execute("SELECT id,status,error_code FROM worker_jobs WHERE pairing_id=? AND kind='REVOKE' ORDER BY created DESC LIMIT 1",(p['id'],)).fetchone()
+    if not job:
+        return {'status':'NOT_REQUESTED','terminal_stopped':False}
+    status=job['status']
+    return {
+        'job_id':job['id'],
+        'status':status,
+        'terminal_stopped':status=='REVOKED',
+        'error_code':job['error_code'] or '',
+    }

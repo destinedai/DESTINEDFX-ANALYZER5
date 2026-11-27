@@ -261,14 +261,26 @@ string BuildCandlesJson(const bool terminalConnected)
    return out + "]";
 }
 
+string AnalyzerAccountMode()
+{
+   long mode = AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   if(mode == ACCOUNT_TRADE_MODE_DEMO) return "DEMO";
+   if(mode == ACCOUNT_TRADE_MODE_REAL) return "LIVE";
+   return "";
+}
+
 void PublishAnalyzerMarketData()
 {
    bool terminalConnected = (TerminalInfoInteger(TERMINAL_CONNECTED) != 0);
+   string accountLogin = terminalConnected ? StringFormat("%I64d", AccountInfoInteger(ACCOUNT_LOGIN)) : "";
+   string accountServer = terminalConnected ? AccountInfoString(ACCOUNT_SERVER) : "";
+   string accountMode = terminalConnected ? AnalyzerAccountMode() : "";
    string symbols[];
    int count = BuildSymbolList(symbols);
    string payload = StringFormat(
-      "{\"terminal_connected\":%s,\"symbols\":%s,\"broker_quotes\":%s,\"broker_candles\":%s}",
+      "{\"terminal_connected\":%s,\"account_login\":\"%s\",\"account_server\":\"%s\",\"account_mode\":\"%s\",\"symbols\":%s,\"broker_quotes\":%s,\"broker_candles\":%s}",
       terminalConnected ? "true" : "false",
+      JsonEscape(accountLogin), JsonEscape(accountServer), JsonEscape(accountMode),
       BuildSymbolsJson(symbols, count),
       BuildQuotesJson(symbols, count, terminalConnected),
       BuildCandlesJson(terminalConnected)

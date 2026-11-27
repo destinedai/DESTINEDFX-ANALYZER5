@@ -23,6 +23,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +64,15 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {}) {
     val secrets = viewModel.app.secretsManager
+    val selectedMt5Mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
+    val selectedMt5BrokerBrand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
+    val selectedMt5Profile = "${selectedMt5BrokerBrand}_${selectedMt5Mode}"
+    val expectedAccountLogin = remember(secrets, selectedMt5Profile) {
+        secrets.getManagedMT5AccountLogin(selectedMt5Profile)
+    }
+    val expectedAccountServer = remember(secrets, selectedMt5Profile) {
+        secrets.getManagedMT5AccountServer(selectedMt5Profile)
+    }
     val serviceOrigin = remember(secrets) {
         MT5RemoteBridgeClient.initialServiceUrl(
             secrets.getManagedMT5ServiceUrl(),
@@ -73,9 +83,12 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     }
     val accessId = remember(secrets) { secrets.getCloudflareAccessClientId() }
     val accessSecret = remember(secrets) { secrets.getCloudflareAccessClientSecret() }
-    val feedClient = remember(serviceOrigin, accessId, accessSecret) {
+    val feedClient = remember(serviceOrigin, accessId, accessSecret, expectedAccountLogin, expectedAccountServer, selectedMt5Mode) {
         if (serviceOrigin.isBlank()) null else runCatching {
-            MT5AnalyzerMarketFeedClient(serviceOrigin, accessId, accessSecret)
+            MT5AnalyzerMarketFeedClient(
+                serviceOrigin, accessId, accessSecret,
+                expectedAccountLogin, expectedAccountServer, selectedMt5Mode
+            )
         }.getOrNull()
     }
     var snapshot by remember(feedClient) {

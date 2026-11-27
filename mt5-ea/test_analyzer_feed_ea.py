@@ -13,6 +13,11 @@ def test_analyzer_publisher_reads_live_mt5_quotes_and_closed_bars():
     assert "/v1/analyzer/market-selection" in SOURCE
     assert "broker_quotes" in SOURCE
     assert "broker_candles" in SOURCE
+    assert "ACCOUNT_LOGIN" in SOURCE
+    assert "ACCOUNT_SERVER" in SOURCE
+    assert "ACCOUNT_TRADE_MODE_DEMO" in SOURCE
+    assert "ACCOUNT_TRADE_MODE_REAL" in SOURCE
+    assert "account_login" in SOURCE and "account_server" in SOURCE and "account_mode" in SOURCE
 
 
 def test_analyzer_publisher_is_separate_from_bot_and_has_no_trade_or_pairing_commands():
@@ -25,3 +30,4 @@ def test_analyzer_publisher_is_separate_from_bot_and_has_no_trade_or_pairing_com
     assert "authorization:" not in lowered
     assert "InpAnalyzerFeedBaseURL" in SOURCE
     assert "http://127.0.0.1:8000" in SOURCE
+    assert "PairingCode" not in SOURCE and "LoginPassword" not in SOURCE

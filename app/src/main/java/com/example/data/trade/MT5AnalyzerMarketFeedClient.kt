@@ -10,6 +10,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.URI
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -23,7 +25,10 @@ import java.util.concurrent.TimeUnit
 class MT5AnalyzerMarketFeedClient(
     serviceOrigin: String,
     private val cloudflareAccessClientId: String = "",
-    private val cloudflareAccessClientSecret: String = ""
+    private val cloudflareAccessClientSecret: String = "",
+    expectedAccountLogin: String = "",
+    expectedAccountServer: String = "",
+    expectedAccountMode: String = ""
 ) {
     data class Snapshot(
         val connected: Boolean,
@@ -38,6 +43,15 @@ class MT5AnalyzerMarketFeedClient(
     )
 
     private val origin: String = validateOrigin(serviceOrigin)
+    private val expectedAccountMode = expectedAccountMode.trim().uppercase(Locale.ROOT)
+    private val expectedAccountIdentityHash = if (
+        expectedAccountLogin.isNotBlank() && expectedAccountServer.isNotBlank() &&
+        this.expectedAccountMode in setOf("DEMO", "LIVE")
+    ) {
+        MessageDigest.getInstance("SHA-256").digest(
+            "$expectedAccountLogin|$expectedAccountServer|${this.expectedAccountMode}".toByteArray(StandardCharsets.UTF_8)
+        ).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    } else ""
     private val http = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
@@ -50,9 +64,12 @@ class MT5AnalyzerMarketFeedClient(
         val nowMs = System.currentTimeMillis()
         val quotes = parseVerifiedBrokerQuotes(body.optJSONArray("broker_quotes"), nowMs).orEmpty()
         val candles = parseVerifiedBrokerCandles(body.optJSONArray("broker_candles"), nowMs).orEmpty()
-        val symbols = parseSymbols(body.optJSONArray("symbols"))
         val heartbeatFresh = body.optBoolean("heartbeat_fresh", false)
-        val connected = body.optBoolean("connected", false) && heartbeatFresh
+        val terminalConnected = body.optBoolean("connected", false) && heartbeatFresh
+        val identityMatches = expectedAccountIdentityHash.isNotBlank() &&
+            body.optString("account_identity_sha256").equals(expectedAccountIdentityHash, ignoreCase = true)
+        val connected = terminalConnected && identityMatches
+        val symbols = if (connected) parseSymbols(body.optJSONArray("symbols")) else emptyList()
         Snapshot(
             connected = connected,
             heartbeatFresh = heartbeatFresh,
@@ -64,8 +81,12 @@ class MT5AnalyzerMarketFeedClient(
             activeChartSymbol = body.optString("selected_symbol").trim(),
             activeChartTimeframe = body.optString("selected_timeframe", "M15")
                 .uppercase(Locale.ROOT).takeIf { it in SUPPORTED_TIMEFRAMES } ?: "M15",
-            errorMessage = body.optString("error_message").takeIf { it.isNotBlank() }
-                ?: if (connected) "" else "MT5 not connected"
+            errorMessage = when {
+                !terminalConnected -> body.optString("error_message").takeIf { it.isNotBlank() } ?: "MT5 not connected"
+                expectedAccountIdentityHash.isBlank() -> "Connect the selected MT5 account in Bot first"
+                !identityMatches -> "Analyzer MT5 terminal does not match the selected $expectedAccountMode account"
+                else -> ""
+            }
         )
     }
 

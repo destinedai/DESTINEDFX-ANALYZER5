@@ -360,9 +360,14 @@ def test_heartbeat_status_identity_and_offline():
     with app.tx(True) as c: c.execute('UPDATE pairings SET heartbeat=? WHERE id=?',(app.json.dumps({**heartbeat_data(),'timestamp':'2000-01-01T00:00:00Z'}),p['pairing_id']))
     off=client.get('/v1/app/state',headers=ah).json(); assert off['terminal_online'] is False and off['ea_state']=='OFFLINE' and off['active_chart_symbol']=='' and off['active_chart_timeframe']==''
 
-def test_revoke_invalidates_both_tokens():
+def test_revoke_invalidates_both_tokens_but_keeps_status_poll_read_only():
     p=pair(); t=claimed(p); ah={'Authorization':'Bearer '+p['app_token']}; th={'Authorization':'Bearer '+t['terminal_token']}
-    assert client.delete('/v1/app/pairing',headers=ah).status_code==200
+    revoked=client.delete('/v1/app/pairing',headers=ah)
+    assert revoked.status_code==200
+    job_id=revoked.json()['job_id']
+    status=client.get('/v1/app/pairing/revocation-status',headers=ah)
+    assert status.status_code==200 and status.json()['status']=='QUEUED'
+    assert status.json()['job_id']==job_id and status.json()['terminal_stopped'] is False
     assert client.get('/v1/app/state',headers=ah).status_code==401
     assert client.get('/v1/terminal/commands',headers=th).status_code==401
 

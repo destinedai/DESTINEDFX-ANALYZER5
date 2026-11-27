@@ -10,6 +10,7 @@ import com.example.data.broker.HostProfile
 import com.example.data.broker.ModeReadOnlyVerification
 import com.destinedfx.core.strategy.StrategyRegistry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -1093,11 +1094,46 @@ class MT5RemoteBridgeClient(
         if (accountMode == "LIVE" && hasPairing()) request("DELETE", "/v1/app/live-authorization")
     }
 
+    suspend fun isRevocationPending(): Boolean =
+        request("GET", "/v1/app/pairing/revocation-status").optString("status", "NOT_REQUESTED") != "NOT_REQUESTED"
+
     suspend fun revoke() {
-        request("DELETE", "/v1/app/pairing")
-        secrets.clearMT5BridgeAccountAppToken(profile)
-        secrets.clearMT5BridgeAccountPendingCommand(profile)
-        secrets.clearMT5BridgeAccountSafetyStop(profile)
+        var status = request("GET", "/v1/app/pairing/revocation-status")
+            .optString("status", "NOT_REQUESTED")
+        if (status == "REVOKED") {
+            secrets.clearMT5BridgeAccountAppToken(profile)
+            secrets.clearMT5BridgeAccountPendingCommand(profile)
+            secrets.clearMT5BridgeAccountSafetyStop(profile)
+            return
+        }
+        if (status !in setOf("QUEUED", "LEASED", "PROVISIONING", "AUTHENTICATING")) {
+            val queued = request("DELETE", "/v1/app/pairing")
+            require(queued.optString("job_id").isNotBlank() && queued.optBoolean("deprovision_queued")) {
+                "Bridge did not confirm that MT5 terminal shutdown was queued."
+            }
+        }
+        repeat(180) {
+            val current = request("GET", "/v1/app/pairing/revocation-status")
+            status = current.optString("status", "UNKNOWN")
+            when (status) {
+                "REVOKED" -> {
+                    require(current.optBoolean("terminal_stopped", false)) {
+                        "Worker reported revocation without confirming MT5 terminal shutdown."
+                    }
+                    secrets.clearMT5BridgeAccountAppToken(profile)
+                    secrets.clearMT5BridgeAccountPendingCommand(profile)
+                    secrets.clearMT5BridgeAccountSafetyStop(profile)
+                    return
+                }
+                "FAILED" -> throw IllegalStateException(
+                    "MT5 terminal logout could not be verified (${current.optString("error_code", "REVOKE_FAILED")}). Keep the old profile selected; do not sign in to another account."
+                )
+            }
+            delay(1_000L)
+        }
+        throw IllegalStateException(
+            "MT5 terminal shutdown is still awaiting worker confirmation. The old profile remains locked; another account cannot be selected yet."
+        )
     }
 
     private fun gateFailure(snapshot: Snapshot, requireLiveAuthorization: Boolean): String? {

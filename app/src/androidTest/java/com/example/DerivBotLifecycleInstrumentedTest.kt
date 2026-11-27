@@ -214,11 +214,19 @@ class DerivBotLifecycleInstrumentedTest {
         assertTrue(DerivDemoBotService.statusReason.value.contains("broker confirms all DestinedFX Bot contracts are closed"))
 
         val buysAfterStop = gateway.purchaseAttempts.get()
+        assertFalse("STOP must disable persisted automatic recovery", secrets.isDerivBotRecoveryEnabled())
+        val runsAfterStop = DerivDemoBotLifecycleHarness.runStarts.get()
         context.startService(Intent(context, DerivDemoBotService::class.java))
-        await("no restart after Stop") { DerivDemoBotService.state.value == "STOPPED" }
+        await("no restart after Stop") {
+            DerivDemoBotService.state.value == "STOPPED" &&
+                DerivDemoBotService.statusReason.value.contains(
+                    "saved DEMO configuration, current acceptance, credentials, or notifications are unavailable"
+                )
+        }
         SystemClock.sleep(200L)
         record("NoAutoRestartAfterStop", "STOPPED", DerivDemoBotService.state.value,
-            "Null-intent service restart remained STOPPED; no purchase increase was observed.")
+            "Null-intent restart was explicitly rejected because persisted DEMO recovery is disabled; no run or purchase restarted.")
+        assertEquals("Null-intent restart must not create a new Bot run", runsAfterStop, DerivDemoBotLifecycleHarness.runStarts.get())
         assertEquals(buysAfterStop, gateway.purchaseAttempts.get())
         gateway.settleByBroker(unownedAtStop)
         // Model the production edge case: the WebSocket still reports READY after Stop,
@@ -263,11 +271,19 @@ class DerivBotLifecycleInstrumentedTest {
         assertEquals(0, app.modeArmingPolicy.activeLeaseCount())
 
         val buysAfterEmergency = gateway.purchaseAttempts.get()
+        assertFalse("Emergency-Stop must disable persisted automatic recovery", secrets.isDerivBotRecoveryEnabled())
+        val runsAfterEmergency = DerivDemoBotLifecycleHarness.runStarts.get()
         context.startService(Intent(context, DerivDemoBotService::class.java))
-        await("no restart after Emergency-Stop") { DerivDemoBotService.state.value == "STOPPED" }
+        await("no restart after Emergency-Stop") {
+            DerivDemoBotService.state.value == "STOPPED" &&
+                DerivDemoBotService.statusReason.value.contains(
+                    "saved DEMO configuration, current acceptance, credentials, or notifications are unavailable"
+                )
+        }
         SystemClock.sleep(200L)
         record("NoAutoRestartAfterEmergencyStop", "STOPPED", DerivDemoBotService.state.value,
-            "Null-intent service restart remained STOPPED; no purchase increase was observed.")
+            "Null-intent restart was explicitly rejected because Emergency-Stop disabled persisted DEMO recovery; no run or purchase restarted.")
+        assertEquals("Emergency-Stop null-intent restart must not create a new Bot run", runsAfterEmergency, DerivDemoBotLifecycleHarness.runStarts.get())
         assertEquals(buysAfterEmergency, gateway.purchaseAttempts.get())
         gateway.settleByBroker(unownedAtEmergency)
 

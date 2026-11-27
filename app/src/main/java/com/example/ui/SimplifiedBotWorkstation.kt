@@ -228,6 +228,7 @@ private suspend fun stopManagedMt5AndConfirm(
  */
 internal suspend fun stopAndRevokeManagedMt5ForSwitch(
     accountMode: String,
+    revocationPending: suspend () -> Boolean,
     clearLiveAuthorization: suspend () -> Unit,
     stopAndConfirm: suspend () -> String,
     revoke: suspend () -> Unit,
@@ -235,10 +236,15 @@ internal suspend fun stopAndRevokeManagedMt5ForSwitch(
     require(accountMode == "DEMO" || accountMode == "LIVE") {
         "Account switch requires a verified DEMO or LIVE profile."
     }
-    if (accountMode == "LIVE") clearLiveAuthorization()
-    val stopResult = stopAndConfirm()
-    check(stopResult == "BOT STOPPED - All Bot trades closed") {
-        "Account switch blocked because the previous MT5 account did not confirm Bot close-out: $stopResult"
+    // A prior attempt may have stopped the Bot and queued terminal teardown before
+    // the app was closed. Resume that exact worker hand-off instead of issuing a
+    // command to the already-revoked terminal.
+    if (!revocationPending()) {
+        if (accountMode == "LIVE") clearLiveAuthorization()
+        val stopResult = stopAndConfirm()
+        check(stopResult == "BOT STOPPED - All Bot trades closed") {
+            "Account switch blocked because the previous MT5 account did not confirm Bot close-out: $stopResult"
+        }
     }
     revoke()
 }
@@ -599,6 +605,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 try {
                     stopAndRevokeManagedMt5ForSwitch(
                         accountMode = mt5Mode,
+                        revocationPending = { requireNotNull(previousBridge).isRevocationPending() },
                         clearLiveAuthorization = { requireNotNull(previousBridge).clearLiveAuthorization() },
                         stopAndConfirm = {
                             stopManagedMt5AndConfirm(requireNotNull(previousBridge), "STOP") { mt5Snapshot = it }
@@ -621,6 +628,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 try {
                     stopAndRevokeManagedMt5ForSwitch(
                         accountMode = mt5Mode,
+                        revocationPending = { requireNotNull(previousBridge).isRevocationPending() },
                         clearLiveAuthorization = { requireNotNull(previousBridge).clearLiveAuthorization() },
                         stopAndConfirm = {
                             stopManagedMt5AndConfirm(requireNotNull(previousBridge), "STOP") { mt5Snapshot = it }
@@ -2645,6 +2653,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         val client = requireNotNull(bridge)
                         stopAndRevokeManagedMt5ForSwitch(
                             accountMode = mt5Mode,
+                            revocationPending = { client.isRevocationPending() },
                             clearLiveAuthorization = { client.clearLiveAuthorization() },
                             stopAndConfirm = { stopManagedMt5AndConfirm(client, "STOP") { mt5Snapshot = it } },
                             revoke = { client.revoke() },
@@ -2654,7 +2663,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         login = ""
                         password = ""
                         server = ""
-                        message = "$selectedMt5Broker $mt5Mode logged out. STOP verified zero Bot positions and pending orders; isolated terminal cleanup was queued. Select DEMO or REAL and sign in again."
+                        message = "$selectedMt5Broker $mt5Mode logged out. STOP verified zero Bot positions and pending orders; the MT5 process was stopped and its isolated account data removed. Select DEMO or REAL and sign in again."
                     } catch (e: Exception) {
                         message = e.message ?: "Pairing revocation was not confirmed."
                     } finally { busy = false }

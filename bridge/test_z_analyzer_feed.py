@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ def _reset_feed():
         bridge._ANALYZER_FEED_STATE.update({
             "heartbeat_at_ms": 0,
             "terminal_connected": False,
+            "account_identity_sha256": "",
             "symbols": [],
             "broker_quotes": [],
             "broker_candles": [],
@@ -33,6 +35,9 @@ def test_analyzer_feed_is_independent_of_bot_pairing_and_returns_terminal_prices
 
     pushed = client.post("/v1/analyzer/market-heartbeat", json={
         "terminal_connected": True,
+        "account_login": "12345678",
+        "account_server": "Broker-Demo",
+        "account_mode": "DEMO",
         "symbols": ["XAUUSD.a", "EURUSD", "Volatility 75 Index"],
         "broker_quotes": [
             {"symbol": "XAUUSD.a", "bid": 3800.12, "ask": 3800.42,
@@ -54,6 +59,8 @@ def test_analyzer_feed_is_independent_of_bot_pairing_and_returns_terminal_prices
     assert state.status_code == 200
     payload = state.json()
     assert payload["connected"] is True
+    assert payload["account_identity_sha256"] == hashlib.sha256(b"12345678|Broker-Demo|DEMO").hexdigest()
+    assert "account_login" not in payload and "account_server" not in payload
     assert payload["selected_symbol"] == "XAUUSD.a"
     assert payload["selected_timeframe"] == "M15"
     assert "Volatility 75 Index" in payload["symbols"]
@@ -64,6 +71,21 @@ def test_analyzer_feed_is_independent_of_bot_pairing_and_returns_terminal_prices
     assert payload["broker_candles"][0]["source"] == "MT5_TERMINAL"
 
 
+def test_analyzer_feed_rejects_a_connected_publisher_without_verified_account_identity():
+    _reset_feed()
+    now_ms = int(time.time() * 1000)
+    client = TestClient(bridge.app, base_url="https://bridge.test",
+                        client=("127.0.0.1", 49152))
+    response = client.post("/v1/analyzer/market-heartbeat", json={
+        "terminal_connected": True,
+        "symbols": ["EURUSD"],
+        "broker_quotes": [{"symbol": "EURUSD", "bid": 1.1, "ask": 1.2,
+                           "digits": 5, "timestamp_ms": now_ms}],
+        "broker_candles": [],
+    })
+    assert response.status_code == 422
+
+
 def test_analyzer_feed_rejects_public_market_data_publishers():
     _reset_feed()
     now_ms = int(time.time() * 1000)
@@ -71,6 +93,9 @@ def test_analyzer_feed_rejects_public_market_data_publishers():
                         client=("203.0.113.10", 49152))
     response = client.post("/v1/analyzer/market-heartbeat", json={
         "terminal_connected": True,
+        "account_login": "12345678",
+        "account_server": "Broker-Demo",
+        "account_mode": "DEMO",
         "symbols": ["EURUSD"],
         "broker_quotes": [{"symbol": "EURUSD", "bid": 1.1, "ask": 1.2,
                            "digits": 5, "timestamp_ms": now_ms}],
@@ -86,6 +111,9 @@ def test_analyzer_feed_expires_after_terminal_stops_heartbeating():
         bridge._ANALYZER_FEED_STATE.update({
             "heartbeat_at_ms": int(time.time() * 1000) - 20_000,
             "terminal_connected": True,
+        "account_login": "12345678",
+        "account_server": "Broker-Demo",
+        "account_mode": "DEMO",
             "symbols": ["EURUSD"],
             "broker_quotes": [{"symbol": "EURUSD", "bid": 1.1, "ask": 1.2,
                                "digits": 5, "timestamp_ms": int(time.time() * 1000)}],
@@ -114,6 +142,9 @@ def test_local_analyzer_publisher_uses_host_scope_not_bot_or_cloudflare_pairing(
     now_ms = int(time.time() * 1000)
     response = local.post("/v1/analyzer/market-heartbeat", json={
         "terminal_connected": True,
+        "account_login": "12345678",
+        "account_server": "Broker-Demo",
+        "account_mode": "DEMO",
         "symbols": ["EURUSD"],
         "broker_quotes": [{"symbol": "EURUSD", "bid": 1.1, "ask": 1.1002,
                            "digits": 5, "timestamp_ms": now_ms}],

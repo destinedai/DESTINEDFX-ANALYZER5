@@ -13,6 +13,7 @@ class MT5AccountSwitchSafetyTest {
         val events = mutableListOf<String>()
         stopAndRevokeManagedMt5ForSwitch(
             accountMode = "DEMO",
+            revocationPending = { false },
             clearLiveAuthorization = { events += "DISARM_LIVE" },
             stopAndConfirm = { events += "STOP_CONFIRMED"; "BOT STOPPED - All Bot trades closed" },
             revoke = { events += "LOGOUT" },
@@ -26,6 +27,7 @@ class MT5AccountSwitchSafetyTest {
         val events = mutableListOf<String>()
         stopAndRevokeManagedMt5ForSwitch(
             accountMode = "LIVE",
+            revocationPending = { false },
             clearLiveAuthorization = { events += "DISARM_LIVE" },
             stopAndConfirm = { events += "STOP_CONFIRMED"; "BOT STOPPED - All Bot trades closed" },
             revoke = { events += "LOGOUT" },
@@ -39,6 +41,7 @@ class MT5AccountSwitchSafetyTest {
         try {
             stopAndRevokeManagedMt5ForSwitch(
                 accountMode = "DEMO",
+                revocationPending = { false },
                 clearLiveAuthorization = {},
                 stopAndConfirm = { "BOT STOPPED - close-out not confirmed; 1 Bot position(s) remain." },
                 revoke = { revoked = true },
@@ -54,6 +57,7 @@ class MT5AccountSwitchSafetyTest {
         try {
             stopAndRevokeManagedMt5ForSwitch(
                 accountMode = "UNKNOWN",
+                revocationPending = { false },
                 clearLiveAuthorization = {},
                 stopAndConfirm = { "BOT STOPPED - All Bot trades closed" },
                 revoke = {},
@@ -63,4 +67,19 @@ class MT5AccountSwitchSafetyTest {
             // Expected: fail closed before any account action.
         }
     }
+    @Test
+    fun liveSwitchResumesExistingRevocationWithoutTouchingTerminatedTerminal() = runBlocking {
+        val events = mutableListOf<String>()
+        stopAndRevokeManagedMt5ForSwitch(
+            accountMode = "LIVE",
+            revocationPending = { events += "REVOCATION_PENDING"; true },
+            clearLiveAuthorization = { events += "DISARM_LIVE" },
+            stopAndConfirm = { events += "STOP_UNEXPECTED"; "BOT STOPPED - All Bot trades closed" },
+            revoke = { events += "LOGOUT_CONFIRMED" },
+        )
+        assertEquals(listOf("REVOCATION_PENDING", "LOGOUT_CONFIRMED"), events)
+        assertFalse(events.contains("STOP_UNEXPECTED"))
+        assertFalse(events.contains("DISARM_LIVE"))
+    }
+
 }

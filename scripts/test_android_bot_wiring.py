@@ -39,6 +39,10 @@ HOME = (ROOT / "app/src/main/java/com/example/ui/HomeDashboardTab.kt").read_text
 BRIDGE_CLIENT = (ROOT / "app/src/main/java/com/example/data/trade/MT5RemoteBridgeClient.kt").read_text(encoding="utf-8")
 WORKER = (ROOT / "managed-worker/worker.py").read_text(encoding="utf-8")
 EA = (ROOT / "mt5-ea/DestinedFXTraderEA.mq5").read_text(encoding="utf-8")
+BRIDGE_API = (ROOT / "bridge/app.py").read_text(encoding="utf-8")
+ANALYZER_CLIENT = (ROOT / "app/src/main/java/com/example/data/trade/MT5AnalyzerMarketFeedClient.kt").read_text(encoding="utf-8")
+ANALYZER_UI = (ROOT / "app/src/main/java/com/example/ui/SimplifiedAnalyzerTab.kt").read_text(encoding="utf-8")
+ANALYZER_EA = (ROOT / "mt5-ea/AnalyzerMarketFeedEA.mq5").read_text(encoding="utf-8")
 
 
 def test_mt5_login_credentials_and_mode_are_passed_through_to_the_same_terminal():
@@ -76,7 +80,20 @@ def test_mt5_profile_switch_is_blocked_without_logout_and_home_has_no_bypass():
         "if (showLiveAuthorizationDialog)", 1
     )[0]
     assert "stopAndRevokeManagedMt5ForSwitch(" in revoke_dialog
+    assert "revocationPending = { client.isRevocationPending() }" in revoke_dialog
     assert revoke_dialog.index("stopAndRevokeManagedMt5ForSwitch(") < revoke_dialog.index("client.revoke()")
+    switch_helper = WORKSTATION.split("internal suspend fun stopAndRevokeManagedMt5ForSwitch(", 1)[1].split("@Composable", 1)[0]
+    assert "if (!revocationPending())" in switch_helper
+    assert switch_helper.index("stopAndConfirm()") < switch_helper.index("revoke()")
+    revoke_client = BRIDGE_CLIENT.split("suspend fun revoke()", 1)[1].split("private fun gateFailure", 1)[0]
+    assert '"/v1/app/pairing/revocation-status"' in revoke_client
+    assert '"/v1/app/pairing"' in revoke_client and '"REVOKED"' in revoke_client
+    assert "delay(1_000L)" in revoke_client
+    assert revoke_client.index('"REVOKED"') < revoke_client.index("secrets.clearMT5BridgeAccountAppToken(profile)")
+    assert "def pairing_revocation_status" in BRIDGE_API
+    assert "terminal_stopped':status=='REVOKED'" in BRIDGE_API
+    assert "allow_revoked=True" in BRIDGE_API
+    assert "row['revocation_pending']" in BRIDGE_API and "revocation_pending=1" in BRIDGE_API
 
 
 def test_mt5_stop_closes_bot_owned_positions_orders_and_retries_for_both_modes():
@@ -84,6 +101,24 @@ def test_mt5_stop_closes_bot_owned_positions_orders_and_retries_for_both_modes()
     assert "StopAndCloseBotTrades(outcome,msg)" in EA
     assert "AttemptBotStopCloseout(outcome,message)" in EA
     assert "RetryPendingStopCloseout();" in EA
+    assert "PersistStopCloseoutIntent(true)" in EA and "GlobalVariablesFlush()" in EA
     assert "CountBotExposure(remainingPositions,remainingOrders)" in EA
     assert "AccountIdentityMatches()" in EA and "BrokerAccountMode()" in EA
     assert "botPositions.isEmpty() && botOrders.isEmpty()" in WORKSTATION
+
+
+def test_analyzer_feed_is_token_free_and_matches_the_selected_app_account():
+    assert "expectedAccountLogin: String = \"\"" in ANALYZER_CLIENT
+    assert "expectedAccountServer: String = \"\"" in ANALYZER_CLIENT
+    assert "expectedAccountMode: String = \"\"" in ANALYZER_CLIENT
+    assert "account_identity_sha256" in ANALYZER_CLIENT
+    assert "MessageDigest.getInstance(\"SHA-256\")" in ANALYZER_CLIENT
+    assert "collectAsStateWithLifecycle()" in ANALYZER_UI
+    assert "getManagedMT5AccountLogin(selectedMt5Profile)" in ANALYZER_UI
+    assert "getManagedMT5AccountServer(selectedMt5Profile)" in ANALYZER_UI
+    assert "expectedAccountLogin, expectedAccountServer, selectedMt5Mode" in ANALYZER_UI
+    assert "ACCOUNT_LOGIN" in ANALYZER_EA and "ACCOUNT_SERVER" in ANALYZER_EA
+    assert "ACCOUNT_TRADE_MODE_DEMO" in ANALYZER_EA and "ACCOUNT_TRADE_MODE_REAL" in ANALYZER_EA
+    assert "account_identity_sha256" in BRIDGE_API
+    assert "getMT5BridgeAccountAppToken" not in ANALYZER_CLIENT
+    assert "pairing_code" not in ANALYZER_EA and "authorization:" not in ANALYZER_EA
