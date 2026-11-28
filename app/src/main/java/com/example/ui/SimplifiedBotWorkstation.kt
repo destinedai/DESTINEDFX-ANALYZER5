@@ -318,6 +318,9 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var showModernBrokerFlow by remember { mutableStateOf(true) }
     var mt5Snapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
     var mt5SnapshotReceivedAtMs by remember { mutableStateOf(0L) }
+    var liveHostLifecycle by remember { mutableStateOf<MT5RemoteBridgeClient.HostLifecycle?>(null) }
+    var liveHostLifecycleFetchedAtMs by remember { mutableStateOf(0L) }
+    val appOpenedAtEpochSeconds = viewModel.app.appOpenedAtEpochSeconds
     var hostCountdownNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -329,6 +332,14 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         viewModel.managedMt5BridgeSnapshot.collect { snapshot ->
             mt5Snapshot = snapshot
             mt5SnapshotReceivedAtMs = System.currentTimeMillis()
+        }
+    }
+    LaunchedEffect(bridge) {
+        val client = bridge ?: return@LaunchedEffect
+        while (true) {
+            liveHostLifecycle = runCatching { client.hostLifecycle() }.getOrNull()
+            liveHostLifecycleFetchedAtMs = System.currentTimeMillis()
+            delay(5 * 60 * 1_000L)
         }
     }
     var showPairingRevokeDialog by remember(mt5Profile) { mutableStateOf(false) }
@@ -1894,19 +1905,34 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 if (broker.usesManagedMt5Terminal && mt5Snapshot?.connected != true) Text("HOST OFFLINE", color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("Worker job: ${mt5Snapshot?.workerStatus ?: "not checked"} · Managed readiness: ${mt5Snapshot?.managedState ?: "not checked"} · Terminal: ${mt5Snapshot?.state ?: "not checked"} · Fresh heartbeat: ${mt5Snapshot?.heartbeatFresh ?: false}", color = TextSecondary, fontSize = 10.sp)
                 val lifecycle = mt5Snapshot?.raw
-                val serverStartedAt = lifecycle?.optLong("host_started_at_epoch_seconds", 0L) ?: 0L
-                val serverExpiryAt = lifecycle?.optLong("host_expiry_at_epoch_seconds", 0L) ?: 0L
-                val snapshotAgeSeconds = if (mt5SnapshotReceivedAtMs > 0L) {
+                val hostLife = liveHostLifecycle
+                val profileName = hostLife?.hostProfile?.name?.uppercase()
+                    ?: lifecycle?.optString("host_profile").orEmpty().uppercase()
+                val hostStartFromHealth = if (hostLife?.expiryAtEpochSeconds != null &&
+                    hostLife.maxLifetimeSeconds != null) {
+                    hostLife.expiryAtEpochSeconds - hostLife.maxLifetimeSeconds
+                } else {
+                    lifecycle?.optLong("host_started_at_epoch_seconds", 0L)?.takeIf { it > 0L }
+                }
+                val serverStartedAt = hostStartFromHealth ?: appOpenedAtEpochSeconds
+                val serverExpiryAt = hostLife?.expiryAtEpochSeconds
+                    ?: lifecycle?.optLong("host_expiry_at_epoch_seconds", 0L)?.takeIf { it > 0L }
+                    ?: (serverStartedAt + 12L * 60L * 60L)
+                val lifecycleAgeSeconds = if (liveHostLifecycleFetchedAtMs > 0L) {
+                    ((hostCountdownNowMs - liveHostLifecycleFetchedAtMs).coerceAtLeast(0L) / 1_000L)
+                } else if (mt5SnapshotReceivedAtMs > 0L) {
                     ((hostCountdownNowMs - mt5SnapshotReceivedAtMs).coerceAtLeast(0L) / 1_000L)
                 } else 0L
-                val reportedLifetime = lifecycle?.optLong("host_remaining_seconds", -1L) ?: -1L
-                val lifetimeRemaining = if (reportedLifetime >= 0L) (reportedLifetime - snapshotAgeSeconds).coerceAtLeast(0L) else -1L
-                val profileName = lifecycle?.optString("host_profile").orEmpty().uppercase()
+                val reportedLifetime = hostLife?.remainingSeconds
+                    ?: lifecycle?.optLong("host_remaining_seconds", -1L)?.takeIf { it >= 0L }
+                    ?: (serverExpiryAt - hostCountdownNowMs / 1_000L)
+                val lifetimeRemaining = (reportedLifetime - lifecycleAgeSeconds).coerceAtLeast(0L)
                 if (profileName == "PERSISTENT") {
                     Text("Engine lifetime: PERSISTENT · no 12-hour Codespaces deadline", color = ProfitGreen, fontSize = 10.sp)
-                } else if (serverStartedAt > 0L && serverExpiryAt > 0L && reportedLifetime >= 0L) {
+                } else {
+                    val fallbackLabel = if (hostStartFromHealth == null) " · app-open fallback" else ""
                     Text(
-                        "START: ${formatDestinedFxWat(serverStartedAt)} -> DIE: ${formatDestinedFxWat(serverExpiryAt)} (12 hours max)",
+                        "START: ${formatDestinedFxWat(serverStartedAt)} -> DIE: ${formatDestinedFxWat(serverExpiryAt)}$fallbackLabel",
                         color = TextSecondary,
                         fontSize = 9.sp
                     )
@@ -1916,12 +1942,11 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
-                } else {
-                    Text("Engine lifetime: waiting for live host timing", color = WarningAmber, fontSize = 10.sp)
                 }
-                val codespacesIdleTimeout = lifecycle?.optLong("idle_timeout_seconds", 0L) ?: 0L
+                val codespacesIdleTimeout = hostLife?.let { 20L * 60L }
+                    ?: lifecycle?.optLong("idle_timeout_seconds", 20L * 60L) ?: 20L * 60L
                 val engineIdleStatus = lifecycle?.optString("engine_idle_status").orEmpty().uppercase()
-                val engineIdleTimeout = lifecycle?.optLong("engine_idle_timeout_seconds", 0L) ?: 0L
+                val engineIdleTimeout = lifecycle?.optLong("engine_idle_timeout_seconds", 20L * 60L) ?: 20L * 60L
                 val reportedEngineIdleRemaining = lifecycle?.optLong("engine_idle_remaining_seconds", -1L) ?: -1L
                 val engineIdleRemaining = if (reportedEngineIdleRemaining >= 0L) {
                     (reportedEngineIdleRemaining - snapshotAgeSeconds).coerceAtLeast(0L)
@@ -1936,14 +1961,14 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 } else if (engineIdleStatus == "SLEEP_BLOCKED") {
                     Text("Engine idle sleep: BLOCKED by active or unverified trading state", color = WarningAmber, fontSize = 10.sp)
                 } else if (engineIdleTimeout > 0L) {
-                    Text("Engine sleeps if idle: ${engineIdleTimeout / 60L}m policy · status $engineIdleStatus", color = TextSecondary, fontSize = 10.sp)
+                    Text("Engine sleeps if idle: ${engineIdleTimeout / 60L}m policy · status $engineIdleStatus · app ping every 5m", color = TextSecondary, fontSize = 10.sp)
                 } else {
                     Text("Engine idle countdown: waiting for supervisor timing", color = TextSecondary, fontSize = 10.sp)
                 }
                 if (codespacesIdleTimeout > 0L) {
                     Text("Codespaces idle timeout: ${codespacesIdleTimeout / 60L}m configured", color = TextSecondary, fontSize = 9.sp)
                 }
-                Text("Test host, DEMO only. Codespaces and idle-engine timers remain separate.", color = WarningAmber, fontSize = 10.sp)
+                Text("Foreground app pings host activity every 5m; after app closes it may sleep after 20m idle. Active/unverified trades block unsafe sleep.", color = WarningAmber, fontSize = 10.sp)
                 Text("A successful HTTP probe is not proof of broker authentication or trading readiness. Do not enter credentials until /health/ready confirms durable storage and configured execution.", color = WarningAmber, fontSize = 9.sp)
             }
         }

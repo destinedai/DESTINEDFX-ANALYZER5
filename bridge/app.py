@@ -2279,7 +2279,7 @@ def health():
         # The mobile app compares this non-secret value with the URL host before saving it.
         'expected_forwarded_host':EXPECTED_PUBLIC_HOST if PUBLIC_EXPOSURE else '',
         'idle_timeout_seconds':HOST_IDLE_TIMEOUT_SECONDS,
-        'auto_sleep_idle_seconds':max(120,min(86400,int(os.getenv('DESTINEDFX_AUTO_SLEEP_IDLE_SECONDS','120')))),
+        'auto_sleep_idle_seconds':max(120,min(86400,int(os.getenv('DESTINEDFX_AUTO_SLEEP_IDLE_SECONDS','1200')))),
         'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,
         **host_lifecycle_state(),
     }

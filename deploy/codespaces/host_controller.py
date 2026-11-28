@@ -33,7 +33,7 @@ STATUS_FILE = RUNTIME / "host-status.json"
 STOP_REQUEST = RUNTIME / "stop.request"
 ACTIVITY_FILE = RUNTIME / "last-activity"
 USAGE_FILE = STATE / "codespaces-usage.json"
-AUTO_IDLE_TIMEOUT_SECONDS = max(120, min(86_400, int(os.environ.get("DESTINEDFX_AUTO_SLEEP_IDLE_SECONDS", "120"))))
+AUTO_IDLE_TIMEOUT_SECONDS = max(120, min(86_400, int(os.environ.get("DESTINEDFX_AUTO_SLEEP_IDLE_SECONDS", "1200"))))
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:

@@ -42,6 +42,7 @@ class MyApplication : Application() {
         data class Failed(val error: Throwable) : InitState()
     }
     val initStatus = MutableStateFlow<InitState>(InitState.Initializing)
+    val appOpenedAtEpochSeconds: Long = System.currentTimeMillis() / 1_000L
 
     private var _db: AppDatabase? = null
     val db: AppDatabase get() = _db ?: throw IllegalStateException("AppDatabase not initialized")
@@ -138,6 +139,26 @@ class MyApplication : Application() {
 
     fun prewarmManagedMt5Host() {
         if (storageAvailable.value) scheduleManagedMt5HostWarmup()
+    }
+
+    suspend fun pingManagedMt5HostActivity() {
+        val secrets = _secretsManager ?: return
+        if (!secrets.isSecureStorageAvailable) return
+        for (brand in listOf("FBS", "EXNESS", "HFM", "DERIV")) {
+            for (mode in listOf("DEMO", "LIVE")) {
+                val client = runCatching {
+                    com.example.data.trade.MT5RemoteBridgeClient(
+                        secrets = secrets,
+                        profile = "${brand}_${mode}",
+                        accountMode = mode,
+                        brokerBrand = brand
+                    )
+                }.getOrNull() ?: continue
+                if (!client.hasPairing() || !client.managedConfigured()) continue
+                runCatching { client.touchHostActivity() }
+                    .onSuccess { return }
+            }
+        }
     }
 
     suspend fun awaitManagedMt5Host(): com.example.data.trade.MT5RemoteBridgeClient.ServiceReadiness {

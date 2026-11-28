@@ -42,6 +42,13 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.di.AppContainer
 import com.example.ui.DestinedFXApp
@@ -52,8 +59,22 @@ import com.example.security.AppSecurityGuard
 
 class MainActivity : FragmentActivity() {
     private var mainViewModel: DestinedFXViewModel? = null
+    private val keepAliveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var keepAliveJob: Job? = null
     private val processLifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            if (keepAliveJob?.isActive == true) return
+            keepAliveJob = keepAliveScope.launch {
+                val app = application as? MyApplication ?: return@launch
+                while (isActive) {
+                    runCatching { app.pingManagedMt5HostActivity() }
+                    delay(5 * 60 * 1_000L)
+                }
+            }
+        }
         override fun onStop(owner: LifecycleOwner) {
+            keepAliveJob?.cancel()
+            keepAliveJob = null
             AppSecurityGuard.lock()
         }
     }
@@ -89,7 +110,7 @@ class MainActivity : FragmentActivity() {
                             DestinedFXApp(viewModel = mainVm)
                             if (hostWarmupStatus == "CONNECTING") {
                                 Text(
-                                    "CONNECTING...",
+                                    "RECONNECTING...",
                                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
                                     color = ElectricCyan,
                                     style = MaterialTheme.typography.labelSmall
@@ -191,6 +212,8 @@ class MainActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
+        keepAliveJob?.cancel()
+        keepAliveScope.coroutineContext[Job]?.cancel()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(processLifecycleObserver)
         super.onDestroy()
     }

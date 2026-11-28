@@ -207,6 +207,12 @@ class MT5RemoteBridgeClient(
         )
     }
 
+    /** Touches only the host idle-activity marker; it never changes account or trade state. */
+    suspend fun touchHostActivity() {
+        check(hasPairing()) { "MT5 pairing is required to keep the managed host active." }
+        request("POST", "/v1/app/host/activity")
+    }
+
     /** Public liveness metadata is readable before pairing; do not call authenticated /state to learn host type. */
     override suspend fun hostProfile(): HostProfile = hostLifecycle().hostProfile
 
