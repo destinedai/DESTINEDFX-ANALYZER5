@@ -102,6 +102,7 @@ def verify_apk(
     aapt: Path,
     source_sha: str,
     expected_certificate_sha256: str,
+    production_release: bool = False,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-fA-F]{40}", source_sha):
         raise VerificationError("The supplied source SHA is not a full Git commit SHA.")
@@ -130,7 +131,7 @@ def verify_apk(
     if not expected or len(expected) != 64:
         raise VerificationError("A valid prepared signing-certificate fingerprint is required.")
     if certificate_sha256 != expected:
-        raise VerificationError("APK signer fingerprint does not match the certificate in the prepared debug keystore.")
+        raise VerificationError("APK signer fingerprint does not match the prepared signing keystore.")
 
     badging = subprocess.run(
         [str(aapt), "dump", "badging", str(apk)],
@@ -159,7 +160,8 @@ def verify_apk(
         "sha256": digest.hexdigest(),
         "certificate_sha256": certificate_sha256,
         "verified_signature_schemes": verified_schemes,
-        "debug_only": True,
+        "debug_only": not production_release,
+        "production_signed": production_release,
     }
 
 
@@ -171,6 +173,8 @@ def main() -> int:
     parser.add_argument("--aapt", type=Path, required=True, help="Android aapt or aapt2 binary")
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--expected-certificate-sha256", required=True)
+    parser.add_argument("--production-release", action="store_true",
+                        help="Mark the artifact as an owner-key-signed production release.")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -181,6 +185,7 @@ def main() -> int:
             args.aapt,
             args.source_sha,
             args.expected_certificate_sha256,
+            production_release=args.production_release,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

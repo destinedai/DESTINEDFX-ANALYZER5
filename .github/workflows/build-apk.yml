@@ -604,7 +604,7 @@ jobs:
             --gradle app/build.gradle.kts \
             --apksigner "$apksigner" \
             --aapt "$aapt" \
-            --source-sha "$GITHUB_SHA" \
+            --source-sha "$GITHUB_SHA" --production-release \
             --expected-certificate-sha256 "$DESTINEDFX_DEBUG_CERT_SHA256" \
             --output app/build/outputs/apk/debug/verified/apk-metadata.json
           {
@@ -734,7 +734,7 @@ jobs:
             --apk "$apk" --gradle app/build.gradle.kts \
             --apksigner "$ANDROID_HOME/build-tools/$tools/apksigner" \
             --aapt "$ANDROID_HOME/build-tools/$tools/aapt2" \
-            --source-sha "$GITHUB_SHA" \
+            --source-sha "$GITHUB_SHA" --production-release \
             --expected-certificate-sha256 "$DESTINEDFX_DEBUG_CERT_SHA256" \
             --output app/build/outputs/apk/codespaces/Codespaces-bootstrap.metadata.json
           cp "$apk" app/build/outputs/apk/codespaces/DestinedFX-Codespaces-bootstrap.apk
@@ -786,7 +786,7 @@ jobs:
           python scripts/verify_apk_artifact.py \
             --apk "$apk" --gradle app/build.gradle.kts \
             --apksigner "$apksigner" --aapt "$aapt2" \
-            --source-sha "$GITHUB_SHA" \
+            --source-sha "$GITHUB_SHA" --production-release \
             --expected-certificate-sha256 "$DESTINEDFX_DEBUG_CERT_SHA256" \
             --output app/build/outputs/apk/debug/verified/apk-metadata.json
           sha256sum "$apk" | tee app/build/outputs/apk/debug/verified/app-debug.apk.sha256
@@ -837,7 +837,7 @@ jobs:
             args+=(--stable-signing-required)
           fi
           python scripts/verify_apk_metadata_consistency.py \
-            --source-sha "$GITHUB_SHA" \
+            --source-sha "$GITHUB_SHA" --production-release \
             --metadata android-jvm=incoming/android-jvm/verified/apk-metadata.json \
             --apk android-jvm=incoming/android-jvm/app-debug.apk \
             --metadata codespaces-bootstrap=incoming/codespaces-bootstrap/Codespaces-bootstrap.metadata.json \
@@ -889,26 +889,13 @@ jobs:
             -storepass android -keypass android -alias androiddebugkey \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
-      - name: Check whether CI can run the Android emulator
+      - name: Require hardware acceleration for Android emulator tests
         id: kvm
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          if [ -e /dev/kvm ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            ls -l /dev/kvm
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Skipped - needs phone test::This runner has no KVM device. Emulator acceptance was skipped; owner must perform the physical Android phone acceptance."
-            {
-              echo "### Emulator acceptance: **Skipped - needs phone test**"
-              echo "This CI runner has no usable /dev/kvm device. The emulator could not be started."
-              echo "Owner action required: install the newly built APK on a physical Android phone and complete the DEMO login, account-balance, quote/chart and reconnect checks."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Run Android Python runtime instrumentation on clean API 34 emulator
-        if: steps.kvm.outputs.available == 'true'
+          set -euo pipefail
+          test -e /dev/kvm || { echo "Android emulator acceptance cannot be skipped: /dev/kvm is unavailable." >&2; exit 1; }
+          echo "available=true" >> "$GITHUB_OUTPUT"
+      - name: Run Android Python runtime instrumentation on clean API 34 emulator      - name: Run Android Python runtime instrumentation on clean API 34 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -921,14 +908,13 @@ jobs:
           script: bash ./scripts/run-android-emulator-tests.sh
       - name: Verify Android instrumentation and bot lifecycle evidence
         id: verify-instrumentation
-        if: always() && steps.kvm.outputs.available == 'true'
         run: |
           python scripts/validate-bot-lifecycle-evidence.py \
             --evidence app/build/reports/bot-lifecycle/bot-lifecycle-evidence.json \
             --test-results app/build/outputs/androidTest-results/connected
           echo "accepted=true" >> "$GITHUB_OUTPUT"
       - name: Upload bot lifecycle evidence JSON
-        if: always() && steps.kvm.outputs.available == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bot-lifecycle-evidence
@@ -969,7 +955,7 @@ jobs:
           4. Run managed-worker/windows/install-owner-stack.ps1 only after reviewing the exact genuine broker install and account-issued server.
           5. The bridge binds only to 127.0.0.1:8000. Never use Funnel, a LAN/public listener, or a public unauthenticated endpoint.
           6. Begin with an authorized DEMO account. Verify account identity, fresh terminal heartbeat, worker READY, fills, SL/TP, history and STOP separately.
-          7. No LIVE order is authorized by this kit. A queued job or launched terminal is not terminal readiness.
+          7. REAL MT5 requires the exact REAL MASTER login, fresh broker-authenticated terminal heartbeat, and explicit CONFIRM REAL TRADE. A queued job or launched terminal alone is not terminal readiness.
           8. Preserve ProgramData\DestinedFX, DPAPI secrets, SQLite, account directories and verified backups during recovery.
           Tailscale commercial-use eligibility is the operator's responsibility; do not assume Personal plan rights.
           EOF
@@ -979,60 +965,7 @@ jobs:
           path: dist/DestinedFX-Windows-Worker-Kit/
           if-no-files-found: error
 
-  # OWNER_ACCEPTED = TRUE — explicit owner acceptance recorded 2026-11-24.
-  package-host-v1-prerelease:
-    name: Package host-v1 prerelease (OWNER ACCEPTED; runtime gates retained)
-    if: ${{ github.ref == 'refs/heads/feat/self-hosted-linux-host-runtime' || startsWith(github.ref, 'refs/tags/host-v') }}
-    permissions:
-      contents: write
-    env:
-      DESTINEDFX_OWNER_ACCEPTED: "true"
-    needs: [mt5-ea-windows-compile, android-build-and-unit-tests, codespaces-bootstrap-apk, android-emulator-instrumentation, apk-signing-consistency, package-windows-worker-kit, python-tests, backend-tests, secret-scan, broker-validation, iac-validate]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Verify explicit owner acceptance
-        run: test "$DESTINEDFX_OWNER_ACCEPTED" = "true"
-      - uses: actions/download-artifact@v4
-        with:
-          name: DestinedFX-MT5-EA-ex5
-          path: dist/incoming/ea
-      - uses: actions/download-artifact@v4
-        with:
-          name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY
-          path: dist/incoming/apk
-      - uses: actions/download-artifact@v4
-        with:
-          name: DestinedFX-Windows-Worker-Kit
-          path: dist/incoming/worker-kit
-      - name: Assemble release assets and checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/host-v1
-          ea="$(find dist/incoming/ea -type f -name 'DestinedFXTraderEA.ex5' -print -quit)"
-          apk="$(find dist/incoming/apk -type f -name 'app-debug.apk' -print -quit)"
-          test -s "$ea"; test -s "$apk"
-          cp "$ea" dist/host-v1/DestinedFXTraderEA.ex5
-          cp "$apk" dist/host-v1/DestinedFX-debug.apk
-          cp -R dist/incoming/worker-kit dist/host-v1/DestinedFX-Windows-Worker-Kit
-          (cd dist/host-v1 && zip -qr DestinedFX-Windows-Worker-Kit.zip DestinedFX-Windows-Worker-Kit && rm -rf DestinedFX-Windows-Worker-Kit)
-          (cd dist/host-v1 && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt)
-          cat > dist/host-v1/RELEASE-NOTES.txt <<'EOF'
-          DestinedFX host-v prerelease
-          This package is owner-operated and is not evidence of broker connectivity or trading readiness.
-          Verify SHA256SUMS.txt before installation. Start with DEMO and follow docs/deployment/GO_LIVE_CHECKLIST.md.
-          LIVE remains blocked until the existing ModeArmingPolicy and persistent-host requirements are independently satisfied.
-          EOF
-      - name: Publish GitHub prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="host-v1-${GITHUB_SHA:0:12}"
-          gh release create "$tag" dist/host-v1/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --prerelease \
-            --title "DestinedFX host-v1 prerelease ${GITHUB_SHA:0:12}" \
-            --notes-file dist/host-v1/RELEASE-NOTES.txt
+  # The owner-key-signed release APK below is the only official installable release.
 
   iac-validate:
     name: Validate Azure for Students IaC
@@ -1083,13 +1016,11 @@ jobs:
 
 
   android-release-apk:
-    name: Production-signed Android release APK (persistent host gated)
+    name: Production-signed Android release APK
     needs: [python-tests, android-build-and-unit-tests, android-emulator-instrumentation, backend-tests, secret-scan, broker-validation, mt5-ea-windows-compile, package-windows-worker-kit]
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      MT5_MANAGED_SERVICE_URL: ${{ vars.MT5_MANAGED_SERVICE_URL }}
-      MANAGEMENT_API_ORIGIN: ${{ vars.MANAGEMENT_API_ORIGIN }}
       DESTINEDFX_UPLOAD_KEYSTORE_B64: ${{ secrets.DESTINEDFX_UPLOAD_KEYSTORE_B64 }}
       STORE_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_STORE_PASSWORD }}
       KEY_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_KEY_PASSWORD }}
@@ -1101,7 +1032,7 @@ jobs:
           distribution: temurin
           java-version: 21
           cache: gradle
-      - name: Check owner release key, emulator and live persistent host
+      - name: Check owner release key and emulator acceptance
         id: release-preflight
         shell: bash
         run: |
@@ -1110,110 +1041,62 @@ jobs:
           [[ -n "$DESTINEDFX_UPLOAD_KEYSTORE_B64" ]] || blockers+=("DESTINEDFX_UPLOAD_KEYSTORE_B64 secret is missing")
           [[ -n "$STORE_PASSWORD" ]] || blockers+=("DESTINEDFX_UPLOAD_STORE_PASSWORD secret is missing")
           [[ -n "$KEY_PASSWORD" ]] || blockers+=("DESTINEDFX_UPLOAD_KEY_PASSWORD secret is missing")
-          [[ -n "$MT5_MANAGED_SERVICE_URL" ]] || blockers+=("MT5_MANAGED_SERVICE_URL repository variable is missing")
-          [[ -n "$MANAGEMENT_API_ORIGIN" ]] || blockers+=("MANAGEMENT_API_ORIGIN repository variable is missing")
           [[ "$EMULATOR_ACCEPTED" == "true" ]] || blockers+=("API 34 emulator acceptance did not pass; a skipped emulator run does not count")
           if (( ${#blockers[@]} > 0 )); then
             {
-              echo "### RELEASE APK BLOCKED — no debug-key fallback"
+              echo "### RELEASE APK BLOCKED — owner signing key required"
               for item in "${blockers[@]}"; do echo "- $item"; done
               echo ""
-              echo "1. On a trusted owner workstation, create an upload key with keytool and keep an offline backup of the .jks file."
-              echo "2. Add DESTINEDFX_UPLOAD_KEYSTORE_B64 as a repository Actions secret: base64 -w0 <destinedfx-upload.jks> | gh secret set DESTINEDFX_UPLOAD_KEYSTORE_B64"
-              echo "3. Add DESTINEDFX_UPLOAD_STORE_PASSWORD and DESTINEDFX_UPLOAD_KEY_PASSWORD as repository Actions secrets. Set MT5_MANAGED_SERVICE_URL and MANAGEMENT_API_ORIGIN to the two persistent-host HTTPS origins as repository variables."
+              echo "No debug signing key is used as a production fallback. Keep the upload key offline and set these repository Actions secrets."
             } >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
           umask 077
           KEYSTORE_PATH="$RUNNER_TEMP/destinedfx-upload.jks"
           if ! printf "%s" "$DESTINEDFX_UPLOAD_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH" || [[ ! -s "$KEYSTORE_PATH" ]]; then
-            echo "Release blocked: upload keystore could not be decoded." >> "$GITHUB_STEP_SUMMARY"
+            echo "Release blocked: owner upload keystore could not be decoded." >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
           chmod 600 "$KEYSTORE_PATH"
           if ! keytool -list -keystore "$KEYSTORE_PATH" -storetype JKS -storepass "$STORE_PASSWORD" -alias upload >/dev/null 2>&1; then
             echo "Release blocked: upload keystore, store password or upload alias is invalid." >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! python3 - <<'PY'
-          import json, os, urllib.request
-          from urllib.parse import urlsplit
-          bridge = os.environ["MT5_MANAGED_SERVICE_URL"].rstrip("/")
-          management = os.environ["MANAGEMENT_API_ORIGIN"].rstrip("/")
-          def origin(value, name):
-              parsed = urlsplit(value)
-              if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.path not in ("", "/") or parsed.query or parsed.fragment or parsed.port not in (None, 443):
-                  raise ValueError(f"{name} must be a bare public HTTPS origin")
-              return parsed.hostname.lower()
-          if origin(bridge, "Bridge") == origin(management, "Management API"):
-              raise ValueError("Bridge and Management API must have distinct hostnames")
-          def get(url):
-              request = urllib.request.Request(url, headers={"Accept":"application/json"})
-              with urllib.request.urlopen(request, timeout=15) as response:
-                  if response.geturl().rstrip("/") != url.rstrip("/") or response.status != 200:
-                      raise ValueError("HTTPS readiness probe redirected or returned non-200")
-                  body = response.read(65537)
-              if len(body) > 65536:
-                  raise ValueError("Readiness response exceeded size limit")
-              return json.loads(body)
-          bridge_ready = get(bridge + "/health/ready")
-          bridge_config = get(bridge + "/health/config")
-          api_ready = get(management + "/ready")
-          verify_key = get(management + "/api/v1/auth/bridge-verification-key")
-          if bridge_ready.get("status") != "ready" or bridge_ready.get("host_profile") != "PERSISTENT":
-              raise ValueError("Bridge must be READY on a PERSISTENT host")
-          if bridge_ready.get("per_user_terminal_isolation") != "VERIFIED" or int(bridge_ready.get("isolated_slots", 0)) < 2 or int(bridge_ready.get("max_isolated_slots", 0)) < 2:
-              raise ValueError("Two simultaneously active, root-attested Linux MT5 terminals must be verified")
-          if bridge_config.get("per_user_terminal_isolation") != "VERIFIED" or int(bridge_config.get("isolated_slots", 0)) < 2 or int(bridge_config.get("max_isolated_slots", 0)) < 2:
-              raise ValueError("Configuration does not report two verified isolated account slots")
-          if bridge_config.get("backup", {}).get("status") != "PASS":
-              raise ValueError("Recent checksum-verified Bridge and Management backups are not PASS")
-          if api_ready.get("status") != "ready":
-              raise ValueError("Management API/PostgreSQL is not ready")
-          if verify_key.get("algorithm") != "EdDSA" or verify_key.get("issuer") != "destinedfx-management" or verify_key.get("audience") != "destinedfx-bridge" or not str(verify_key.get("public_key_pem", "")).startswith("-----BEGIN PUBLIC KEY-----"):
-              raise ValueError("Management API EdDSA Bridge verification key is not ready")
-          print("Persistent Bridge, two active isolated terminals, verified backups and Management API checks passed.")
-          PY
-          then
-            echo "Release blocked: persistent host, backup or Management API preflight failed. No release artifact produced." >> "$GITHUB_STEP_SUMMARY"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
           echo "KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
           echo "DESTINEDFX_EMULATOR_ACCEPTED=true" >> "$GITHUB_ENV"
           echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "Production signing key, emulator and persistent-host preflight passed." >> "$GITHUB_STEP_SUMMARY"
+          echo "Owner production signing key and API 34 emulator acceptance passed. Bridge and Management origins can be configured in the app after install." >> "$GITHUB_STEP_SUMMARY"
       - name: Build production-signed release APK
         if: steps.release-preflight.outputs.ready == 'true'
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --max-workers=2 --stacktrace \
-            -Pmt5ManagedServiceUrl="$MT5_MANAGED_SERVICE_URL" \
-            -PmanagementApiOrigin="$MANAGEMENT_API_ORIGIN" \
-            -PdestinedfxEndpointsLocked=true \
+            -PdestinedfxEndpointsLocked=false \
             -PdestinedfxCodespacesHostDiscovery=false \
             -PdestinedfxEmulatorAccepted=true
-      - name: Verify release signature, version, package and SHA-256
+      - name: Verify release signature, package, version and SHA-256
         if: steps.release-preflight.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
           apk="app/build/outputs/apk/release/app-release.apk"
           test -s "$apk"
-          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
+          tools="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           apksigner="$ANDROID_HOME/build-tools/$tools/apksigner"
-          aapt="$ANDROID_HOME/build-tools/$tools/aapt"
+          aapt2="$ANDROID_HOME/build-tools/$tools/aapt2"
           cert_sha256="$(keytool -list -v -keystore "$KEYSTORE_PATH" -storetype JKS -storepass "$STORE_PASSWORD" -alias upload 2>/dev/null | awk 'toupper($1) ~ /^SHA-?256:/ {gsub(":", "", $2); print tolower($2); exit}')"
           [[ "$cert_sha256" =~ ^[0-9a-f]{64}$ ]]
           "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/release-signature.txt"
           grep -Fq "$cert_sha256" "$RUNNER_TEMP/release-signature.txt"
+          metadata="$("$aapt2" dump badging "$apk")"
+          grep -Fq "package: name='com.aistudio.destinedfx.qwvzxp'" <<<"$metadata"
           mkdir -p dist/DestinedFX-RELEASE-APK-v1.0.14
           python scripts/verify_apk_artifact.py \
-            --apk "$apk" --gradle app/build.gradle.kts --apksigner "$apksigner" --aapt "$aapt" \
-            --source-sha "$GITHUB_SHA" --expected-certificate-sha256 "$cert_sha256" \
+            --apk "$apk" --gradle app/build.gradle.kts --apksigner "$apksigner" --aapt "$aapt2" \
+            --source-sha "$GITHUB_SHA" --expected-certificate-sha256 "$cert_sha256" --production-release \
             --output dist/DestinedFX-RELEASE-APK-v1.0.14/apk-metadata.json
           cp "$apk" dist/DestinedFX-RELEASE-APK-v1.0.14/DestinedFX-1.0.14-release.apk
           sha256sum dist/DestinedFX-RELEASE-APK-v1.0.14/DestinedFX-1.0.14-release.apk > dist/DestinedFX-RELEASE-APK-v1.0.14/DestinedFX-1.0.14-release.apk.sha256

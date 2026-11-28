@@ -428,13 +428,17 @@ def test_open_position_with_unavailable_commission_is_accepted_as_null():
 from cryptography.fernet import Fernet
 
 def managed_env(monkeypatch):
-    monkeypatch.setattr(app,'HOST_PROFILE','PERSISTENT')
+    monkeypatch.setattr(app,'HOST_PROFILE','EPHEMERAL')
+    monkeypatch.setattr(app,'LINUX_HOST_MODE',False)
+    monkeypatch.setattr(app,'durable_execution_enabled',lambda:True)
+    monkeypatch.setattr(app,'_isolation_evidence_verified',lambda:True)
     with app.tx(True) as c:
         c.execute('DELETE FROM worker_attestations')
         c.execute('DELETE FROM worker_jobs')
         c.execute('DELETE FROM worker_identities')
         c.execute('DELETE FROM managed_accounts')
         c.execute('DELETE FROM live_challenges')
+        c.execute('DELETE FROM live_session_challenges')
         c.execute('DELETE FROM live_profile_links')
         c.execute('DELETE FROM demo_soak_daily')
         c.execute('DELETE FROM trade_ledger_events')
@@ -542,42 +546,38 @@ def test_persistent_linux_host_allows_live_enrollment_with_two_slot_capacity(mon
     assert job['status'] == 'AWAITING_ATTESTATION'
 
 
-def test_persistent_linux_live_enrollment_rejects_insufficient_slot_capacity(monkeypatch):
+def test_linux_live_enrollment_needs_one_isolated_slot_not_two(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
-    monkeypatch.setattr(app, 'HOST_PROFILE', 'PERSISTENT')
-    monkeypatch.setattr(app, '_isolation_evidence_verified', lambda: False)
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
     monkeypatch.setattr(app, 'linux_host_report', lambda: {
-        'healthy': True, 'slot_isolation': {
-            'enabled': True, 'ready': True, 'active_slots': 1, 'max_slots': 1,
-        },
+        'healthy': True, 'slot_isolation': {'enabled': True, 'ready': True, 'active_slots': 0, 'max_slots': 1},
     })
     monkeypatch.setattr(app, 'durable_execution_enabled', lambda: True)
     p, ah = managed_pair()
     response = client.post('/v1/app/managed-account', headers=ah, json={
         'login':'123458', 'server':'FBS-Live', 'password':'live-secret',
-        'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS',
-        'consent':True,
+        'access_type':'MASTER', 'account_mode':'LIVE', 'broker_brand':'FBS', 'consent':True,
     })
-    assert response.status_code == 409
-    assert response.json()['detail']['code'] == 'LIVE_REQUIRES_TWO_ISOLATED_TERMINALS'
-    with app.tx() as c:
-        assert c.execute('SELECT COUNT(*) FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
-        assert c.execute('SELECT COUNT(*) FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()[0] == 0
+    assert response.status_code == 202, response.text
+    with app.tx() as conn:
+        account = conn.execute('SELECT * FROM managed_accounts WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
+        job = conn.execute('SELECT status,requested_account_mode FROM worker_jobs WHERE pairing_id=?', (p['pairing_id'],)).fetchone()
+    assert account is not None and account['account_mode'] == 'LIVE'
+    assert 'live-secret' not in str(dict(account))
+    assert job['requested_account_mode'] == 'LIVE'
 
 
-def test_persistent_linux_live_challenge_requires_two_active_slots(monkeypatch):
+def test_live_challenge_uses_one_isolated_terminal_slot(monkeypatch):
     pairing, headers, _worker, _job, _terminal, _actual = live_ready(monkeypatch)
     monkeypatch.setattr(app, 'LINUX_HOST_MODE', True)
-    monkeypatch.setattr(app, 'HOST_PROFILE', 'PERSISTENT')
+    monkeypatch.setattr(app, 'HOST_PROFILE', 'EPHEMERAL')
     monkeypatch.setattr(app, 'linux_host_report', lambda: {
-        'healthy': True, 'slot_isolation': {
-            'enabled': True, 'ready': True, 'active_slots': 1, 'max_slots': 2,
-        },
+        'healthy': True, 'slot_isolation': {'enabled': True, 'ready': True, 'active_slots': 1, 'max_slots': 1},
     })
-    response = client.post('/v1/app/live-challenge', headers=headers)
-    assert response.status_code == 409
-    assert response.json()['detail']['code'] == 'LIVE_ISOLATION_CAPACITY_NOT_READY'
+    challenge = client.post('/v1/app/live-challenge', headers=headers)
+    assert challenge.status_code == 200, challenge.text
+    assert challenge.json()['typed_confirmation'] == 'CONFIRM REAL TRADE'
 
 
 def test_ephemeral_linux_host_rejects_unready_isolation_before_storage(monkeypatch):
@@ -1504,65 +1504,26 @@ def _ready_test_profile(pairing, headers, worker_headers, worker_id, login, serv
 
 def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker-Live'):
     managed_env(monkeypatch)
-    # Each mode gets its own management pairing, broker login and worker identity.
-    demo_pairing,demo_headers=managed_pair()
-    demo_worker=_test_worker('worker-demo')
-    demo_job,demo_th,demo_actual=_ready_test_profile(
-        demo_pairing,demo_headers,demo_worker,'worker-demo','600001','Broker-Demo','DEMO','demo-test-password'
+    live_pairing, live_headers = managed_pair()
+    live_worker = _test_worker('worker-live')
+    live_job, live_terminal_headers, live_actual = _ready_test_profile(
+        live_pairing, live_headers, live_worker, 'worker-live',
+        login, server, 'LIVE', 'live-test-password', access_type
     )
-    seed_demo_soak_evidence(demo_pairing,demo_actual,'worker-demo')
-    demo_digest='a'*64
-    demo_evidence_context=demo_pass_context(demo_pairing,'worker-demo')
-    pass_document=demo_pass_document(**demo_evidence_context)
-    acceptance=client.post('/v1/app/demo-acceptance',headers=demo_headers,json={
-        'confirm_demo':True,'evidence_document':pass_document,
-    })
-    assert acceptance.status_code==200, acceptance.text
-    accepted=acceptance.json()
-    assert accepted['pairing_id']==demo_pairing['pairing_id']
-    assert accepted['login']=='600001' and accepted['server']=='Broker-Demo'
-
-    live_pairing,live_headers=managed_pair()
-    live_worker=_test_worker('worker-live')
-    live_job,live_th,live_actual=_ready_test_profile(
-        live_pairing,live_headers,live_worker,'worker-live',login,server,'LIVE','live-test-password',access_type
-    )
-    live_pairing['demo_pairing_id']=demo_pairing['pairing_id']
-    live_pairing['demo_app_token']=demo_pairing['app_token']
-    live_pairing['demo_acceptance_id']=accepted['acceptance_id']
-    live_pairing['demo_evidence_context']=demo_evidence_context
-    if access_type=='MASTER':
-        association=client.post('/v1/app/live-profile-association',headers=live_headers,json={
-            'demo_pairing_id':demo_pairing['pairing_id'],
-            'demo_acceptance_id':accepted['acceptance_id'],
-            'confirm_association':True,
-        })
-        assert association.status_code==200, association.text
-        assert association.json()['demo_login']=='600001'
-        assert association.json()['live_login']==login
-        assert association.json()['demo_pairing_id'] != association.json()['live_pairing_id']
-    return live_pairing,live_headers,live_worker,live_job,live_th,live_actual
+    return live_pairing, live_headers, live_worker, live_job, live_terminal_headers, live_actual
 
 def authorize_live_fixture(p, ah, job, actual):
-    challenge=client.post('/v1/app/live-challenge',headers=ah)
-    assert challenge.status_code==200, challenge.text
-    challenge_body=challenge.json()
-    assert challenge_body['pairing_id']==p['pairing_id']
-    assert challenge_body['broker_brand']=='FBS'
-    assert challenge_body['login']==actual['login']
-    assert challenge_body['server']==actual['server']
-    assert challenge_body['account_mode']=='LIVE'
-    assert challenge_body['credential_generation']=='live-generation'
-    phrase=challenge_body['typed_confirmation']
-    claims={'iss':'destinedfx-management','aud':'destinedfx-bridge','sub':'fixture-user','tenant_id':'fixture-user','sid':'fixture-session',
-            'jti':uuid.uuid4().hex,'iat':int(time.time()),'exp':int(time.time())+120,
-            'pairing_id':p['pairing_id'],'challenge_id':challenge.json()['challenge_id'],
-            'typed_confirmation':phrase,'broker_brand':'FBS','login':actual['login'],'server':actual['server'],
-            'account_mode':'LIVE','credential_generation':'live-generation'}
-    proof=jwt.encode(claims,app.TEST_STEP_UP_PRIVATE_KEY,algorithm='EdDSA')
-    return client.post('/v1/app/live-authorization',headers=ah,json={
-        'challenge_id':challenge.json()['challenge_id'],
-        'typed_confirmation':phrase,'step_up_assertion':proof
+    challenge = client.post('/v1/app/live-challenge', headers=ah)
+    assert challenge.status_code == 200, challenge.text
+    body = challenge.json()
+    assert body['pairing_id'] == p['pairing_id']
+    assert body['broker_brand'] == 'FBS'
+    assert body['login'] == actual['login']
+    assert body['server'] == actual['server']
+    assert body['account_mode'] == 'LIVE'
+    assert body['typed_confirmation'] == 'CONFIRM REAL TRADE'
+    return client.post('/v1/app/live-authorization', headers=ah, json={
+        'challenge_id': body['challenge_id'], 'typed_confirmation': 'CONFIRM REAL TRADE',
     })
 
 
@@ -1680,92 +1641,23 @@ def test_demo_acceptance_and_cross_profile_link_require_fresh_management_identit
     assert missing_link.status_code==401
 
 
-def test_separate_demo_live_profiles_authorize_even_with_different_logins(monkeypatch):
-    pairing,headers,wh,job,th,actual=live_ready(monkeypatch)
-    assert pairing['demo_pairing_id'] != pairing['pairing_id']
-    assert pairing['demo_acceptance_id']
-    assert pairing['demo_app_token']
-    assert actual['login']=='700001'
-    state=client.get('/v1/app/state',headers=headers).json()
-    assert state['pairing_id']==pairing['pairing_id']
-    assert state['management_identity_bound'] is True
-    assert state['managed_execution']['live_authorized'] is False
-    authorized=authorize_live_fixture(pairing,headers,job,actual)
-    assert authorized.status_code==200, authorized.text
-    assert client.get('/v1/app/state',headers=headers).json()['managed_execution']['live_authorized'] is True
-    assert client.post('/v1/app/commands',headers=headers,json=command_req('START')).status_code==202
-
-
-def test_revoking_separate_demo_acceptance_disarms_live_pairing(monkeypatch):
-    pairing,headers,wh,job,th,actual=live_ready(monkeypatch)
-    assert authorize_live_fixture(pairing,headers,job,actual).status_code==200
-    demo_headers={'Authorization':'Bearer '+pairing['demo_app_token']}
-    revoked=client.delete('/v1/app/demo-acceptance',headers=demo_headers)
-    assert revoked.status_code==200 and revoked.json()['revoked'] is True
-    state=client.get('/v1/app/state',headers=headers).json()
-    assert state['managed_execution']['live_authorized'] is False
-    assert client.post('/v1/app/commands',headers=headers,json=command_req('START')).status_code==409
-
-
-def test_demo_reacceptance_updates_stable_acceptance_and_revokes_live_lease(monkeypatch):
-    pairing,headers,wh,job,th,actual=live_ready(monkeypatch)
-    assert authorize_live_fixture(pairing,headers,job,actual).status_code==200
-    demo_headers={
-        'Authorization':'Bearer '+pairing['demo_app_token'],
-        'X-Management-Identity':management_identity_assertion(),
-    }
-    refreshed=client.post('/v1/app/demo-acceptance',headers=demo_headers,json={
-        'confirm_demo':True,'evidence_document':demo_pass_document(**pairing['demo_evidence_context']),
-    })
-    assert refreshed.status_code==200, refreshed.text
-    assert refreshed.json()['acceptance_id']==pairing['demo_acceptance_id']
-    assert client.get('/v1/app/state',headers=headers).json()['managed_execution']['live_authorized'] is False
-    assert client.post('/v1/app/commands',headers=headers,json=command_req('START')).status_code==409
-
-
-def test_live_lease_revalidates_demo_tenant_credentials_and_worker_generation(monkeypatch):
-    pairing,headers,wh,job,th,actual=live_ready(monkeypatch)
-    assert authorize_live_fixture(pairing,headers,job,actual).status_code==200
-    with app.tx(True) as c:
-        c.execute('UPDATE pairings SET owner_tenant=? WHERE id=?',('foreign-tenant',pairing['demo_pairing_id']))
-    assert client.get('/v1/app/state',headers=headers).json()['managed_execution']['live_authorized'] is False
-    assert client.post('/v1/app/commands',headers=headers,json=command_req('START')).status_code==409
-    with app.tx(True) as c:
-        c.execute('UPDATE pairings SET owner_tenant=? WHERE id=?',('fixture-user',pairing['demo_pairing_id']))
-        c.execute('UPDATE managed_accounts SET credential_generation=? WHERE pairing_id=?',
-                  ('rotated-demo-generation',pairing['demo_pairing_id']))
-    assert client.get('/v1/app/state',headers=headers).json()['managed_execution']['live_authorized'] is False
-    with app.tx(True) as c:
-        c.execute('UPDATE managed_accounts SET credential_generation=? WHERE pairing_id=?',
-                  ('demo-generation',pairing['demo_pairing_id']))
-        c.execute('UPDATE worker_identities SET generation=generation+1 WHERE worker_id=?',
-                  ('worker-demo',))
-    assert client.get('/v1/app/state',headers=headers).json()['managed_execution']['live_authorized'] is False
-
-
-def test_profile_reenrollment_invalidates_associated_live_lease(monkeypatch):
-    pairing,headers,wh,job,th,actual=live_ready(monkeypatch)
-    assert authorize_live_fixture(pairing,headers,job,actual).status_code==200
-    demo_headers={
-        'Authorization':'Bearer '+pairing['demo_app_token'],
-        'X-Management-Identity':management_identity_assertion(),
-    }
-    # Simulate the worker-confirmed completion of the DEMO terminal's revoke.
-    # The LIVE job returned by live_ready() belongs to a different pairing.
-    with app.tx(True) as c:
-        c.execute(
-            """UPDATE worker_jobs SET status='REVOKED',lease_until=NULL
-               WHERE pairing_id=? AND kind='PROVISION'""",
-            (pairing['demo_pairing_id'],),
-        )
-    re_enrolled=client.post('/v1/app/managed-account',headers=demo_headers,json={
-        'login':'600001','server':'Broker-Demo','password':'new-demo-password',
-        'access_type':'MASTER','account_mode':'DEMO','broker_brand':'FBS','consent':True,
-        'credential_generation':'demo-generation-2',
-    })
-    assert re_enrolled.status_code==202, re_enrolled.text
-    assert client.get('/v1/app/state',headers=headers).json()['managed_execution']['live_authorized'] is False
-    assert client.post('/v1/app/commands',headers=headers,json=command_req('START')).status_code==409
+def test_real_live_profile_authorizes_without_a_demo_pair_or_management_step_up(monkeypatch):
+    pairing, headers, _worker, _job, _terminal, _actual = live_ready(monkeypatch)
+    assert pairing['pairing_id']
+    assert client.get('/v1/app/state', headers=headers).json()['managed_execution']['live_authorized'] is False
+    challenge = client.post('/v1/app/live-challenge', headers=headers)
+    assert challenge.status_code == 200, challenge.text
+    assert challenge.json()['typed_confirmation'] == 'CONFIRM REAL TRADE'
+    no_auth = client.post('/v1/app/commands', headers=headers, json=command_req('START'))
+    assert no_auth.status_code == 409
+    authorized = authorize_live_fixture(pairing, headers, _job, _actual)
+    assert authorized.status_code == 200, authorized.text
+    assert authorized.json()['authorized'] is True
+    assert authorized.json()['duration_seconds'] is None
+    state = client.get('/v1/app/state', headers=headers).json()
+    assert state['managed_execution']['account_mode'] == 'LIVE'
+    assert state['managed_execution']['live_authorized'] is True
+    assert client.post('/v1/app/commands', headers=headers, json=command_req('START')).status_code == 202
 
 
 def test_live_master_requires_explicit_current_authorization(monkeypatch):
@@ -1773,39 +1665,31 @@ def test_live_master_requires_explicit_current_authorization(monkeypatch):
     no_auth=client.post('/v1/app/commands',headers=ah,json=command_req('START'))
     assert no_auth.status_code==409
     authorized=authorize_live_fixture(p,ah,job,actual)
-    assert authorized.status_code==200 and authorized.json()['duration_seconds']==900
+    assert authorized.status_code==200 and authorized.json()['duration_seconds'] is None
 
-def test_live_authorization_rejects_unsigned_assertion_and_replay(monkeypatch):
-    p,ah,wh,job,th,actual=live_ready(monkeypatch)
-    challenge=client.post('/v1/app/live-challenge',headers=ah)
-    assert challenge.status_code==200
-    phrase=challenge.json()['typed_confirmation']
-    bad=client.post('/v1/app/live-authorization',headers=ah,json={
-        'challenge_id':challenge.json()['challenge_id'],
-        'typed_confirmation':phrase,
-        'step_up_assertion':'x' * 200,
+def test_live_authorization_requires_exact_phrase_and_rejects_replay(monkeypatch):
+    pairing, headers, _worker, _job, _terminal, _actual = live_ready(monkeypatch)
+    challenge = client.post('/v1/app/live-challenge', headers=headers)
+    assert challenge.status_code == 200, challenge.text
+    body = challenge.json()
+    wrong = client.post('/v1/app/live-authorization', headers=headers, json={
+        'challenge_id': body['challenge_id'], 'typed_confirmation': 'ARM LIVE FBS 700001',
     })
-    assert bad.status_code==401
-    claims={'iss':'destinedfx-management','aud':'destinedfx-bridge','sub':'fixture-user','tenant_id':'fixture-user','sid':'fixture-session',
-            'jti':uuid.uuid4().hex,'iat':int(time.time()),'exp':int(time.time())+120,
-            'pairing_id':p['pairing_id'],'challenge_id':challenge.json()['challenge_id'],
-            'typed_confirmation':phrase,'broker_brand':'FBS','login':actual['login'],'server':actual['server'],
-            'account_mode':'LIVE','credential_generation':'live-generation'}
-    assertion=jwt.encode(claims,app.TEST_STEP_UP_PRIVATE_KEY,algorithm='EdDSA')
-    first=client.post('/v1/app/live-authorization',headers=ah,json={
-        'challenge_id':challenge.json()['challenge_id'],
-        'typed_confirmation':phrase,'step_up_assertion':assertion})
-    assert first.status_code==200
-    replay=client.post('/v1/app/live-authorization',headers=ah,json={
-        'challenge_id':challenge.json()['challenge_id'],
-        'typed_confirmation':phrase,'step_up_assertion':assertion})
-    assert replay.status_code==409
+    assert wrong.status_code == 422
+    confirmed = client.post('/v1/app/live-authorization', headers=headers, json={
+        'challenge_id': body['challenge_id'], 'typed_confirmation': 'CONFIRM REAL TRADE',
+    })
+    assert confirmed.status_code == 200, confirmed.text
+    replay = client.post('/v1/app/live-authorization', headers=headers, json={
+        'challenge_id': body['challenge_id'], 'typed_confirmation': 'CONFIRM REAL TRADE',
+    })
+    assert replay.status_code == 409
 
 
 def test_live_master_authorization_updates_state(monkeypatch):
     p,ah,wh,job,th,actual=live_ready(monkeypatch)
     authorized=authorize_live_fixture(p,ah,job,actual)
-    assert authorized.status_code==200 and authorized.json()['duration_seconds']==900
+    assert authorized.status_code==200 and authorized.json()['duration_seconds'] is None
     state=client.get('/v1/app/state',headers=ah).json()
     assert state['account_identity_verified'] is True
     assert state['managed_execution']['account_mode']=='LIVE' and state['managed_execution']['live_authorized'] is True
@@ -2743,33 +2627,22 @@ def test_live_state_exposes_validated_ea_risk_controls(monkeypatch):
     assert client.get('/v1/app/state',headers=headers).json()['managed_execution']['live_authorized'] is True
 
 
-def test_live_challenge_rejects_missing_breached_or_out_of_policy_risk_evidence(monkeypatch):
-    pairing,headers,worker,job,terminal_headers,actual=live_ready(monkeypatch)
-    account={**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100}
-    invalid_configurations=[
-        {'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,
-         'max_concurrent_positions':2,'daily_risk_status':'DATA_UNAVAILABLE',
-         'daily_loss_used_percent':-1.0},
-        {'strategy':'demo','risk_percent':1.01,'max_daily_loss_percent':2.0,
-         'max_concurrent_positions':2,'daily_risk_status':'NORMAL',
-         'daily_loss_used_percent':10.0},
-        {'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.01,
-         'max_concurrent_positions':2,'daily_risk_status':'NORMAL',
-         'daily_loss_used_percent':10.0},
-        {'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,
-         'max_concurrent_positions':3,'daily_risk_status':'NORMAL',
-         'daily_loss_used_percent':10.0},
-        {'strategy':'demo','risk_percent':0.25,'max_daily_loss_percent':2.0,
-         'max_concurrent_positions':2,'daily_risk_status':'BREACHED_LOCKED',
-         'daily_loss_used_percent':100.0},
-    ]
-    for config in invalid_configurations:
-        posted=client.post('/v1/terminal/heartbeat',headers=terminal_headers,
-                           json=heartbeat_data(account=account,configuration=config))
-        assert posted.status_code==200, posted.text
-        challenge=client.post('/v1/app/live-challenge',headers=headers)
-        assert challenge.status_code==409, challenge.text
-        assert challenge.json()['detail']['code']=='LIVE_RISK_EVIDENCE_INVALID'
+def test_live_confirmation_challenge_requires_exact_reachable_real_session(monkeypatch):
+    pairing, headers, worker, job, terminal_headers, actual = live_ready(monkeypatch)
+    # Authorization establishes the real broker session; entry and order routes
+    # continue evaluating current quotes, risk caps and economic-calendar data.
+    bad_config = {
+        'strategy':'demo', 'risk_percent':1.01, 'max_daily_loss_percent':2.01,
+        'max_concurrent_positions':3, 'daily_risk_status':'DATA_UNAVAILABLE',
+        'daily_loss_used_percent':100.0,
+    }
+    account = {**actual,'balance':10000,'equity':10000,'margin':0,'free_margin':10000,'margin_level':0,'leverage':100}
+    posted = client.post('/v1/terminal/heartbeat', headers=terminal_headers,
+        json=heartbeat_data(account=account, configuration=bad_config, news_verdict={'status':'BLOCKED','detail':'test window'}))
+    assert posted.status_code == 200, posted.text
+    challenge = client.post('/v1/app/live-challenge', headers=headers)
+    assert challenge.status_code == 200, challenge.text
+    assert challenge.json()['typed_confirmation'] == 'CONFIRM REAL TRADE'
 
 
 def test_live_daily_loss_breach_revokes_existing_server_lease(monkeypatch):

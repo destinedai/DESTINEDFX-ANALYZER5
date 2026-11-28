@@ -27,7 +27,7 @@ class ModeArmingPolicyTest {
 
     private fun request(liveIdentity: ModeAccountIdentity = identity(mode = AccountMode.LIVE, generation = "cred-live"),
         demoIdentity: ModeAccountIdentity = identity(), liveVerified: ModeReadOnlyVerification = verified(liveIdentity),
-        confirmation: String = "ARM LIVE " + liveIdentity.broker + " " + liveIdentity.accountId, minSize: Boolean = true,
+        confirmation: String = if (liveIdentity.path == ModePath.DERIV_OPTIONS) "ARM LIVE " + liveIdentity.broker + " " + liveIdentity.accountId else "CONFIRM REAL TRADE", minSize: Boolean = true,
         dailyRisk: Boolean = true, riskCaps: Boolean = true, reauthenticated: Boolean = true,
         currentDemoGeneration: String = demoIdentity.credentialGeneration,
         hostProfile: HostProfile = HostProfile.PERSISTENT) =
@@ -57,79 +57,55 @@ class ModeArmingPolicyTest {
         assertFalse(policy.liveDecision(live.identity.copy(mode = AccountMode.UNKNOWN)).allowed)
     }
 
-    @Test fun liveNeedsMatchingDemoPassFreshLiveVerificationTypedConfirmationAndAllRiskGates() {
+    @Test fun mt5LiveRequiresOnlyFreshExactLiveSessionAndExplicitConfirmation() {
         val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
-        val good = request()
+        val good = request(hostProfile = HostProfile.EPHEMERAL)
         val lease = policy.armLive(good).getOrThrow()
-        assertEquals(15L * 60L * 1000L, lease.expiresAtMs - lease.armedAtMs)
-        assertFalse(policy.armLive(request(confirmation = "yes")).isSuccess)
-        assertFalse(policy.armLive(request(minSize = false)).isSuccess)
-        assertFalse(policy.armLive(request(dailyRisk = false)).isSuccess)
-        assertFalse(policy.armLive(request(riskCaps = false)).isSuccess)
-        assertFalse(policy.armLive(request(reauthenticated = false)).isSuccess)
-        assertFalse(policy.armLive(request(demoIdentity = identity(account = "999999"))).isSuccess)
-        assertFalse(policy.armLive(request(demoIdentity = identity(server = "Other-Server"))).isSuccess)
-        assertFalse(policy.armLive(request(currentDemoGeneration = "rotated")).isSuccess)
-        assertFalse(policy.armLive(request(liveVerified = verified(identity(mode = AccountMode.LIVE).copy(accountId = "999999")))).isSuccess)
-        assertFalse(policy.armLive(request(liveVerified = verified(good.identity.copy(credentialGeneration = "rotated")))).isSuccess)
+        assertEquals(Long.MAX_VALUE, lease.expiresAtMs)
+        assertTrue(policy.liveDecision(good.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
+        assertTrue(policy.liveLease(good.identity, hostProfile = HostProfile.EPHEMERAL) != null)
+        assertFalse(policy.armLive(request(hostProfile = HostProfile.EPHEMERAL, confirmation = "YES")).isSuccess)
+        assertFalse(policy.armLive(request(hostProfile = HostProfile.EPHEMERAL,
+            liveVerified = verified(good.identity).copy(accountIdentityMatched = false))).isSuccess)
+        assertFalse(policy.armLive(request(hostProfile = HostProfile.EPHEMERAL,
+            liveVerified = verified(good.identity).copy(checkedAtMs = 900_000L))).isSuccess)
+        assertFalse(policy.armLive(request(hostProfile = HostProfile.EPHEMERAL,
+            liveVerified = verified(good.identity).copy(authenticatedSession = false))).isSuccess)
+        assertFalse(policy.armLive(request(hostProfile = HostProfile.EPHEMERAL,
+            liveVerified = verified(good.identity).copy(freshAccountData = false))).isSuccess)
     }
 
-
-    @Test fun separateDemoAndLiveLoginsRequireAnExactVerifiedBridgeAssociation() {
+    @Test fun mt5LiveDoesNotRequireASeparateDemoPairOrDemoPass() {
         val now = 1_000_000L
         val policy = ModeArmingPolicy(nowMs = { now })
-        val demo = identity(account = "600001", generation = "demo-generation", server = "Broker-Demo")
-        val live = identity(mode = AccountMode.LIVE, account = "700001", generation = "live-generation", server = "Broker-Live")
-        val acceptance = accepted(demo, now - 10_000L)
-        val proof = VerifiedDemoProfileAssociation(
-            demoIdentity = demo,
-            liveIdentity = live,
-            demoPairingId = "demo-pairing-1",
-            livePairingId = "live-pairing-1",
-            associatedAtMs = now - 1_000L,
-            expiresAtMs = now + 60_000L,
-            evidenceDigest = acceptance.evidenceDigest
-        )
+        val live = identity(mode = AccountMode.LIVE, account = "700001",
+            generation = "live-generation", server = "Broker-Live")
         val request = LiveArmRequest(
             identity = live,
-            demoAcceptance = acceptance,
-            currentDemoCredentialGeneration = demo.credentialGeneration,
+            demoAcceptance = null,
+            currentDemoCredentialGeneration = "",
             liveVerification = verified(live, now),
-            typedConfirmation = "ARM LIVE ${live.broker} ${live.accountId}",
-            ownerReauthenticated = true,
-            firstMinimumSizeVerified = true,
-            dailyRiskClear = true,
-            riskCapsClear = true,
-            hostProfile = HostProfile.PERSISTENT,
-            demoProfileAssociation = proof
+            typedConfirmation = "CONFIRM REAL TRADE",
+            ownerReauthenticated = false,
+            firstMinimumSizeVerified = false,
+            dailyRiskClear = false,
+            riskCapsClear = false,
+            hostProfile = HostProfile.EPHEMERAL,
+            demoProfileAssociation = null
         )
         assertTrue(policy.armLive(request).isSuccess)
-        assertFalse(policy.armLive(request.copy(demoProfileAssociation = null)).isSuccess)
-        assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(livePairingId = proof.demoPairingId))).isSuccess)
-        assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(evidenceDigest = "b".repeat(64)))).isSuccess)
-        assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(expiresAtMs = now))).isSuccess)
-        assertFalse(policy.armLive(request.copy(demoProfileAssociation = proof.copy(demoIdentity = demo.copy(accountId = "600002")))).isSuccess)
+        assertTrue(policy.liveDecision(live, hostProfile = HostProfile.EPHEMERAL).allowed)
     }
 
-    @Test fun ephemeralHostCannotArmLiveAndPersistentLeaseIsRevokedOnHostDowngrade() {
+    @Test fun mt5HostProfileDoesNotDisarmConfirmedLiveButCredentialChangeDoes() {
         val policy = ModeArmingPolicy(nowMs = { 1_000_000L })
-        val ephemeral = request(hostProfile = HostProfile.EPHEMERAL)
-        assertFalse(policy.armLive(ephemeral).isSuccess)
-        assertFalse(policy.liveDecision(ephemeral.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
+        val live = request(hostProfile = HostProfile.EPHEMERAL)
+        policy.armLive(live).getOrThrow()
+        assertTrue(policy.liveDecision(live.identity, hostProfile = HostProfile.PERSISTENT).allowed)
+        assertTrue(policy.liveDecision(live.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
+        policy.onCredentialChanged(live.identity.path, live.identity.broker, live.identity.accountId)
+        assertFalse(policy.liveDecision(live.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
         assertEquals(0, policy.activeLeaseCount())
-
-        val persistent = request(hostProfile = HostProfile.PERSISTENT)
-        assertTrue(policy.armLive(persistent).isSuccess)
-        // Omitting the host profile means it is unverified and therefore EPHEMERAL.
-        assertFalse(policy.liveDecision(persistent.identity).allowed)
-        assertEquals(0, policy.activeLeaseCount())
-
-        assertTrue(policy.armLive(persistent).isSuccess)
-        assertTrue(policy.liveDecision(persistent.identity, hostProfile = HostProfile.PERSISTENT).allowed)
-        assertTrue(policy.liveLease(persistent.identity, hostProfile = HostProfile.PERSISTENT) != null)
-        assertFalse(policy.liveDecision(persistent.identity, hostProfile = HostProfile.EPHEMERAL).allowed)
-        assertEquals(0, policy.activeLeaseCount())
-
         val demo = identity()
         assertTrue(policy.demoDecision(demo, verified(demo), accepted(demo), "cred-demo").allowed)
     }
@@ -144,21 +120,18 @@ class ModeArmingPolicyTest {
         assertFalse(policy.armLive(request(ctLive, ctDemo, verified(ctLive))).isSuccess)
     }
 
-    @Test fun leasesExpireOnTimeCredentialRotationAccountSwitchAndProcessDeath() {
+    @Test fun mt5LiveLeasePersistsUntilAccountChangeOrEmergencyStop() {
         var now = 1_000_000L
         val policy = ModeArmingPolicy(nowMs = { now })
-        val req = request()
+        val req = request(hostProfile = HostProfile.EPHEMERAL)
         policy.armLive(req).getOrThrow()
-        assertTrue(policy.liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
-        policy.onCredentialChanged(req.identity.path, req.identity.broker, req.identity.accountId)
-        assertFalse(policy.liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
+        now += 365L * 24L * 60L * 60L * 1000L
+        assertTrue(policy.liveDecision(req.identity, now, HostProfile.EPHEMERAL).allowed)
+        policy.onAccountSwitch(req.identity.path, req.identity.broker, "another-account")
+        assertFalse(policy.liveDecision(req.identity, now, HostProfile.EPHEMERAL).allowed)
         policy.armLive(req).getOrThrow()
-        policy.onAccountSwitch(req.identity.path, req.identity.broker, "other-account")
-        assertFalse(policy.liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
-        policy.armLive(req).getOrThrow()
-        now += 15L * 60L * 1000L
-        assertFalse(policy.liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
-        assertFalse(ModeArmingPolicy(nowMs = { now }).liveDecision(req.identity, hostProfile = HostProfile.PERSISTENT).allowed)
+        assertEquals(1, policy.emergencyStop())
+        assertFalse(policy.liveDecision(req.identity, now, HostProfile.EPHEMERAL).allowed)
     }
 
     @Test fun emergencyStopDisarmsAllPathsAndAuditContainsOnlyFingerprints() {

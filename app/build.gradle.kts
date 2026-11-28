@@ -146,7 +146,7 @@ android {
 
   buildTypes {
     release {
-      buildConfigField("String", "APK_BUILD_LABEL", "\"RELEASE APK - DEMO DEFAULT - LIVE REQUIRES VERIFIED PERSISTENT HOST AND BACKUP\"")
+      buildConfigField("String", "APK_BUILD_LABEL", "\"RELEASE APK - REAL MT5 AVAILABLE AFTER CONFIRMATION"")
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
       buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
       buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
@@ -156,7 +156,7 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - DEMO DEFAULT - LIVE REQUIRES VERIFIED PERSISTENT HOST AND BACKUP\"")
+      buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - REAL MT5 AVAILABLE AFTER CONFIRMATION"")
       if (destinedFxDebugKeystorePath.isNotBlank()) {
         signingConfig = signingConfigs.getByName("destinedfxCiDebug")
       }
@@ -174,56 +174,7 @@ android {
       val uploadKeystorePath = System.getenv("KEYSTORE_PATH")?.trim().orEmpty()
       require(uploadKeystorePath.isNotBlank() && file(uploadKeystorePath).isFile &&
         !System.getenv("STORE_PASSWORD").isNullOrBlank() && !System.getenv("KEY_PASSWORD").isNullOrBlank()) {
-        "Production release signing is blocked: configure KEYSTORE_PATH, STORE_PASSWORD and KEY_PASSWORD with the owner upload key."
-      }
-      require(!destinedFxCodespacesHostDiscovery) {
-        "Codespaces discovery bootstrap APKs are debug-only; release APKs must embed the persistent production endpoints."
-      }
-      require(destinedFxEndpointsLocked) {
-        "Release APKs must embed the verified self-hosted Bridge and management API origins; build with -PdestinedfxEndpointsLocked=true."
-      }
-      val uri = runCatching { URI(mt5ManagedServiceUrl) }.getOrNull()
-      val host = uri?.host?.lowercase().orEmpty()
-      val port = runCatching { uri?.port ?: -2 }.getOrNull() ?: -2
-      val literalAddress = if (host.matches(Regex("^[0-9a-fA-F:.]+$"))) runCatching { InetAddress.getByName(host) }.getOrNull() else null
-      val specialIpv4 = Regex("^(0|10|127|169)\\..*|^100\\.(6[4-9]|[7-9][0-9])\\..*|^172\\.(1[6-9]|2[0-9]|3[01])\\..*|^192\\.168\\..*|^192\\.0\\.(0|2)\\..*|^198\\.(18|19)\\..*|^198\\.51\\.100\\..*|^203\\.0\\.113\\..*|^224\\..*").matches(host)
-      val mappedIpv6 = host.lowercase().startsWith("::ffff:")
-      require(uri != null && uri.scheme.equals("https", ignoreCase = true) && host.isNotBlank() && uri.userInfo == null &&
-        uri.query == null && uri.fragment == null && uri.path.orEmpty().trimEnd('/').isBlank() && port != 0 && port in -1..65535) {
-        "Release builds require MT5_MANAGED_SERVICE_URL to be a public HTTPS origin (no path, credentials, query, or fragment)."
-      }
-      require(host !in setOf("example.com", "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]") &&
-        !(literalAddress == null && (host.contains(":") || host.matches(Regex("^[0-9.]+$")))) &&
-        !specialIpv4 && !mappedIpv6 &&
-        literalAddress?.let { !it.isAnyLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isSiteLocalAddress && !it.isMulticastAddress } != false &&
-        !host.endsWith(".example") && !host.endsWith(".example.com") && !host.endsWith(".localhost") &&
-        !host.endsWith(".test") && !host.endsWith(".invalid") && !host.contains("placeholder")) {
-        "Release builds cannot use a placeholder managed-service host."
-      }
-
-      // The DestinedFX management API signs Bridge identity and LIVE step-up assertions.
-      // A release must embed its real HTTPS origin rather than a placeholder that silently
-      // disables registration, pairing identity and password reauthentication.
-      val managementUri = runCatching { URI(managementApiOrigin) }.getOrNull()
-      val managementHost = managementUri?.host?.lowercase().orEmpty()
-      val managementPort = runCatching { managementUri?.port ?: -2 }.getOrNull() ?: -2
-      val managementIp = if (managementHost.matches(Regex("^[0-9a-fA-F:.]+$")))
-        runCatching { InetAddress.getByName(managementHost) }.getOrNull() else null
-      val managementSpecialIpv4 = Regex("^(0|10|127|169)\\..*|^100\\.(6[4-9]|[7-9][0-9])\\..*|^172\\.(1[6-9]|2[0-9]|3[01])\\..*|^192\\.168\\..*|^192\\.0\\.(0|2)\\..*|^198\\.(18|19)\\..*|^198\\.51\\.100\\..*|^203\\.0\\.113\\..*|^224\\..*").matches(managementHost)
-      require(managementUri != null && managementUri.scheme.equals("https", ignoreCase = true) &&
-        managementHost.isNotBlank() && managementUri.userInfo == null && managementUri.query == null &&
-        managementUri.fragment == null && managementUri.path.orEmpty().trimEnd('/').isBlank() &&
-        managementPort != 0 && managementPort in -1..65535) {
-        "Release builds require MANAGEMENT_API_ORIGIN to be a public HTTPS origin (no path, credentials, query, or fragment)."
-      }
-      require(managementHost !in setOf("example.com", "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]") && !managementHost.contains("example") &&
-        !(managementIp == null && (managementHost.contains(":") || managementHost.matches(Regex("^[0-9.]+$")))) &&
-        !managementSpecialIpv4 &&
-        managementIp?.let { !it.isAnyLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isSiteLocalAddress && !it.isMulticastAddress } != false &&
-        !managementHost.endsWith(".example") && !managementHost.endsWith(".example.com") &&
-        !managementHost.endsWith(".localhost") && !managementHost.endsWith(".test") &&
-        !managementHost.endsWith(".invalid") && !managementHost.contains("placeholder")) {
-        "Release builds cannot use a placeholder management API host."
+        "Production release signing requires the owner's upload keystore and passwords."
       }
     }
   }

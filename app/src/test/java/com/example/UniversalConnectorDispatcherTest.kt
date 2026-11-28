@@ -116,17 +116,35 @@ class UniversalConnectorDispatcherTest {
     }
 
     @Test
-    fun liveConnectorIsBlockedUntilAProcessLocalLeaseExists() {
-        val dispatcher = UniversalConnectorDispatcher(emptyMap(), ModeArmingPolicy())
+    fun liveConnectorAcceptsConfirmedEphemeralRealMt5SessionWithoutDemoPass() {
+        val policy = ModeArmingPolicy()
+        val dispatcher = UniversalConnectorDispatcher(emptyMap(), policy)
         val demo = fixture(ConnectorKind.FBS_MT5)
         val liveIdentity = demo.identity!!.copy(mode = AccountMode.LIVE, credentialGeneration = "live-generation")
+        val verification = ModeReadOnlyVerification(
+            liveIdentity, System.currentTimeMillis(), true, true, true, true, true
+        )
         val live = demo.copy(
             identity = liveIdentity,
-            readOnlyVerification = ModeReadOnlyVerification(liveIdentity, System.currentTimeMillis(), true, true, true, true, true),
-            demoAcceptance = demo.demoAcceptance,
-            currentDemoCredentialGeneration = demo.identity.credentialGeneration
+            hostProfile = com.example.data.broker.HostProfile.EPHEMERAL,
+            readOnlyVerification = verification,
+            demoAcceptance = null,
+            currentDemoCredentialGeneration = ""
         )
         assertFalse(dispatcher.validateVerification(ConnectorKind.FBS_MT5, live).isSuccess)
+        policy.armLive(com.example.data.broker.LiveArmRequest(
+            identity = liveIdentity,
+            demoAcceptance = null,
+            currentDemoCredentialGeneration = "",
+            liveVerification = verification,
+            typedConfirmation = "CONFIRM REAL TRADE",
+            ownerReauthenticated = false,
+            firstMinimumSizeVerified = false,
+            dailyRiskClear = false,
+            riskCapsClear = false,
+            hostProfile = com.example.data.broker.HostProfile.EPHEMERAL
+        )).getOrThrow()
+        assertTrue(dispatcher.validateVerification(ConnectorKind.FBS_MT5, live).isSuccess)
     }
 
     @Test

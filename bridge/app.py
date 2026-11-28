@@ -91,6 +91,7 @@ def host_lifecycle_state(now_epoch=None):
     if HOST_PROFILE != 'EPHEMERAL' or HOST_STARTED_AT_EPOCH_SECONDS <= 0:
         return {
             'host_lifecycle_status':'PERSISTENT' if HOST_PROFILE == 'PERSISTENT' else 'UNKNOWN',
+            'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS or None,
             'max_lifetime_seconds':None,
             'host_warning_seconds':HOST_WARNING_SECONDS,
             'host_emergency_stop_lead_seconds':HOST_EMERGENCY_STOP_LEAD_SECONDS,
@@ -105,6 +106,7 @@ def host_lifecycle_state(now_epoch=None):
     warning=remaining <= HOST_WARNING_SECONDS
     return {
         'host_lifecycle_status':'SHUTDOWN_PENDING' if pending else ('WARNING' if warning else 'ACTIVE'),
+        'host_started_at_epoch_seconds':HOST_STARTED_AT_EPOCH_SECONDS,
         'max_lifetime_seconds':HOST_MAX_LIFETIME_SECONDS,
         'host_warning_seconds':HOST_WARNING_SECONDS,
         'host_emergency_stop_lead_seconds':HOST_EMERGENCY_STOP_LEAD_SECONDS,
@@ -309,12 +311,12 @@ def linux_slot_isolation(host):
     return isolation if isinstance(isolation, dict) else {}
 
 
-def require_live_host_isolation(minimum_active_slots=2):
-    """Require root-attested per-user Linux process isolation for LIVE.
+def require_live_host_isolation(minimum_active_slots=1):
+    """Require one root-attested isolated slot for the exact authenticated LIVE terminal.
 
-    EPHEMERAL Codespaces can run LIVE after explicit owner risk acceptance; it
-    needs one isolated terminal slot. Persistent Linux retains its two-slot and
-    verified-backup requirements.
+    Persistence duration, backup health and a second DEMO account are not LIVE
+    authorization criteria. Per-user process isolation remains in place so one
+    broker account cannot read another user's credentials or terminal process.
     """
     if LINUX_HOST_MODE:
         host = linux_host_report()
@@ -323,31 +325,23 @@ def require_live_host_isolation(minimum_active_slots=2):
         maximum = isolation.get('max_slots')
         valid_active = isinstance(active, int) and not isinstance(active, bool)
         valid_maximum = isinstance(maximum, int) and not isinstance(maximum, bool)
-        required_slots = 1 if HOST_PROFILE == 'EPHEMERAL' else max(1, minimum_active_slots)
         if isolation.get('enabled') is not True or isolation.get('ready') is not True:
             raise HTTPException(503, detail={
                 'code': 'PER_USER_TERMINAL_ISOLATION_REQUIRED',
-                'message': 'The root host agent has not verified isolated per-user MT5 terminals',
+                'message': 'The root host agent has not verified the isolated per-pairing MT5 terminal',
             })
-        if not valid_maximum or maximum < required_slots or not valid_active or active < required_slots:
+        if not valid_maximum or maximum < 1 or not valid_active or active < 1:
             raise HTTPException(409, detail={
-                'code': 'LIVE_ISOLATION_CAPACITY_NOT_READY',
-                'message': f'LIVE requires {required_slots} active root-attested MT5 terminal slot(s) on this host',
+                'code': 'LIVE_TERMINAL_SLOT_NOT_READY',
+                'message': 'One root-attested isolated LIVE MT5 terminal slot must be active',
                 'active_slots': active if valid_active else 0,
                 'max_slots': maximum if valid_maximum else 0,
-            })
-        backup = host.get('backup') if isinstance(host, dict) else None
-        if HOST_PROFILE == 'PERSISTENT' and (not isinstance(backup, dict) or backup.get('status') != 'PASS'):
-            raise HTTPException(503, detail={
-                'code': 'LIVE_BACKUP_NOT_VERIFIED',
-                'message': 'LIVE requires recent checksum-verified Bridge and Management database backups on the persistent Linux host',
-                'backup_status': backup.get('status', 'NOT_VERIFIED') if isinstance(backup, dict) else 'NOT_VERIFIED',
             })
         return isolation
     if not _isolation_evidence_verified():
         raise HTTPException(409, detail={
-            'code': 'MULTI_USER_OS_ISOLATION_NOT_VERIFIED',
-            'message': 'This Windows worker has not proved separate per-user process identities and account ACLs',
+            'code': 'PER_USER_TERMINAL_ISOLATION_REQUIRED',
+            'message': 'This worker has not proved separate per-user process identities and account ACLs',
         })
     return {}
 
@@ -499,6 +493,13 @@ def db():
         challenge_hash TEXT NOT NULL UNIQUE, demo_acceptance_id TEXT NOT NULL REFERENCES demo_acceptances(id),
         demo_pairing_id TEXT, broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL, company TEXT NOT NULL,
         worker_id TEXT NOT NULL, worker_generation INTEGER NOT NULL, host_generation TEXT NOT NULL, credential_generation TEXT NOT NULL DEFAULT '',
+        expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS live_session_challenges(
+        id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL REFERENCES pairings(id) ON DELETE CASCADE,
+        challenge_hash TEXT NOT NULL UNIQUE, broker_brand TEXT NOT NULL, login TEXT NOT NULL, server TEXT NOT NULL,
+        company TEXT NOT NULL, worker_id TEXT NOT NULL, worker_generation INTEGER NOT NULL,
+        host_generation TEXT NOT NULL, credential_generation TEXT NOT NULL DEFAULT '',
         expires_at REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
     );''')
     c.execute('''CREATE TABLE IF NOT EXISTS live_profile_links(
@@ -841,7 +842,7 @@ class LiveAuthorization(BaseModel):
     model_config=ConfigDict(extra='forbid')
     challenge_id:str=Field(min_length=1,max_length=128)
     typed_confirmation:str=Field(min_length=8,max_length=256)
-    step_up_assertion:str=Field(min_length=100,max_length=8192)
+    step_up_assertion:str=Field(default='',max_length=8192)
 class DemoPassEvidence(BaseModel):
     model_config=ConfigDict(extra='forbid')
     evidence_version:StrictInt=Field(ge=1,le=1)
@@ -1515,13 +1516,9 @@ def require_live_risk_evidence(beat):
     return evidence
 
 def live_authorization_valid(p, managed, beat, now_epoch=None):
-    """Require the current LIVE lease and its exact, currently valid DEMO profile association."""
+    """LIVE is authorized by one explicit confirmation bound to the active REAL MT5 login."""
     now_epoch = time.time() if now_epoch is None else now_epoch
     if not p or not managed or managed['revoked'] or managed['access_type'] != 'MASTER':
-        return False
-    try:
-        require_live_host_isolation(minimum_active_slots=2)
-    except HTTPException:
         return False
     if managed['account_mode'] != 'LIVE' or not beat:
         return False
@@ -1529,25 +1526,14 @@ def live_authorization_valid(p, managed, beat, now_epoch=None):
         return False
     if not terminal_identity_matches(p, 'LIVE', beat):
         return False
-    if not live_risk_controls(beat)['authorized']:
-        return False
     account = beat.get('account') or {}
-    if not (
+    return bool(
         p['live_authorized_until'] is not None
         and p['live_authorized_until'] > now_epoch
         and p['live_authorized_login'] == account.get('login')
         and p['live_authorized_server'] == account.get('server')
         and account.get('account_mode') == 'LIVE'
-    ):
-        return False
-    try:
-        with tx() as c:
-            link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
-            live_managed=c.execute('SELECT * FROM managed_accounts WHERE pairing_id=?',(p['id'],)).fetchone()
-        _verified_live_demo_association(p,link,live_managed,beat,now_epoch)
-        return True
-    except Exception:
-        return False
+    )
 
 
 def _management_step_up_claims(assertion):
@@ -1596,8 +1582,8 @@ def _current_ready_context(p, expected_mode):
         worker['expires_at']<=time.time() or not beat or not execution_state_eligible(beat) or
         not beat.get('terminal_connected') or not terminal_identity_matches(p,expected_mode,beat)):
         raise HTTPException(409,detail={'code':'ACCOUNT_EVIDENCE_NOT_READY','message':'Fresh authenticated account, worker and terminal evidence is required'})
-    if expected_mode=='LIVE' and (not beat.get('trade_allowed') or not heartbeat_news_clear(beat)):
-        raise HTTPException(409,detail={'code':'LIVE_EVIDENCE_NOT_READY','message':'LIVE terminal permission and clear news evidence are required'})
+    if expected_mode=='LIVE' and not beat.get('trade_allowed'):
+        raise HTTPException(409,detail={'code':'LIVE_TERMINAL_PERMISSION_NOT_READY','message':'The authenticated REAL MT5 terminal must report trade permission'})
     return managed,job,worker,beat
 
 def _verified_live_demo_association(p, link, live_managed, live_beat, now_epoch=None):
@@ -1847,18 +1833,16 @@ def managed_account(x:ManagedAccount, authorization:str|None=Header(default=None
         isolation=linux_slot_isolation(host)
         if isolation.get('enabled') is not True or isolation.get('ready') is not True:
             raise HTTPException(503,detail={'code':'PER_USER_TERMINAL_ISOLATION_REQUIRED','message':'Root host agent has not verified isolated per-user terminal slot capacity'})
-        # LIVE credentials may be paired on EPHEMERAL for account verification only.
-        # Root-attested isolation is still mandatory; worker disables MT5 algo trading on EPHEMERAL.
-        # LIVE authorization, START/RESUME and order routes remain persistent-host-only.
+        # One root-attested per-pairing terminal slot is required for DEMO or REAL.
+        # The authenticated broker account mode and the explicit REAL confirmation control LIVE.
         if x.account_mode == 'LIVE':
             maximum=isolation.get('max_slots')
             active=isolation.get('active_slots',0)
-            required_slots = 2 if HOST_PROFILE == 'PERSISTENT' else 1
+            required_slots = 1
             if (not isinstance(maximum,int) or isinstance(maximum,bool) or maximum < required_slots or
                     not isinstance(active,int) or isinstance(active,bool) or active >= maximum):
-                code = 'LIVE_REQUIRES_TWO_ISOLATED_TERMINALS' if HOST_PROFILE == 'PERSISTENT' else 'LIVE_LOGIN_SLOT_CAPACITY_NOT_READY'
-                message = ('A persistent host needs capacity for separate DEMO and LIVE MT5 terminals'
-                           if HOST_PROFILE == 'PERSISTENT' else 'An ephemeral account-verification login needs one isolated MT5 terminal slot')
+                code = 'LIVE_TERMINAL_SLOT_NOT_READY'
+                message = 'One isolated MT5 terminal slot must be available for this REAL account'
                 raise HTTPException(409,detail={'code':code,'message':message,'active_slots':active if isinstance(active,int) and not isinstance(active,bool) else 0,'max_slots':maximum if isinstance(maximum,int) and not isinstance(maximum,bool) else 0})
     p=auth(authorization,'app')
     if not x_management_identity:
@@ -2759,7 +2743,7 @@ def state(authorization:str|None=Header(default=None)):
         expected_login=fernet.decrypt(m['login_enc']).decode()
         expected_server=fernet.decrypt(m['server_enc']).decode()
         broker_identity_verified=bool(actual and actual.get('account') and broker_company_matches(m['broker_brand'], actual['account'].get('company','')) and broker_server_matches(m['broker_brand'], expected_server, actual['account'].get('server','')))
-        app_status='READY' if identity_verified and worker_ready and execution_state_eligible(actual) and heartbeat_news_clear(actual) else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
+        app_status='READY' if identity_verified and worker_ready and execution_state_eligible(actual) else ('STALE' if worker_ready and p['heartbeat'] else ('AUTHENTICATING' if worker_ready else (job['status'] if job else 'QUEUED')))
         live_auth=live_authorization_valid(p,m,actual) if m['account_mode']=='LIVE' else False
         managed={'status':app_status,'worker_status':job['status'] if job else 'NOT_CONFIGURED','access_type':m['access_type'],'account_mode':m['account_mode'],'broker_brand':m['broker_brand'],'requested_login':expected_login,'requested_server':expected_server,'terminal_fresh':bool(actual),'account_identity_verified':identity_verified,'broker_identity_verified':broker_identity_verified,'execution_state_eligible':execution_state_eligible(actual),'news_ready':heartbeat_news_clear(actual),'live_authorized':live_auth,'live_authorized_until':iso(datetime.fromtimestamp(p['live_authorized_until'],timezone.utc)) if p['live_authorized_until'] else None,'trade_allowed':bool(actual and actual.get('trade_allowed')),'error_code':job['error_code'] if job else None,'error_message':job['error_message'] if job else None}
         if actual:
@@ -3290,111 +3274,81 @@ def revoke_demo_acceptance(authorization:str|None=Header(default=None)):
 @app.post('/v1/app/live-challenge')
 def create_live_challenge(authorization:str|None=Header(default=None)):
     require_durable_execution()
-    require_live_host_isolation(minimum_active_slots=2)
+    require_live_host_isolation(minimum_active_slots=1)
     p=auth(authorization,'app')
     managed,job,worker,beat=_current_ready_context(p,'LIVE')
-    if managed['access_type']!='MASTER':
-        raise HTTPException(409,'LIVE authorization requires a MASTER profile')
-    require_live_risk_evidence(beat)
-    with tx() as c:
-        link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
-    if not link:
-        raise HTTPException(409,detail={'code':'DEMO_PROFILE_ASSOCIATION_REQUIRED','message':'Associate a separately paired DEMO profile before LIVE authorization'})
-    acceptance,demo_managed,demo_pair=_verified_live_demo_association(p,link,managed,beat)
+    if managed['account_mode']!='LIVE' or managed['access_type']!='MASTER':
+        raise HTTPException(409,detail={'code':'REAL_MT5_SESSION_REQUIRED','message':'Log in to the exact REAL MT5 account with TRADE access first'})
+    account=beat.get('account') or {}
     challenge_id=secrets.token_urlsafe(24); now_epoch=time.time(); expires=now_epoch+120
     with tx(True) as c:
-        c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
-        c.execute('''INSERT INTO live_challenges
-            (id,pairing_id,challenge_hash,demo_acceptance_id,demo_pairing_id,broker_brand,login,server,company,
-             worker_id,worker_generation,host_generation,credential_generation,expires_at,used,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)''',
-            (challenge_id,p['id'],digest(challenge_id),acceptance['id'],link['demo_pairing_id'],managed['broker_brand'],
-             beat['account']['login'],beat['account']['server'],beat['account']['company'],
-             job['worker_id'],worker['generation'],HOST_GENERATION,managed['credential_generation'] or '',expires,now_epoch))
+        c.execute('UPDATE live_session_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
+        c.execute('''INSERT INTO live_session_challenges
+            (id,pairing_id,challenge_hash,broker_brand,login,server,company,worker_id,worker_generation,
+             host_generation,credential_generation,expires_at,used,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?, ?,0,?)''',
+            (challenge_id,p['id'],digest(challenge_id),managed['broker_brand'],account['login'],
+             account['server'],account['company'],job['worker_id'],worker['generation'],
+             HOST_GENERATION,managed['credential_generation'] or '',expires,now_epoch))
     return {
         'pairing_id':p['id'],
         'challenge_id':challenge_id,
         'expires_at':iso(datetime.fromtimestamp(expires,timezone.utc)),
-        'typed_confirmation':f"ARM LIVE {managed['broker_brand']} {beat['account']['login']}",
+        'typed_confirmation':'CONFIRM REAL TRADE',
         'broker_brand':managed['broker_brand'],
-        'login':beat['account']['login'],
-        'server':beat['account']['server'],
-        'account_mode':managed['account_mode'],
+        'login':account['login'],
+        'server':account['server'],
+        'account_mode':'LIVE',
         'credential_generation':managed['credential_generation'] or '',
     }
 
 @app.post('/v1/app/live-authorization')
 def authorize_live(x:LiveAuthorization,authorization:str|None=Header(default=None)):
     require_durable_execution()
-    require_live_host_isolation(minimum_active_slots=2)
+    require_live_host_isolation(minimum_active_slots=1)
     p=auth(authorization,'app')
+    now_epoch=time.time()
     with tx(True) as c:
-        challenge=c.execute('SELECT * FROM live_challenges WHERE id=? AND challenge_hash=? AND pairing_id=?',
+        challenge=c.execute('SELECT * FROM live_session_challenges WHERE id=? AND challenge_hash=? AND pairing_id=?',
                             (x.challenge_id,digest(x.challenge_id),p['id'])).fetchone()
-    if not challenge or challenge['used'] or challenge['expires_at']<=time.time():
-        raise HTTPException(409,detail={'code':'LIVE_CHALLENGE_INVALID','message':'LIVE authorization challenge is invalid, expired or already used'})
-    claims=_management_step_up_claims(x.step_up_assertion)
-    if not p['owner_subject'] or claims['sub'] != p['owner_subject'] or claims['tenant_id'] != p['owner_tenant']:
-        raise HTTPException(403,detail={'code':'MANAGEMENT_IDENTITY_MISMATCH','message':'The management identity is not bound to this pairing'})
-    if any((
-        claims['pairing_id'] != p['id'],
-        claims['challenge_id'] != challenge['id'],
-        claims['typed_confirmation'] != x.typed_confirmation,
-        claims['broker_brand'] != challenge['broker_brand'],
-        claims['login'] != challenge['login'],
-        claims['server'] != challenge['server'],
-        claims['account_mode'] != 'LIVE',
-        claims['credential_generation'] != challenge['credential_generation'],
-    )):
-        with tx(True) as c:
-            c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
-        raise HTTPException(409,detail={'code':'LIVE_CONTEXT_CHANGED','message':'The authorization context changed; obtain a new challenge'})
+    if not challenge or challenge['used'] or challenge['expires_at']<=now_epoch:
+        raise HTTPException(409,detail={'code':'LIVE_CHALLENGE_INVALID','message':'The LIVE confirmation is expired or already used'})
+    if x.typed_confirmation != 'CONFIRM REAL TRADE':
+        raise HTTPException(422,detail={'code':'REAL_TRADE_CONFIRMATION_REQUIRED','message':'Press CONFIRM REAL TRADE for this account'})
     managed,job,worker,beat=_current_ready_context(p,'LIVE')
-    require_live_risk_evidence(beat)
-    with tx() as c:
-        link=c.execute('SELECT * FROM live_profile_links WHERE pairing_id=? AND revoked=0',(p['id'],)).fetchone()
-    if (not link or link['demo_pairing_id'] != challenge['demo_pairing_id'] or
-        link['demo_acceptance_id'] != challenge['demo_acceptance_id']):
-        with tx(True) as c:
-            c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
-        raise HTTPException(409,detail={'code':'DEMO_PROFILE_ASSOCIATION_CHANGED','message':'The DEMO association changed after the LIVE challenge was issued'})
-    acceptance,demo_managed,demo_pair=_verified_live_demo_association(p,link,managed,beat)
-    expected=f'ARM LIVE {managed["broker_brand"]} {beat["account"]["login"]}'
-    if x.typed_confirmation != expected:
-        raise HTTPException(422,'Typed LIVE confirmation does not match the current account')
+    if managed['account_mode']!='LIVE' or managed['access_type']!='MASTER':
+        raise HTTPException(409,detail={'code':'REAL_MT5_SESSION_REQUIRED','message':'The active terminal is not a REAL MASTER MT5 session'})
+    account=beat.get('account') or {}
     if any((
+        managed['broker_brand'] != challenge['broker_brand'],
         managed['credential_generation'] != challenge['credential_generation'],
         job['worker_id'] != challenge['worker_id'],
         worker['generation'] != challenge['worker_generation'],
         HOST_GENERATION != challenge['host_generation'],
-        beat['account'].get('login') != challenge['login'],
-        beat['account'].get('server') != challenge['server'],
-        beat['account'].get('company') != challenge['company'],
+        account.get('login') != challenge['login'],
+        account.get('server') != challenge['server'],
+        account.get('company') != challenge['company'],
+        account.get('account_mode') != 'LIVE',
     )):
         with tx(True) as c:
-            c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
-        raise HTTPException(409,detail={'code':'LIVE_CONTEXT_CHANGED','message':'The authorization context changed; obtain a new challenge'})
+            c.execute('UPDATE live_session_challenges SET used=1 WHERE id=? AND used=0',(challenge['id'],))
+        raise HTTPException(409,detail={'code':'LIVE_CONTEXT_CHANGED','message':'The authenticated REAL MT5 session changed; log in and confirm again'})
     with tx(True) as c:
-        acceptance=c.execute('''SELECT * FROM demo_acceptances WHERE id=? AND pairing_id=?
-                                 AND credential_generation=? AND revoked=0 AND expires_at>?''',
-                              (challenge['demo_acceptance_id'],challenge['demo_pairing_id'],
-                               demo_managed['credential_generation'],time.time())).fetchone()
-        if not acceptance:
-            raise HTTPException(409,detail={'code':'DEMO_ACCEPTANCE_REQUIRED','message':'DEMO acceptance is missing or expired'})
-        changed=c.execute('UPDATE live_challenges SET used=1 WHERE id=? AND used=0 AND expires_at>?',(x.challenge_id,time.time()))
+        changed=c.execute('UPDATE live_session_challenges SET used=1 WHERE id=? AND used=0 AND expires_at>?',
+                          (x.challenge_id,now_epoch))
         if changed.rowcount!=1:
-            raise HTTPException(409,detail={'code':'LIVE_CHALLENGE_REPLAY','message':'LIVE authorization challenge was already consumed'})
-        until=time.time()+900
-        account=beat['account']
+            raise HTTPException(409,detail={'code':'LIVE_CHALLENGE_REPLAY','message':'REAL trade confirmation was already consumed'})
+        until=253402300799.0
         c.execute('UPDATE pairings SET live_authorized_until=?,live_authorized_login=?,live_authorized_server=? WHERE id=?',
                   (until,account['login'],account['server'],p['id']))
-    return {'authorized':True,'expires_at':iso(datetime.fromtimestamp(until,timezone.utc)),'duration_seconds':900}
+    return {'authorized':True,'expires_at':iso(datetime.fromtimestamp(until,timezone.utc)),'duration_seconds':None}
 @app.delete('/v1/app/live-authorization')
 def revoke_live_authorization(authorization:str|None=Header(default=None)):
     p=auth(authorization,'app')
     with tx(True) as c:
         c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
         c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
+        c.execute('UPDATE live_session_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
     return {'revoked':True}
 
 @app.post('/v1/app/close-all-confirmation')
@@ -3818,7 +3772,7 @@ def command(x:Command,authorization:str|None=Header(default=None)):
         account=beat.get('account',{}) if beat else {}
         live_ok=(m['account_mode']!='LIVE' or live_authorization_valid(p,m,beat))
         symbols=resolve_start_news_symbols(x.config,beat)
-        if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or symbols is None or not heartbeat_news_clear(beat,symbols) or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: profile, MASTER access, eligible EA state, verified identity/mode, fresh CLEAR news verdict, verified identity/mode, fresh heartbeat, worker readiness, trade permission and current LIVE authorization are required')
+        if m['revoked'] or m['access_type']!='MASTER' or m['account_mode'] not in ('DEMO','LIVE') or not execution_state_eligible(beat) or symbols is None or not beat.get('terminal_connected') or not beat.get('trade_allowed') or not terminal_identity_matches(p,m['account_mode'],beat) or not job or job['status']!='READY' or not live_ok: raise HTTPException(409,'Managed execution is not authorized to start or resume: account profile, MASTER access, eligible EA state, verified identity/mode, fresh heartbeat, worker readiness, trade permission and explicit LIVE confirmation are required')
     serialized=json.dumps(x.config,separators=(',',':'),allow_nan=False)
     with tx(True) as c:
         _require_host_accepting_commands(c)
@@ -3942,6 +3896,7 @@ def heartbeat(x:Heartbeat,authorization:str|None=Header(default=None)):
             # Risk evidence loss or a breached EA daily-loss guard immediately removes the lease.
             c.execute('UPDATE pairings SET live_authorized_until=NULL,live_authorized_login=NULL,live_authorized_server=NULL WHERE id=?',(p['id'],))
             c.execute('UPDATE live_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
+            c.execute('UPDATE live_session_challenges SET used=1 WHERE pairing_id=? AND used=0',(p['id'],))
         if (managed and not managed['revoked'] and managed['access_type']=='MASTER' and managed['account_mode']==x.account.account_mode
             and broker_company_matches(managed['broker_brand'],x.account.company)
             and job and job['status']=='READY' and x.terminal_connected and terminal_identity_matches(p,managed['account_mode'],payload)):

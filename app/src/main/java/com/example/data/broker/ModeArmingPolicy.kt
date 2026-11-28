@@ -155,6 +155,33 @@ class ModeArmingPolicy(
     fun armLive(request: LiveArmRequest): Result<ModeLiveLease> {
         val identity = request.identity
         val now = nowMs()
+        val isMt5 = identity.path in setOf(ModePath.FBS_MT5, ModePath.EXNESS_MT5, ModePath.HFM_MT5, ModePath.DERIV_MT5)
+        if (isMt5) {
+            val verification = request.liveVerification
+            val reason = when {
+                identity.mode != AccountMode.LIVE -> "LIVE_PROFILE_REQUIRED"
+                !identity.isValid() -> "LIVE_ACCOUNT_IDENTITY_INCOMPLETE"
+                verification.identity != identity -> "LIVE_VERIFICATION_IDENTITY_MISMATCH"
+                !isFresh(verification.checkedAtMs, now, freshnessLimit(identity.path)) -> "LIVE_VERIFICATION_STALE"
+                !verification.authenticatedSession -> "LIVE_AUTHENTICATED_SESSION_REQUIRED"
+                !verification.freshAccountData -> "LIVE_ACCOUNT_DATA_STALE"
+                !(verification.freshQuote || verification.freshHeartbeat) -> "LIVE_QUOTE_OR_HEARTBEAT_REQUIRED"
+                !verification.accountIdentityMatched -> "LIVE_ACCOUNT_IDENTITY_MISMATCH"
+                request.typedConfirmation != "CONFIRM REAL TRADE" -> "REAL_TRADE_CONFIRMATION_REQUIRED"
+                else -> null
+            }
+            if (reason != null) {
+                audit(identity, "LIVE_ARM_BLOCKED", false, reason, now)
+                return Result.failure(IllegalStateException(reason))
+            }
+            val lease = ModeLiveLease(identity, now, Long.MAX_VALUE)
+            if (!audit(identity, "LIVE_ARMED", true, "EXPLICIT_REAL_TRADE_CONFIRMATION", now)) {
+                return Result.failure(IllegalStateException("MODE_AUDIT_WRITE_FAILED"))
+            }
+            liveLeases[identity.fingerprint()] = lease
+            return Result.success(lease)
+        }
+
         val reason = when {
             identity.mode != AccountMode.LIVE -> "LIVE_PROFILE_REQUIRED"
             identity.path == ModePath.CTRADER_ACCOUNT -> "CTRADER_TRADING_NOT_IMPLEMENTED"
@@ -196,6 +223,18 @@ class ModeArmingPolicy(
 
     fun liveDecision(identity: ModeAccountIdentity, now: Long = nowMs(), hostProfile: HostProfile = HostProfile.EPHEMERAL): ModeDecision {
         if (identity.mode != AccountMode.LIVE) return ModeDecision(false, "BLOCKED", "LIVE_PROFILE_REQUIRED")
+        val isMt5 = identity.path in setOf(ModePath.FBS_MT5, ModePath.EXNESS_MT5, ModePath.HFM_MT5, ModePath.DERIV_MT5)
+        if (isMt5) {
+            if (!identity.isValid()) return ModeDecision(false, "BLOCKED", "LIVE_ACCOUNT_IDENTITY_INCOMPLETE")
+            val lease = liveLeases[identity.fingerprint()]
+                ?: return ModeDecision(false, "LIVE_LOCKED", "LIVE_CONFIRMATION_REQUIRED")
+            if (lease.identity != identity || now < lease.armedAtMs) {
+                liveLeases.remove(identity.fingerprint())
+                audit(identity, "LIVE_DISARMED", false, "LIVE_ACCOUNT_IDENTITY_CHANGED", now)
+                return ModeDecision(false, "LIVE_LOCKED", "LIVE_ACCOUNT_IDENTITY_CHANGED")
+            }
+            return ModeDecision(true, "LIVE_ARMED", "Explicit REAL trade confirmation is active for this exact MT5 account.")
+        }
         if (hostProfile != HostProfile.PERSISTENT) {
             liveLeases.remove(identity.fingerprint())
             audit(identity, "LIVE_DISARMED", false, "LIVE_REQUIRES_PERSISTENT_HOST", now)

@@ -701,7 +701,8 @@ class MT5RemoteBridgeClient(
         require(action in setOf("START", "STOP", "PAUSE", "RESUME", "EMERGENCY_STOP", "SET_ANALYZER_CHART") + COMMAND_TRADE_ACTIONS)
         touchHostActivity()
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "request_id must be a UUID" }
-        if (action in COMMAND_TRADE_ACTIONS + setOf("START", "RESUME") && !sensitiveActionAuthorized()) {
+        if (action in COMMAND_TRADE_ACTIONS + setOf("START", "RESUME") &&
+            accountMode != "LIVE" && !sensitiveActionAuthorized()) {
             return CommandResult(requestId, false, "REAUTHENTICATION_REQUIRED: authenticate again before this trading action", rejected = true)
         }
         if (action == "EMERGENCY_STOP") {
@@ -734,11 +735,26 @@ class MT5RemoteBridgeClient(
             val fresh = try { state() } catch (e: Exception) {
                 return CommandResult(requestId, false, safeMessage(e), rejected = (e as? BridgeHttpException)?.status?.let { it in 400..499 } == true)
             }
-            val reason = gateFailure(fresh, requireLiveAuthorization = action != "PAUSE")
+            val startOrResume = action == "START" || action == "RESUME"
+            var reason = gateFailure(
+                fresh,
+                requireLiveAuthorization = action != "PAUSE" && !(accountMode == "LIVE" && startOrResume)
+            )
             if (reason != null) return CommandResult(requestId, false, reason, rejected = true)
-            if (action == "START" || action == "RESUME") {
-                val policy = modeArmingPolicy
-                    ?: return CommandResult(requestId, false, "MODE_POLICY_NOT_CONFIGURED: trading start is blocked", rejected = true)
+            if (startOrResume) {
+                if (accountMode == "LIVE" && !fresh.liveAuthorized) {
+                    return CommandResult(
+                        requestId,
+                        false,
+                        "LIVE_CONFIRMATION_REQUIRED: press CONFIRM REAL TRADE for this authenticated REAL MT5 account before starting the Bot",
+                        rejected = true
+                    )
+                }
+                val latest = try { state() } catch (e: Exception) {
+                    return CommandResult(requestId, false, safeMessage(e), rejected = true)
+                }
+                reason = gateFailure(latest, requireLiveAuthorization = true)
+                if (reason != null) return CommandResult(requestId, false, reason, rejected = true)
                 val identity = modeIdentity(fresh)
                 if (!identity.isValid() || identity.mode.name != accountMode || identity.broker != brokerBrand ||
                     identity.accountId != secrets.getManagedMT5AccountLogin(profile) ||
@@ -757,12 +773,16 @@ class MT5RemoteBridgeClient(
                         fresh.actualServer == secrets.getManagedMT5AccountServer(profile) &&
                         fresh.actualAccountMode == accountMode
                 )
-                val decision = if (accountMode == "DEMO") {
-                    policy.demoDecision(identity, evidence, secrets.getPathDemoAcceptance(identity),
+                if (accountMode == "DEMO") {
+                    val policy = modeArmingPolicy
+                        ?: return CommandResult(requestId, false, "MODE_POLICY_NOT_CONFIGURED: trading start is blocked", rejected = true)
+                    val decision = policy.demoDecision(identity, evidence, secrets.getPathDemoAcceptance(identity),
                         secrets.getManagedMT5CredentialGeneration(profile))
-                } else policy.liveDecision(identity, hostProfile = fresh.hostProfile)
-                if (!decision.allowed) {
-                    return CommandResult(requestId, false, "MODE_ARMING_BLOCKED: " + decision.reason, rejected = true)
+                    if (!decision.allowed) {
+                        return CommandResult(requestId, false, "MODE_ARMING_BLOCKED: " + decision.reason, rejected = true)
+                    }
+                } else if (!latest.liveAuthorized) {
+                    return CommandResult(requestId, false, "LIVE_CONFIRMATION_REQUIRED", rejected = true)
                 }
             }
         }
@@ -961,8 +981,7 @@ class MT5RemoteBridgeClient(
             "The DEMO PASS document changed after its original file digest was calculated."
         }
         val fresh = state()
-        require(fresh.hostProfile == HostProfile.PERSISTENT &&
-            fresh.managedState == "READY" && fresh.workerStatus == "READY" &&
+        require(fresh.managedState == "READY" && fresh.workerStatus == "READY" &&
             fresh.accountVerified && fresh.brokerIdentityVerified && fresh.heartbeatFresh &&
             fresh.actualAccountMode == "DEMO" && fresh.accessType == "MASTER"
         ) { "DEMO_ACCEPTANCE_BLOCKED: a fresh identity-matched MASTER DEMO terminal is required." }
@@ -1031,8 +1050,7 @@ class MT5RemoteBridgeClient(
             acceptance.expiresAtMs > System.currentTimeMillis()
         ) { "DEMO_PROFILE_ASSOCIATION_INVALID: the DEMO acceptance does not match the selected broker profile." }
         val fresh = state()
-        require(fresh.hostProfile == HostProfile.PERSISTENT &&
-            fresh.managedState == "READY" && fresh.workerStatus == "READY" &&
+        require(fresh.managedState == "READY" && fresh.workerStatus == "READY" &&
             fresh.accountVerified && fresh.brokerIdentityVerified && fresh.heartbeatFresh &&
             fresh.actualAccountMode == "LIVE" && fresh.accessType == "MASTER"
         ) { "LIVE_PROFILE_NOT_READY: fresh identity-matched MASTER LIVE terminal evidence is required." }
@@ -1132,7 +1150,6 @@ class MT5RemoteBridgeClient(
     }
 
     suspend fun liveChallenge(): LiveChallenge {
-        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
         require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
         val fresh = state()
         val reason = gateFailure(fresh, requireLiveAuthorization = false)
@@ -1151,17 +1168,15 @@ class MT5RemoteBridgeClient(
     suspend fun authorizeLiveSession(
         challengeId: String,
         typedConfirmation: String,
-        stepUpAssertion: String
+        stepUpAssertion: String = ""
     ): String {
-        require(sensitiveActionAuthorized()) { "REAUTHENTICATION_REQUIRED: authenticate again before LIVE authorization" }
         require(accountMode == "LIVE") { "LIVE authorization is available only for the LIVE profile." }
-        require(challengeId.isNotBlank() && typedConfirmation.isNotBlank() && stepUpAssertion.length >= 100) {
-            "LIVE authorization requires the server challenge, exact typed confirmation, and signed reauthentication."
+        require(challengeId.isNotBlank() && typedConfirmation == "CONFIRM REAL TRADE") {
+            "Confirm REAL trade on the authenticated LIVE MT5 account."
         }
         val result = request("POST", "/v1/app/live-authorization", JSONObject()
             .put("challenge_id", challengeId)
-            .put("typed_confirmation", typedConfirmation)
-            .put("step_up_assertion", stepUpAssertion))
+            .put("typed_confirmation", typedConfirmation))
         return result.optString("expires_at").takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("Bridge returned no LIVE lease expiry.")
     }
@@ -1361,9 +1376,6 @@ class MT5RemoteBridgeClient(
                 snapshot.managedState == "READY" && snapshot.accessType == "MASTER") {
                 "A fresh verified MASTER MT5 snapshot is required before editing position protection."
             }
-            require(snapshot.hostProfile == HostProfile.PERSISTENT) {
-                "A persistent Windows owner host is required before editing position protection."
-            }
             if (snapshot.actualAccountMode == "LIVE") require(snapshot.liveAuthorized) {
                 "A current account-bound LIVE lease is required before editing a real-money position stop."
             }
@@ -1417,9 +1429,6 @@ class MT5RemoteBridgeClient(
                 snapshot.accountVerified && snapshot.brokerIdentityVerified && snapshot.tradeAllowed &&
                 snapshot.managedState == "READY" && snapshot.accessType == "MASTER") {
                 "A fresh verified MASTER MT5 terminal snapshot is required before an order."
-            }
-            require(snapshot.hostProfile == HostProfile.PERSISTENT) {
-                "A persistent Windows owner host is required before a market order."
             }
             if (snapshot.actualAccountMode == "LIVE") require(snapshot.liveAuthorized) {
                 "A current account-bound LIVE lease is required before a real-money order."
