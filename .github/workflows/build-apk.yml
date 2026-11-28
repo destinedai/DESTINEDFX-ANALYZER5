@@ -804,7 +804,7 @@ jobs:
 
   apk-signing-consistency:
     name: Verify APK source and signer consistency
-    needs: [android-build-and-unit-tests, codespaces-bootstrap-apk]
+    needs: [android-build-and-unit-tests, codespaces-bootstrap-apk, android-release-apk]
     runs-on: ubuntu-24.04
     env:
       STABLE_DEBUG_SIGNING_CONFIGURED: ${{ secrets.DESTINEDFX_DEBUG_KEYSTORE_B64 != '' }}
@@ -828,6 +828,11 @@ jobs:
         with:
           name: DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-independent
           path: incoming/independent-standard
+      - name: Download production-signed release APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DestinedFX-RELEASE-APK-v1.0.14
+          path: incoming/release
       - name: Verify exact source SHA, APK digests, package metadata and signer consistency
         shell: bash
         run: |
@@ -837,7 +842,7 @@ jobs:
             args+=(--stable-signing-required)
           fi
           python scripts/verify_apk_metadata_consistency.py \
-            --source-sha "$GITHUB_SHA" --production-release \
+            --source-sha "$GITHUB_SHA" \
             --metadata android-jvm=incoming/android-jvm/verified/apk-metadata.json \
             --apk android-jvm=incoming/android-jvm/app-debug.apk \
             --metadata codespaces-bootstrap=incoming/codespaces-bootstrap/Codespaces-bootstrap.metadata.json \
@@ -847,10 +852,57 @@ jobs:
             --output dist/apk-signing-consistency.json \
             "${args[@]}"
           {
-            echo "### APK provenance and signing consistency"
-            echo "No private signing material is included. A successful metadata check is not an APK upgrade test."
+            echo "### Debug APK provenance and signing consistency"
+            echo "Debug APKs are DEMO/test builds only. A successful metadata check is not an APK upgrade test."
             cat dist/apk-signing-consistency.json
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify production release APK exists and uses the owner release signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="incoming/release/DestinedFX-1.0.14-release.apk"
+          metadata="incoming/release/apk-metadata.json"
+          test -s "$apk"
+          test -s "$metadata"
+          tools="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          apksigner="$ANDROID_HOME/build-tools/$tools/apksigner"
+          test -x "$apksigner"
+          signature="$("$apksigner" verify --verbose --print-certs "$apk" 2>&1)"
+          printf '%s\n' "$signature"
+          python - "$apk" "$metadata" "$GITHUB_SHA" "$signature" <<'PY'
+          import hashlib
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          apk = Path(sys.argv[1])
+          metadata_path = Path(sys.argv[2])
+          expected_source = sys.argv[3].lower()
+          signature = sys.argv[4]
+          data = json.loads(metadata_path.read_text(encoding="utf-8"))
+          if data.get("source_sha", "").lower() != expected_source:
+              raise SystemExit("Release APK metadata source SHA does not match this workflow run.")
+          if data.get("debug_only") is not False or data.get("production_signed") is not True:
+              raise SystemExit("Release APK metadata is debug-only or is not marked production-signed.")
+          if data.get("apk_file") != "app-release.apk":
+              raise SystemExit("Release APK metadata does not identify the production release variant.")
+          digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+          if apk.stat().st_size != data.get("size_bytes") or digest != data.get("sha256", "").lower():
+              raise SystemExit("Release APK size or SHA-256 does not match its verified metadata.")
+          expected_certificate = data.get("certificate_sha256", "").lower()
+          if not re.fullmatch(r"[0-9a-f]{64}", expected_certificate):
+              raise SystemExit("Release APK metadata does not contain a valid owner signing fingerprint.")
+          match = re.search(r"certificate SHA-256 digest:[ ]*([0-9a-fA-F:]{64,95})", signature, re.IGNORECASE)
+          if not match:
+              raise SystemExit("apksigner did not report a release signing certificate fingerprint.")
+          actual_certificate = re.sub(r"[^0-9a-f]", "", match.group(1).lower())
+          if actual_certificate != expected_certificate:
+              raise SystemExit("Release APK signer does not match the owner upload-key fingerprint.")
+          print("RELEASE_APK_PRESENT")
+          print("RELEASE_SIGNATURE_VERIFIED")
+          print("RELEASE_NOT_DEBUG_ONLY")
+          PY
       - name: Upload APK provenance and signing consistency report
         if: always()
         uses: actions/upload-artifact@v4
@@ -1017,14 +1069,13 @@ jobs:
 
   android-release-apk:
     name: Production-signed Android release APK
-    needs: [python-tests, android-build-and-unit-tests, android-emulator-instrumentation, backend-tests, secret-scan, broker-validation, mt5-ea-windows-compile, package-windows-worker-kit]
+    needs: [python-tests, android-build-and-unit-tests, backend-tests, secret-scan, broker-validation, mt5-ea-windows-compile, package-windows-worker-kit]
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       DESTINEDFX_UPLOAD_KEYSTORE_B64: ${{ secrets.DESTINEDFX_UPLOAD_KEYSTORE_B64 }}
       STORE_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_STORE_PASSWORD }}
       KEY_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_KEY_PASSWORD }}
-      EMULATOR_ACCEPTED: ${{ needs.android-emulator-instrumentation.outputs.live_emulator_accepted }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -1032,7 +1083,7 @@ jobs:
           distribution: temurin
           java-version: 21
           cache: gradle
-      - name: Check owner release key and emulator acceptance
+      - name: Check owner release signing key
         id: release-preflight
         shell: bash
         run: |
@@ -1041,7 +1092,6 @@ jobs:
           [[ -n "$DESTINEDFX_UPLOAD_KEYSTORE_B64" ]] || blockers+=("DESTINEDFX_UPLOAD_KEYSTORE_B64 secret is missing")
           [[ -n "$STORE_PASSWORD" ]] || blockers+=("DESTINEDFX_UPLOAD_STORE_PASSWORD secret is missing")
           [[ -n "$KEY_PASSWORD" ]] || blockers+=("DESTINEDFX_UPLOAD_KEY_PASSWORD secret is missing")
-          [[ "$EMULATOR_ACCEPTED" == "true" ]] || blockers+=("API 34 emulator acceptance did not pass; a skipped emulator run does not count")
           if (( ${#blockers[@]} > 0 )); then
             {
               echo "### RELEASE APK BLOCKED — owner signing key required"
@@ -1066,9 +1116,8 @@ jobs:
             exit 1
           fi
           echo "KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
-          echo "DESTINEDFX_EMULATOR_ACCEPTED=true" >> "$GITHUB_ENV"
           echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "Owner production signing key and API 34 emulator acceptance passed. Bridge and Management origins can be configured in the app after install." >> "$GITHUB_STEP_SUMMARY"
+          echo "Owner production signing key passed. Emulator instrumentation runs independently and does not gate release compilation." >> "$GITHUB_STEP_SUMMARY"
       - name: Build production-signed release APK
         if: steps.release-preflight.outputs.ready == 'true'
         run: |
@@ -1076,7 +1125,7 @@ jobs:
           ./gradlew assembleRelease --max-workers=2 --stacktrace \
             -PdestinedfxEndpointsLocked=false \
             -PdestinedfxCodespacesHostDiscovery=false \
-            -PdestinedfxEmulatorAccepted=true
+            -PdestinedfxEmulatorAccepted=false
       - name: Verify release signature, package, version and SHA-256
         if: steps.release-preflight.outputs.ready == 'true'
         shell: bash

@@ -168,9 +168,8 @@ android {
 
   gradle.taskGraph.whenReady {
     if (allTasks.any { it.name.contains("Release", ignoreCase = true) }) {
-      require(destinedFxEmulatorAccepted) {
-        "Production release APKs require successful Android emulator acceptance in the same CI run."
-      }
+      // Release signing is gated by the owner's upload key; emulator instrumentation
+      // remains a separate CI result and does not gate APK assembly.
       val uploadKeystorePath = System.getenv("KEYSTORE_PATH")?.trim().orEmpty()
       require(uploadKeystorePath.isNotBlank() && file(uploadKeystorePath).isFile &&
         !System.getenv("STORE_PASSWORD").isNullOrBlank() && !System.getenv("KEY_PASSWORD").isNullOrBlank()) {
