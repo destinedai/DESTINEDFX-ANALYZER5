@@ -81,8 +81,8 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             active.firstOrNull { it.symbol.equals(resolved, ignoreCase = true) }?.let { name to it.symbol }
         }.toMap()
     }
-    val selectedMt5Mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
-    val selectedMt5BrokerBrand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
+    val selectedMt5Mode by viewModel.selectedAnalyzerMt5Mode.collectAsStateWithLifecycle()
+    val selectedMt5BrokerBrand by viewModel.selectedAnalyzerMt5BrokerBrand.collectAsStateWithLifecycle()
     val selectedMt5Profile = "${selectedMt5BrokerBrand}_${selectedMt5Mode}"
     val expectedAccountLogin = secrets.getManagedMT5AccountLogin(selectedMt5Profile)
     val expectedAccountServer = secrets.getManagedMT5AccountServer(selectedMt5Profile)

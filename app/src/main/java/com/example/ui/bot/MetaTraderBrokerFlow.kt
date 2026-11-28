@@ -142,6 +142,10 @@ fun MetaTraderBrokerFlow(
     val securePolicy = LoginRules.savePasswordPolicy(secrets.isSecureStorageAvailable)
     val activeMt5ProfileKey = "${selected?.id?.removeSuffix("_MT5")}_${form.mode.name}"
     val activeMt5ServerValid = form.server == form.server.trim() && Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(form.server)
+    val selectedMt5BrokerKey = selected?.id?.removeSuffix("_MT5")?.filter(Char::isLetterOrDigit)?.uppercase(java.util.Locale.ROOT).orEmpty()
+    val normalizedServerKey = form.server.filter(Char::isLetterOrDigit).uppercase(java.util.Locale.ROOT)
+    val serverBelongsToSelectedBroker = selected?.connector != LoginConnector.MT5_TERMINAL ||
+        (selectedMt5BrokerKey.length >= 2 && normalizedServerKey.contains(selectedMt5BrokerKey))
     val activeMt5ServerSaved = activeMt5ServerValid && secrets.getManagedMT5AccountServer(activeMt5ProfileKey) == form.server
     var ephemeralLiveTradeAcknowledged by remember(selected?.id, form.mode, form.type, hostProfile) { mutableStateOf(false) }
     val ephemeralLiveTradeWarningRequired = form.mode == LoginMode.LIVE &&
@@ -518,7 +522,7 @@ fun MetaTraderBrokerFlow(
                             serverResults = emptyList()
                             serverSearchError = ""
                             serverSaveStatus = ""
-                            serverMenu = value.trim().length >= 3
+                            serverMenu = value.trim().length >= 2
                         },
                         modifier = Modifier.fillMaxWidth().testTag("server_field"),
                         enabled = mt5CredentialFieldsEnabled,
@@ -529,7 +533,7 @@ fun MetaTraderBrokerFlow(
                             }) { Text("SEARCH") }
                         },
                         label = { Text("Search MT5 Server") },
-                        placeholder = { Text("Type broker name, e.g. FBS") },
+                        placeholder = { Text("Type any broker name (e.g. Exness, XM, IC Markets)") },
                         singleLine = true,
                         textStyle = TextStyle(fontSize = 16.sp),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Search),
@@ -537,7 +541,7 @@ fun MetaTraderBrokerFlow(
                     )
                     LaunchedEffect(serverMenu, spec.id, form.mode, serverSearch) {
                         val searchText = serverSearch.trim()
-                        if (!serverMenu || searchText.length < 3) return@LaunchedEffect
+                        if (!serverMenu || searchText.length < 2) return@LaunchedEffect
                         delay(300L)
                         serverSearchBusy = true
                         serverSearchError = ""
@@ -597,12 +601,13 @@ fun MetaTraderBrokerFlow(
                             val candidate = form.server
                             serverSaveStatus = when {
                                 !serverSelectionVerified || candidate.isBlank() -> "Server not found"
+                                !serverBelongsToSelectedBroker -> "This catalogue server belongs to another broker. Select the matching broker profile before saving."
                                 candidate != candidate.trim() || !Regex("[A-Za-z0-9][A-Za-z0-9._-]{2,95}").matches(candidate) -> "Select a real server from the MT5 list."
                                 secrets.saveManagedMT5AccountServer(activeMt5ProfileKey, candidate) -> "Server saved"
                                 else -> "Server could not be saved to encrypted storage."
                             }
                         },
-                        enabled = !busy && activeMt5ServerValid && serverSelectionVerified && mt5CredentialFieldsEnabled,
+                        enabled = !busy && activeMt5ServerValid && serverSelectionVerified && serverBelongsToSelectedBroker && mt5CredentialFieldsEnabled,
                         modifier = Modifier.fillMaxWidth().testTag("save_mt5_server")
                     ) { Text("SAVE SERVER") }
                     Row(
@@ -643,7 +648,7 @@ fun MetaTraderBrokerFlow(
                             Text("SEARCHING MT5 SERVER LIST...", color = ElectricCyan, fontSize = 10.sp, modifier = Modifier.padding(12.dp))
                         } else if (serverResults.isEmpty()) {
                             Text(
-                                serverSearchError.ifBlank { if (serverSearch.trim().length < 3) "Enter at least 3 characters to search." else "Server not found" },
+                                serverSearchError.ifBlank { if (serverSearch.trim().length < 2) "Enter a broker name to search." else "Server not found" },
                                 color = if (serverSearchError.isBlank()) TextSecondary else LossRed,
                                 fontSize = 10.sp,
                                 modifier = Modifier.padding(12.dp).testTag("server_search_empty")
@@ -728,7 +733,7 @@ fun MetaTraderBrokerFlow(
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
                 Button(
                     enabled = !busy && LoginRules.canSubmitLogin(spec, form, modeHintChosen) &&
-                        (spec.connector != LoginConnector.MT5_TERMINAL || (activeMt5ServerSaved && serverSelectionVerified)) &&
+                        (spec.connector != LoginConnector.MT5_TERMINAL || (activeMt5ServerSaved && serverSelectionVerified && serverBelongsToSelectedBroker)) &&
                         (spec.connector != LoginConnector.MT5_TERMINAL || mt5CredentialFieldsEnabled),
                     onClick = { connect(spec, form.copy(type = AccessType.TRADE)) },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
@@ -771,11 +776,6 @@ fun MetaTraderBrokerFlow(
                                 colors = ButtonDefaults.buttonColors(containerColor = LoginBlue),
                             ) { Text("RECONNECT AS $verifiedMode") }
                         }
-                        AccountSummary(
-                            spec = spec,
-                            details = details,
-                            nowMs = clockNowMs,
-                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
                             AccountTab.values().forEach { tab ->
                                 Button(
@@ -784,6 +784,13 @@ fun MetaTraderBrokerFlow(
                                     colors = ButtonDefaults.buttonColors(containerColor = if (accountTab == tab) LoginBlue else BrokerSurfaceVariant),
                                 ) { Text(tab.name, color = TextPrimary) }
                             }
+                        }
+                        if (accountTab != AccountTab.BOT) {
+                            AccountSummary(
+                                spec = spec,
+                                details = details,
+                                nowMs = clockNowMs,
+                            )
                         }
                         when (accountTab) {
                             AccountTab.TRADE -> AccountTradeList(
@@ -1072,6 +1079,7 @@ private fun AccountHistoryList(details: VerifiedAccountDetails, modifier: Modifi
             }
         }
     }
+
 }
 
 @Composable
@@ -1091,6 +1099,9 @@ private fun AccountBotControls(
     onCheckPolicy: () -> Unit,
     onOpenArming: () -> Unit,
 ) {
+    var showRealStartConfirmation by remember(details.login, details.server, details.mode) {
+        mutableStateOf(false)
+    }
     val canControl = connector in setOf(LoginConnector.MT5_TERMINAL, LoginConnector.DERIV_OPTIONS)
     val liveOnEphemeral = details.mode.equals("LIVE", true) && details.hostProfile == HostProfile.EPHEMERAL
     val canExecute = canControl && (!liveOnEphemeral || riskAccepted)
@@ -1099,7 +1110,18 @@ private fun AccountBotControls(
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("ModeArmingPolicy: $policyMessage", color = WarningAmber, fontSize = 12.sp, modifier = Modifier.testTag("mode_arming_state"))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = onStart, enabled = canStart && !busy && !running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) { Text("START") }
+            Button(
+                onClick = {
+                    if (details.mode.equals("LIVE", ignoreCase = true)) {
+                        showRealStartConfirmation = true
+                    } else {
+                        onStart()
+                    }
+                },
+                enabled = canStart && !busy && !running,
+                modifier = Modifier.weight(1f).height(48.dp).testTag("account_start"),
+                colors = ButtonDefaults.buttonColors(containerColor = LoginBlue),
+            ) { Text("START") }
             Button(onClick = onPauseResume, enabled = canExecute && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant)) { Text(if (details.engineState == "PAUSED") "RESUME" else "PAUSE") }
             Button(onClick = onStop, enabled = canExecute && !busy && running, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = LossRed)) { Text("STOP") }
         }
@@ -1130,6 +1152,32 @@ private fun AccountBotControls(
             colors = ButtonDefaults.buttonColors(containerColor = LossRed, contentColor = Color.White),
         ) { Text("EMERGENCY STOP", fontSize = 15.sp) }
     }
+    if (showRealStartConfirmation) AlertDialog(
+        onDismissRequest = { showRealStartConfirmation = false },
+        title = { Text("REAL money confirmation") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("You are about to trade REAL money")
+                Text("Confirm only after checking the REAL account, lot size, risk limits and stop-loss settings.")
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    showRealStartConfirmation = false
+                    onStart()
+                },
+                modifier = Modifier.testTag("confirm_real_trade_start"),
+            ) { Text("CONFIRM REAL TRADE") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = { showRealStartConfirmation = false },
+                modifier = Modifier.testTag("cancel_real_trade_start"),
+            ) { Text("CANCEL") }
+        },
+    )
+
 }
 
 @Composable

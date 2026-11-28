@@ -1,7 +1,8 @@
-"""Read-only search of the genuine MetaTrader terminal server catalogue.
+"""Generic, read-only search of the installed MetaTrader server catalogue.
 
-MetaTrader stores discovered trading servers in Config/servers.dat. Results are exact labels
-from that catalogue plus the two FBS labels explicitly confirmed by the account owner.
+Broker names are search terms, not a supported-broker allowlist. Results must be readable
+server labels in the installed terminal's Config/servers.dat and must carry a clear account-mode
+marker. No provider server names are fabricated when the catalogue is absent.
 """
 from __future__ import annotations
 
@@ -11,18 +12,14 @@ import stat
 from pathlib import Path
 
 MAX_CATALOG_BYTES = 16 * 1024 * 1024
+MAX_BROKER_QUERY_LENGTH = 64
 SERVER_NAME = re.compile(r"(?<![A-Za-z0-9])([A-Za-z0-9][A-Za-z0-9._-]{2,95})(?![A-Za-z0-9])")
-BROKER_MARKERS = {
-    "FBS": ("FBS",),
-    "EXNESS": ("EXNESS",),
-    "HFM": ("HFM", "HFMARKETS"),
-    "DERIV": ("DERIV",),
-}
-# The owner explicitly confirmed these two exact labels from the original FBS MT5
-# search results. Other broker labels must come from the installed MT5 catalogue.
-OWNER_CONFIRMED_LABELS = {
-    "FBS": {"DEMO": ("FBS-Demo",), "LIVE": ("FBS-Real",)},
-}
+DEMO_MARKERS = ("DEMO", "TRIAL", "CONTEST", "PRACTICE")
+LIVE_MARKERS = ("REAL", "LIVE")
+
+
+def _normalise_search(value: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
 
 
 def _read_server_labels(path: Path) -> set[str]:
@@ -37,30 +34,34 @@ def _read_server_labels(path: Path) -> set[str]:
         return set()
 
     found: dict[str, str] = {}
-    # MetaTrader's binary catalogue stores readable labels as UTF-16 strings.
-    # ASCII is also scanned for builds that store a portion of the index narrowly.
+    # MetaTrader server names are stored as readable UTF-16 strings in the binary catalogue.
+    # Scan UTF-16 and the narrow encodings used by some terminal builds.
     for encoding in ("utf-16le", "utf-16be", "utf-8", "latin-1"):
         decoded = raw.decode(encoding, errors="ignore")
         for match in SERVER_NAME.finditer(decoded):
             label = match.group(1).strip("._-")
-            if not label:
-                continue
-            found.setdefault(label.upper(), label)
+            if label:
+                found.setdefault(label.upper(), label)
     return set(found.values())
 
 
 def _server_mode(label: str) -> str | None:
-    folded = label.casefold()
-    if any(marker in folded for marker in ("demo", "trial", "contest", "practice")):
-        return "DEMO"
-    if any(marker in folded for marker in ("real", "live")):
-        return "LIVE"
-    return None
+    normalized = _normalise_search(label)
+    is_demo = any(marker in normalized for marker in DEMO_MARKERS)
+    is_live = any(marker in normalized for marker in LIVE_MARKERS)
+    # Ambiguous labels (neither mode, or both modes) are never returned.
+    if is_demo == is_live:
+        return None
+    return "DEMO" if is_demo else "LIVE"
 
 
-def _matches_broker(label: str, broker: str) -> bool:
-    normalized = re.sub(r"[^A-Z0-9]", "", label.upper())
-    return any(marker in normalized for marker in BROKER_MARKERS[broker])
+def _matches_broker(label: str, broker_query: str) -> bool:
+    normalized_label = _normalise_search(label)
+    normalized_broker = _normalise_search(broker_query)
+    return bool(
+        len(normalized_broker) >= 2
+        and normalized_broker in normalized_label
+    )
 
 
 def search_mt5_servers(
@@ -70,13 +71,18 @@ def search_mt5_servers(
     *,
     terminal_root: str | Path | None = None,
 ) -> list[str]:
-    """Return exact catalogue or owner-confirmed labels; no free-typed server is accepted."""
-    brand = str(broker).strip().upper()
-    account_mode = str(mode).strip().upper()
-    search = str(query).strip().casefold()
-    if brand not in BROKER_MARKERS or account_mode not in {"DEMO", "LIVE"}:
+    """Search catalogue labels by any typed broker name and exact DEMO/REAL mode."""
+    broker_query = str(broker or "").strip()
+    account_mode = str(mode or "").strip().upper()
+    search_query = str(query or "").strip()
+
+    normalized_broker = _normalise_search(broker_query)
+    normalized_query = _normalise_search(search_query)
+    if not 2 <= len(normalized_broker) <= MAX_BROKER_QUERY_LENGTH:
         return []
-    if len(search) > 96:
+    if account_mode not in {"DEMO", "LIVE"}:
+        return []
+    if len(search_query) > 96:
         return []
 
     if terminal_root is None:
@@ -91,16 +97,13 @@ def search_mt5_servers(
     # terminal64.exe. The lowercase spelling is accepted for Wine compatibility.
     paths = (root / "Config" / "servers.dat", root / "config" / "servers.dat")
     labels: dict[str, str] = {}
-    for label in OWNER_CONFIRMED_LABELS.get(brand, {}).get(account_mode, ()):
-        if not search or search in label.casefold():
-            labels.setdefault(label.casefold(), label)
     for path in paths:
         for label in _read_server_labels(path):
-            if not _matches_broker(label, brand):
+            if not _matches_broker(label, broker_query):
+                continue
+            if normalized_query and normalized_query not in _normalise_search(label):
                 continue
             if _server_mode(label) != account_mode:
-                continue
-            if search and search not in label.casefold():
                 continue
             labels.setdefault(label.casefold(), label)
     return sorted(labels.values(), key=str.casefold)

@@ -5,6 +5,7 @@ import com.example.data.codespaces.isCodespacesForwardedBridgeOrigin
 import com.example.data.trade.parseVerifiedBrokerQuotes
 import com.example.data.trade.parseVerifiedBrokerCandles
 import com.example.data.trade.parseVerifiedBrokerChartSelection
+import com.example.data.trade.mt5ServerCatalogRequestPath
 import com.example.security.SecretsManager
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
@@ -24,6 +25,29 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MT5RemoteBridgeClientTest {
+    @Test fun serverCatalogRequestUsesAnyTypedBrokerNameWithoutAProviderAllowlist() {
+        assertEquals(
+            "/v1/mt5/server-catalog?broker=FBS&mode=DEMO&q=FBS",
+            mt5ServerCatalogRequestPath("FBS", "DEMO", "FBS")
+        )
+        assertEquals(
+            "/v1/mt5/server-catalog?broker=XM&mode=DEMO&q=XM",
+            mt5ServerCatalogRequestPath("XM", "DEMO", "XM")
+        )
+        assertEquals(
+            "/v1/mt5/server-catalog?broker=Exness&mode=LIVE&q=Exness",
+            mt5ServerCatalogRequestPath("Exness", "LIVE", "Exness")
+        )
+        assertEquals(
+            "/v1/mt5/server-catalog?broker=IC+Markets&mode=DEMO&q=IC+Markets",
+            mt5ServerCatalogRequestPath("IC Markets", "DEMO", "IC Markets")
+        )
+        assertEquals(
+            "/v1/mt5/server-catalog?broker=Pepperstone&mode=LIVE&q=Pepperstone",
+            mt5ServerCatalogRequestPath("Pepperstone", "LIVE", "Pepperstone")
+        )
+    }
+
     @Test fun brokerCandleParserAcceptsOnlyClosedFreshFiniteUniqueTerminalBars() {
         val now = 1_800_000_000_000L
         val rows = JSONArray()

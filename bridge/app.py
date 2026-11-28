@@ -2602,24 +2602,28 @@ def safe_terminal_chart_symbol(value):
 
 
 @app.get('/v1/mt5/server-catalog')
-def mt5_server_catalog(broker: str = Query(..., min_length=2, max_length=16),
+def mt5_server_catalog(broker: str = Query(..., min_length=2, max_length=64),
                        mode: str = Query(..., min_length=4, max_length=4),
                        q: str = Query(default='', max_length=96)):
-    """Search exact MT5 labels from the installed terminal catalogue; never accept typed names."""
-    brand = broker.strip().upper()
+    """Search any typed broker name against exact labels in the installed MT5 catalogue."""
+    broker_query = broker.strip()
     account_mode = mode.strip().upper()
-    if brand not in {'FBS', 'EXNESS', 'HFM', 'DERIV'} or account_mode not in {'DEMO', 'LIVE'}:
-        raise HTTPException(400, detail={'code': 'INVALID_BROKER_OR_MODE'})
-    if len(q.strip()) < 3:
-        return {'broker': brand, 'mode': account_mode, 'servers': [], 'catalog_available': False}
-    rows = search_mt5_servers(brand, account_mode, q)
+    normalized_broker = re.sub(r'[^A-Za-z0-9]', '', broker_query)
+    if (len(normalized_broker) < 2 or len(normalized_broker) > 64 or
+        not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 .&_-]{1,63}', broker_query) or
+        account_mode not in {'DEMO', 'LIVE'}):
+        raise HTTPException(400, detail={'code': 'INVALID_BROKER_SEARCH_OR_MODE'})
+    search_query = q.strip() or broker_query
+    if len(search_query) < 2:
+        return {'broker': broker_query, 'mode': account_mode, 'servers': [], 'catalog_available': False}
+    rows = search_mt5_servers(broker_query, account_mode, search_query)
     return {
-        'broker': brand,
+        'broker': broker_query,
         'mode': account_mode,
         'servers': rows,
         'count': len(rows),
         'catalog_available': bool(rows),
-        'source': 'MT5 Config/servers.dat + owner-confirmed FBS labels',
+        'source': 'MT5 Config/servers.dat',
     }
 
 def safe_terminal_chart_timeframe(value):

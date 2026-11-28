@@ -129,9 +129,34 @@ def test_mt5_server_catalog_returns_only_terminal_reported_labels(monkeypatch):
     assert calls == [("FBS","DEMO","FBS"),("FBS","LIVE","FBS")]
 
 
-def test_mt5_server_catalog_rejects_invalid_broker_or_mode():
-    assert client.get('/v1/mt5/server-catalog',params={'broker':'UNKNOWN','mode':'DEMO','q':'FBS'}).status_code == 400
+def test_mt5_server_catalog_rejects_malformed_broker_or_mode():
+    assert client.get('/v1/mt5/server-catalog',params={'broker':'@@@','mode':'DEMO','q':'@@@'}).status_code == 400
     assert client.get('/v1/mt5/server-catalog',params={'broker':'FBS','mode':'TEST','q':'FBS'}).status_code == 400
+
+
+def test_mt5_server_catalog_accepts_any_valid_broker_name_without_a_whitelist(monkeypatch):
+    catalogue = {
+        'Exness': ['Exness-MT5Trial5'],
+        'XM': ['XMGlobal-Demo'],
+        'IC Markets': ['ICMarketsSC-Demo'],
+        'UnknownBroker': [],
+    }
+    calls = []
+
+    def fake_catalog(broker, mode, query):
+        calls.append((broker, mode, query))
+        return catalogue.get(broker, [])
+
+    monkeypatch.setattr(app, 'search_mt5_servers', fake_catalog)
+    for broker, expected in catalogue.items():
+        response = client.get(
+            '/v1/mt5/server-catalog',
+            params={'broker': broker, 'mode': 'DEMO', 'q': broker},
+        )
+        assert response.status_code == 200
+        assert response.json()['servers'] == expected
+        assert response.json()['broker'] == broker
+    assert calls == [(broker, 'DEMO', broker) for broker in catalogue]
 
 
 def test_unspecified_bridge_host_and_storage_defaults_fail_closed(monkeypatch):

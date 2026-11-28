@@ -137,6 +137,17 @@ internal fun parseVerifiedBrokerChartSelection(symbol: String?, timeframe: Strin
     return VerifiedBrokerChartSelection(cleanSymbol, cleanTimeframe)
 }
 
+internal fun mt5ServerCatalogRequestPath(broker: String, mode: String, query: String): String {
+    val cleanBroker = broker.trim()
+    require(cleanBroker.length in 2..64 && Regex("[A-Za-z0-9][A-Za-z0-9 .&_-]{1,63}").matches(cleanBroker)) {
+        "Type a broker name to search the installed MT5 catalogue."
+    }
+    val encodedBroker = java.net.URLEncoder.encode(cleanBroker, "UTF-8")
+    val encodedMode = java.net.URLEncoder.encode(mode.trim().uppercase(Locale.ROOT), "UTF-8")
+    val encodedQuery = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+    return "/v1/mt5/server-catalog?broker=$encodedBroker&mode=$encodedMode&q=$encodedQuery"
+}
+
 class MT5RemoteBridgeClient(
     private val secrets: SecretsManager,
     profile: String,
@@ -1039,30 +1050,19 @@ class MT5RemoteBridgeClient(
         require(requestedMode == accountMode && requestedMode in setOf("DEMO", "LIVE")) {
             "Server search mode must match the selected broker profile."
         }
-        if (cleanQuery.length < 3 || cleanQuery.length > 96) return emptyList()
-        val encoded = java.net.URLEncoder.encode(cleanQuery, "UTF-8")
-        val result = request(
-            "GET",
-            "/v1/mt5/server-catalog?broker=\${brokerBrand}&mode=\${requestedMode}&q=\${encoded}",
-            includeAppAuthorization = false
-        )
+        if (cleanQuery.length < 2 || cleanQuery.length > 96) return emptyList()
+        val catalogPath = mt5ServerCatalogRequestPath(cleanQuery, requestedMode, cleanQuery)
+        val result = request("GET", catalogPath, includeAppAuthorization = false)
         val rows = result.optJSONArray("servers") ?: return emptyList()
         val found = LinkedHashMap<String, String>()
         for (index in 0 until rows.length()) {
             val label = rows.optString(index).trim()
             if (!label.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{2,95}"))) continue
             val normalized = label.uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
-            val brandMatches = when (brokerBrand.uppercase(Locale.ROOT)) {
-                "FBS" -> "FBS" in normalized
-                "EXNESS" -> "EXNESS" in normalized
-                "HFM" -> "HFM" in normalized || "HFMARKETS" in normalized
-                "DERIV" -> "DERIV" in normalized
-                else -> false
-            }
             val demoLabel = listOf("DEMO", "TRIAL", "CONTEST", "PRACTICE").any { it in normalized }
             val liveLabel = "REAL" in normalized || "LIVE" in normalized
             val modeMatches = if (requestedMode == "DEMO") demoLabel && !liveLabel else liveLabel && !demoLabel
-            if (brandMatches && modeMatches) found.putIfAbsent(label.uppercase(Locale.ROOT), label)
+            if (modeMatches) found.putIfAbsent(label.uppercase(Locale.ROOT), label)
         }
         return found.values.sortedBy { it.uppercase(Locale.ROOT) }
     }

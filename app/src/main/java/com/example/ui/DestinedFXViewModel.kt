@@ -289,6 +289,10 @@ open class DestinedFXViewModel(
     val selectedScreen = MutableStateFlow<DestinedFXScreen>(DestinedFXScreen.Analyzer)
     val selectedMt5Mode = MutableStateFlow(if (isPreview) "DEMO" else app.secretsManager.getSelectedMT5Mode())
     val selectedMt5BrokerBrand = MutableStateFlow(if (isPreview) "FBS" else app.secretsManager.getSelectedMT5BrokerBrand())
+    // Analyzer follows the most recently identity-verified MT5 login without changing the Bot's
+    // separately selected execution profile or authorizing LIVE trading.
+    val selectedAnalyzerMt5Mode = MutableStateFlow(selectedMt5Mode.value)
+    val selectedAnalyzerMt5BrokerBrand = MutableStateFlow(selectedMt5BrokerBrand.value)
 
     fun selectMt5AccountProfile(brand: String, mode: String): Boolean {
         val b = brand.trim().uppercase()
@@ -314,6 +318,15 @@ open class DestinedFXViewModel(
         ) return false
         if (!isPreview && !app.secretsManager.saveSelectedMT5Mode(normalized)) return false
         selectedMt5Mode.value = normalized
+        return true
+    }
+
+    fun selectAnalyzerMt5AccountProfile(brand: String, mode: String): Boolean {
+        val b = brand.trim().uppercase()
+        val m = mode.trim().uppercase()
+        if (b !in setOf("FBS", "EXNESS", "HFM", "DERIV") || m !in setOf("DEMO", "LIVE")) return false
+        selectedAnalyzerMt5BrokerBrand.value = b
+        selectedAnalyzerMt5Mode.value = m
         return true
     }
 
