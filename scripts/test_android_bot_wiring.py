@@ -3,9 +3,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKSTATION = (ROOT / "app/src/main/java/com/example/ui/SimplifiedBotWorkstation.kt").read_text(encoding="utf-8")
 BACKEND = (ROOT / "app/src/main/java/com/example/ui/bot/MT5BridgeConnectBackend.kt").read_text(encoding="utf-8")
+APPLICATION = (ROOT / "app/src/main/java/com/example/MyApplication.kt").read_text(encoding="utf-8")
 
 
-def test_mt5_login_requires_the_phone_codespaces_wake_callback_before_pairing():
+def test_mt5_login_joins_the_single_background_codespaces_warmup_before_pairing():
     assert "private val wakeHost: (suspend ((ConnectStage) -> Unit) -> Unit)" in BACKEND
     assert "wakeHost.invoke(onStage)" in BACKEND
     assert "wakeHost?.invoke" not in BACKEND
@@ -14,15 +15,18 @@ def test_mt5_login_requires_the_phone_codespaces_wake_callback_before_pairing():
     wake = WORKSTATION.split("suspend fun wakeCodespacesHostForMt5(", 1)[1].split(
         'if (showModernBrokerFlow && !connected)', 1
     )[0]
+    assert "viewModel.app.awaitManagedMt5Host()" in wake
     for required in (
-        "githubCodespacesClient.listTargetCodespaces()",
-        "githubCodespacesClient.startCodespace(current)",
-        "codespacesLifecycleClient.discoverAndSaveBridge()",
-        "codespacesLifecycleClient.discoverAndSaveManagementApi()",
-        "client.checkServiceReadiness()",
-        'readiness.perUserTerminalIsolation.equals("VERIFIED", ignoreCase = true)',
+        "performManagedMt5HostWarmup(secrets)",
+        "github.listTargetCodespaces()",
+        "github.startCodespace(current)",
+        "lifecycle.discoverAndSaveBridge()",
+        "lifecycle.discoverAndSaveManagementApi()",
+        "bridge.checkServiceReadiness()",
+        'value.perUserTerminalIsolation.equals("VERIFIED", ignoreCase = true)',
+        "prewarmManagedMt5Host()",
     ):
-        assert required in wake, required
+        assert required in APPLICATION, required
 
 
 def test_mt5_dashboard_start_sends_auto_market_watch_scan_not_a_phone_selected_symbol():

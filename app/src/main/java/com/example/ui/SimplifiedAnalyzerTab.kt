@@ -116,7 +116,7 @@ private object AnalyzerTradingViewPool {
 }
 
 @Composable
-fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {})
+fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {}) {
     val secrets = viewModel.app.secretsManager
     val publicGateway = viewModel.app.derivMarketDataGateway
     val publicQuotes by publicGateway.latestQuotes.collectAsStateWithLifecycle()

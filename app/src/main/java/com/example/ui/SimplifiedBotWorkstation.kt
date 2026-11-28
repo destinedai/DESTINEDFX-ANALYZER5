@@ -106,8 +106,24 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.TimeZone
+import java.util.Locale
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+
+private fun formatDestinedFxWat(epochSeconds: Long): String =
+    SimpleDateFormat("dd MMM yyyy, hh:mm a 'WAT'", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("Africa/Lagos")
+    }.format(Date(epochSeconds.coerceAtLeast(0L) * 1000L))
+
+private fun formatDestinedFxDuration(totalSeconds: Long): String {
+    val seconds = totalSeconds.coerceAtLeast(0L)
+    val hours = seconds / 3600L
+    val minutes = (seconds % 3600L) / 60L
+    return if (hours > 0L) "${hours}h ${minutes}m" else "${minutes}m ${seconds % 60L}s"
+}
 
 sealed interface BotUiState {
     val label: String
@@ -301,8 +317,19 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
     var showAdvancedConnection by remember { mutableStateOf(false) }
     var showModernBrokerFlow by remember { mutableStateOf(true) }
     var mt5Snapshot by remember { mutableStateOf<MT5RemoteBridgeClient.Snapshot?>(null) }
+    var mt5SnapshotReceivedAtMs by remember { mutableStateOf(0L) }
+    var hostCountdownNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            hostCountdownNowMs = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
     LaunchedEffect(viewModel.managedMt5BridgeSnapshot) {
-        viewModel.managedMt5BridgeSnapshot.collect { snapshot -> mt5Snapshot = snapshot }
+        viewModel.managedMt5BridgeSnapshot.collect { snapshot ->
+            mt5Snapshot = snapshot
+            mt5SnapshotReceivedAtMs = System.currentTimeMillis()
+        }
     }
     var showPairingRevokeDialog by remember(mt5Profile) { mutableStateOf(false) }
     var showLiveAuthorizationDialog by remember(mt5Profile) { mutableStateOf(false) }
@@ -1866,18 +1893,57 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 }
                 if (broker.usesManagedMt5Terminal && mt5Snapshot?.connected != true) Text("HOST OFFLINE", color = LossRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("Worker job: ${mt5Snapshot?.workerStatus ?: "not checked"} · Managed readiness: ${mt5Snapshot?.managedState ?: "not checked"} · Terminal: ${mt5Snapshot?.state ?: "not checked"} · Fresh heartbeat: ${mt5Snapshot?.heartbeatFresh ?: false}", color = TextSecondary, fontSize = 10.sp)
-                val idleTimeoutSeconds: Long = mt5Snapshot?.raw?.optInt("idle_timeout_seconds")
-                    ?.takeIf { it > 0 }
-                    ?.toLong() ?: 0L
-                val hostStartedAt: Long = mt5Snapshot?.raw?.optLong("host_started_at_epoch_seconds")
-                    ?.takeIf { it > 0L } ?: 0L
-                val idleCountdownEstimate: Long = if (idleTimeoutSeconds > 0L && hostStartedAt > 0L) {
-                    (idleTimeoutSeconds - (System.currentTimeMillis() / 1000L - hostStartedAt).coerceAtLeast(0L)).coerceAtLeast(0L)
-                } else idleTimeoutSeconds
-                val idleCountdownLabel: String = if (idleCountdownEstimate > 0L) {
-                    " · estimated idle countdown ${idleCountdownEstimate / 60}m ${idleCountdownEstimate % 60}s; user activity resets GitHub's timer"
-                } else ""
-                Text("Test host, DEMO only, stops when idle$idleCountdownLabel", color = WarningAmber, fontSize = 10.sp)
+                val lifecycle = mt5Snapshot?.raw
+                val serverStartedAt = lifecycle?.optLong("host_started_at_epoch_seconds", 0L) ?: 0L
+                val serverExpiryAt = lifecycle?.optLong("host_expiry_at_epoch_seconds", 0L) ?: 0L
+                val snapshotAgeSeconds = if (mt5SnapshotReceivedAtMs > 0L) {
+                    ((hostCountdownNowMs - mt5SnapshotReceivedAtMs).coerceAtLeast(0L) / 1_000L)
+                } else 0L
+                val reportedLifetime = lifecycle?.optLong("host_remaining_seconds", -1L) ?: -1L
+                val lifetimeRemaining = if (reportedLifetime >= 0L) (reportedLifetime - snapshotAgeSeconds).coerceAtLeast(0L) else -1L
+                val profileName = lifecycle?.optString("host_profile").orEmpty().uppercase()
+                if (profileName == "PERSISTENT") {
+                    Text("Engine lifetime: PERSISTENT · no 12-hour Codespaces deadline", color = ProfitGreen, fontSize = 10.sp)
+                } else if (serverStartedAt > 0L && serverExpiryAt > 0L && reportedLifetime >= 0L) {
+                    Text(
+                        "START: ${formatDestinedFxWat(serverStartedAt)} -> DIE: ${formatDestinedFxWat(serverExpiryAt)} (12 hours max)",
+                        color = TextSecondary,
+                        fontSize = 9.sp
+                    )
+                    Text(
+                        "Engine dies in: ${formatDestinedFxDuration(lifetimeRemaining)} · WAT",
+                        color = WarningAmber,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                } else {
+                    Text("Engine lifetime: waiting for live host timing", color = WarningAmber, fontSize = 10.sp)
+                }
+                val codespacesIdleTimeout = lifecycle?.optLong("idle_timeout_seconds", 0L) ?: 0L
+                val engineIdleStatus = lifecycle?.optString("engine_idle_status").orEmpty().uppercase()
+                val engineIdleTimeout = lifecycle?.optLong("engine_idle_timeout_seconds", 0L) ?: 0L
+                val reportedEngineIdleRemaining = lifecycle?.optLong("engine_idle_remaining_seconds", -1L) ?: -1L
+                val engineIdleRemaining = if (reportedEngineIdleRemaining >= 0L) {
+                    (reportedEngineIdleRemaining - snapshotAgeSeconds).coerceAtLeast(0L)
+                } else -1L
+                if (engineIdleStatus == "RUNNING" && engineIdleRemaining >= 0L) {
+                    val engineSleepAt = hostCountdownNowMs / 1_000L + engineIdleRemaining
+                    Text(
+                        "Engine sleeps if idle: ${formatDestinedFxDuration(engineIdleRemaining)} · by ${formatDestinedFxWat(engineSleepAt)}",
+                        color = WarningAmber,
+                        fontSize = 10.sp
+                    )
+                } else if (engineIdleStatus == "SLEEP_BLOCKED") {
+                    Text("Engine idle sleep: BLOCKED by active or unverified trading state", color = WarningAmber, fontSize = 10.sp)
+                } else if (engineIdleTimeout > 0L) {
+                    Text("Engine sleeps if idle: ${engineIdleTimeout / 60L}m policy · status $engineIdleStatus", color = TextSecondary, fontSize = 10.sp)
+                } else {
+                    Text("Engine idle countdown: waiting for supervisor timing", color = TextSecondary, fontSize = 10.sp)
+                }
+                if (codespacesIdleTimeout > 0L) {
+                    Text("Codespaces idle timeout: ${codespacesIdleTimeout / 60L}m configured", color = TextSecondary, fontSize = 9.sp)
+                }
+                Text("Test host, DEMO only. Codespaces and idle-engine timers remain separate.", color = WarningAmber, fontSize = 10.sp)
                 Text("A successful HTTP probe is not proof of broker authentication or trading readiness. Do not enter credentials until /health/ready confirms durable storage and configured execution.", color = WarningAmber, fontSize = 9.sp)
             }
         }
