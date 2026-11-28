@@ -161,3 +161,85 @@ def test_safe_request_without_cloudflare_credentials_keeps_headers_unchanged(mon
     assert doctor.safe_request("https://bridge.invalid/health/ready", token="worker-token")[0] == 200
     assert not any(key.lower().startswith("cf-access-client-") for key in captured)
     assert captured["Authorization"] == "Bearer worker-token"
+
+
+from types import SimpleNamespace
+
+
+def _fake_mt5_api(monkeypatch, *, trade_mode, account_trade_allowed=True,
+                  trade_expert=True, terminal_trade_allowed=True):
+    info = SimpleNamespace(
+        login=987654,
+        server="ExampleBroker-Demo" if trade_mode == 0 else "ExampleBroker-Live",
+        company="Example Broker Ltd",
+        currency="USD",
+        trade_mode=trade_mode,
+        trade_allowed=account_trade_allowed,
+        trade_expert=trade_expert,
+        leverage=200 if trade_mode == 2 else 100,
+        balance=12345.67,
+        equity=12389.12,
+        margin=234.50,
+        margin_free=12154.62,
+        margin_level=5283.2,
+    )
+    terminal_info = SimpleNamespace(
+        connected=True,
+        trade_allowed=terminal_trade_allowed,
+        company="Example Broker Ltd",
+    )
+    fake = SimpleNamespace(
+        initialize=lambda **kwargs: True,
+        account_info=lambda: info,
+        terminal_info=lambda: terminal_info,
+        shutdown=lambda: None,
+    )
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake)
+
+
+@pytest.mark.parametrize(
+    ("trade_mode", "expected_mode", "expected_leverage"),
+    [(0, "DEMO", 100), (2, "LIVE", 200)],
+)
+def test_mt5_check_reports_demo_and_live_permissions_independently_of_mode(
+    monkeypatch, tmp_path, trade_mode, expected_mode, expected_leverage
+):
+    _fake_mt5_api(monkeypatch, trade_mode=trade_mode)
+
+    result = doctor.mt5_check(tmp_path / "terminal64.exe", None, None, None)
+
+    assert result["python_mt5_check"] == "CONNECTED_TO_TERMINAL"
+    reported = result["reported"]
+    assert reported["account_mode"] == expected_mode
+    assert reported["trade_allowed"] is True
+    assert reported["terminal_connected"] is True
+    assert reported["balance"] == pytest.approx(12345.67)
+    assert reported["equity"] == pytest.approx(12389.12)
+    assert reported["margin"] == pytest.approx(234.50)
+    assert reported["free_margin"] == pytest.approx(12154.62)
+    assert reported["margin_level"] == pytest.approx(5283.2)
+    assert reported["leverage"] == expected_leverage
+    assert reported["currency"] == "USD"
+    assert reported["company"] == "Example Broker Ltd"
+
+
+@pytest.mark.parametrize(
+    ("account_trade_allowed", "trade_expert", "terminal_trade_allowed"),
+    [(False, True, True), (True, False, True), (True, True, False)],
+)
+def test_mt5_check_blocks_when_any_real_trade_permission_is_false(
+    monkeypatch, tmp_path, account_trade_allowed, trade_expert, terminal_trade_allowed
+):
+    # DEMO's trade_mode is 0; the mode itself must not be mistaken for a ban.
+    _fake_mt5_api(
+        monkeypatch,
+        trade_mode=0,
+        account_trade_allowed=account_trade_allowed,
+        trade_expert=trade_expert,
+        terminal_trade_allowed=terminal_trade_allowed,
+    )
+
+    result = doctor.mt5_check(tmp_path / "terminal64.exe", None, None, None)
+
+    assert result["reported"]["account_mode"] == "DEMO"
+    assert result["reported"]["trade_allowed"] is False

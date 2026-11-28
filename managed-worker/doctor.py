@@ -100,15 +100,32 @@ def mt5_check(terminal: Path, login: str | None, password: str | None, server: s
                 result["python_mt5_check"] = "ERROR: account or terminal info unavailable"
                 return result
             result["python_mt5_check"] = "CONNECTED_TO_TERMINAL"
+            # MT5 trade_mode identifies the account type, not whether trading is
+            # permitted. DEMO is enum value 0 and can still be fully tradable.
+            trade_mode = int(getattr(info, "trade_mode", -1))
+            account_mode = {0: "DEMO", 1: "CONTEST", 2: "LIVE"}.get(trade_mode, "UNKNOWN")
+            terminal_connected = bool(getattr(terminal_info, "connected", False))
+            trade_allowed = bool(
+                account_mode in ("DEMO", "LIVE")
+                and terminal_connected
+                and getattr(terminal_info, "trade_allowed", False)
+                and getattr(info, "trade_allowed", False)
+                and getattr(info, "trade_expert", False)
+            )
             result["reported"] = {
                 "login": str(getattr(info, "login", "")),
                 "server": str(getattr(info, "server", "")),
-                "company": str(getattr(terminal_info, "company", "")),
+                "company": str(getattr(info, "company", "") or getattr(terminal_info, "company", "")),
+                "currency": str(getattr(info, "currency", "")),
+                "account_mode": account_mode,
                 "balance": float(getattr(info, "balance", 0.0)),
                 "equity": float(getattr(info, "equity", 0.0)),
+                "margin": float(getattr(info, "margin", 0.0)),
                 "free_margin": float(getattr(info, "margin_free", 0.0)),
+                "margin_level": float(getattr(info, "margin_level", 0.0)),
                 "leverage": int(getattr(info, "leverage", 0)),
-                "trade_allowed": bool(getattr(terminal_info, "trade_allowed", False) and getattr(info, "trade_mode", 0) != 0),
+                "terminal_connected": terminal_connected,
+                "trade_allowed": trade_allowed,
             }
         finally:
             mt5.shutdown()
