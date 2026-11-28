@@ -1505,6 +1505,13 @@ def _ready_test_profile(pairing, headers, worker_headers, worker_id, login, serv
 def live_ready(monkeypatch, access_type='MASTER', login='700001', server='Broker-Live'):
     managed_env(monkeypatch)
     live_pairing, live_headers = managed_pair()
+    demo_pairing, _demo_headers = managed_pair()
+    live_pairing.update({
+        'demo_app_token': demo_pairing['app_token'],
+        'demo_pairing_id': demo_pairing['pairing_id'],
+        'demo_acceptance_id': str(uuid.uuid4()),
+        'demo_evidence_context': demo_pass_context(demo_pairing),
+    })
     live_worker = _test_worker('worker-live')
     live_job, live_terminal_headers, live_actual = _ready_test_profile(
         live_pairing, live_headers, live_worker, 'worker-live',
@@ -1846,6 +1853,7 @@ def test_worker_claim_receives_persisted_bridge_origin_and_readiness_fails_close
 def test_non_durable_storage_is_not_execution_ready(monkeypatch):
     managed_env(monkeypatch)
     monkeypatch.setenv('EXECUTION_STORAGE_DURABLE','false')
+    monkeypatch.setattr(app,'durable_execution_enabled',lambda:False)
     response=client.get('/health/ready')
     assert response.status_code==503
     assert response.json()['detail']['code']=='NON_DURABLE_STORAGE'

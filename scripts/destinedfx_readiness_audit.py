@@ -170,22 +170,25 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         "The Analyzer displays fresh independent public market quotes and TradingView before Bot login, then prefers the exact identity-matched MT5 quote and closed candles after the selected Bot account is connected; public prices are marked analysis-only."
     )
 
-    persistent_live_policy_ok = (
-        "val hostProfile: HostProfile = HostProfile.EPHEMERAL" in arming
-        and "request.hostProfile != HostProfile.PERSISTENT" in arming
-        and "hostProfile: HostProfile = HostProfile.EPHEMERAL): ModeDecision" in arming
-        and "hostProfile: HostProfile = HostProfile.EPHEMERAL" in arming
-        and "liveLeases.remove(identity.fingerprint())" in arming
-        and "required_slots = 1 if HOST_PROFILE == 'EPHEMERAL' else max(1, minimum_active_slots)" in bridge
-        and "if HOST_PROFILE == 'PERSISTENT' and" in bridge
+    mt5_live_policy_ok = (
+        'val isMt5 = identity.path in setOf(ModePath.FBS_MT5, ModePath.EXNESS_MT5, ModePath.HFM_MT5, ModePath.DERIV_MT5)' in arming
+        and 'verification.identity != identity' in arming
+        and '!isFresh(verification.checkedAtMs, now, freshnessLimit(identity.path))' in arming
+        and '!verification.authenticatedSession' in arming
+        and '!verification.freshAccountData' in arming
+        and '!(verification.freshQuote || verification.freshHeartbeat)' in arming
+        and '!verification.accountIdentityMatched' in arming
+        and 'request.typedConfirmation != "CONFIRM REAL TRADE"' in arming
+        and 'audit(identity, "LIVE_ARMED", true, "EXPLICIT_REAL_TRADE_CONFIRMATION", now)' in arming
+        and 'return ModeDecision(true, "LIVE_ARMED", "Explicit REAL trade confirmation is active for this exact MT5 account.")' in arming
         and 'allow_trade = "1" if access_type == "MASTER" else "0"' in live_worker
         and "AllowLiveTrading={allow_trade}" in live_worker
     )
     add_check(
         checks,
-        "fail-closed persistent-host LIVE policy",
-        persistent_live_policy_ok,
-        "LIVE arming defaults unknown host state to EPHEMERAL, requires explicit PERSISTENT host proof, and revokes an existing local lease if a later host check is EPHEMERAL. Root-attested isolation and MASTER access remain required.",
+        "MT5 LIVE identity-bound confirmation policy",
+        mt5_live_policy_ok,
+        "MT5 LIVE requires the exact account identity, a fresh authenticated session and account data, a fresh quote or heartbeat, exact CONFIRM REAL TRADE, and MASTER-only worker trading. It does not require a persistent host.",
     )
 
     bridge_defaults_fail_closed = (

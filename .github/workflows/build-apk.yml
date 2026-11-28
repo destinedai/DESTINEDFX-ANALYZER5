@@ -895,7 +895,7 @@ jobs:
           set -euo pipefail
           test -e /dev/kvm || { echo "Android emulator acceptance cannot be skipped: /dev/kvm is unavailable." >&2; exit 1; }
           echo "available=true" >> "$GITHUB_OUTPUT"
-      - name: Run Android Python runtime instrumentation on clean API 34 emulator      - name: Run Android Python runtime instrumentation on clean API 34 emulator
+      - name: Run Android Python runtime instrumentation on clean API 34 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34

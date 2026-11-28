@@ -121,8 +121,7 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("add_account").performClick()
         composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
-        composeRule.onNodeWithTag("ephemeral_live_trade_continue").performScrollTo().performClick()
-        composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
+        composeRule.onNodeWithTag("field_login").assertIsEnabled().performScrollTo().performTextInput("123456")
         composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
         composeRule.onNodeWithTag("server_field").performScrollTo().performTextReplacement("FBS-Real")
         composeRule.waitUntil(timeoutMillis = 5_000) {
@@ -259,12 +258,11 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
 
         composeRule.onNodeWithTag("mt5_type_trade_only").performScrollTo().assertIsDisplayed()
-        // LIVE Trade on EPHEMERAL requires acknowledgement before credentials can be entered.
+        // REAL MT5 credentials remain available on EPHEMERAL; account authentication and explicit REAL confirmation govern trading.
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
-        composeRule.onNodeWithTag("ephemeral_live_trade_warning").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("field_login").assertIsNotEnabled()
-        composeRule.onNodeWithTag("ephemeral_live_trade_continue").performScrollTo().performClick()
         composeRule.onNodeWithTag("field_login").assertIsEnabled()
+        composeRule.onNodeWithTag("field_password").assertIsEnabled()
+        composeRule.onNodeWithTag("server_field").assertIsEnabled()
         composeRule.onNodeWithTag("server_field").assertTextEquals("Search MT5 Server", "FBS")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag("mt5_server_save_status").assertIsDisplayed()
@@ -287,7 +285,6 @@ class MetaTraderBrokerFlowTest {
         composeRule.onNodeWithTag("server_field").assertTextEquals("Search MT5 Server", "FBS-Demo")
         composeRule.onNodeWithTag("login_button").performScrollTo().assertIsEnabled()
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
-        composeRule.onNodeWithTag("ephemeral_live_trade_continue").performScrollTo().performClick()
         composeRule.onNodeWithTag("server_field").performScrollTo().performTextReplacement("FBS-Real")
         composeRule.waitUntil(timeoutMillis = 5_000) { composeRule.onAllNodesWithTag("server_result_FBS-Real").fetchSemanticsNodes().isNotEmpty() }
         composeRule.onNodeWithTag("server_result_FBS-Real").performClick()
@@ -296,19 +293,15 @@ class MetaTraderBrokerFlowTest {
     }
 
     @Test
-    fun ephemeralLiveTradeFieldsUnlockAfterWarningAndEndpointVerifierIsOnLoginScreen() {
+    fun realTradeFieldsRemainEnabledOnEphemeralHostAndEndpointVerifierIsOnLoginScreen() {
         openFlow()
         composeRule.onNodeWithTag("add_account").performClick()
         composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
         composeRule.onNodeWithTag("mt5_type_trade_only").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
-        composeRule.onNodeWithTag("ephemeral_live_trade_warning").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("field_login").assertIsNotEnabled()
-        composeRule.onNodeWithTag("field_password").assertIsNotEnabled()
-        composeRule.onNodeWithTag("server_field").assertIsNotEnabled()
-        composeRule.onNodeWithTag("login_button").assertIsNotEnabled()
-
-        composeRule.onNodeWithTag("ephemeral_live_trade_continue").performScrollTo().performClick()
+        composeRule.onNodeWithTag("field_login").assertIsEnabled()
+        composeRule.onNodeWithTag("field_password").assertIsEnabled()
+        composeRule.onNodeWithTag("server_field").assertIsEnabled()
         composeRule.onNodeWithTag("field_login").assertIsEnabled().performScrollTo().performTextInput("123456")
         composeRule.onNodeWithTag("field_password").assertIsEnabled().performScrollTo().performTextInput("fixture-password")
         composeRule.onNodeWithTag("server_field").assertIsEnabled().performTextReplacement("FBS-Real")

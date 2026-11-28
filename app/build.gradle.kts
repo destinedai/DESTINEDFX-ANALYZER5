@@ -146,7 +146,7 @@ android {
 
   buildTypes {
     release {
-      buildConfigField("String", "APK_BUILD_LABEL", "\"RELEASE APK - REAL MT5 AVAILABLE AFTER CONFIRMATION"")
+      buildConfigField("String", "APK_BUILD_LABEL", "\"RELEASE APK - DEMO DEFAULT - REAL MT5 AVAILABLE AFTER CONFIRMATION\"")
       buildConfigField("String", "MT5_MANAGED_SERVICE_URL", "\"$mt5ManagedServiceUrlBuildValue\"")
       buildConfigField("String", "MANAGEMENT_API_ORIGIN", "\"$managementApiOriginBuildValue\"")
       buildConfigField("String", "CODESPACES_GITHUB_CLIENT_ID", "\"$codespacesGithubClientIdBuildValue\"")
@@ -156,7 +156,7 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - REAL MT5 AVAILABLE AFTER CONFIRMATION"")
+      buildConfigField("String", "APK_BUILD_LABEL", "\"DEBUG APK - DEMO DEFAULT - REAL MT5 AVAILABLE AFTER CONFIRMATION\"")
       if (destinedFxDebugKeystorePath.isNotBlank()) {
         signingConfig = signingConfigs.getByName("destinedfxCiDebug")
       }

@@ -242,9 +242,10 @@ def test_android_emulator_and_bootstrap_jobs_wait_for_prior_acceptance_gates():
 
 def test_codespaces_bootstrap_apk_has_explicit_locked_discovery_without_embedded_hosts():
     gradle = (ROOT / "app" / "build.gradle.kts").read_text()
+    workflow = (ROOT / ".github" / "workflows" / "build-apk.yml").read_text()
     assert "val codespacesBootstrapBuild = destinedFxCodespacesHostDiscovery" in gradle
     assert "destinedFxEndpointsLocked && !codespacesBootstrapBuild" in gradle
-    assert "Codespaces discovery bootstrap APKs are debug-only" in gradle
+    assert "DestinedFX-DEBUG-APK-FOR-DEMO-TEST-ONLY-Codespaces-bootstrap" in workflow
     assert "DESTINEDFX_CODESPACES_HOST_DISCOVERY" in gradle
 
 

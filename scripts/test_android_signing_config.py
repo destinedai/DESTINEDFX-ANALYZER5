@@ -27,12 +27,13 @@ def test_production_release_requires_owner_upload_key_endpoints_and_emulator_acc
     assert "DESTINEDFX_UPLOAD_KEYSTORE_B64" in workflow
     assert "assembleRelease" in workflow
     assert "live_emulator_accepted" in workflow
-    for label in ('"Host Healthy"', '"Backup"', '"Broker Login"', '"RISK"'):
+    for label in ('"Host: ${serviceReadiness?.hostProfile', 'Backup: ${serviceReadiness?.backupStatus', 'EA heartbeat:', 'REAL MT5 confirmation is account-bound:'):
         assert label in ui
     assert "FilterChip(selected = selected, enabled = !busy, onClick = { selectMt5Slot(brand, mode) }" in ui
     assert 'if (mode == "LIVE" && !storedDemoPass && !canSelectMt5Mode' not in ui
     assert "hostProfile = liveLoginHostProfile" in ui
     assert "refreshManagedHostReadiness" in ui
-    assert "liveDemoPassAccepted && snapshot?.liveAuthorized != true" in ui
+    assert "CONFIRM REAL TRADE" in ui
+    assert "liveDemoPassAccepted && snapshot?.liveAuthorized != true" not in ui
     assert "authorizeLiveSession" in (ROOT / "app" / "src" / "main" / "java" / "com" / "example" / "data" / "trade" / "MT5RemoteBridgeClient.kt").read_text(encoding="utf-8")
     assert '"Emulator" to com.example.BuildConfig.DESTINEDFX_EMULATOR_ACCEPTED' not in preview_ui
