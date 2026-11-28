@@ -334,14 +334,6 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
             mt5SnapshotReceivedAtMs = System.currentTimeMillis()
         }
     }
-    LaunchedEffect(bridge) {
-        val client = bridge ?: return@LaunchedEffect
-        while (true) {
-            liveHostLifecycle = runCatching { client.hostLifecycle() }.getOrNull()
-            liveHostLifecycleFetchedAtMs = System.currentTimeMillis()
-            delay(5 * 60 * 1_000L)
-        }
-    }
     var showPairingRevokeDialog by remember(mt5Profile) { mutableStateOf(false) }
     var showLiveAuthorizationDialog by remember(mt5Profile) { mutableStateOf(false) }
     var liveTypedConfirmation by remember(mt5Profile) { mutableStateOf("") }
@@ -482,6 +474,14 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         } else null
     }
 
+    LaunchedEffect(bridge) {
+        val client = bridge ?: return@LaunchedEffect
+        while (true) {
+            liveHostLifecycle = runCatching { client.hostLifecycle() }.getOrNull()
+            liveHostLifecycleFetchedAtMs = System.currentTimeMillis()
+            delay(5 * 60 * 1_000L)
+        }
+    }
     suspend fun refreshManagedHostReadiness(client: MT5RemoteBridgeClient): MT5RemoteBridgeClient.ServiceReadiness {
         val runtime = client.checkServiceReadiness()
         val configuration = client.checkServiceConfiguration()
@@ -1949,7 +1949,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                 val engineIdleTimeout = lifecycle?.optLong("engine_idle_timeout_seconds", 20L * 60L) ?: 20L * 60L
                 val reportedEngineIdleRemaining = lifecycle?.optLong("engine_idle_remaining_seconds", -1L) ?: -1L
                 val engineIdleRemaining = if (reportedEngineIdleRemaining >= 0L) {
-                    (reportedEngineIdleRemaining - snapshotAgeSeconds).coerceAtLeast(0L)
+                    (reportedEngineIdleRemaining - lifecycleAgeSeconds).coerceAtLeast(0L)
                 } else -1L
                 if (engineIdleStatus == "RUNNING" && engineIdleRemaining >= 0L) {
                     val engineSleepAt = hostCountdownNowMs / 1_000L + engineIdleRemaining
