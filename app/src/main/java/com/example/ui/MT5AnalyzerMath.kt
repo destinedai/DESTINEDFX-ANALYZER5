@@ -1,7 +1,5 @@
 package com.example.ui
 
-import com.example.data.trade.VerifiedBrokerCandle
-import com.example.data.trade.VerifiedBrokerQuote
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -22,6 +20,19 @@ data class MT5AnalyzerInsight(
     val swingLow: Double? = null
 )
 
+/**
+ * Source-neutral, completed OHLC candle. Analyzer math never requires an MT5 session.
+ */
+data class AnalyzerBar(
+    val timeframe: String,
+    val timestampMs: Long,
+    val open: Double,
+    val high: Double,
+    val low: Double,
+    val close: Double,
+    val complete: Boolean = true,
+)
+
 private data class MT5Structure(
     val direction: String,
     val structure: String,
@@ -35,21 +46,16 @@ object MT5AnalyzerMath {
     private val timeframes = listOf("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1")
 
     fun analyze(
-        quote: VerifiedBrokerQuote?,
-        candles: List<VerifiedBrokerCandle>,
+        livePrice: Double?,
+        candles: List<AnalyzerBar>,
         selectedTimeframe: String = candles.firstOrNull()?.timeframe ?: "M15"
     ): MT5AnalyzerInsight {
-        if (quote == null || quote.source != "MT5_TERMINAL") {
-            return MT5AnalyzerInsight(reason = "Waiting for MT5 quote.")
-        }
-        val price = quote.bid
-        if (!price.isFinite() || price <= 0.0) {
-            return MT5AnalyzerInsight(reason = "Waiting for valid MT5 quote.")
-        }
+        val price = livePrice?.takeIf { it.isFinite() && it > 0.0 }
+            ?: return MT5AnalyzerInsight(reason = "Waiting for a fresh live market price.")
 
         val timeframe = selectedTimeframe.uppercase(Locale.ROOT)
             .takeIf { it in timeframes } ?: "M15"
-        val symbolCandles = validCandles(candles, quote.symbol)
+        val symbolCandles = validCandles(candles)
         val lowerBars = symbolCandles.filter { it.timeframe.equals(timeframe, true) }
         val higherTf = nextHigherTimeframe(timeframe)
         val higherBars = symbolCandles.filter { it.timeframe.equals(higherTf, true) }
@@ -181,10 +187,10 @@ object MT5AnalyzerMath {
         )
     }
 
-    private fun validCandles(candles: List<VerifiedBrokerCandle>, symbol: String): List<VerifiedBrokerCandle> =
+    private fun validCandles(candles: List<AnalyzerBar>): List<AnalyzerBar> =
         candles.asSequence().filter {
-            it.source == "MT5_TERMINAL" && it.complete && it.symbol.equals(symbol, true) &&
-                it.timeframe.uppercase(Locale.ROOT) in timeframes && it.timestampMs > 0L &&
+            it.complete && it.timeframe.uppercase(Locale.ROOT) in timeframes &&
+                it.timestampMs > 0L &&
                 it.open.isFinite() && it.high.isFinite() && it.low.isFinite() && it.close.isFinite() &&
                 it.open > 0.0 && it.low > 0.0 &&
                 it.high >= maxOf(it.open, it.close, it.low) &&
@@ -203,7 +209,7 @@ object MT5AnalyzerMath {
         else -> "W1"
     }
 
-    private fun structure(bars: List<VerifiedBrokerCandle>): MT5Structure {
+    private fun structure(bars: List<AnalyzerBar>): MT5Structure {
         if (bars.size < 21) return MT5Structure("UNKNOWN", "UNCONFIRMED", "WAITING", null, null, null)
         val atr = atr14(bars)
         val recent = bars.takeLast(20)
@@ -256,7 +262,7 @@ object MT5AnalyzerMath {
         return MT5Structure(direction, detail, marketState, recentSwingHigh, recentSwingLow, atr)
     }
 
-    private fun averageTrueRange(bars: List<VerifiedBrokerCandle>): Double? {
+    private fun averageTrueRange(bars: List<AnalyzerBar>): Double? {
         if (bars.size < 3) return null
         val ranges = (1 until bars.size).map { i ->
             val current = bars[i]
@@ -270,7 +276,7 @@ object MT5AnalyzerMath {
         return ranges.average().takeIf { it.isFinite() && it > 0.0 }
     }
 
-    private fun rsi14(bars: List<VerifiedBrokerCandle>): Double? {
+    private fun rsi14(bars: List<AnalyzerBar>): Double? {
         if (bars.size < 15) return null
         val changes = bars.takeLast(15).zipWithNext { a, b -> b.close - a.close }
         val gain = changes.sumOf { it.coerceAtLeast(0.0) } / 14.0
@@ -281,7 +287,7 @@ object MT5AnalyzerMath {
         return (100.0 - 100.0 / (1.0 + rs)).takeIf { it.isFinite() }
     }
 
-    private fun atr14(bars: List<VerifiedBrokerCandle>): Double? {
+    private fun atr14(bars: List<AnalyzerBar>): Double? {
         if (bars.size < 15) return null
         return averageTrueRange(bars.takeLast(15))
     }

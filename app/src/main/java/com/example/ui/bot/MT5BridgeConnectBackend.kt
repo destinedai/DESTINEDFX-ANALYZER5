@@ -7,7 +7,13 @@ import com.example.data.management.ManagementFailure
 import com.example.data.trade.MT5ManagedAccountGateway
 import com.example.data.trade.MT5ManagedAccountLogin
 import com.example.data.trade.MT5RemoteBridgeClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.json.JSONObject
+
+private val mt5HostWakeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /**
  * Adapter over the actual managed bridge. The owner bootstrap code is passed only to the first
@@ -24,15 +30,19 @@ class MT5BridgeConnectBackend(
     override suspend fun preflight(spec: BrokerLoginSpec, form: LoginForm, onStage: (ConnectStage) -> Unit): String? {
         stageListener = onStage
         onStage(ConnectStage.WAKING_ENGINE)
-        try {
-            wakeHost.invoke(onStage)
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (failure: ConnectSubmissionFailure) {
-            return failure.code
-        } catch (_: Exception) {
-            return "HOST_WAKE_FAILED"
+
+        // Start execution-host wake separately. Broker credentials can be queued immediately
+        // through the management service while the terminal host provisions in the background.
+        mt5HostWakeScope.launch {
+            try {
+                wakeHost.invoke { stage -> stageListener(stage) }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Wake failures are surfaced by host readiness; they must not cancel login submission.
+            }
         }
+
         try {
             managementHealthCheck()
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -40,9 +50,6 @@ class MT5BridgeConnectBackend(
         } catch (_: Exception) {
             return "MANAGEMENT_SERVICE_UNAVAILABLE"
         }
-        onStage(ConnectStage.ENGINE_READY)
-        // LIVE MASTER credentials may be submitted for account verification.
-        // Persistent-host requirements remain enforced by LIVE arming and execution routes.
         return null
     }
 

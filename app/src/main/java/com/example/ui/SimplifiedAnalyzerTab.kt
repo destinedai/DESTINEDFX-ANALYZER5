@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.trade.MT5AnalyzerMarketFeedClient
 import com.example.data.trade.MT5RemoteBridgeClient
 import com.example.data.trade.VerifiedBrokerCandle
+import com.example.ui.AnalyzerBar
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkSurface
 import com.example.ui.theme.ElectricCyan
@@ -72,6 +73,35 @@ private object AnalyzerMarketSnapshotCache {
     private val snapshots = java.util.concurrent.ConcurrentHashMap<String, MT5AnalyzerMarketFeedClient.Snapshot>()
     fun get(key: String): MT5AnalyzerMarketFeedClient.Snapshot? = snapshots[key]
     fun put(key: String, value: MT5AnalyzerMarketFeedClient.Snapshot) { snapshots[key] = value }
+}
+
+private object AnalyzerPublicCandleCache {
+    private val candles = java.util.concurrent.ConcurrentHashMap<String, List<AnalyzerBar>>()
+    fun get(key: String): List<AnalyzerBar> = candles[key].orEmpty()
+    fun put(key: String, value: List<AnalyzerBar>) { if (value.isNotEmpty()) candles[key] = value }
+}
+
+private fun analyzerGranularitySeconds(timeframe: String): Int = when (timeframe.uppercase(Locale.ROOT)) {
+    "M1" -> 60
+    "M5" -> 300
+    "M15" -> 900
+    "M30" -> 1_800
+    "H1" -> 3_600
+    "H4" -> 14_400
+    "D1" -> 86_400
+    "W1" -> 604_800
+    else -> 900
+}
+
+private fun analyzerHigherTimeframe(timeframe: String): String = when (timeframe.uppercase(Locale.ROOT)) {
+    "M1" -> "M5"
+    "M5" -> "M15"
+    "M15" -> "H1"
+    "M30" -> "H4"
+    "H1" -> "H4"
+    "H4" -> "D1"
+    "D1" -> "W1"
+    else -> "W1"
 }
 
 private object AnalyzerTradingViewPool {
@@ -194,12 +224,55 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
 
     val connected = snapshot?.connected == true && snapshot?.heartbeatFresh == true
     val publicSymbols = publicInstrumentCodes.keys.sortedBy { it.uppercase(Locale.ROOT) }
-    val symbols = if (connected) snapshot?.symbols.orEmpty() else publicSymbols
+    val symbols = (publicSymbols + if (connected) snapshot?.symbols.orEmpty() else emptyList()).distinct()
     val symbol = selectedSymbol.takeIf { it.isNotBlank() && it in symbols }
         ?: snapshot?.activeChartSymbol?.takeIf { it in symbols }
+        ?: publicSymbols.firstOrNull()
         ?: symbols.firstOrNull()
         ?: "EUR/USD"
     val timeframe = selectedTimeframe
+    val normalizedSymbol = symbol.uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+    val publicMapping = publicInstrumentCodes.entries.firstOrNull { (canonical, _) ->
+        normalizedSymbol.contains(canonical.uppercase(Locale.ROOT).filter(Char::isLetterOrDigit))
+    }
+    val publicCode = publicInstrumentCodes[symbol] ?: publicMapping?.value
+    val publicSeriesKey = "$publicCode|$timeframe"
+    var publicAnalysisCandles by remember(publicSeriesKey) {
+        mutableStateOf(AnalyzerPublicCandleCache.get(publicSeriesKey))
+    }
+
+    LaunchedEffect(publicGateway, publicCode, timeframe, publicSeriesKey) {
+        val code = publicCode
+        if (code.isNullOrBlank()) {
+            publicAnalysisCandles = emptyList()
+            return@LaunchedEffect
+        }
+        val higherTimeframe = analyzerHigherTimeframe(timeframe)
+        try {
+            // Exclude the latest forming candle; signal math uses completed OHLC bars only.
+            val lowerRows = publicGateway.fetchCandles(code, analyzerGranularitySeconds(timeframe), 300)
+                .sortedBy { it.timestamp }.dropLast(1)
+            val higherRows = if (higherTimeframe == timeframe) lowerRows else {
+                publicGateway.fetchCandles(code, analyzerGranularitySeconds(higherTimeframe), 300)
+                    .sortedBy { it.timestamp }.dropLast(1)
+            }
+            val bars = lowerRows.map { row ->
+                AnalyzerBar(timeframe, row.timestamp, row.open, row.high, row.low, row.close, row.complete)
+            } + higherRows.map { row ->
+                AnalyzerBar(higherTimeframe, row.timestamp, row.open, row.high, row.low, row.close, row.complete)
+            }
+            if (bars.isNotEmpty()) {
+                AnalyzerPublicCandleCache.put(publicSeriesKey, bars)
+                publicAnalysisCandles = bars
+            } else {
+                publicAnalysisCandles = AnalyzerPublicCandleCache.get(publicSeriesKey)
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            publicAnalysisCandles = AnalyzerPublicCandleCache.get(publicSeriesKey)
+        }
+    }
 
     LaunchedEffect(feedClient, connected, symbol, timeframe) {
         if (feedClient != null && connected && symbol.isNotBlank()) {
@@ -220,7 +293,6 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val price = quote?.bid?.takeIf { it.isFinite() && it > 0.0 }
     val priceQuoteFresh = connected && quote != null && quote.ageMs in 0L..15_000L &&
         quote.timestampMs > 0L
-    val publicCode = publicInstrumentCodes[symbol]
     DisposableEffect(publicGateway, publicCode) {
         if (!publicCode.isNullOrBlank()) publicGateway.subscribeTicks(publicCode) { }
         onDispose {
@@ -239,8 +311,30 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         symbol.contains("XAG", ignoreCase = true) -> 3
         else -> 5
     }
-    val insight = remember(quote, allSymbolCandles, timeframe) {
-        MT5AnalyzerMath.analyze(quote, allSymbolCandles, timeframe)
+    val publicLowerCount = publicAnalysisCandles.count { it.timeframe.equals(timeframe, true) && it.complete }
+    val publicHigherTimeframe = analyzerHigherTimeframe(timeframe)
+    val publicHigherCount = publicAnalysisCandles.count { it.timeframe.equals(publicHigherTimeframe, true) && it.complete }
+    val publicBarsReady = publicLowerCount >= 21 && publicHigherCount >= 21
+    val terminalAnalysisCandles = allSymbolCandles.map {
+        AnalyzerBar(it.timeframe, it.timestampMs, it.open, it.high, it.low, it.close, it.complete)
+    }
+    val terminalLowerCount = terminalAnalysisCandles.count { it.timeframe.equals(timeframe, true) }
+    val terminalHigherCount = terminalAnalysisCandles.count { it.timeframe.equals(publicHigherTimeframe, true) }
+    val terminalBarsReady = terminalLowerCount >= 21 && terminalHigherCount >= 21
+    val usePublicAnalysis = publicQuoteFresh && publicBarsReady
+    val useTerminalFallback = !usePublicAnalysis && priceQuoteFresh && terminalBarsReady
+    val analysisPrice = when {
+        usePublicAnalysis -> publicPrice
+        useTerminalFallback -> price
+        else -> null
+    }
+    val analysisCandles = when {
+        usePublicAnalysis -> publicAnalysisCandles
+        useTerminalFallback -> terminalAnalysisCandles
+        else -> publicAnalysisCandles
+    }
+    val insight = remember(analysisPrice, analysisCandles, timeframe) {
+        MT5AnalyzerMath.analyze(analysisPrice, analysisCandles, timeframe)
     }
     val support = insight.support
     val resistance = insight.resistance
@@ -256,8 +350,8 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         stopLoss?.let { it.isFinite() && it > 0.0 } == true &&
         takeProfit?.let { it.isFinite() && it > 0.0 } == true &&
         when (insight.trend) {
-            "BUY" -> stopLoss!! < (price ?: 0.0) && takeProfit!! > (price ?: 0.0)
-            "SELL" -> stopLoss!! > (price ?: 0.0) && takeProfit!! < (price ?: 0.0)
+            "BUY" -> stopLoss!! < (analysisPrice ?: 0.0) && takeProfit!! > (analysisPrice ?: 0.0)
+            "SELL" -> stopLoss!! > (analysisPrice ?: 0.0) && takeProfit!! < (analysisPrice ?: 0.0)
             else -> false
         }
     val analysisValidated = trendValidated && levelsValidated

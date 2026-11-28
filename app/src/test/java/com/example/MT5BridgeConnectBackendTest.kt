@@ -11,6 +11,7 @@ import com.example.ui.bot.LoginForm
 import com.example.ui.bot.MT5BridgeConnectBackend
 import com.example.ui.bot.ConnectSubmissionFailure
 import com.example.ui.bot.ConnectStage
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -47,15 +48,19 @@ class MT5BridgeConnectBackendTest {
     }
 
     @Test
-    fun engineWakeAndHealthVerificationFinishBeforePairingBegins() = runBlocking {
+    fun credentialsAreSubmittedWhileHostWakeContinuesInBackground() = runBlocking {
         val gateway = FakeGateway()
+        val wakeStarted = CompletableDeferred<Unit>()
+        val allowWakeToFinish = CompletableDeferred<Unit>()
+        val wakeFinished = CompletableDeferred<Unit>()
         val events = mutableListOf<String>()
         val backend = MT5BridgeConnectBackend(
             gateway,
             managementHealthCheck = { events += "MANAGEMENT_HEALTH" },
-            wakeHost = { reportStage ->
-                events += "HOST_WAKE"
-                reportStage(ConnectStage.ENGINE_READY)
+            wakeHost = {
+                wakeStarted.complete(Unit)
+                allowWakeToFinish.await()
+                wakeFinished.complete(Unit)
             },
         )
         val spec = requireNotNull(BrokerLoginSpecs.byId("FBS_MT5"))
@@ -64,13 +69,16 @@ class MT5BridgeConnectBackendTest {
             password = "fixture-broker-password", server = "Fixture-Demo",
         )
 
-        assertNull(backend.preflight(spec, form) { events += it.name })
+        assertNull(backend.preflight(spec, form))
         backend.submit(spec, form)
+        wakeStarted.await()
 
-        assertTrue(events.indexOf("HOST_WAKE") >= 0)
-        assertTrue(events.indexOf("HOST_WAKE") < events.indexOf("MANAGEMENT_HEALTH"))
-        assertTrue(events.indexOf("MANAGEMENT_HEALTH") < events.indexOf(ConnectStage.PAIRING.name))
+        assertEquals(listOf("MANAGEMENT_HEALTH"), events)
         assertEquals("123456", gateway.submitted?.login)
+        assertTrue("Host wake must still be pending after credentials are submitted.", !wakeFinished.isCompleted)
+
+        allowWakeToFinish.complete(Unit)
+        wakeFinished.await()
     }
 
     @Test
@@ -190,13 +198,16 @@ class MT5BridgeConnectBackendTest {
 
 
     @Test
-    fun hostWakeFailureBlocksManagementCheckAndBrokerCredentialSubmission() = runBlocking {
+    fun backgroundHostWakeFailureDoesNotBlockCredentialSubmission() = runBlocking {
         val gateway = FakeGateway()
-        val events = mutableListOf<String>()
+        val wakeAttempted = CompletableDeferred<Unit>()
         val backend = MT5BridgeConnectBackend(
             client = gateway,
-            managementHealthCheck = { events += "MANAGEMENT_HEALTH" },
-            wakeHost = { throw IllegalStateException("fixture wake failed") },
+            managementHealthCheck = {},
+            wakeHost = {
+                wakeAttempted.complete(Unit)
+                throw IllegalStateException("fixture wake failed")
+            },
         )
         val spec = requireNotNull(BrokerLoginSpecs.byId("FBS_MT5"))
         val form = LoginForm(
@@ -207,9 +218,10 @@ class MT5BridgeConnectBackendTest {
             server = "Fixture-Demo",
         )
 
-        assertEquals("HOST_WAKE_FAILED", backend.preflight(spec, form) { events += it.name })
-        assertTrue("Management API check must not run before a successful wake.", "MANAGEMENT_HEALTH" !in events)
-        assertTrue("Broker credentials must not be submitted after a failed wake.", gateway.submitted == null)
+        assertNull(backend.preflight(spec, form))
+        backend.submit(spec, form)
+        wakeAttempted.await()
+        assertEquals("123456", gateway.submitted?.login)
     }
 
     companion object {
