@@ -22,7 +22,7 @@ def test_production_release_requires_owner_upload_key_endpoints_and_emulator_acc
     preview_ui = (ROOT / "app" / "src" / "main" / "java" / "com" / "example" / "ui" / "workstations" / "BotWorkstation.kt").read_text(encoding="utf-8")
     assert "KEYSTORE_PATH" in build and "STORE_PASSWORD" in build and "KEY_PASSWORD" in build
     assert "destinedFxEmulatorAccepted" in build
-    assert "RELEASE APK - DEMO DEFAULT" in build
+    assert r'APK_BUILD_LABEL", "\"RELEASE APK - DEMO DEFAULT - REAL MT5 AVAILABLE AFTER CONFIRMATION\""' in build
     assert "android-release-apk:" in workflow
     assert "DESTINEDFX_UPLOAD_KEYSTORE_B64" in workflow
     assert "assembleRelease" in workflow

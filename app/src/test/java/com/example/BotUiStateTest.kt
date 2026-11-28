@@ -134,10 +134,10 @@ class BotUiStateTest {
         assertEquals(false, accepted(evidencePathCount = 0))
     }
 
-    @Test fun liveSelectionRequiresAcceptedBrokerSpecificDemoPassAndLeaseLabelIsExplicit() {
+    @Test fun liveSelectionDoesNotRequireDemoPassAndLeaseLabelIsExplicit() {
         assertEquals(true, canSelectMt5Mode("DEMO", "FBS", emptyMap()))
-        assertEquals(false, canSelectMt5Mode("LIVE", "FBS", emptyMap()))
-        assertEquals(false, canSelectMt5Mode("LIVE", "EXNESS", mapOf("FBS" to "accepted-demo-pass-sha256")))
+        assertEquals(true, canSelectMt5Mode("LIVE", "FBS", emptyMap()))
+        assertEquals(true, canSelectMt5Mode("LIVE", "EXNESS", emptyMap()))
         assertEquals(true, canSelectMt5Mode("LIVE", "FBS", mapOf("FBS" to "accepted-demo-pass-sha256")))
 
         assertEquals("LIVE NOT ARMED · SERVER LEASE INACTIVE", liveLeaseStatusLabel(false))

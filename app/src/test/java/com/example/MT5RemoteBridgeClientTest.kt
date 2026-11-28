@@ -434,7 +434,7 @@ class MT5RemoteBridgeClientTest {
         assertFalse(payload.getJSONObject("config").has("tickets"))
     }
 
-    @Test fun phoneMarketOrderConfigRejectsRiskAboveEaCapAndInvalidProtection() {
+    @Test fun phoneMarketOrderConfigRejectsRiskAboveEaCapAndInvalidProtectionButAllowsEphemeralMt5() {
         val snapshot = phoneMarketOrderSnapshot()
         assertThrows(IllegalArgumentException::class.java) {
             MT5RemoteBridgeClient.marketOrderConfig(
@@ -448,13 +448,12 @@ class MT5RemoteBridgeClientTest {
                 requestedVolume = 0.01
             )
         }
-        assertThrows(IllegalArgumentException::class.java) {
-            MT5RemoteBridgeClient.marketOrderConfig(
-                snapshot.copy(hostProfile = com.example.data.broker.HostProfile.EPHEMERAL),
-                side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.20,
-                requestedVolume = 0.01
-            )
-        }
+        val ephemeralConfig = MT5RemoteBridgeClient.marketOrderConfig(
+            snapshot.copy(hostProfile = com.example.data.broker.HostProfile.EPHEMERAL),
+            side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.20,
+            requestedVolume = 0.01
+        )
+        assertEquals("EURUSD", ephemeralConfig.getString("symbol"))
         assertThrows(IllegalArgumentException::class.java) {
             MT5RemoteBridgeClient.marketOrderConfig(
                 snapshot, side = "BUY", stopLoss = 1.09000, takeProfit = 1.12000, riskPercent = 0.20,

@@ -131,7 +131,8 @@ class UniversalConnectorDispatcherTest {
             demoAcceptance = null,
             currentDemoCredentialGeneration = ""
         )
-        assertFalse(dispatcher.validateVerification(ConnectorKind.FBS_MT5, live).isSuccess)
+        // A valid REAL MT5 login may connect without a DEMO pass; Bot START still requires explicit confirmation.
+        assertTrue(dispatcher.validateVerification(ConnectorKind.FBS_MT5, live).isSuccess)
         policy.armLive(com.example.data.broker.LiveArmRequest(
             identity = liveIdentity,
             demoAcceptance = null,

@@ -129,7 +129,9 @@ class ModeArmingPolicyTest {
         assertTrue(policy.liveDecision(req.identity, now, HostProfile.EPHEMERAL).allowed)
         policy.onAccountSwitch(req.identity.path, req.identity.broker, "another-account")
         assertFalse(policy.liveDecision(req.identity, now, HostProfile.EPHEMERAL).allowed)
-        policy.armLive(req).getOrThrow()
+        policy.armLive(req.copy(
+            liveVerification = req.liveVerification.copy(checkedAtMs = now)
+        )).getOrThrow()
         assertEquals(1, policy.emergencyStop())
         assertFalse(policy.liveDecision(req.identity, now, HostProfile.EPHEMERAL).allowed)
     }
