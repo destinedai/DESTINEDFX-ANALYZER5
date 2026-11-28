@@ -847,13 +847,19 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         val brand = spec.id.removeSuffix("_MT5")
                         val mode = form.mode.name
                         val client = mt5Client("${brand}_${mode}", mode, brand)
-                        ConnectUseCase(
+                        val outcome = ConnectUseCase(
                             MT5BridgeConnectBackend(
                                 client = client,
                                 managementHealthCheck = { viewModel.requireManagementApiHealth() },
                                 wakeHost = { reportStage -> wakeCodespacesHostForMt5(client, reportStage) },
                             )
                         ).connect(spec, form, onStage)
+                        if (outcome is ConnectOutcome.Verified &&
+                            !outcome.modeMismatch && outcome.accountMode.equals(mode, ignoreCase = true)
+                        ) {
+                            viewModel.selectAnalyzerMt5AccountProfile(brand, mode)
+                        }
+                        outcome
                     }
                 }
             },

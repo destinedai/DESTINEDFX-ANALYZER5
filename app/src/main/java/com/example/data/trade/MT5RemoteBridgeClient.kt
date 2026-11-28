@@ -137,6 +137,13 @@ internal fun parseVerifiedBrokerChartSelection(symbol: String?, timeframe: Strin
     return VerifiedBrokerChartSelection(cleanSymbol, cleanTimeframe)
 }
 
+internal fun mt5ServerCatalogRequestPath(broker: String, mode: String, query: String): String {
+    val encodedBroker = java.net.URLEncoder.encode(broker.trim().uppercase(Locale.ROOT), "UTF-8")
+    val encodedMode = java.net.URLEncoder.encode(mode.trim().uppercase(Locale.ROOT), "UTF-8")
+    val encodedQuery = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+    return "/v1/mt5/server-catalog?broker=$encodedBroker&mode=$encodedMode&q=$encodedQuery"
+}
+
 class MT5RemoteBridgeClient(
     private val secrets: SecretsManager,
     profile: String,
@@ -1040,12 +1047,8 @@ class MT5RemoteBridgeClient(
             "Server search mode must match the selected broker profile."
         }
         if (cleanQuery.length < 3 || cleanQuery.length > 96) return emptyList()
-        val encoded = java.net.URLEncoder.encode(cleanQuery, "UTF-8")
-        val result = request(
-            "GET",
-            "/v1/mt5/server-catalog?broker=\${brokerBrand}&mode=\${requestedMode}&q=\${encoded}",
-            includeAppAuthorization = false
-        )
+        val catalogPath = mt5ServerCatalogRequestPath(brokerBrand, requestedMode, cleanQuery)
+        val result = request("GET", catalogPath, includeAppAuthorization = false)
         val rows = result.optJSONArray("servers") ?: return emptyList()
         val found = LinkedHashMap<String, String>()
         for (index in 0 until rows.length()) {

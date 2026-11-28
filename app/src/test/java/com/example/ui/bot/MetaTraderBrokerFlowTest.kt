@@ -36,7 +36,20 @@ class MetaTraderBrokerFlowTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private fun openFlow(storageAvailable: Boolean = true) {
+    private fun openFlow(
+        storageAvailable: Boolean = true,
+        onConnect: suspend (
+            com.example.data.broker.BrokerLoginSpec,
+            LoginForm,
+            (ConnectStage) -> Unit,
+        ) -> ConnectOutcome = { _, _, _ -> ConnectOutcome.Failed("FIXTURE", "Fixture only") },
+        onAccountCommand: suspend (
+            com.example.data.broker.BrokerLoginSpec,
+            LoginForm,
+            String,
+            String?,
+        ) -> String = { _, _, action, _ -> "Fixture action: $action" },
+    ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("broker_flow_ui_fixture", Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
@@ -53,7 +66,7 @@ class MetaTraderBrokerFlowTest {
                     context = context,
                     hostProfile = HostProfile.EPHEMERAL,
                     onGrantAccess = { _, _ -> "WAITING FOR SPOTWARE APPROVAL" },
-                    onConnect = { _, _, _ -> ConnectOutcome.Failed("FIXTURE", "Fixture only") },
+                    onConnect = onConnect,
                     onSearchServers = { spec, mode, query ->
                         val brand = spec.id.removeSuffix("_MT5")
                         val exact = "$brand-${if (mode == com.example.data.broker.LoginMode.DEMO) "Demo" else "Real"}"
@@ -61,7 +74,7 @@ class MetaTraderBrokerFlowTest {
                             .filter { it.contains(query.trim(), ignoreCase = true) }
                     },
                     onRefreshAccount = { _, _ -> null },
-                    onAccountCommand = { _, _, action, _ -> "Fixture action: $action" },
+                    onAccountCommand = onAccountCommand,
                     onEmergencyStop = { _, _ -> "Fixture emergency stop requested" },
                     onAcceptDemo = { _, _ -> "Fixture DEMO acceptance recorded" },
                     onArmLive = { _, _, _, _ -> "Fixture LIVE arming blocked" },
@@ -70,6 +83,74 @@ class MetaTraderBrokerFlowTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun realLoginUsesRealCatalogServerAndStartRequiresRealMoneyConfirmation() {
+        var submittedForm: LoginForm? = null
+        var startCalls = 0
+        openFlow(
+            onConnect = { _, form, _ ->
+                submittedForm = form
+                ConnectOutcome.Verified(
+                    accountMode = "LIVE",
+                    modeMismatch = false,
+                    account = VerifiedAccountDetails(
+                        login = "123456",
+                        server = "FBS-Real",
+                        mode = "LIVE",
+                        currency = "USD",
+                        balance = 1000.0,
+                        equity = 1000.0,
+                        freeMargin = 1000.0,
+                        marginLevel = 0.0,
+                        leverage = 100,
+                        retrievedAtMs = System.currentTimeMillis(),
+                        positions = emptyList(),
+                        pendingOrders = emptyList(),
+                        deals = emptyList(),
+                        hostProfile = HostProfile.EPHEMERAL,
+                        engineState = "STOPPED",
+                    ),
+                )
+            },
+            onAccountCommand = { _, _, action, _ ->
+                if (action == "START") startCalls += 1
+                "Fixture action: $action"
+            },
+        )
+        composeRule.onNodeWithTag("add_account").performClick()
+        composeRule.onNodeWithTag("broker_FBS_MT5").performClick()
+        composeRule.onNodeWithTag("login_mode_real").performScrollTo().performClick()
+        composeRule.onNodeWithTag("ephemeral_live_trade_continue").performScrollTo().performClick()
+        composeRule.onNodeWithTag("field_login").performScrollTo().performTextInput("123456")
+        composeRule.onNodeWithTag("field_password").performScrollTo().performTextInput("fixture-password")
+        composeRule.onNodeWithTag("server_field").performScrollTo().performTextReplacement("FBS-Real")
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("server_result_FBS-Real").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("server_result_FBS-Real").performClick()
+        composeRule.onNodeWithTag("save_mt5_server").performScrollTo().performClick()
+        composeRule.onNodeWithText("Server saved").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("login_button").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("account_tab_bot").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals("LIVE", submittedForm?.mode?.name)
+        assertEquals("FBS-Real", submittedForm?.server)
+        assertEquals(AccessType.TRADE, submittedForm?.type)
+
+        composeRule.onNodeWithTag("account_tab_bot").performClick()
+        composeRule.onNodeWithText("START").assertIsEnabled().performClick()
+        composeRule.onNodeWithText("You are about to trade REAL money").assertIsDisplayed()
+        assertEquals("REAL START must not be sent before explicit confirmation", 0, startCalls)
+        composeRule.onNodeWithTag("cancel_real_trade_start").performClick()
+        assertEquals(0, startCalls)
+
+        composeRule.onNodeWithText("START").performClick()
+        composeRule.onNodeWithTag("confirm_real_trade_start").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) { startCalls == 1 }
+        assertEquals(1, startCalls)
     }
 
     @Test

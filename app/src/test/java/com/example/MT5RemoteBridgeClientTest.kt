@@ -5,6 +5,7 @@ import com.example.data.codespaces.isCodespacesForwardedBridgeOrigin
 import com.example.data.trade.parseVerifiedBrokerQuotes
 import com.example.data.trade.parseVerifiedBrokerCandles
 import com.example.data.trade.parseVerifiedBrokerChartSelection
+import com.example.data.trade.mt5ServerCatalogRequestPath
 import com.example.security.SecretsManager
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
@@ -24,6 +25,13 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MT5RemoteBridgeClientTest {
+    @Test fun realServerCatalogRequestUsesConcreteBrokerModeAndEncodedQuery() {
+        assertEquals(
+            "/v1/mt5/server-catalog?broker=FBS&mode=LIVE&q=FBS+Real",
+            mt5ServerCatalogRequestPath("fbs", "live", "FBS Real")
+        )
+    }
+
     @Test fun brokerCandleParserAcceptsOnlyClosedFreshFiniteUniqueTerminalBars() {
         val now = 1_800_000_000_000L
         val rows = JSONArray()
