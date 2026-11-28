@@ -92,6 +92,7 @@ fun MetaTraderBrokerFlow(
     initialMode: LoginMode = LoginMode.DEMO,
     onGrantAccess: (BrokerLoginSpec, LoginForm) -> String?,
     onConnect: suspend (BrokerLoginSpec, LoginForm, (ConnectStage) -> Unit) -> ConnectOutcome,
+    onSearchServers: suspend (BrokerLoginSpec, LoginMode, String) -> List<String> = { _, _, _ -> emptyList() },
     onRefreshAccount: suspend (BrokerLoginSpec, LoginForm) -> VerifiedAccountDetails?,
     onAccountCommand: suspend (BrokerLoginSpec, LoginForm, String, String?) -> String,
     onEmergencyStop: suspend (BrokerLoginSpec, LoginForm) -> String,
@@ -105,6 +106,10 @@ fun MetaTraderBrokerFlow(
     var selected by remember { mutableStateOf<BrokerLoginSpec?>(null) }
     var query by remember { mutableStateOf("") }
     var serverSearch by remember { mutableStateOf("") }
+    var serverResults by remember { mutableStateOf<List<String>>(emptyList()) }
+    var serverSearchBusy by remember { mutableStateOf(false) }
+    var serverSearchError by remember { mutableStateOf("") }
+    var serverSelectionVerified by remember { mutableStateOf(false) }
     var manualDialog by remember { mutableStateOf(false) }
     var manualName by remember { mutableStateOf("") }
     var form by remember(initialMode) { mutableStateOf(LoginForm(mode = initialMode)) }
@@ -297,12 +302,16 @@ fun MetaTraderBrokerFlow(
                         saved.forEach { account ->
                             AccountRow(account) {
                         selected = account.spec
+                            serverSearch = account.spec.id.removeSuffix("_MT5")
+                            serverResults = emptyList()
+                            serverSearchError = ""
+                            serverSelectionVerified = false
                             modeHintChosen = false
                             form = when (account.spec.connector) {
                             LoginConnector.MT5_TERMINAL -> {
                                 val accessType = AccessType.values().firstOrNull {
                                     it.wireValue == secrets.getManagedMT5AccountAccessType(account.profileKey)
-                                } ?: AccessType.INVESTOR
+                                } ?: AccessType.TRADE
                                 val passwordSaved = secrets.isManagedMT5AccountPasswordSaveEnabled(account.profileKey)
                                 LoginForm(
                                     type = accessType,
@@ -370,6 +379,10 @@ fun MetaTraderBrokerFlow(
                     items(filtered, key = { it.specId }) { row ->
                         BrokerRowCard(row) {
                             selected = BrokerLoginSpecs.byId(row.specId)
+                        serverSearch = row.specId.removeSuffix("_MT5")
+                        serverResults = emptyList()
+                        serverSearchError = ""
+                        serverSelectionVerified = false
                         modeHintChosen = false
                         val spec = selected
                             form = when (spec?.connector) {
@@ -432,7 +445,7 @@ fun MetaTraderBrokerFlow(
                         modifier = Modifier.testTag("mt5_mode_hint_notice"),
                     )
                     Text(
-                        "Enter your MT5 account number, password and exact broker server.",
+                        "Enter your MT5 account number, master password and exact broker server.",
                         color = TextSecondary,
                         fontSize = 11.sp,
                         modifier = Modifier.testTag("mt5_login_fields_help"),
@@ -457,21 +470,20 @@ fun MetaTraderBrokerFlow(
                                         val savedServer = secrets.getManagedMT5AccountServer("${brand}_${mode.name}")
                                         // Never erase owner-entered text when this mode has no saved server.
                                         // The active-mode saved check below still requires an explicit save.
-                                        val serverForMode = savedServer.takeIf { it.isNotBlank() } ?: form.server
-                                        form = LoginRules.withMode(form, mode).copy(server = serverForMode)
+                                        form = LoginRules.withMode(form, mode).copy(server = "")
+                                        serverSearch = spec.id.removeSuffix("_MT5")
+                                        serverResults = emptyList()
+                                        serverSearchError = ""
+                                        serverSelectionVerified = false
                                         serverSaveStatus = ""
+                                        endpointVerification = null
                                         modeHintChosen = true
                                     }
                                     .testTag("login_mode_${if (isReal) "real" else "demo"}"),
                             )
                         }
                     }
-                    var typeMenu by remember { mutableStateOf(false) }
-                    Text("Type: ${form.type.label}", color = TextPrimary, modifier = Modifier.fillMaxWidth().height(48.dp).clickable { typeMenu = true }.padding(12.dp).testTag("type_dropdown"))
-                    DropdownMenu(typeMenu, { typeMenu = false }) { LoginRules.availableTypes(spec, form.mode, hostProfile).forEach { type -> DropdownMenuItem(text = { Text(type.label) }, onClick = { form = form.copy(type = type); typeMenu = false }) } }
-                    if (form.mode == LoginMode.LIVE && form.type == AccessType.INVESTOR) {
-                        Text("Investor access is read-only and cannot place trades.", color = WarningAmber, fontSize = 14.sp)
-                    }
+                    Text("Type: Trade account", color = TextPrimary, modifier = Modifier.fillMaxWidth().height(48.dp).padding(12.dp).testTag("mt5_type_trade_only"))
                     if (ephemeralLiveTradeWarningRequired) {
                         Card(colors = CardDefaults.cardColors(containerColor = BrokerSurfaceVariant), shape = RoundedCornerShape(8.dp)) {
                             Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -494,22 +506,57 @@ fun MetaTraderBrokerFlow(
                     }
                     LoginInput("Login", form.login, { form = form.copy(login = it.filter(Char::isDigit)) },
                         KeyboardType.Number, enabled = mt5CredentialFieldsEnabled)
-                    LoginInput("Password", form.password, { form = form.copy(password = it) },
+                    LoginInput("Master Password", form.password, { form = form.copy(password = it) },
                         KeyboardType.Password, true, ImeAction.Next, enabled = mt5CredentialFieldsEnabled)
                     var serverMenu by remember { mutableStateOf(false) }
                     OutlinedTextField(
-                        value = form.server,
-                        onValueChange = { server -> form = form.copy(server = server); serverSaveStatus = "" },
+                        value = if (serverSelectionVerified) form.server else serverSearch,
+                        onValueChange = { value ->
+                            serverSearch = value
+                            form = form.copy(server = "")
+                            serverSelectionVerified = false
+                            serverResults = emptyList()
+                            serverSearchError = ""
+                            serverSaveStatus = ""
+                            serverMenu = value.trim().length >= 3
+                        },
                         modifier = Modifier.fillMaxWidth().testTag("server_field"),
                         enabled = mt5CredentialFieldsEnabled,
-                        trailingIcon = { TextButton(enabled = mt5CredentialFieldsEnabled, onClick = { serverSearch = ""; serverMenu = true }) { Text("SEARCH") } },
-                        label = { Text("Exact MT5 Server") },
-                        placeholder = { Text("Copy the server from your broker's MT5 account details") },
+                        trailingIcon = {
+                            TextButton(enabled = mt5CredentialFieldsEnabled, onClick = {
+                                if (serverSearch.isBlank()) serverSearch = spec.id.removeSuffix("_MT5")
+                                serverMenu = true
+                            }) { Text("SEARCH") }
+                        },
+                        label = { Text("Search MT5 Server") },
+                        placeholder = { Text("Type broker name, e.g. FBS") },
                         singleLine = true,
                         textStyle = TextStyle(fontSize = 16.sp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
-                        keyboardActions = loginKeyboardActions(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Search),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { serverMenu = true }),
                     )
+                    LaunchedEffect(serverMenu, spec.id, form.mode, serverSearch) {
+                        val searchText = serverSearch.trim()
+                        if (!serverMenu || searchText.length < 3) return@LaunchedEffect
+                        delay(300L)
+                        serverSearchBusy = true
+                        serverSearchError = ""
+                        try {
+                            val matches = onSearchServers(spec, form.mode, searchText)
+                            serverResults = matches
+                            serverSelectionVerified = form.server.isNotBlank() &&
+                                matches.any { it == form.server }
+                            if (matches.isEmpty()) serverSearchError = "Server not found"
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            serverResults = emptyList()
+                            serverSelectionVerified = false
+                            serverSearchError = "Server search unavailable. No server was selected."
+                        } finally {
+                            serverSearchBusy = false
+                        }
+                    }
                     val mt5Brand = spec.id.removeSuffix("_MT5")
                     if (form.mode == LoginMode.LIVE) {
                         Text("OFFICIAL MT5 SERVER REFERENCE · $mt5Brand", color = ElectricCyan, fontSize = 9.sp,
@@ -549,13 +596,13 @@ fun MetaTraderBrokerFlow(
                         onClick = {
                             val candidate = form.server
                             serverSaveStatus = when {
-                                candidate.isBlank() -> "Enter the exact MT5 server first."
-                                candidate != candidate.trim() || !Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(candidate) -> "Server must contain letters/numbers plus . _ - only; spaces and ports are not allowed."
+                                !serverSelectionVerified || candidate.isBlank() -> "Server not found"
+                                candidate != candidate.trim() || !Regex("[A-Za-z0-9][A-Za-z0-9._-]{2,95}").matches(candidate) -> "Select a real server from the MT5 list."
                                 secrets.saveManagedMT5AccountServer(activeMt5ProfileKey, candidate) -> "Server saved"
                                 else -> "Server could not be saved to encrypted storage."
                             }
                         },
-                        enabled = !busy && activeMt5ServerValid && mt5CredentialFieldsEnabled,
+                        enabled = !busy && activeMt5ServerValid && serverSelectionVerified && mt5CredentialFieldsEnabled,
                         modifier = Modifier.fillMaxWidth().testTag("save_mt5_server")
                     ) { Text("SAVE SERVER") }
                     Row(
@@ -578,34 +625,43 @@ fun MetaTraderBrokerFlow(
                         fontSize = 10.sp,
                         modifier = Modifier.testTag("mt5_login_verification_path")
                     )
-                    val serverOptions = ServerOptions.build(spec, emptyList(), emptyList())
-                        .filter { option -> option !is ServerOption.Suggested || option.value.contains(serverSearch.trim(), ignoreCase = true) }
-                    DropdownMenu(serverMenu, { serverMenu = false; serverSearch = "" }) {
+                    DropdownMenu(serverMenu, { serverMenu = false }) {
                         OutlinedTextField(
                             value = serverSearch,
-                            onValueChange = { serverSearch = it },
+                            onValueChange = {
+                                serverSearch = it
+                                form = form.copy(server = "")
+                                serverSelectionVerified = false
+                                serverResults = emptyList()
+                                serverSearchError = ""
+                            },
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("server_search"),
-                            label = { Text("Search saved servers") },
+                            label = { Text("Search MT5 broker servers") },
                             singleLine = true,
                         )
-                        val suggestions = serverOptions.filterIsInstance<ServerOption.Suggested>()
-                        if (suggestions.isEmpty()) {
-                            Text("No saved server suggestions. Enter the exact name above.", color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(12.dp))
+                        if (serverSearchBusy) {
+                            Text("SEARCHING MT5 SERVER LIST...", color = ElectricCyan, fontSize = 10.sp, modifier = Modifier.padding(12.dp))
+                        } else if (serverResults.isEmpty()) {
+                            Text(
+                                serverSearchError.ifBlank { if (serverSearch.trim().length < 3) "Enter at least 3 characters to search." else "Server not found" },
+                                color = if (serverSearchError.isBlank()) TextSecondary else LossRed,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(12.dp).testTag("server_search_empty")
+                            )
                         }
-                        suggestions.forEach { option ->
+                        serverResults.forEach { serverName ->
                             DropdownMenuItem(
-                                text = { Column { Text(option.value); Text(option.origin, color = TextSecondary, fontSize = 9.sp) } },
+                                text = { Text(serverName) },
+                                modifier = Modifier.testTag("server_result_$serverName"),
                                 onClick = {
-                                    form = form.copy(server = option.value)
+                                    form = form.copy(server = serverName, type = AccessType.TRADE)
+                                    serverSearch = serverName
+                                    serverSelectionVerified = true
                                     serverMenu = false
-                                    serverSearch = ""
+                                    serverSaveStatus = ""
                                 },
                             )
                         }
-                        DropdownMenuItem(
-                            text = { Text("Type exact server name") },
-                            onClick = { serverMenu = false; serverSearch = "" }
-                        )
                     }
                 } else if (spec.connector == LoginConnector.DERIV_OPTIONS) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -672,9 +728,9 @@ fun MetaTraderBrokerFlow(
                 failure?.let { Text(it, color = LossRed, modifier = Modifier.testTag("connect_error")) }
                 Button(
                     enabled = !busy && LoginRules.canSubmitLogin(spec, form, modeHintChosen) &&
-                        (spec.connector != LoginConnector.MT5_TERMINAL || activeMt5ServerSaved) &&
+                        (spec.connector != LoginConnector.MT5_TERMINAL || (activeMt5ServerSaved && serverSelectionVerified)) &&
                         (spec.connector != LoginConnector.MT5_TERMINAL || mt5CredentialFieldsEnabled),
-                    onClick = { connect(spec, form) },
+                    onClick = { connect(spec, form.copy(type = AccessType.TRADE)) },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("login_button"), colors = ButtonDefaults.buttonColors(containerColor = LoginBlue)) {
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White)
                     else Text("LOGIN")
@@ -689,7 +745,7 @@ fun MetaTraderBrokerFlow(
                         onClick = {
                             val next = form.copy(accountId = account.id, mode = account.mode)
                             form = next
-                            connect(spec, next)
+                            connect(spec, next.copy(type = AccessType.TRADE))
                         },
                         modifier = Modifier.fillMaxWidth().height(48.dp).testTag("provider_account_${account.id}"),
                         colors = ButtonDefaults.buttonColors(containerColor = BrokerSurfaceVariant),
@@ -709,7 +765,7 @@ fun MetaTraderBrokerFlow(
                                 onClick = {
                                     val retryForm = LoginRules.withMode(form, LoginMode.valueOf(requireNotNull(verifiedMode)))
                                     form = retryForm
-                                    connect(spec, retryForm)
+                                    connect(spec, retryForm.copy(type = AccessType.TRADE))
                                 },
                                 modifier = Modifier.fillMaxWidth().testTag("reconnect_reported_mode"),
                                 colors = ButtonDefaults.buttonColors(containerColor = LoginBlue),
@@ -1132,7 +1188,7 @@ private fun LoginInput(
         onValueChange = onValue,
         enabled = enabled,
         modifier = Modifier.fillMaxWidth().height(56.dp)
-            .testTag("field_${label.replace(" ", "_").lowercase()}"),
+            .testTag(if (label == "Master Password") "field_password" else "field_${label.replace(" ", "_").lowercase()}"),
         label = { Text(label) },
         singleLine = true,
         textStyle = TextStyle(fontSize = 16.sp),

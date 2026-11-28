@@ -56,6 +56,9 @@ class MyApplication : Application() {
 
     private var _marketDataRepository: MarketDataRepositoryImpl? = null
     val marketDataRepository: MarketDataRepositoryImpl get() = _marketDataRepository ?: throw IllegalStateException("MarketDataRepository not initialized")
+    private var _derivMarketDataGateway: com.example.data.deriv.DerivMarketDataGateway? = null
+    val derivMarketDataGateway: com.example.data.deriv.DerivMarketDataGateway
+        get() = _derivMarketDataGateway ?: throw IllegalStateException("DerivMarketDataGateway not initialized")
 
     private var _mt5GatewayRepository: MT5GatewayRepository? = null
     val mt5GatewayRepository: MT5GatewayRepository get() = _mt5GatewayRepository ?: throw IllegalStateException("MT5GatewayRepository not initialized")
@@ -154,7 +157,7 @@ class MyApplication : Application() {
             _riskRepository = RiskRepositoryImpl(this@MyApplication, secrets)
             
             val derivMarketDataGateway = com.example.data.deriv.DerivMarketDataGateway()
-            
+            _derivMarketDataGateway = derivMarketDataGateway
             _marketDataRepository = MarketDataRepositoryImpl(secrets, derivMarketDataGateway)
             _mt5GatewayRepository = MT5GatewayRepository(secrets)
             _newsRepository = ForexNewsRepository()
@@ -228,10 +231,12 @@ class MyApplication : Application() {
             // a later dependency fails, so a Retry cannot leave duplicate network loops alive.
             try {
                 _marketDataRepository?.close()
+                _derivMarketDataGateway?.disconnect()
             } catch (cleanupError: Exception) {
                 android.util.Log.w("MyApplication", "Partial initialization cleanup failed", cleanupError)
             }
             _marketDataRepository = null
+            _derivMarketDataGateway = null
             android.util.Log.e("MyApplication", "Dependency initialization failed", e)
             initStatus.value = InitState.Failed(e)
         }

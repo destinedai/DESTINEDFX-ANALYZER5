@@ -664,7 +664,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         if (selectedMt5Broker in setOf("FBS", "EXNESS", "HFM", "DERIV")) {
             login = secrets.getManagedMT5AccountLogin(mt5Profile)
             server = secrets.getManagedMT5AccountServer(mt5Profile)
-            accessType = secrets.getManagedMT5AccountAccessType(mt5Profile)
+            accessType = "MASTER"
             savePassword = secrets.isManagedMT5AccountPasswordSaveEnabled(mt5Profile)
             password = if (savePassword) secrets.getManagedMT5AccountPassword(mt5Profile) else ""
         }
@@ -823,6 +823,10 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                         }
                     }
                 }
+            },
+            onSearchServers = { spec, mode, query ->
+                val brand = spec.id.removeSuffix("_MT5")
+                mt5Client("${brand}_${mode.name}", mode.name, brand).searchServerCatalog(mode.name, query)
             },
             onConnect = { spec, form, onStage ->
                 when (spec.connector) {
@@ -2039,7 +2043,12 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                     Text("Broker selection is not identity proof. Use the exact server assigned to this MT5 account; verify terminal-reported company separately.", color = WarningAmber, fontSize = 9.sp)
                     LoginField("Login", login, { login = it.filter(Char::isDigit) }, KeyboardType.Number)
                     LoginField("Password", password, { password = it }, KeyboardType.Password, true)
-                    LoginField("Exact broker server", server, { server = it }, KeyboardType.Text)
+                    Text("Selected MT5 server: ${server.ifBlank { "not selected" }}", color = TextPrimary, fontSize = 10.sp)
+                    if (broker.usesManagedMt5Terminal) {
+                        OutlinedButton(onClick = { showModernBrokerFlow = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("OPEN MT5 SERVER SEARCH")
+                        }
+                    }
                     if (mt5Mode == "LIVE") {
                         Text("OFFICIAL MT5 SERVER REFERENCES", color = ElectricCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                         listOf("FBS", "EXNESS", "HFM", "DERIV").forEach { brand ->
@@ -2081,23 +2090,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             Text("TLS certificate identity and transparent-proxy absence are NOT attested by this pre-login MT5 probe.", color = WarningAmber, fontSize = 9.sp)
                         }
                     }
-                    val savedServerSuggestions = listOf("FBS", "EXNESS", "HFM", "DERIV").flatMap { brand ->
-                        listOf("DEMO", "LIVE").map { mode -> secrets.getManagedMT5AccountServer("${brand}_${mode}").trim() }
-                    }.filter { it.isNotBlank() && !it.equals(server.trim(), ignoreCase = true) }.distinct().take(6)
-                    if (savedServerSuggestions.isNotEmpty()) {
-                        Text("Previously saved server suggestions only. Confirm the exact server in the broker-issued terminal.", color = TextSecondary, fontSize = 9.sp)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            savedServerSuggestions.forEach { suggestion ->
-                                FilterChip(selected = false, onClick = { server = suggestion }, label = { Text(suggestion, fontSize = 9.sp) })
-                            }
-                        }
-                    }
-                    Text("Access type", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("MASTER", "INVESTOR").forEach { access ->
-                            FilterChip(selected = accessType == access, onClick = { accessType = access }, label = { Text(access, fontSize = 10.sp) })
-                        }
-                    }
+                    Text("Type: Trade account", color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     if (bridge?.hasPairing() == true) OutlinedButton(onClick = { showPairingRevokeDialog = true }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("REVOKE THIS ACCOUNT PAIRING") }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Switch(checked = savePassword, onCheckedChange = { savePassword = it })
@@ -2420,7 +2413,7 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
                             } catch (e: Exception) { message = e.message?.take(220) ?: "Connection failed." } finally { busy = false }
                         }
                     },
-                    enabled = !busy,
+                    enabled = !busy && !broker.usesManagedMt5Terminal,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBackground)
                 ) {

@@ -151,20 +151,23 @@ def audit_repository(root: Path = ROOT) -> dict[str, Any]:
         and "BrokerQuotesJson()" not in analyzer_feed_ea
         and "AnalyzerBrokerCandlestickChart" in analyzer_ui
         and "Canvas(" in analyzer_ui
-        and "quote!!.bid" in analyzer_ui
-        and "quote!!.ask" in analyzer_ui
+        and "quote?.bid" in analyzer_ui
+        and "quote.ask" in analyzer_ui
         and "managedMt5BridgeSnapshot" not in analyzer_ui
         and "startSelectedMt5AnalyzerBridgeMonitor" not in analyzer_ui
         and "getMT5BridgeAccountAppToken" not in analyzer_feed_client
-        and "tradingview.com" not in analyzer_ui.lower()
-        and "TradingView" not in analyzer_ui
-        and "OANDA:" not in analyzer_ui
+        and "embed-widget-advanced-chart.js" in analyzer_ui
+        and "publicGateway.latestQuotes" in analyzer_ui
+        and "fetchActiveSymbols()" in analyzer_ui
+        and "Deriv public live market data" in analyzer_ui
+        and "getMT5BridgeAccountAppToken" not in analyzer_feed_client
+        and "OANDA:" in analyzer_ui
     )
     add_check(
         checks,
         "Analyzer provider diagnostics",
         diagnostics_ok,
-        "The Analyzer reads the independent token-free MT5 feed, validates fresh terminal BID/ASK and closed candles, selects MT5 Market Watch symbols/timeframes, and renders its own chart without Bot pairing, TradingView or OANDA."
+        "The Analyzer displays fresh independent public market quotes and TradingView before Bot login, then prefers the exact identity-matched MT5 quote and closed candles after the selected Bot account is connected; public prices are marked analysis-only."
     )
 
     persistent_live_policy_ok = (

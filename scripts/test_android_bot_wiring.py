@@ -43,6 +43,25 @@ BRIDGE_API = (ROOT / "bridge/app.py").read_text(encoding="utf-8")
 ANALYZER_CLIENT = (ROOT / "app/src/main/java/com/example/data/trade/MT5AnalyzerMarketFeedClient.kt").read_text(encoding="utf-8")
 ANALYZER_UI = (ROOT / "app/src/main/java/com/example/ui/SimplifiedAnalyzerTab.kt").read_text(encoding="utf-8")
 ANALYZER_EA = (ROOT / "mt5-ea/AnalyzerMarketFeedEA.mq5").read_text(encoding="utf-8")
+LOGIN_MODEL = (ROOT / "app/src/main/java/com/example/ui/bot/BrokerLoginModel.kt").read_text(encoding="utf-8")
+BROKER_FLOW = (ROOT / "app/src/main/java/com/example/ui/bot/MetaTraderBrokerFlow.kt").read_text(encoding="utf-8")
+SERVER_CATALOG = (ROOT / "bridge/mt5_server_catalog.py").read_text(encoding="utf-8")
+LINUX_SLOT_WORKER = (ROOT / "scripts/linux-host/linux-slot-worker.py").read_text(encoding="utf-8")
+
+
+def test_mt5_login_is_trade_only_and_server_must_come_from_real_terminal_catalog():
+    assert "INVESTOR" not in LOGIN_MODEL
+    assert "Investor" not in BROKER_FLOW
+    assert "AccessType.TRADE" in LOGIN_MODEL
+    assert "mt5_type_trade_only" in BROKER_FLOW
+    assert "serverSelectionVerified" in BROKER_FLOW
+    assert "server_results" in BROKER_FLOW or "serverResults" in BROKER_FLOW
+    assert "onSearchServers" in BROKER_FLOW
+    assert "Type exact server name" not in BROKER_FLOW
+    assert "Server not found" in BROKER_FLOW
+    assert "/v1/mt5/server-catalog" in BRIDGE_CLIENT
+    assert "Config" in SERVER_CATALOG and "servers.dat" in SERVER_CATALOG
+    assert 'name.lower() != "servers.dat"' in LINUX_SLOT_WORKER
 
 
 def test_mt5_login_credentials_and_mode_are_passed_through_to_the_same_terminal():
@@ -105,6 +124,18 @@ def test_mt5_stop_closes_bot_owned_positions_orders_and_retries_for_both_modes()
     assert "CountBotExposure(remainingPositions,remainingOrders)" in EA
     assert "AccountIdentityMatches()" in EA and "BrokerAccountMode()" in EA
     assert "botPositions.isEmpty() && botOrders.isEmpty()" in WORKSTATION
+
+
+def test_analyzer_public_feed_and_tradingview_are_independent_of_bot_login():
+    assert "publicGateway.latestQuotes" in ANALYZER_UI
+    assert "publicGateway.subscribeTicks" in ANALYZER_UI
+    assert "fetchActiveSymbols()" in ANALYZER_UI
+    assert "embed-widget-advanced-chart.js" in ANALYZER_UI
+    assert "Deriv public live market data" in ANALYZER_UI
+    assert "analysis only, not a broker execution quote" in ANALYZER_UI
+    assert "state(" in ANALYZER_CLIENT
+    assert "account_identity_sha256" in ANALYZER_CLIENT
+    assert "getMT5BridgeAccountAppToken" not in ANALYZER_CLIENT
 
 
 def test_analyzer_feed_is_token_free_and_matches_the_selected_app_account():

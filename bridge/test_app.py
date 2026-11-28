@@ -115,6 +115,25 @@ def test_bridge_tests_use_a_process_isolated_database():
     assert app.DB_PATH.startswith(f'/tmp/destinedfx-bridge-test-{os.getpid()}-')
     assert app.DB_PATH != '/tmp/destinedfx-bridge-test.sqlite3'
 
+
+def test_mt5_server_catalog_returns_only_terminal_reported_labels(monkeypatch):
+    calls=[]
+    def fake_catalog(broker, mode, query):
+        calls.append((broker,mode,query))
+        return ["FBS-Demo"] if broker == "FBS" and mode == "DEMO" else ["FBS-Real"] if broker == "FBS" and mode == "LIVE" else []
+    monkeypatch.setattr(app, "search_mt5_servers", fake_catalog)
+    demo=client.get('/v1/mt5/server-catalog',params={'broker':'FBS','mode':'DEMO','q':'FBS'})
+    live=client.get('/v1/mt5/server-catalog',params={'broker':'FBS','mode':'LIVE','q':'FBS'})
+    assert demo.status_code == 200 and demo.json()['servers'] == ["FBS-Demo"]
+    assert live.status_code == 200 and live.json()['servers'] == ["FBS-Real"]
+    assert calls == [("FBS","DEMO","FBS"),("FBS","LIVE","FBS")]
+
+
+def test_mt5_server_catalog_rejects_invalid_broker_or_mode():
+    assert client.get('/v1/mt5/server-catalog',params={'broker':'UNKNOWN','mode':'DEMO','q':'FBS'}).status_code == 400
+    assert client.get('/v1/mt5/server-catalog',params={'broker':'FBS','mode':'TEST','q':'FBS'}).status_code == 400
+
+
 def test_unspecified_bridge_host_and_storage_defaults_fail_closed(monkeypatch):
     monkeypatch.delenv('BRIDGE_HOST_PROFILE', raising=False)
     monkeypatch.delenv('EXECUTION_STORAGE_DURABLE', raising=False)

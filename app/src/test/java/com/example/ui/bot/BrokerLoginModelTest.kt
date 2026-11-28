@@ -63,7 +63,7 @@ class BrokerLoginModelTest {
             accountMode = mode,
             login = login,
             server = "Fixture-$mode",
-            accessType = "INVESTOR",
+            accessType = "MASTER",
             connected = false,
             passwordSaved = false,
         )
@@ -121,11 +121,11 @@ class BrokerLoginModelTest {
         assertTrue(LoginRules.loginEnabled(ctrader, LoginForm()))
     }
 
-    @Test fun investorTypeIsOnlyOfferedWhereTheSpecAllowsIt() {
-        assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR), LoginRules.availableTypes(mt5))
+    @Test fun mt5AndProviderLoginExposeTradeOnlyAccess() {
+        assertEquals(listOf(AccessType.TRADE), LoginRules.availableTypes(mt5))
         assertEquals(listOf(AccessType.TRADE), LoginRules.availableTypes(derivOptions))
-        assertEquals("INVESTOR", AccessType.INVESTOR.wireValue)
         assertEquals("MASTER", AccessType.TRADE.wireValue)
+        assertEquals(AccessType.TRADE, LoginForm().type)
     }
 
     @Test fun savePasswordIsOnlyDefaultOnWithASecureLockScreen() {
@@ -146,21 +146,17 @@ class BrokerLoginModelTest {
         assertEquals(LoginMode.LIVE, LoginRules.modeForServer(""))
         val live = LoginRules.withMode(goodForm, LoginMode.LIVE)
         assertEquals(AccessType.TRADE, live.type)
-        val investorLive = LoginRules.withMode(goodForm.copy(type = AccessType.INVESTOR), LoginMode.LIVE)
-        assertEquals(AccessType.INVESTOR, investorLive.type)
+        assertEquals(AccessType.TRADE, LoginRules.withMode(live, LoginMode.LIVE).type)
         assertEquals(LoginMode.DEMO, LoginRules.withMode(live, LoginMode.DEMO).mode)
         assertEquals(AccessType.TRADE, LoginRules.withMode(live, LoginMode.DEMO).type)
     }
 
-    @Test fun ephemeralLiveTradeAccessTypeRemainsSelectable() {
-        assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR),
-            LoginRules.availableTypes(mt5, LoginMode.DEMO, HostProfile.EPHEMERAL))
-        assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR),
-            LoginRules.availableTypes(mt5, LoginMode.LIVE, HostProfile.EPHEMERAL))
-        assertEquals(listOf(AccessType.TRADE, AccessType.INVESTOR),
-            LoginRules.availableTypes(mt5, LoginMode.LIVE, HostProfile.PERSISTENT))
-        assertEquals(listOf(AccessType.TRADE),
-            LoginRules.availableTypes(derivOptions, LoginMode.LIVE, HostProfile.PERSISTENT))
+    @Test fun mt5LoginTypeRemainsTradeOnlyAcrossModesAndHostProfiles() {
+        LoginMode.values().forEach { mode ->
+            assertEquals(listOf(AccessType.TRADE), LoginRules.availableTypes(mt5, mode, HostProfile.EPHEMERAL))
+            assertEquals(listOf(AccessType.TRADE), LoginRules.availableTypes(mt5, mode, HostProfile.PERSISTENT))
+        }
+        assertEquals(listOf(AccessType.TRADE), LoginRules.availableTypes(derivOptions, LoginMode.LIVE, HostProfile.PERSISTENT))
     }
 
     @Test fun ephemeralLiveMasterCredentialsCanBeSubmittedForAccountVerification() = runBlocking {
@@ -285,11 +281,11 @@ class BrokerLoginModelTest {
 
     @Test fun terminalModeMismatchIsComparedToSelectedModeAndReconnectUsesThatMode() = runBlocking {
         val backend = FakeBackend(listOf(ConnectObservation(ConnectStage.VERIFIED, accountMode = "DEMO")))
-        val liveForm = goodForm.copy(mode = LoginMode.LIVE, type = AccessType.INVESTOR, server = "Broker-Real")
+        val liveForm = goodForm.copy(mode = LoginMode.LIVE, type = AccessType.TRADE, server = "Broker-Real")
         val outcome = useCase(backend).connect(mt5, liveForm)
         assertEquals(ConnectOutcome.Verified("DEMO", modeMismatch = true), outcome)
         assertEquals(LoginMode.DEMO, LoginRules.withMode(liveForm, LoginMode.DEMO).mode)
-        assertEquals(AccessType.INVESTOR, LoginRules.withMode(liveForm, LoginMode.DEMO).type)
+        assertEquals(AccessType.TRADE, LoginRules.withMode(liveForm, LoginMode.DEMO).type)
     }
 
     @Test fun mt5ModeMismatchRequiresFreshExactIdentityAndBrokerEvidence() {
@@ -392,7 +388,7 @@ class BrokerLoginModelTest {
             for (mode in LoginMode.values()) {
                 val form = when (spec.connector) {
                     com.example.data.broker.LoginConnector.MT5_TERMINAL -> LoginForm(
-                        type = if (mode == LoginMode.LIVE) AccessType.INVESTOR else AccessType.TRADE,
+                        type = AccessType.TRADE,
                         mode = mode,
                         login = "123456",
                         password = "fixture-secret",

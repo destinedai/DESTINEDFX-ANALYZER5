@@ -1032,6 +1032,41 @@ class MT5RemoteBridgeClient(
         return proof
     }
 
+    /** Search only server labels downloaded by the genuine MT5 terminal into Config/servers.dat. */
+    suspend fun searchServerCatalog(mode: String, query: String): List<String> {
+        val requestedMode = mode.trim().uppercase(Locale.ROOT)
+        val cleanQuery = query.trim()
+        require(requestedMode == accountMode && requestedMode in setOf("DEMO", "LIVE")) {
+            "Server search mode must match the selected broker profile."
+        }
+        if (cleanQuery.length < 3 || cleanQuery.length > 96) return emptyList()
+        val encoded = java.net.URLEncoder.encode(cleanQuery, "UTF-8")
+        val result = request(
+            "GET",
+            "/v1/mt5/server-catalog?broker=\${brokerBrand}&mode=\${requestedMode}&q=\${encoded}",
+            includeAppAuthorization = false
+        )
+        val rows = result.optJSONArray("servers") ?: return emptyList()
+        val found = LinkedHashMap<String, String>()
+        for (index in 0 until rows.length()) {
+            val label = rows.optString(index).trim()
+            if (!label.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{2,95}"))) continue
+            val normalized = label.uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+            val brandMatches = when (brokerBrand.uppercase(Locale.ROOT)) {
+                "FBS" -> "FBS" in normalized
+                "EXNESS" -> "EXNESS" in normalized
+                "HFM" -> "HFM" in normalized || "HFMARKETS" in normalized
+                "DERIV" -> "DERIV" in normalized
+                else -> false
+            }
+            val demoLabel = listOf("DEMO", "TRIAL", "CONTEST", "PRACTICE").any { it in normalized }
+            val liveLabel = "REAL" in normalized || "LIVE" in normalized
+            val modeMatches = if (requestedMode == "DEMO") demoLabel && !liveLabel else liveLabel && !demoLabel
+            if (brandMatches && modeMatches) found.putIfAbsent(label.uppercase(Locale.ROOT), label)
+        }
+        return found.values.sortedBy { it.uppercase(Locale.ROOT) }
+    }
+
     private fun modePath(brand: String): ModePath? = when (brand.uppercase()) {
         "FBS" -> ModePath.FBS_MT5
         "EXNESS" -> ModePath.EXNESS_MT5

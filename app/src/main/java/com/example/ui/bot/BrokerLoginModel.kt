@@ -95,11 +95,10 @@ data class ManualBrokerProfile(val companyOrServer: String, val server: String, 
 
 enum class AccessType(val label: String, val wireValue: String) {
     TRADE("Trade account", "MASTER"),
-    INVESTOR("Investor (read-only)", "INVESTOR"),
 }
 
 data class LoginForm(
-    val type: AccessType = AccessType.INVESTOR,
+    val type: AccessType = AccessType.TRADE,
     val mode: LoginMode = LoginMode.DEMO,
     val accountId: String? = null,
     val login: String = "",
@@ -122,7 +121,7 @@ object LoginRules {
     private val digits = Regex("[0-9]{1,20}")
 
     fun loginEnabled(spec: BrokerLoginSpec, form: LoginForm): Boolean = when (spec.connector) {
-        LoginConnector.MT5_TERMINAL -> digits.matches(form.login.trim()) && form.password.isNotBlank() && form.server.isNotBlank()
+        LoginConnector.MT5_TERMINAL -> form.type == AccessType.TRADE && digits.matches(form.login.trim()) && form.password.isNotBlank() && form.server.isNotBlank()
         LoginConnector.DERIV_OPTIONS -> form.appId.isNotBlank() && form.token.isNotBlank()
         LoginConnector.CTRADER -> true // Grant access opens the provider's own consent page; no secret is typed here.
     }
@@ -134,7 +133,7 @@ object LoginRules {
         spec: BrokerLoginSpec,
         mode: LoginMode = LoginMode.DEMO,
         hostProfile: HostProfile = HostProfile.PERSISTENT,
-    ): List<AccessType> = if (spec.investorAccess) AccessType.values().toList() else listOf(AccessType.TRADE)
+    ): List<AccessType> = listOf(AccessType.TRADE)
 
     fun modeForServer(server: String): LoginMode =
         if (server.contains("demo", ignoreCase = true) || server.contains("trial", ignoreCase = true)) LoginMode.DEMO

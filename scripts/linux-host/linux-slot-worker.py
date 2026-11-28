@@ -382,13 +382,19 @@ def _terminal_copy_ignore(source: str, names: list[str]) -> set[str]:
         return set()
     parts = relative.parts
     excluded = {
-        "bases", "config", "logs", "profiles", "history", "tester",
+        "bases", "logs", "profiles", "history", "tester",
         "MQL5/Files", "MQL5/Logs", "MQL5/Profiles", "MQL5/Presets",
         "MQL5/Experts",
     }
     ignored = set()
     for name in names:
         candidate = "/".join(parts + (name,))
+        # Copy only MetaTrader's public server catalogue into each portable
+        # terminal. Account records and all other mutable Config data stay private.
+        if parts and parts[0].lower() == "config":
+            if len(parts) > 1 or name.lower() != "servers.dat":
+                ignored.add(name)
+                continue
         if candidate in excluded or name.lower() in {"accounts.dat", "origin.txt"}:
             ignored.add(name)
     return ignored

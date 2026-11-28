@@ -164,6 +164,7 @@ class MarketDataRepositoryImpl(
      */
     fun close() {
         scope.cancel()
+        derivMarketDataGateway?.disconnect()
     }
 
     private fun getTtlForTimeframe(timeframe: String): Long {

@@ -20,6 +20,7 @@ from jwt import PyJWKClient
 from host_lifecycle import backup_database, cancel_stop, inspect_shutdown_safety, read_status, touch_activity
 from pathlib import Path
 from quantitative import STRATEGY_RULESETS, analyze_json
+from mt5_server_catalog import search_mt5_servers
 
 
 DB_PATH=os.getenv('BRIDGE_DB_PATH','/data/bridge.sqlite3')
@@ -2598,6 +2599,28 @@ def safe_terminal_chart_symbol(value):
         return ''
     return symbol
 
+
+
+@app.get('/v1/mt5/server-catalog')
+def mt5_server_catalog(broker: str = Query(..., min_length=2, max_length=16),
+                       mode: str = Query(..., min_length=4, max_length=4),
+                       q: str = Query(default='', max_length=96)):
+    """Search exact MT5 labels from the installed terminal catalogue; never accept typed names."""
+    brand = broker.strip().upper()
+    account_mode = mode.strip().upper()
+    if brand not in {'FBS', 'EXNESS', 'HFM', 'DERIV'} or account_mode not in {'DEMO', 'LIVE'}:
+        raise HTTPException(400, detail={'code': 'INVALID_BROKER_OR_MODE'})
+    if len(q.strip()) < 3:
+        return {'broker': brand, 'mode': account_mode, 'servers': [], 'catalog_available': False}
+    rows = search_mt5_servers(brand, account_mode, q)
+    return {
+        'broker': brand,
+        'mode': account_mode,
+        'servers': rows,
+        'count': len(rows),
+        'catalog_available': bool(rows),
+        'source': 'MT5 Config/servers.dat + owner-confirmed FBS labels',
+    }
 
 def safe_terminal_chart_timeframe(value):
     allowed={'M1','M5','M15','M30','H1','H4','D1','W1'}

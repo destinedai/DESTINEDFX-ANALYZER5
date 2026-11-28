@@ -147,6 +147,7 @@ grep -Fq 'DESTINEDFX_ALLOW_LOOPBACK_CONTROL_PLANE=true' "$ROOT/deploy/codespaces
 grep -Fq 'unset WINEPREFIX MT5_JOURNAL_DIR DESTINEDFX_EA_SET_PATH' "$ROOT/deploy/codespaces/start.sh" || fail 'shared Wine prefix, journal and preset overrides must remain unset'
 grep -Fq 'export DESTINEDFX_ISOLATED_SLOTS=true' "$ROOT/deploy/codespaces/start.sh" || fail 'per-user isolated MT5 slots must be enabled'
 grep -Fq '"/portable"' "$ROOT/scripts/linux-host/linux-slot-worker.py" || fail 'each MT5 session must use its private portable terminal data tree'
+grep -Fq 'name.lower() != "servers.dat"' "$ROOT/scripts/linux-host/linux-slot-worker.py" || fail 'only the MT5 server catalogue may be copied from shared Config'
 grep -Fq 'terminal-{pairing_key(reservation.pairing_id)}.log' "$ROOT/scripts/linux-host/linux-slot-worker.py" || fail 'each pairing must have a separate private runtime log'
 grep -Fq '.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe' "$ROOT/deploy/codespaces/start.sh" || fail 'MetaQuotes default terminal template path missing'
 pass 'Per-user runtime: isolated Wine prefix, portable terminal data and per-pairing logs wired'

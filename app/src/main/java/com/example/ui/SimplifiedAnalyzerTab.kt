@@ -23,6 +23,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,6 +36,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import com.destinedfx.core.broker.DerivInstrumentResolver
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.trade.MT5AnalyzerMarketFeedClient
@@ -64,15 +70,22 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {}) {
     val secrets = viewModel.app.secretsManager
+    val publicGateway = viewModel.app.derivMarketDataGateway
+    val publicQuotes by publicGateway.latestQuotes.collectAsStateWithLifecycle()
+    var publicInstrumentCodes by remember(publicGateway) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    LaunchedEffect(publicGateway) {
+        val active = withContext(Dispatchers.IO) { publicGateway.fetchActiveSymbols() }
+        val canonical = listOf("EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY", "XAU/USD", "XAG/USD", "BTC/USD")
+        publicInstrumentCodes = canonical.mapNotNull { name ->
+            val resolved = DerivInstrumentResolver.resolve(name) ?: return@mapNotNull null
+            active.firstOrNull { it.symbol.equals(resolved, ignoreCase = true) }?.let { name to it.symbol }
+        }.toMap()
+    }
     val selectedMt5Mode by viewModel.selectedMt5Mode.collectAsStateWithLifecycle()
     val selectedMt5BrokerBrand by viewModel.selectedMt5BrokerBrand.collectAsStateWithLifecycle()
     val selectedMt5Profile = "${selectedMt5BrokerBrand}_${selectedMt5Mode}"
-    val expectedAccountLogin = remember(secrets, selectedMt5Profile) {
-        secrets.getManagedMT5AccountLogin(selectedMt5Profile)
-    }
-    val expectedAccountServer = remember(secrets, selectedMt5Profile) {
-        secrets.getManagedMT5AccountServer(selectedMt5Profile)
-    }
+    val expectedAccountLogin = secrets.getManagedMT5AccountLogin(selectedMt5Profile)
+    val expectedAccountServer = secrets.getManagedMT5AccountServer(selectedMt5Profile)
     val serviceOrigin = remember(secrets) {
         MT5RemoteBridgeClient.initialServiceUrl(
             secrets.getManagedMT5ServiceUrl(),
@@ -111,7 +124,11 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         }
         while (true) {
             try {
-                val fresh = feedClient.state()
+                val fresh = feedClient.state(
+                    expectedAccountLogin = secrets.getManagedMT5AccountLogin(selectedMt5Profile),
+                    expectedAccountServer = secrets.getManagedMT5AccountServer(selectedMt5Profile),
+                    expectedAccountMode = selectedMt5Mode
+                )
                 snapshot = fresh
                 connectionError = fresh.errorMessage
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -124,20 +141,21 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
         }
     }
 
-    val symbols = snapshot?.symbols.orEmpty()
-    val symbol = selectedSymbol.takeIf { it.isNotBlank() }
+    val connected = snapshot?.connected == true && snapshot?.heartbeatFresh == true
+    val publicSymbols = publicInstrumentCodes.keys.sortedBy { it.uppercase(Locale.ROOT) }
+    val symbols = if (connected) snapshot?.symbols.orEmpty() else publicSymbols
+    val symbol = selectedSymbol.takeIf { it.isNotBlank() && it in symbols }
         ?: snapshot?.activeChartSymbol?.takeIf { it in symbols }
         ?: symbols.firstOrNull()
-        ?: ""
+        ?: "EUR/USD"
     val timeframe = selectedTimeframe
 
-    LaunchedEffect(feedClient, symbol, timeframe) {
-        if (feedClient != null && symbol.isNotBlank()) {
+    LaunchedEffect(feedClient, connected, symbol, timeframe) {
+        if (feedClient != null && connected && symbol.isNotBlank()) {
             runCatching { feedClient.select(symbol, timeframe) }
         }
     }
 
-    val connected = snapshot?.connected == true && snapshot?.heartbeatFresh == true
     val quote = if (connected && symbol.isNotBlank()) {
         snapshot?.brokerQuotes?.singleOrNull { it.symbol.equals(symbol, true) }
     } else null
@@ -151,6 +169,25 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
     val price = quote?.bid?.takeIf { it.isFinite() && it > 0.0 }
     val priceQuoteFresh = connected && quote != null && quote.ageMs in 0L..15_000L &&
         quote.timestampMs > 0L
+    val publicCode = publicInstrumentCodes[symbol]
+    DisposableEffect(publicGateway, publicCode) {
+        if (!publicCode.isNullOrBlank()) publicGateway.subscribeTicks(publicCode) { }
+        onDispose {
+            if (!publicCode.isNullOrBlank()) publicGateway.unsubscribeTicks(publicCode)
+        }
+    }
+    val publicQuote = publicCode?.let { publicQuotes[it] }
+    val publicPrice = (publicQuote?.mid ?: publicQuote?.last)?.takeIf { it.isFinite() && it > 0.0 }
+    val publicQuoteAgeMs = publicQuote?.receivedAtMs?.let { System.currentTimeMillis() - it }
+    val publicQuoteFresh = publicPrice != null && publicQuoteAgeMs != null && publicQuoteAgeMs in 0L..15_000L
+    val displayPrice = if (priceQuoteFresh) price else publicPrice.takeIf { publicQuoteFresh }
+    val displayPriceFresh = priceQuoteFresh || publicQuoteFresh
+    val displayPriceDigits = quote?.digits ?: when {
+        symbol.contains("JPY", ignoreCase = true) -> 3
+        symbol.contains("XAU", ignoreCase = true) -> 2
+        symbol.contains("XAG", ignoreCase = true) -> 3
+        else -> 5
+    }
     val insight = remember(quote, allSymbolCandles, timeframe) {
         MT5AnalyzerMath.analyze(quote, allSymbolCandles, timeframe)
     }
@@ -173,7 +210,7 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             else -> false
         }
     val analysisValidated = trendValidated && levelsValidated
-    val showPrice = priceQuoteFresh
+    val showPrice = displayPriceFresh
 
     Column(
         Modifier.fillMaxSize().background(DarkBackground).verticalScroll(rememberScrollState())
@@ -212,27 +249,40 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                 }
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text("BID", color = TextSecondary, fontSize = 9.sp)
+                        Text(if (priceQuoteFresh) "BROKER BID" else "LIVE PRICE", color = TextSecondary, fontSize = 9.sp)
                         Text(
-                            if (showPrice) formatAnalyzerTerminalPrice(quote!!.bid, quote!!.digits) else "--",
+                            displayPrice?.let { formatAnalyzerTerminalPrice(it, displayPriceDigits) } ?: "CONNECTING",
                             color = TextPrimary, fontSize = 27.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Black
                         )
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("ASK", color = TextSecondary, fontSize = 9.sp)
+                        Text(if (priceQuoteFresh) "BROKER ASK" else "PUBLIC BID / ASK", color = TextSecondary, fontSize = 9.sp)
                         Text(
-                            if (showPrice) formatAnalyzerTerminalPrice(quote!!.ask, quote!!.digits) else "--",
-                            color = TextPrimary, fontSize = 19.sp,
+                            if (priceQuoteFresh && quote != null) formatAnalyzerTerminalPrice(quote.ask, quote.digits)
+                            else if (publicQuoteFresh && publicQuote?.bid != null && publicQuote.ask != null)
+                                formatAnalyzerTerminalPrice(publicQuote.bid!!, displayPriceDigits) + " / " + formatAnalyzerTerminalPrice(publicQuote.ask!!, displayPriceDigits)
+                            else "Not supplied",
+                            color = TextPrimary, fontSize = 15.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                         )
                     }
                 }
+                Text(
+                    when {
+                        priceQuoteFresh -> "${selectedMt5BrokerBrand} MT5 ${selectedMt5Mode} · exact account identity verified"
+                        publicQuoteFresh -> "Deriv public live market data · analysis only, not a broker execution quote"
+                        else -> "Connecting to independent public market data"
+                    },
+                    color = if (priceQuoteFresh || publicQuoteFresh) ProfitGreen else WarningAmber,
+                    fontSize = 10.sp
+                )
                 if (!connected) {
-                    Text("MT5 not connected", color = TextSecondary, fontSize = 10.sp)
-                } else if (!showPrice) {
+                    Text("MT5 account not connected · independent Analyzer feed remains active", color = TextSecondary, fontSize = 10.sp)
+                }
+                if (!showPrice) {
                     Text(
-                        connectionError.ifBlank { "Waiting for live MT5 quote" },
+                        connectionError.ifBlank { "Waiting for a fresh public or selected-account quote" },
                         color = TextSecondary, fontSize = 10.sp
                     )
                 }
@@ -241,7 +291,21 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
 
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
-            AnalyzerBrokerCandlestickChart(candles, symbol, timeframe, Modifier.fillMaxWidth().height(270.dp))
+            Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("TRADINGVIEW LIVE CHART", color = ElectricCyan, fontSize = 10.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                AnalyzerTradingViewWidget(symbol, timeframe, Modifier.fillMaxWidth().height(340.dp))
+            }
+        }
+        if (connected && candles.size >= 2) {
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)) {
+                Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("SELECTED MT5 ACCOUNT CANDLES", color = ProfitGreen, fontSize = 10.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    AnalyzerBrokerCandlestickChart(candles, symbol, timeframe, Modifier.fillMaxWidth().height(220.dp))
+                }
+            }
         }
 
         if (showPrice) {
@@ -288,6 +352,105 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
 
 private fun formatAnalyzerTerminalPrice(value: Double, digits: Int): String =
     String.format(Locale.US, "%.${digits.coerceIn(0, 12)}f", value)
+
+
+@Composable
+private fun AnalyzerTradingViewWidget(
+    symbol: String,
+    timeframe: String,
+    modifier: Modifier = Modifier
+) {
+    val rawCompact = symbol.trim().uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+    val knownInstruments = listOf(
+        "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
+        "EURGBP", "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD"
+    )
+    val compact = knownInstruments.firstOrNull { rawCompact.startsWith(it) || rawCompact.endsWith(it) }
+        ?: rawCompact
+    val tradingViewSymbol = when (compact) {
+        "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
+        "EURGBP", "EURJPY", "GBPJPY" -> "OANDA:$compact"
+        "XAUUSD" -> "OANDA:XAUUSD"
+        "XAGUSD" -> "OANDA:XAGUSD"
+        "BTCUSD" -> "COINBASE:BTCUSD"
+        else -> ""
+    }
+    val interval = when (timeframe.uppercase(Locale.ROOT)) {
+        "M1" -> "1"; "M5" -> "5"; "M15" -> "15"; "M30" -> "30"
+        "H1" -> "60"; "H4" -> "240"; "D1" -> "D"; "W1" -> "W"; else -> "15"
+    }
+    if (tradingViewSymbol.isBlank()) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Text("TradingView symbol mapping is unavailable for $symbol.", color = WarningAmber, fontSize = 11.sp)
+        }
+        return
+    }
+    val config = remember(tradingViewSymbol, interval) {
+        org.json.JSONObject()
+            .put("autosize", true)
+            .put("symbol", tradingViewSymbol)
+            .put("interval", interval)
+            .put("timezone", "Etc/UTC")
+            .put("theme", "dark")
+            .put("style", "1")
+            .put("locale", "en")
+            .put("allow_symbol_change", false)
+            .put("calendar", false)
+            .put("details", true)
+            .put("hide_side_toolbar", false)
+            .put("hide_top_toolbar", false)
+            .put("hide_legend", false)
+            .put("save_image", false)
+            .put("support_host", "https://www.tradingview.com")
+            .toString()
+    }
+    val html = remember(config) {
+        """
+        <!doctype html><html><head>
+        <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+        <style>html,body,.tradingview-widget-container{margin:0;width:100%;height:100%;background:#10151d;overflow:hidden}
+        .tradingview-widget-container__widget{width:100%;height:100%}</style>
+        </head><body>
+        <div class="tradingview-widget-container">
+          <div class="tradingview-widget-container__widget"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+            $config
+          </script>
+        </div></body></html>
+        """.trimIndent()
+    }
+    AndroidView(
+        factory = { ctx ->
+            WebView(ctx).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                setBackgroundColor(android.graphics.Color.rgb(16, 21, 29))
+                overScrollMode = android.view.View.OVER_SCROLL_NEVER
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+                webViewClient = WebViewClient()
+                tag = html
+                loadDataWithBaseURL("https://www.tradingview.com/", html, "text/html", "UTF-8", null)
+            }
+        },
+        update = { web ->
+            if (web.tag != html) {
+                web.tag = html
+                web.loadDataWithBaseURL("https://www.tradingview.com/", html, "text/html", "UTF-8", null)
+            }
+        },
+        onRelease = { web ->
+            web.stopLoading()
+            web.webViewClient = WebViewClient()
+            web.removeAllViews()
+            web.destroy()
+        },
+        modifier = modifier
+    )
+}
 
 @Composable
 private fun AnalyzerBrokerCandlestickChart(

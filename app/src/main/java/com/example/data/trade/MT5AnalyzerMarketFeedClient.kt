@@ -30,6 +30,10 @@ class MT5AnalyzerMarketFeedClient(
     expectedAccountServer: String = "",
     expectedAccountMode: String = ""
 ) {
+    private val initialExpectedAccountLogin = expectedAccountLogin
+    private val initialExpectedAccountServer = expectedAccountServer
+    private val initialExpectedAccountMode = expectedAccountMode
+
     data class Snapshot(
         val connected: Boolean,
         val heartbeatFresh: Boolean,
@@ -43,15 +47,6 @@ class MT5AnalyzerMarketFeedClient(
     )
 
     private val origin: String = validateOrigin(serviceOrigin)
-    private val expectedAccountMode = expectedAccountMode.trim().uppercase(Locale.ROOT)
-    private val expectedAccountIdentityHash = if (
-        expectedAccountLogin.isNotBlank() && expectedAccountServer.isNotBlank() &&
-        this.expectedAccountMode in setOf("DEMO", "LIVE")
-    ) {
-        MessageDigest.getInstance("SHA-256").digest(
-            "$expectedAccountLogin|$expectedAccountServer|${this.expectedAccountMode}".toByteArray(StandardCharsets.UTF_8)
-        ).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
-    } else ""
     private val http = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
@@ -59,7 +54,20 @@ class MT5AnalyzerMarketFeedClient(
         .callTimeout(6, TimeUnit.SECONDS)
         .build()
 
-    suspend fun state(): Snapshot = withContext(Dispatchers.IO) {
+    suspend fun state(
+        expectedAccountLogin: String = initialExpectedAccountLogin,
+        expectedAccountServer: String = initialExpectedAccountServer,
+        expectedAccountMode: String = initialExpectedAccountMode,
+    ): Snapshot = withContext(Dispatchers.IO) {
+        val normalizedMode = expectedAccountMode.trim().uppercase(Locale.ROOT)
+        val expectedAccountIdentityHash = if (
+            expectedAccountLogin.isNotBlank() && expectedAccountServer.isNotBlank() &&
+            normalizedMode in setOf("DEMO", "LIVE")
+        ) {
+            MessageDigest.getInstance("SHA-256").digest(
+                "$expectedAccountLogin|$expectedAccountServer|$normalizedMode".toByteArray(StandardCharsets.UTF_8)
+            ).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        } else ""
         val body = execute("GET", "/v1/analyzer/market-state", null)
         val nowMs = System.currentTimeMillis()
         val quotes = parseVerifiedBrokerQuotes(body.optJSONArray("broker_quotes"), nowMs).orEmpty()
@@ -84,7 +92,7 @@ class MT5AnalyzerMarketFeedClient(
             errorMessage = when {
                 !terminalConnected -> body.optString("error_message").takeIf { it.isNotBlank() } ?: "MT5 not connected"
                 expectedAccountIdentityHash.isBlank() -> "Connect the selected MT5 account in Bot first"
-                !identityMatches -> "Analyzer MT5 terminal does not match the selected $expectedAccountMode account"
+                !identityMatches -> "Analyzer MT5 terminal does not match the selected $normalizedMode account"
                 else -> ""
             }
         )
