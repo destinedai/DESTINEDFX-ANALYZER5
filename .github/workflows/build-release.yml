@@ -1,0 +1,86 @@
+name: Build Release APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-release:
+    name: Build and sign release APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DESTINEDFX_UPLOAD_KEYSTORE_B64: ${{ secrets.DESTINEDFX_UPLOAD_KEYSTORE_B64 }}
+      STORE_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_STORE_PASSWORD }}
+      KEY_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_KEY_PASSWORD }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode and validate owner release keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$DESTINEDFX_UPLOAD_KEYSTORE_B64" ]] || { echo "::error::DESTINEDFX_UPLOAD_KEYSTORE_B64 is missing."; exit 1; }
+          [[ -n "$STORE_PASSWORD" ]] || { echo "::error::DESTINEDFX_UPLOAD_STORE_PASSWORD is missing."; exit 1; }
+          [[ -n "$KEY_PASSWORD" ]] || { echo "::error::DESTINEDFX_UPLOAD_KEY_PASSWORD is missing."; exit 1; }
+          umask 077
+          install -d -m 700 app
+          printf '%s' "$DESTINEDFX_UPLOAD_KEYSTORE_B64" | base64 --decode > app/upload-keystore.jks
+          test -s app/upload-keystore.jks
+          chmod 600 app/upload-keystore.jks
+          keytool -list -keystore app/upload-keystore.jks -storetype JKS \
+            -storepass "$STORE_PASSWORD" -alias destinedfx-upload >/dev/null
+          echo "Owner release keystore decoded and alias destinedfx-upload validated."
+
+      - name: Assemble signed release APK
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/app/upload-keystore.jks
+          STORE_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK has the owner's release signature
+        shell: bash
+        env:
+          STORE_PASSWORD: ${{ secrets.DESTINEDFX_UPLOAD_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/release/app-release.apk"
+          test -s "$apk"
+          tools_dir="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
+          apksigner="$ANDROID_HOME/build-tools/$tools_dir/apksigner"
+          test -x "$apksigner"
+          cert_sha256="$(keytool -list -v -keystore app/upload-keystore.jks -storetype JKS \
+            -storepass "$STORE_PASSWORD" -alias destinedfx-upload 2>/dev/null | \
+            awk 'toupper($1) ~ /^SHA-?256:/ {gsub(":", "", $2); print tolower($2); exit}')"
+          [[ "$cert_sha256" =~ ^[0-9a-f]{64}$ ]]
+          "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/release-apk-signature.txt"
+          grep -Fqi "$cert_sha256" "$RUNNER_TEMP/release-apk-signature.txt"
+          echo "APK signature matches the configured destinedfx-upload release certificate."
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DestinedFX-signed-release-APK
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30

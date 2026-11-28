@@ -1110,7 +1110,7 @@ jobs:
             exit 1
           fi
           chmod 600 "$KEYSTORE_PATH"
-          if ! keytool -list -keystore "$KEYSTORE_PATH" -storetype JKS -storepass "$STORE_PASSWORD" -alias upload >/dev/null 2>&1; then
+          if ! keytool -list -keystore "$KEYSTORE_PATH" -storetype JKS -storepass "$STORE_PASSWORD" -alias destinedfx-upload >/dev/null 2>&1; then
             echo "Release blocked: upload keystore, store password or upload alias is invalid." >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"
             exit 1
@@ -1136,7 +1136,7 @@ jobs:
           tools="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           apksigner="$ANDROID_HOME/build-tools/$tools/apksigner"
           aapt2="$ANDROID_HOME/build-tools/$tools/aapt2"
-          cert_sha256="$(keytool -list -v -keystore "$KEYSTORE_PATH" -storetype JKS -storepass "$STORE_PASSWORD" -alias upload 2>/dev/null | awk 'toupper($1) ~ /^SHA-?256:/ {gsub(":", "", $2); print tolower($2); exit}')"
+          cert_sha256="$(keytool -list -v -keystore "$KEYSTORE_PATH" -storetype JKS -storepass "$STORE_PASSWORD" -alias destinedfx-upload 2>/dev/null | awk 'toupper($1) ~ /^SHA-?256:/ {gsub(":", "", $2); print tolower($2); exit}')"
           [[ "$cert_sha256" =~ ^[0-9a-f]{64}$ ]]
           "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/release-signature.txt"
           grep -Fq "$cert_sha256" "$RUNNER_TEMP/release-signature.txt"
