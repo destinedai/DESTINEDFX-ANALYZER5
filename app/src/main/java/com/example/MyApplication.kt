@@ -24,6 +24,12 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -123,6 +129,121 @@ class MyApplication : Application() {
     private var _mt5GatewayAdapter: com.example.data.broker.MT5BrokerGatewayAdapter? = null
     val mt5GatewayAdapter: com.example.data.broker.MT5BrokerGatewayAdapter get() = _mt5GatewayAdapter ?: throw IllegalStateException("MT5GatewayAdapter not initialized")
 
+    // One app-wide warm-up job is shared by startup and Login. It never runs on the UI thread.
+    private val mt5WarmupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mt5WarmupLock = Any()
+    @Volatile private var mt5WarmupJob: Deferred<Result<com.example.data.trade.MT5RemoteBridgeClient.ServiceReadiness>>? = null
+    @Volatile private var mt5WarmupReadyUntilMs = 0L
+    val mt5HostWarmupStatus = MutableStateFlow("IDLE")
+
+    fun prewarmManagedMt5Host() {
+        if (storageAvailable.value) scheduleManagedMt5HostWarmup()
+    }
+
+    suspend fun awaitManagedMt5Host(): com.example.data.trade.MT5RemoteBridgeClient.ServiceReadiness {
+        check(storageAvailable.value) { "Secure storage is unavailable; Codespaces wake is blocked." }
+        val job = scheduleManagedMt5HostWarmup()
+            ?: throw IllegalStateException("MT5 host warm-up could not be started.")
+        return job.await().getOrElse { throw it }
+    }
+
+    private fun scheduleManagedMt5HostWarmup(): Deferred<Result<com.example.data.trade.MT5RemoteBridgeClient.ServiceReadiness>>? {
+        val secrets = _secretsManager ?: return null
+        if (!secrets.isSecureStorageAvailable) return null
+        synchronized(mt5WarmupLock) {
+            val now = System.currentTimeMillis()
+            mt5WarmupJob?.let { current ->
+                if (current.isActive) return current
+                if (current.isCompleted && mt5WarmupReadyUntilMs > now) return current
+            }
+            val next = mt5WarmupScope.async(start = CoroutineStart.LAZY) {
+                mt5HostWarmupStatus.value = "CONNECTING"
+                try {
+                    val readiness = performManagedMt5HostWarmup(secrets)
+                    mt5WarmupReadyUntilMs = System.currentTimeMillis() + 15_000L
+                    mt5HostWarmupStatus.value = "READY"
+                    Result.success(readiness)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    mt5WarmupReadyUntilMs = 0L
+                    mt5HostWarmupStatus.value = "FAILED"
+                    Result.failure(failure)
+                }
+            }
+            mt5WarmupJob = next
+            next.start()
+            return next
+        }
+    }
+
+    private suspend fun performManagedMt5HostWarmup(
+        secrets: SecretsManager
+    ): com.example.data.trade.MT5RemoteBridgeClient.ServiceReadiness {
+        val bridge = com.example.data.trade.MT5RemoteBridgeClient(
+            secrets = secrets,
+            profile = "FBS_DEMO",
+            accountMode = "DEMO",
+            brokerBrand = "FBS"
+        )
+        fun ready(value: com.example.data.trade.MT5RemoteBridgeClient.ServiceReadiness): Boolean =
+            bridge.managedConfigured() && value.hostRuntimeReady &&
+                value.database.equals("ok", ignoreCase = true) &&
+                value.managedExecution.equals("configured", ignoreCase = true) &&
+                value.perUserTerminalIsolation.equals("VERIFIED", ignoreCase = true)
+
+        // A previously discovered healthy host is a cache hit: do not call GitHub or start it again.
+        val cachedReadiness = bridge.checkServiceReadiness()
+        if (ready(cachedReadiness)) return cachedReadiness
+
+        val github = com.example.data.codespaces.GitHubCodespacesClient(secrets)
+        val lifecycle = com.example.data.codespaces.CodespacesLifecycleClient(secrets)
+        val usage = github.usageEstimate()
+        val targets = github.listTargetCodespaces()
+        val target = targets.singleOrNull()
+            ?: error("Exactly one DestinedFX Codespaces host on the configured branch must be discoverable.")
+        var current = github.getCodespace(target.name)
+
+        if (!current.state.equals("Available", ignoreCase = true)) {
+            check(!usage.blockStart) {
+                "HOST WAKE BLOCKED: the local daily or monthly Codespaces usage reserve has been reached."
+            }
+            github.recordCodespaceStarted(current)
+            try {
+                github.startCodespace(current)
+            } catch (startError: Exception) {
+                val observed = runCatching { github.getCodespace(current.name) }.getOrNull()
+                if (observed != null && !observed.state.equals("Available", ignoreCase = true)) {
+                    runCatching { github.recordCodespaceStopped(observed) }
+                }
+                throw startError
+            }
+            withTimeout(10 * 60 * 1000L) {
+                while (!current.state.equals("Available", ignoreCase = true)) {
+                    delay(5_000L)
+                    current = github.getCodespace(target.name)
+                    check(!current.state.equals("Failed", ignoreCase = true) &&
+                        !current.state.equals("Deleted", ignoreCase = true)) {
+                        "GitHub reports that the DestinedFX Codespace failed to start."
+                    }
+                }
+            }
+        } else {
+            github.recordCodespaceStarted(current)
+        }
+
+        check(current.state.equals("Available", ignoreCase = true)) {
+            "GitHub did not confirm that the DestinedFX Codespace is Available."
+        }
+        lifecycle.discoverAndSaveBridge()
+        lifecycle.discoverAndSaveManagementApi()
+        val readiness = bridge.checkServiceReadiness()
+        check(ready(readiness)) {
+            "HOST NOT READY: Bridge, durable storage, Management API, or isolated MT5 host verification failed. Broker credentials were not submitted."
+        }
+        return readiness
+    }
+
 
     override fun onCreate() {
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
@@ -150,6 +271,8 @@ class MyApplication : Application() {
             val secrets = SecretsManager(this@MyApplication)
             _secretsManager = secrets
             storageAvailable.value = secrets.isSecureStorageAvailable
+            // Start waking the engine while the remaining app dependencies initialize.
+            prewarmManagedMt5Host()
             val dbInstance = AppDatabase.getDatabase(this@MyApplication, secrets)
             _db = dbInstance
             _modeArmingPolicy = ModeArmingPolicy(auditSink = secrets::appendModeArmingAudit)

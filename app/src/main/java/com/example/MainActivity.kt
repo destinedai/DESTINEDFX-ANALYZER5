@@ -67,6 +67,7 @@ class MainActivity : FragmentActivity() {
         setContent {
             val app = (LocalContext.current.applicationContext as MyApplication)
             val initStatus by app.initStatus.collectAsStateWithLifecycle()
+            val hostWarmupStatus by app.mt5HostWarmupStatus.collectAsStateWithLifecycle()
             var showBrandWelcome by rememberSaveable { mutableStateOf(true) }
             // Never create dependency-backed ViewModels until initialization explicitly succeeds.
             val isReady = initStatus is MyApplication.InitState.Ready
@@ -84,9 +85,17 @@ class MainActivity : FragmentActivity() {
 
                 DestinedFXTheme(themeMode = themeMode) {
                     Surface(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-                        DestinedFXApp(
-                            viewModel = mainVm
-                        )
+                        Box(Modifier.fillMaxSize()) {
+                            DestinedFXApp(viewModel = mainVm)
+                            if (hostWarmupStatus == "CONNECTING") {
+                                Text(
+                                    "CONNECTING...",
+                                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
+                                    color = ElectricCyan,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
                     }
                 }
             } else when (val state = initStatus) {
@@ -168,6 +177,11 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        (application as? MyApplication)?.prewarmManagedMt5Host()
     }
 
     override fun onNewIntent(intent: Intent) {

@@ -37,6 +37,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import android.view.ViewGroup
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -67,8 +68,55 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
+private object AnalyzerMarketSnapshotCache {
+    private val snapshots = java.util.concurrent.ConcurrentHashMap<String, MT5AnalyzerMarketFeedClient.Snapshot>()
+    fun get(key: String): MT5AnalyzerMarketFeedClient.Snapshot? = snapshots[key]
+    fun put(key: String, value: MT5AnalyzerMarketFeedClient.Snapshot) { snapshots[key] = value }
+}
+
+private object AnalyzerTradingViewPool {
+    private var parked: WebView? = null
+
+    fun acquire(context: android.content.Context, html: String): WebView {
+        val web = synchronized(this) {
+            val existing = parked
+            parked = null
+            existing ?: WebView(context.applicationContext).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                setBackgroundColor(android.graphics.Color.rgb(16, 21, 29))
+                overScrollMode = android.view.View.OVER_SCROLL_NEVER
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+                webViewClient = WebViewClient()
+            }
+        }
+        if (web.tag != html) {
+            web.tag = html
+            web.loadDataWithBaseURL("https://www.tradingview.com/", html, "text/html", "UTF-8", null)
+        }
+        return web
+    }
+
+    fun release(web: WebView) {
+        synchronized(this) {
+            (web.parent as? ViewGroup)?.removeView(web)
+            if (parked !== web) {
+                parked?.let { previous ->
+                    previous.stopLoading()
+                    previous.destroy()
+                }
+                parked = web
+            }
+        }
+    }
+}
+
 @Composable
-fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {}) {
+fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -> Unit = {})
     val secrets = viewModel.app.secretsManager
     val publicGateway = viewModel.app.derivMarketDataGateway
     val publicQuotes by publicGateway.latestQuotes.collectAsStateWithLifecycle()
@@ -104,8 +152,9 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
             )
         }.getOrNull()
     }
-    var snapshot by remember(feedClient) {
-        mutableStateOf<MT5AnalyzerMarketFeedClient.Snapshot?>(null)
+    val snapshotCacheKey = "${serviceOrigin}|${expectedAccountLogin}|${expectedAccountServer}|${selectedMt5Mode}"
+    var snapshot by remember(feedClient, snapshotCacheKey) {
+        mutableStateOf(feedClient?.let { AnalyzerMarketSnapshotCache.get(snapshotCacheKey) })
     }
     var connectionError by remember(feedClient) {
         mutableStateOf(if (feedClient == null) "MT5 not connected" else "")
@@ -130,11 +179,13 @@ fun SimplifiedAnalyzerTab(viewModel: DestinedFXViewModel, onExportAnalysis: () -
                     expectedAccountMode = selectedMt5Mode
                 )
                 snapshot = fresh
+                AnalyzerMarketSnapshotCache.put(snapshotCacheKey, fresh)
                 connectionError = fresh.errorMessage
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                snapshot = null
+                // Keep the last verified snapshot for instant display; freshness checks below
+                // ensure an expired quote is never represented as live.
                 connectionError = "MT5 not connected"
             }
             delay(1_000L)
@@ -420,34 +471,14 @@ private fun AnalyzerTradingViewWidget(
         """.trimIndent()
     }
     AndroidView(
-        factory = { ctx ->
-            WebView(ctx).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                setBackgroundColor(android.graphics.Color.rgb(16, 21, 29))
-                overScrollMode = android.view.View.OVER_SCROLL_NEVER
-                isVerticalScrollBarEnabled = false
-                isHorizontalScrollBarEnabled = false
-                webViewClient = WebViewClient()
-                tag = html
-                loadDataWithBaseURL("https://www.tradingview.com/", html, "text/html", "UTF-8", null)
-            }
-        },
+        factory = { ctx -> AnalyzerTradingViewPool.acquire(ctx, html) },
         update = { web ->
             if (web.tag != html) {
                 web.tag = html
                 web.loadDataWithBaseURL("https://www.tradingview.com/", html, "text/html", "UTF-8", null)
             }
         },
-        onRelease = { web ->
-            web.stopLoading()
-            web.webViewClient = WebViewClient()
-            web.removeAllViews()
-            web.destroy()
-        },
+        onRelease = { web -> AnalyzerTradingViewPool.release(web) },
         modifier = modifier
     )
 }

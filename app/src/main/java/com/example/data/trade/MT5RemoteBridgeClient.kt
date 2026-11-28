@@ -30,6 +30,41 @@ import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+private object Mt5ServerCatalogCache {
+    private data class Entry(val savedAtMs: Long, val servers: List<String>)
+    private val entries = java.util.concurrent.ConcurrentHashMap<String, Entry>()
+    private val inFlight = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<List<String>>>()
+    private const val TTL_MS = 5 * 60 * 1000L
+
+    suspend fun getOrLoad(key: String, loader: suspend () -> List<String>): List<String> {
+        val now = System.currentTimeMillis()
+        entries[key]?.let { cached ->
+            if (now - cached.savedAtMs in 0..TTL_MS) return cached.servers
+            entries.remove(key, cached)
+        }
+        val pending = kotlinx.coroutines.CompletableDeferred<List<String>>()
+        val existing = inFlight.putIfAbsent(key, pending)
+        if (existing != null) return existing.await()
+        try {
+            val loaded = loader()
+            entries[key] = Entry(System.currentTimeMillis(), loaded)
+            if (entries.size > 96) {
+                entries.entries.removeIf { System.currentTimeMillis() - it.value.savedAtMs > TTL_MS }
+            }
+            pending.complete(loaded)
+            return loaded
+        } catch (failure: Throwable) {
+            pending.completeExceptionally(failure)
+            throw failure
+        } finally {
+            inFlight.remove(key, pending)
+        }
+    }
+
+    fun normalize(value: String): String =
+        value.uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+}
+
 /** Android account-bound control client for a remote MT5 terminal and its managed EA. */
 data class VerifiedBrokerQuote(
     val symbol: String,
@@ -1050,21 +1085,27 @@ class MT5RemoteBridgeClient(
         require(requestedMode == accountMode && requestedMode in setOf("DEMO", "LIVE")) {
             "Server search mode must match the selected broker profile."
         }
-        if (cleanQuery.length < 2 || cleanQuery.length > 96) return emptyList()
-        val catalogPath = mt5ServerCatalogRequestPath(cleanQuery, requestedMode, cleanQuery)
-        val result = request("GET", catalogPath, includeAppAuthorization = false)
-        val rows = result.optJSONArray("servers") ?: return emptyList()
-        val found = LinkedHashMap<String, String>()
-        for (index in 0 until rows.length()) {
-            val label = rows.optString(index).trim()
-            if (!label.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{2,95}"))) continue
-            val normalized = label.uppercase(Locale.ROOT).filter(Char::isLetterOrDigit)
-            val demoLabel = listOf("DEMO", "TRIAL", "CONTEST", "PRACTICE").any { it in normalized }
-            val liveLabel = "REAL" in normalized || "LIVE" in normalized
-            val modeMatches = if (requestedMode == "DEMO") demoLabel && !liveLabel else liveLabel && !demoLabel
-            if (modeMatches) found.putIfAbsent(label.uppercase(Locale.ROOT), label)
+        val normalizedQuery = Mt5ServerCatalogCache.normalize(cleanQuery)
+        if (normalizedQuery.length < 2 || cleanQuery.length > 96) return emptyList()
+        val prefix = normalizedQuery.take(2)
+        val cacheKey = "${baseUrl()}|${requestedMode}|${prefix}"
+        val cachedRows = Mt5ServerCatalogCache.getOrLoad(cacheKey) {
+            val catalogPath = mt5ServerCatalogRequestPath(prefix, requestedMode, prefix)
+            val result = request("GET", catalogPath, includeAppAuthorization = false)
+            val rows = result.optJSONArray("servers") ?: return@getOrLoad emptyList()
+            val found = LinkedHashMap<String, String>()
+            for (index in 0 until rows.length()) {
+                val label = rows.optString(index).trim()
+                if (!label.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{2,95}"))) continue
+                val normalized = Mt5ServerCatalogCache.normalize(label)
+                val demoLabel = listOf("DEMO", "TRIAL", "CONTEST", "PRACTICE").any { it in normalized }
+                val liveLabel = "REAL" in normalized || "LIVE" in normalized
+                val modeMatches = if (requestedMode == "DEMO") demoLabel && !liveLabel else liveLabel && !demoLabel
+                if (modeMatches) found.putIfAbsent(label.uppercase(Locale.ROOT), label)
+            }
+            found.values.sortedBy { it.uppercase(Locale.ROOT) }
         }
-        return found.values.sortedBy { it.uppercase(Locale.ROOT) }
+        return cachedRows.filter { Mt5ServerCatalogCache.normalize(it).contains(normalizedQuery) }
     }
 
     private fun modePath(brand: String): ModePath? = when (brand.uppercase()) {

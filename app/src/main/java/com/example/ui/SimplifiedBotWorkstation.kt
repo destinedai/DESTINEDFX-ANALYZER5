@@ -726,70 +726,19 @@ fun SimplifiedBotWorkstation(viewModel: DestinedFXViewModel) {
         client: MT5RemoteBridgeClient,
         reportStage: (com.example.ui.bot.ConnectStage) -> Unit,
     ) {
-        check(secrets.isSecureStorageAvailable) {
-            "Android Keystore-backed storage is unavailable; host wake is blocked."
-        }
-        // Broker credentials are not submitted until the owner-authorized GitHub
-        // lifecycle has brought the configured Codespace and both services online.
-        val usage = githubCodespacesClient.usageEstimate()
-        val targets = githubCodespacesClient.listTargetCodespaces()
-        val target = targets.singleOrNull()
-            ?: error("Exactly one DestinedFX Codespaces host on the configured branch must be discoverable.")
-        var current = githubCodespacesClient.getCodespace(target.name)
-        selectedGithubCodespace = current
-        githubCodespaces = targets
-
-        if (!current.state.equals("Available", ignoreCase = true)) {
-            check(!usage.blockStart) {
-                "HOST WAKE BLOCKED: the local 90-minute daily target or monthly usage reserve has been reached."
-            }
-            githubCodespacesClient.recordCodespaceStarted(current)
-            try {
-                githubCodespacesClient.startCodespace(current)
-                reportStage(com.example.ui.bot.ConnectStage.HOST_QUEUED)
-            } catch (startError: Exception) {
-                val observed = runCatching { githubCodespacesClient.getCodespace(current.name) }.getOrNull()
-                if (observed != null && !observed.state.equals("Available", ignoreCase = true)) {
-                    runCatching { githubCodespacesClient.recordCodespaceStopped(observed) }
-                }
-                throw startError
-            }
-            githubHostOperationState = "STARTING"
-            withTimeout(10 * 60 * 1000L) {
-                while (!current.state.equals("Available", ignoreCase = true)) {
-                    delay(5_000L)
-                    current = githubCodespacesClient.getCodespace(target.name)
-                    selectedGithubCodespace = current
-                    githubCodespaces = githubCodespaces.filterNot { it.name == current.name } + current
-                    check(!current.state.equals("Failed", ignoreCase = true) &&
-                        !current.state.equals("Deleted", ignoreCase = true)) {
-                        "GitHub reports that the DestinedFX Codespace failed to start."
-                    }
-                }
-            }
-        } else {
-            // Start observing an already-running host without creating a duplicate usage session.
-            githubCodespacesClient.recordCodespaceStarted(current)
-        }
-
-        check(current.state.equals("Available", ignoreCase = true)) {
-            "GitHub did not confirm that the DestinedFX Codespace is Available."
-        }
-        githubHostOperationState = "STARTING"
-        val discoveredBridgeOrigin = codespacesLifecycleClient.discoverAndSaveBridge()
-        serviceUrl = discoveredBridgeOrigin
-        codespacesLifecycleClient.discoverAndSaveManagementApi()
-        val readiness = client.checkServiceReadiness()
+        reportStage(com.example.ui.bot.ConnectStage.WAKING_ENGINE)
+        val readiness = viewModel.app.awaitManagedMt5Host()
         check(client.managedConfigured() && readiness.hostRuntimeReady &&
             readiness.database.equals("ok", ignoreCase = true) &&
             readiness.managedExecution.equals("configured", ignoreCase = true) &&
             readiness.perUserTerminalIsolation.equals("VERIFIED", ignoreCase = true)) {
             "HOST NOT READY: Bridge, durable storage, Management API, or isolated MT5 host verification failed. Broker credentials were not submitted."
         }
+        serviceUrl = secrets.getManagedMT5ServiceUrl()
         serviceReadiness = readiness
         githubHostOperationState = "ACTIVE"
         githubHostMessage =
-            "Host wake confirmed · Bridge and Management API verified · isolated MT5 host READY. A fresh broker login and MT5 heartbeat are still required."
+            "Host ready · shared background wake reused. A fresh broker login and MT5 heartbeat are still required."
     }
 
     if (showModernBrokerFlow && !connected) {
