@@ -6,10 +6,22 @@ BACKEND = (ROOT / "app/src/main/java/com/example/ui/bot/MT5BridgeConnectBackend.
 APPLICATION = (ROOT / "app/src/main/java/com/example/MyApplication.kt").read_text(encoding="utf-8")
 
 
-def test_mt5_login_joins_the_single_background_codespaces_warmup_before_pairing():
+def test_mt5_login_submits_credentials_without_waiting_for_background_host_warmup():
+    preflight = BACKEND.split("override suspend fun preflight", 1)[1].split(
+        "override suspend fun submit", 1
+    )[0]
     assert "private val wakeHost: (suspend ((ConnectStage) -> Unit) -> Unit)" in BACKEND
-    assert "wakeHost.invoke(onStage)" in BACKEND
-    assert "wakeHost?.invoke" not in BACKEND
+    assert "mt5HostWakeScope.launch" in preflight
+    assert "wakeHost.invoke { stage -> stageListener(stage) }" in preflight
+    assert "wakeHost?.invoke" not in preflight
+    assert "awaitManagedMt5Host" not in preflight
+    assert "managementHealthCheck()" in preflight
+    assert preflight.index("mt5HostWakeScope.launch") < preflight.index("managementHealthCheck()")
+    assert preflight.index("managementHealthCheck()") < preflight.index("return null")
+    submit = BACKEND.split("override suspend fun submit", 1)[1].split(
+        "private fun mapConfigurationFailure", 1
+    )[0]
+    assert "client.registerManagedAccount(" in submit
     login = WORKSTATION.split("LoginConnector.MT5_TERMINAL -> {", 1)[1].split("onRefreshAccount =", 1)[0]
     assert "wakeHost = { reportStage -> wakeCodespacesHostForMt5(client, reportStage) }" in login
     wake = WORKSTATION.split("suspend fun wakeCodespacesHostForMt5(", 1)[1].split(
